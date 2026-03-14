@@ -7,6 +7,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+SCHEMA_VERSION = 1
+
 
 class DatabaseManager:
     """Thread-safe SQLite database manager with WAL mode."""
@@ -117,6 +119,11 @@ class DatabaseManager:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS schema_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -185,6 +192,10 @@ class DatabaseManager:
         self._ensure_column(conn, "memories", "last_accessed_at", "TEXT")
         self._ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
         self._ensure_column(conn, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'")
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
+            ("schema_version", str(SCHEMA_VERSION)),
+        )
         conn.commit()
 
     def _ensure_column(
@@ -204,6 +215,15 @@ class DatabaseManager:
 
     def initialize_schema(self) -> None:
         self._initialize_schema_on(self.get_connection())
+
+    def get_schema_version(self) -> int | None:
+        row = self.get_connection().execute(
+            "SELECT value FROM schema_metadata WHERE key = ?",
+            ("schema_version",),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row[0])
 
     def close(self) -> None:
         conn = getattr(self._local, "connection", None)

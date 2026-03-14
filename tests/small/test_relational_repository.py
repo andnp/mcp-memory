@@ -4,6 +4,7 @@ from uuid import UUID
 import pytest
 
 from mcp_memory.core.repository import RelationalMemoryRepository
+from mcp_memory.utils.db import SCHEMA_VERSION
 
 
 pytestmark = pytest.mark.small
@@ -41,6 +42,7 @@ def test_database_manager_initializes_relational_memory_schema(db_manager):
         row[1] for row in conn.execute("PRAGMA table_info(system1_journal)").fetchall()
     }
     assert {"workspace_id", "author"} <= journal_columns
+    assert db_manager.get_schema_version() == SCHEMA_VERSION
 
 
 def test_relational_repository_create_read_update_and_list_memory(db_manager):
@@ -62,6 +64,9 @@ def test_relational_repository_create_read_update_and_list_memory(db_manager):
         workspace_ids=["workspace-c"],
         tags=["facts"],
     )
+
+    assert created is not None
+    assert secondary is not None
 
     UUID(created.id)
     assert created.title == "Epic 01 bootstrap"
