@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mcp_memory.relational.importer import import_markdown_memory
+from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 
@@ -47,16 +48,16 @@ class CreateMemoryRecordOperation:
 
 
 class GetMemoryRecordOperation:
-    def __init__(self, repository: RelationalMemoryRepository) -> None:
-        self._repository = repository
+    def __init__(self, queries: RelationalMemoryQueries) -> None:
+        self._queries = queries
 
     def execute(self, memory_id: str):
-        return self._repository.get_memory(memory_id)
+        return self._queries.get_memory(memory_id)
 
 
 class ListMemoryRecordsOperation:
-    def __init__(self, repository: RelationalMemoryRepository) -> None:
-        self._repository = repository
+    def __init__(self, queries: RelationalMemoryQueries) -> None:
+        self._queries = queries
 
     def execute(
         self,
@@ -66,7 +67,7 @@ class ListMemoryRecordsOperation:
         status: str | None,
         limit: int,
     ):
-        return self._repository.list_memories(
+        return self._queries.list_memories(
             workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,

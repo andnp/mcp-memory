@@ -22,6 +22,7 @@ from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
 )
+from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.serialization import (
     link_payload,
     memory_record_payload,
@@ -82,7 +83,7 @@ def get_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    operation = GetMemoryRecordOperation(ctx.repository)
+    operation = GetMemoryRecordOperation(RelationalMemoryQueries(ctx.repository))
     memory_id = require_string(arguments, "memory_id")
     record = operation.execute(memory_id)
     if record is None:
@@ -94,7 +95,7 @@ def list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dic
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    operation = ListMemoryRecordsOperation(ctx.repository)
+    operation = ListMemoryRecordsOperation(RelationalMemoryQueries(ctx.repository))
     records = operation.execute(
         workspace_id=optional_string(arguments, "workspace_id"),
         memory_type=optional_string(arguments, "memory_type"),
