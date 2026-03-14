@@ -2,6 +2,11 @@
 
 **Status:** ✅ Standalone Migration in Progress
 
+> Current implementation note:
+> - The relational schema and repository now exist and back part of the MCP runtime.
+> - Legacy Markdown/index-backed flows still remain in the package as transitional compatibility layers.
+> - The full progressive discovery/search/read public tool surface below is still a target design, not a fully implemented contract.
+
 ## 1. Relational Schema
 
 ### 1.1 Core Tables
