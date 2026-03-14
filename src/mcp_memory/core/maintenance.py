@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from src.context import ApplicationContext
-    from src.memory.manager import MemoryIndexManager
+    from mcp_memory.context import ApplicationContext
+    from mcp_memory.core.manager import MemoryIndexManager
 
 logger = logging.getLogger(__name__)
 

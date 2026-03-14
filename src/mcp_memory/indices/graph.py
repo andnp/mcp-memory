@@ -7,10 +7,10 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from src.indices._corruption import is_corruption_error
-from src.indices.protocol import SearchResult
-from src.search.community import compute_community_boost, get_community_members
-from src.storage.db import DatabaseManager
+from mcp_memory.indices._corruption import is_corruption_error
+from mcp_memory.indices.protocol import SearchResult
+from mcp_memory.search.community import compute_community_boost, get_community_members
+from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

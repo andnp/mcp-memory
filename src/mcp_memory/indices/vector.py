@@ -10,14 +10,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 if TYPE_CHECKING:
-    from src.storage.db import DatabaseManager
+    from mcp_memory.utils.db import DatabaseManager
 
 import numpy as np
 
-from src.models import Chunk, Document
-from src.search.types import SearchResultDict
-from src.utils.atomic_io import atomic_write_json, fsync_path
-from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitState
+from mcp_memory.models import Chunk, Document
+from mcp_memory.search.types import SearchResultDict
+from mcp_memory.utils.atomic_io import atomic_write_json, fsync_path
+from mcp_memory.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitState
 
 logger = logging.getLogger(__name__)
 
@@ -624,7 +624,7 @@ class VectorIndex:
             if excluded_files and docs_root:
                 file_path = node.metadata.get("file_path", "")
                 if file_path:
-                    from src.search.path_utils import matches_any_excluded
+                    from mcp_memory.search.path_utils import matches_any_excluded
 
                     if matches_any_excluded(file_path, excluded_files, docs_root):
                         continue

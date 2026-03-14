@@ -8,21 +8,21 @@ from pathlib import Path
 
 import yaml
 
-from src.chunking.factory import get_chunker
-from src.config import Config
-from src.indices.graph import GraphStore
-from src.indices.keyword import KeywordIndex
-from src.indices.vector import VectorIndex
-from src.memory.link_parser import extract_links
-from src.memory.models import ExtractedLink, MemoryDocument, MemoryFrontmatter
-from src.memory.storage import (
+from mcp_memory.chunking.factory import get_chunker
+from mcp_memory.config import Config
+from mcp_memory.indices.graph import GraphStore
+from mcp_memory.indices.keyword import KeywordIndex
+from mcp_memory.indices.vector import VectorIndex
+from mcp_memory.core.link_parser import extract_links
+from mcp_memory.core.models import ExtractedLink, MemoryDocument, MemoryFrontmatter
+from mcp_memory.core.storage import (
     compute_memory_id,
     ensure_memory_dirs,
     get_memory_file_path,
     get_indices_path,
     list_memory_files,
 )
-from src.models import Document
+from mcp_memory.models import Document
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ class MemoryIndexManager:
         )
 
     def _add_tag_nodes_and_edges(self, memory_id: str, tags: list[str]) -> None:
-        from src.memory.link_parser import normalize_tag
+        from mcp_memory.core.link_parser import normalize_tag
 
         for tag in tags:
             normalized_tag = normalize_tag(tag)

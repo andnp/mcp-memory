@@ -32,4 +32,46 @@ def get_memory_tools() -> list[Tool]:
                 "properties": {},
             },
         ),
+        Tool(
+            name="create_memory_record",
+            description="Create a relational memory record in the runtime database.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string"},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["title", "content", "workspace_ids"],
+            },
+        ),
+        Tool(
+            name="get_memory_record",
+            description="Fetch a relational memory record by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="list_memory_records",
+            description="List relational memory records with optional filters.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_id": {"type": "string"},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+            },
+        ),
     ]

@@ -31,7 +31,14 @@ async def test_call_memory_tool_returns_placeholder_payload() -> None:
 def test_get_memory_tools_returns_empty_list() -> None:
     names = [tool.name for tool in get_memory_tools()]
 
-    assert names == ["record_thought", "get_pending_thoughts", "get_memory_stats"]
+    assert names == [
+        "record_thought",
+        "get_pending_thoughts",
+        "get_memory_stats",
+        "create_memory_record",
+        "get_memory_record",
+        "list_memory_records",
+    ]
 
 
 def test_mcp_server_initializes_with_project_override() -> None:

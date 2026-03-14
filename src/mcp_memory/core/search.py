@@ -3,20 +3,20 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config import Config
-from src.indices.graph import GraphStore
-from src.indices.keyword import KeywordIndex
-from src.indices.vector import VectorIndex
-from src.memory.manager import MemoryIndexManager
-from src.memory.models import (
+from mcp_memory.config import Config
+from mcp_memory.indices.graph import GraphStore
+from mcp_memory.indices.keyword import KeywordIndex
+from mcp_memory.indices.vector import VectorIndex
+from mcp_memory.core.manager import MemoryIndexManager
+from mcp_memory.core.models import (
     LinkedMemoryResult,
     MemoryFrontmatter,
     MemorySearchResult,
     MemorySearchStats,
 )
-from src.search.base_orchestrator import BaseSearchOrchestrator
-from src.search.score_pipeline import ScorePipelineConfig
-from src.utils.similarity import cosine_similarity_lists
+from mcp_memory.search.base_orchestrator import BaseSearchOrchestrator
+from mcp_memory.search.score_pipeline import ScorePipelineConfig
+from mcp_memory.utils.similarity import cosine_similarity_lists
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +450,7 @@ class MemorySearchOrchestrator(BaseSearchOrchestrator[MemorySearchResult]):
     async def search_by_tag_cluster(
         self, tag: str, depth: int = 2, limit: int = 10
     ) -> list[MemorySearchResult]:
-        from src.memory.link_parser import normalize_tag
+        from mcp_memory.core.link_parser import normalize_tag
 
         normalized_tag = normalize_tag(tag)
         tag_id = f"tag:{normalized_tag}"
@@ -607,7 +607,7 @@ class MemorySearchOrchestrator(BaseSearchOrchestrator[MemorySearchResult]):
         return len(done)
 
     def get_related_tags(self, tag: str) -> list[tuple[str, int]]:
-        from src.memory.link_parser import normalize_tag
+        from mcp_memory.core.link_parser import normalize_tag
 
         normalized_tag = normalize_tag(tag)
         tag_id = f"tag:{normalized_tag}"

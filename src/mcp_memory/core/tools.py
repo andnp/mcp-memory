@@ -4,19 +4,16 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-from src.memory.storage import (
+from mcp_memory.core.storage import (
     get_memory_file_path,
     get_trash_path,
     list_memory_files,
 )
-from src.utils.atomic_io import atomic_write_text
+from mcp_memory.utils.atomic_io import atomic_write_text
 
-if TYPE_CHECKING:
-    from src.context import ApplicationContext
-
-type ContextType = ApplicationContext
+ContextType = Any
 
 logger = logging.getLogger(__name__)
 
