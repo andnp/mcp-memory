@@ -7,6 +7,9 @@ from uuid import uuid4
 
 from mcp_memory.utils.db import DatabaseManager
 
+VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
+VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
+
 
 @dataclass
 class RelationalMemoryRecord:
@@ -55,9 +58,18 @@ class RelationalMemoryRepository:
         now = self._utc_now()
         created_timestamp = created_at or now
         updated_timestamp = updated_at or created_timestamp
+        normalized_title = title.strip()
+        normalized_content = content.strip()
         normalized_workspace_ids = self._normalize_values(workspace_ids)
         normalized_tags = self._normalize_values(tags or [])
-        summary_text = summary or self._build_summary(content)
+        normalized_type = self._validate_memory_type(memory_type)
+        normalized_status = self._validate_memory_status(status)
+        self._validate_required_text("title", normalized_title)
+        self._validate_required_text("content", normalized_content)
+        if not normalized_workspace_ids:
+            raise ValueError("workspace_ids must contain at least one non-empty value")
+
+        summary_text = summary or self._build_summary(normalized_content)
         payload = json.dumps(metadata or {}, sort_keys=True)
         record_id = memory_id or str(uuid4())
 
@@ -72,11 +84,11 @@ class RelationalMemoryRepository:
                 """,
                 (
                     record_id,
-                    title,
-                    content,
+                    normalized_title,
+                    normalized_content,
                     summary_text,
-                    memory_type,
-                    status,
+                    normalized_type,
+                    normalized_status,
                     created_timestamp,
                     updated_timestamp,
                     0.0,
@@ -211,14 +223,29 @@ class RelationalMemoryRepository:
         if self.get_memory(memory_id) is None:
             return None
 
+        normalized_type = (
+            self._validate_memory_type(memory_type) if memory_type is not None else None
+        )
+        normalized_status = (
+            self._validate_memory_status(status) if status is not None else None
+        )
+        normalized_title = title.strip() if title is not None else None
+        normalized_content = content.strip() if content is not None else None
+        if normalized_title is not None:
+            self._validate_required_text("title", normalized_title)
+        if normalized_content is not None:
+            self._validate_required_text("content", normalized_content)
+        if workspace_ids is not None and not self._normalize_values(workspace_ids):
+            raise ValueError("workspace_ids must contain at least one non-empty value")
+
         columns = []
         values = []
         updates = {
-            "title": title,
-            "content": content,
+            "title": normalized_title,
+            "content": normalized_content,
             "summary": summary,
-            "type": memory_type,
-            "status": status,
+            "type": normalized_type,
+            "status": normalized_status,
             "access_score": access_score,
             "last_accessed_at": last_accessed_at,
             "last_surfaced_at": last_surfaced_at,
@@ -350,6 +377,26 @@ class RelationalMemoryRepository:
             seen.add(normalized_value)
             normalized_values.append(normalized_value)
         return normalized_values
+
+    def _validate_memory_type(self, memory_type: str):
+        normalized_type = memory_type.strip()
+        if normalized_type not in VALID_MEMORY_TYPES:
+            raise ValueError(
+                f"invalid memory_type: {memory_type!r}. Expected one of {sorted(VALID_MEMORY_TYPES)}"
+            )
+        return normalized_type
+
+    def _validate_memory_status(self, status: str):
+        normalized_status = status.strip()
+        if normalized_status not in VALID_MEMORY_STATUSES:
+            raise ValueError(
+                f"invalid status: {status!r}. Expected one of {sorted(VALID_MEMORY_STATUSES)}"
+            )
+        return normalized_status
+
+    def _validate_required_text(self, field_name: str, value: str):
+        if not value:
+            raise ValueError(f"{field_name} must be non-empty")
 
     def _utc_now(self):
         return datetime.now(UTC).isoformat()

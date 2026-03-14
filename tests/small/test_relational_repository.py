@@ -117,3 +117,33 @@ def test_relational_repository_create_read_update_and_list_memory(db_manager):
     assert [record.id for record in workspace_filtered] == [created.id]
     assert [record.id for record in fact_filtered] == [secondary.id]
     assert [record.id for record in stale_filtered] == [created.id]
+
+
+def test_relational_repository_rejects_invalid_domain_values(db_manager):
+    repository = RelationalMemoryRepository(db_manager)
+
+    with pytest.raises(ValueError, match="workspace_ids must contain at least one non-empty value"):
+        repository.create_memory(
+            title="Bad memory",
+            content="No workspace IDs should fail.",
+            workspace_ids=["", "   "],
+        )
+
+    with pytest.raises(ValueError, match="invalid memory_type"):
+        repository.create_memory(
+            title="Bad memory",
+            content="Unsupported type should fail.",
+            workspace_ids=["workspace-a"],
+            memory_type="todo",
+        )
+
+    created = repository.create_memory(
+        title="Valid memory",
+        content="This one is okay.",
+        workspace_ids=["workspace-a"],
+    )
+
+    assert created is not None
+
+    with pytest.raises(ValueError, match="invalid status"):
+        repository.update_memory(created.id, status="unknown")
