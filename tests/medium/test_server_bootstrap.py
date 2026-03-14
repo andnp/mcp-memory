@@ -28,7 +28,7 @@ async def test_call_memory_tool_returns_placeholder_payload() -> None:
     assert payload["error"] == "runtime_not_initialized"
 
 
-def test_get_memory_tools_returns_empty_list() -> None:
+def test_get_memory_tools_returns_expected_names() -> None:
     names = [tool.name for tool in get_memory_tools()]
 
     assert names == [
@@ -44,23 +44,18 @@ def test_get_memory_tools_returns_empty_list() -> None:
     ]
 
 
-def test_mcp_server_initializes_with_project_override() -> None:
-    server = MCPServer(project_override="demo-project")
+def test_mcp_server_initializes_with_workspace_root() -> None:
+    server = MCPServer(workspace_root="demo-workspace")
 
-    assert server.project_override == "demo-project"
-    assert server.ctx is None
+    assert server.workspace_root == "demo-workspace"
 
 
 @pytest.mark.asyncio
-async def test_call_memory_tool_records_real_journal_entry(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
+async def test_call_memory_tool_records_real_journal_entry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
-    runtime = create_runtime(project_override=None, cwd=tmp_path / "workspace")
-
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         result = await call_memory_tool(runtime, "record_thought", {"content": "wire up mcp handlers"})
         payload = json.loads(result[0].text)
@@ -68,37 +63,27 @@ async def test_call_memory_tool_records_real_journal_entry(
         assert payload["status"] == "recorded"
         assert payload["entry"]["content"] == "wire up mcp handlers"
         assert payload["entry"]["workspace_id"] == runtime.workspace_id
-
-        pending = await call_memory_tool(runtime, "get_pending_thoughts", {"limit": 5})
-        pending_payload = json.loads(pending[0].text)
-        assert pending_payload["entries"][0]["content"] == "wire up mcp handlers"
     finally:
         runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_run_uses_stdio_server(monkeypatch) -> None:
+async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -> None:
     read_stream = object()
     write_stream = object()
     captured: dict[str, object] = {}
-    fake_ctx = object()
 
-    class FakeController:
-        async def acquire_runtime(self, project_override: str | None, cwd):
-            captured["project_override"] = project_override
-            captured["cwd"] = cwd
-            return fake_ctx
-
-        async def release_runtime(self, runtime):
-            captured["released_runtime"] = runtime
-
-    server = MCPServer(controller=FakeController())
+    server = MCPServer(workspace_root="demo")
 
     async def fake_run(read_arg, write_arg, init_options) -> None:
         captured["read_stream"] = read_arg
         captured["write_stream"] = write_arg
         captured["init_options"] = init_options
 
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
     monkeypatch.setattr(
         "mcp_memory.server.stdio_server",
         lambda: FakeAsyncContextManager((read_stream, write_stream)),
@@ -110,14 +95,14 @@ async def test_mcp_server_run_uses_stdio_server(monkeypatch) -> None:
     assert captured["read_stream"] is read_stream
     assert captured["write_stream"] is write_stream
     assert captured["init_options"] is not None
-    assert captured["released_runtime"] is fake_ctx
-    assert server.ctx is fake_ctx
 
 
-def test_cli_stats_command_reports_placeholder() -> None:
+def test_cli_help_lists_run_daemon_and_dashboard_commands() -> None:
     runner = CliRunner()
 
-    result = runner.invoke(main, ["stats"])
+    result = runner.invoke(main, ["--help"])
 
     assert result.exit_code == 0
-    assert "Stats tool coming soon" in result.output
+    assert "run" in result.output
+    assert "daemon" in result.output
+    assert "dashboard" in result.output

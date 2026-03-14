@@ -7,7 +7,7 @@ import pytest
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.utils.db import DatabaseManager
 from tests.sdk.mcp import FakeToolRuntime
-from tests.sdk.providers import DummyEmbeddingProvider, FakeAIProvider, FakeSubprocessInstaller
+from tests.sdk.providers import FakeAIProvider, FakeSubprocessInstaller
 
 
 def pytest_configure(config) -> None:
@@ -52,11 +52,6 @@ def system1_journal(db_manager: DatabaseManager) -> System1Journal:
 @pytest.fixture
 def fake_ai_provider() -> FakeAIProvider:
     return FakeAIProvider()
-
-
-@pytest.fixture
-def dummy_embedding_provider() -> DummyEmbeddingProvider:
-    return DummyEmbeddingProvider()
 
 
 @pytest.fixture

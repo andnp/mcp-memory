@@ -10,8 +10,7 @@ from urllib.request import urlopen
 import pytest
 import uvicorn
 
-from mcp_memory.daemon import DaemonLifecycleController
-from mcp_memory.management.api import create_management_app
+from mcp_memory.daemon import create_daemon_app
 from mcp_memory.mcp.runtime import create_runtime
 
 
@@ -46,7 +45,7 @@ def _start_server(app, port: int):
             return server, thread
         except Exception:
             time.sleep(0.05)
-    raise RuntimeError("management API failed to start")
+    raise RuntimeError("daemon app failed to start")
 
 
 def _stop_server(server: uvicorn.Server, thread: threading.Thread) -> None:
@@ -62,7 +61,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    seed_runtime = create_runtime(project_override=None, cwd=workspace)
+    seed_runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
         assert seed_runtime.repository is not None
         assert seed_runtime.task_queue is not None
@@ -70,14 +69,14 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             title="Management API plan",
             content="Expose runtime health and recent memories.",
             summary="Operations dashboard plan.",
-            workspace_ids=["workspace-a"],
+            workspace_ids=[seed_runtime.workspace_id],
             memory_type="plan",
             tags=["dashboard", "api"],
         )
         superseded = seed_runtime.repository.create_memory(
             title="Management API legacy plan",
             content="An older plan for the same area.",
-            workspace_ids=["workspace-a"],
+            workspace_ids=[seed_runtime.workspace_id],
             memory_type="plan",
             tags=["dashboard"],
         )
@@ -87,7 +86,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         task = seed_runtime.task_queue.enqueue(
             "fact-checker",
             task_id="fact-checker-1",
-            workspace_id="workspace-a",
+            workspace_id=seed_runtime.workspace_id,
             available_at=0.0,
         )
         assert seed_runtime.task_queue.claim_next(now=10.0) is not None
@@ -95,29 +94,26 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     finally:
         seed_runtime.close()
 
-    controller = DaemonLifecycleController(shutdown_grace_seconds=0.05)
-    app = create_management_app(project_override=None, cwd=workspace, controller=controller)
     port = _free_port()
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace, host="127.0.0.1", port=port)
     server, thread = _start_server(app, port)
     try:
         health = _fetch_json(f"http://127.0.0.1:{port}/api/health")
         overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
-        memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id=workspace-a")
+        memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
         dashboard = _fetch_text(f"http://127.0.0.1:{port}/")
 
-        assert health["status"] == "ok"
-        assert health["runtime_active"] is True
-        assert health["workspace_id"]
+        assert health["status"] == "ready"
+        assert health["workspace_id"] == seed_runtime.workspace_id
         assert health["workspace_root"] == str(workspace)
         assert overview["memories"]["total"] == 2
         assert overview["tasks"]["failed_count"] == 1
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
-        assert memories["records"][0]["title"] == "Management API legacy plan" or memories["records"][0]["title"] == "Management API plan"
+        assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
         assert detail["superseded"][0]["id"] == superseded.id
         assert "MCP Memory Dashboard" in dashboard
     finally:
         _stop_server(server, thread)
-        await controller.shutdown_now()

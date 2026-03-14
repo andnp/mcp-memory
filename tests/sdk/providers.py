@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import dataclass, field
-import hashlib
 from typing import Any
 
 
@@ -58,24 +57,6 @@ class ConsolidationResponseFactory:
     @classmethod
     def actions(cls, *actions: dict[str, Any]) -> dict[str, Any]:
         return {"actions": list(actions)}
-
-
-@dataclass
-class DummyEmbeddingProvider:
-    dimension: int = 8
-    seed: str = "mcp-memory"
-    overrides: dict[str, list[float]] = field(default_factory=dict)
-
-    def get_text_embedding(self, text: str) -> list[float]:
-        if text in self.overrides:
-            return self.overrides[text]
-
-        digest = hashlib.sha256(f"{self.seed}:{text}".encode("utf-8")).digest()
-        values = [byte / 255.0 for byte in digest]
-        while len(values) < self.dimension:
-            values.extend(values)
-        return values[: self.dimension]
-
 
 @dataclass
 class FakeAsyncProcess:

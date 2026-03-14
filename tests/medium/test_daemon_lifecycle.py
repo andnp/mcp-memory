@@ -1,145 +1,57 @@
 from __future__ import annotations
 
-import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from mcp_memory.daemon import DaemonLifecycleController
+from mcp_memory.config import Config, resolve_daemon_metadata_path
+from mcp_memory.daemon import DaemonMetadata, ensure_daemon_started, read_daemon_metadata
 from mcp_memory.mcp.runtime import RuntimeSpec
 
 
 pytestmark = pytest.mark.medium
 
 
-class FakeRuntime:
-    def __init__(self):
-        self.close_calls = 0
-
-    def close(self):
-        self.close_calls += 1
-
-
-class FakeWorker:
-    def __init__(self):
-        self.start_calls = 0
-        self.stop_calls: list[float] = []
-
-    async def start(self) -> None:
-        self.start_calls += 1
-
-    async def stop(self, grace_period_seconds: float) -> None:
-        self.stop_calls.append(grace_period_seconds)
+@dataclass(frozen=True)
+class _Spec:
+    memory_path: Path
+    config: Config
+    workspace_id: str
+    workspace_root: Path
+    lock_path: Path
 
 
-def _make_spec(memory_path: Path):
-    return RuntimeSpec(config=None, project_name="demo", memory_path=memory_path)
-
-
-@pytest.mark.asyncio
-async def test_controller_reuses_runtime_and_refcounts_clients(tmp_path: Path):
-    created: list[FakeRuntime] = []
-    spec = _make_spec(tmp_path / "memories")
-
-    def resolve_spec(project_override: str | None, cwd: Path | None):
-        return spec
-
-    def build_runtime(runtime_spec: RuntimeSpec):
-        runtime = FakeRuntime()
-        created.append(runtime)
-        return runtime
-
-    controller = DaemonLifecycleController(
-        shutdown_grace_seconds=0.05,
-        runtime_spec_resolver=resolve_spec,
-        runtime_factory=build_runtime,
-        worker_factory=lambda runtime: None,
+def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Path) -> None:
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=Config(),
+        workspace_id="workspace-123",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
     )
-
-    runtime_one = await controller.acquire_runtime()
-    runtime_two = await controller.acquire_runtime()
-
-    assert runtime_one is runtime_two
-    assert controller.client_count == 2
-    assert len(created) == 1
-
-    await controller.release_runtime(runtime_one)
-    await asyncio.sleep(0.08)
-
-    assert created[0].close_calls == 0
-    assert controller.has_runtime is True
-
-    await controller.release_runtime(runtime_two)
-    await asyncio.sleep(0.08)
-
-    assert created[0].close_calls == 1
-    assert controller.has_runtime is False
-
-
-@pytest.mark.asyncio
-async def test_controller_cancels_pending_shutdown_when_client_reconnects(tmp_path: Path):
-    created: list[FakeRuntime] = []
-    spec = _make_spec(tmp_path / "memories")
-
-    def resolve_spec(project_override: str | None, cwd: Path | None):
-        return spec
-
-    def build_runtime(runtime_spec: RuntimeSpec):
-        runtime = FakeRuntime()
-        created.append(runtime)
-        return runtime
-
-    controller = DaemonLifecycleController(
-        shutdown_grace_seconds=0.15,
-        runtime_spec_resolver=resolve_spec,
-        runtime_factory=build_runtime,
-        worker_factory=lambda runtime: None,
+    metadata = DaemonMetadata(
+        workspace_id=spec.workspace_id,
+        workspace_root=str(spec.workspace_root),
+        host="127.0.0.1",
+        port=8123,
+        pid=123,
+        started_at=1.0,
+        status="ready",
     )
+    metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
 
-    runtime_one = await controller.acquire_runtime()
-    await controller.release_runtime(runtime_one)
-    await asyncio.sleep(0.05)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")))
 
-    runtime_two = await controller.acquire_runtime()
-    await asyncio.sleep(0.15)
+    current = ensure_daemon_started()
 
-    assert runtime_two is runtime_one
-    assert created[0].close_calls == 0
-    assert controller.client_count == 1
-
-    await controller.release_runtime(runtime_two)
-    await asyncio.sleep(0.18)
-
-    assert created[0].close_calls == 1
+    assert current.port == 8123
+    assert current.workspace_id == spec.workspace_id
 
 
-@pytest.mark.asyncio
-async def test_controller_starts_and_stops_runtime_worker(tmp_path: Path):
-    created_workers: list[FakeWorker] = []
-    spec = _make_spec(tmp_path / "memories")
-
-    def resolve_spec(project_override: str | None, cwd: Path | None):
-        return spec
-
-    def build_runtime(runtime_spec: RuntimeSpec):
-        return FakeRuntime()
-
-    def build_worker(runtime):
-        worker = FakeWorker()
-        created_workers.append(worker)
-        return worker
-
-    controller = DaemonLifecycleController(
-        shutdown_grace_seconds=0.05,
-        runtime_spec_resolver=resolve_spec,
-        runtime_factory=build_runtime,
-        worker_factory=build_worker,
-    )
-
-    runtime = await controller.acquire_runtime()
-    await controller.release_runtime(runtime)
-    await asyncio.sleep(0.08)
-
-    assert len(created_workers) == 1
-    assert created_workers[0].start_calls == 1
-    assert created_workers[0].stop_calls == [0.05]
+def test_read_daemon_metadata_returns_none_for_missing_file(tmp_path: Path) -> None:
+    assert read_daemon_metadata(tmp_path / "missing.json") is None

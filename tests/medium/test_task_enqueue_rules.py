@@ -19,7 +19,7 @@ async def test_record_thought_enqueues_single_ingest_task_at_threshold(
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
     workspace = tmp_path / "workspace"
-    runtime = create_runtime(project_override=None, cwd=workspace)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
 
     try:
         first = await call_memory_tool(runtime, "record_thought", {"content": "first note"})

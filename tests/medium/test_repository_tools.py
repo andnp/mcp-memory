@@ -18,7 +18,7 @@ async def test_repository_tools_create_get_and_list_records(
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
-    runtime = create_runtime(project_override=None, cwd=tmp_path / "workspace")
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
 
     try:
         create_result = await call_memory_tool(
@@ -67,7 +67,7 @@ async def test_repository_tools_persist_across_runtime_recreation(
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
-    first_runtime = create_runtime(project_override=None, cwd=tmp_path / "workspace")
+    first_runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         create_result = await call_memory_tool(
             first_runtime,
@@ -82,7 +82,7 @@ async def test_repository_tools_persist_across_runtime_recreation(
     finally:
         first_runtime.close()
 
-    second_runtime = create_runtime(project_override=None, cwd=tmp_path / "workspace")
+    second_runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         get_result = await call_memory_tool(
             second_runtime,

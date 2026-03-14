@@ -15,7 +15,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
-    runtime = create_runtime(project_override=None, cwd=tmp_path / "workspace")
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         first = await call_memory_tool(
             runtime,
@@ -77,7 +77,7 @@ async def test_import_markdown_memory_file_uses_existing_importer(monkeypatch, t
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
-    runtime = create_runtime(project_override=None, cwd=workspace)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
         markdown_file = workspace / "epic-01.md"
         markdown_file.write_text(

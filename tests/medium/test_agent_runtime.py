@@ -36,7 +36,7 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(project_override=None, cwd=workspace)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.journal is not None
     assert runtime.task_queue is not None
     assert runtime.repository is not None
@@ -46,14 +46,14 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         runtime.journal.record("track sqlite queue worker retries")
         task = runtime.task_queue.enqueue(
             SYSTEM1_INGEST_TASK_NAME,
-            workspace_id=runtime.project_name,
-            data={"workspace_id": runtime.project_name},
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
             available_at=0.0,
             task_id="ingest-test",
         )
 
         result = await handle_ingest_system1_task(runtime, task)
-        records = runtime.repository.list_memories(workspace_id=runtime.project_name)
+        records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
 
         assert len(result["created_memory_ids"]) == 1
         assert len(result["processed_entry_ids"]) == 2
@@ -62,7 +62,7 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         assert records[0].metadata["ingest_task_id"] == "ingest-test"
         summary_task = runtime.task_queue.find_open_task(
             SUMMARIZE_MEMORY_TASK_NAME,
-            runtime.project_name or "global",
+            runtime.workspace_id or "global",
         )
         assert summary_task is not None
         assert summary_task.data["memory_id"] == records[0].id
@@ -77,7 +77,7 @@ async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_p
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(project_override=None, cwd=workspace)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.repository is not None
     assert runtime.task_queue is not None
 
@@ -85,7 +85,7 @@ async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_p
         record = runtime.repository.create_memory(
             title="Queue summary",
             content="First sentence. Second sentence. Third sentence.",
-            workspace_ids=[runtime.project_name or "global"],
+            workspace_ids=[runtime.workspace_id or "global"],
             summary="stale",
         )
         task = runtime.task_queue.enqueue(
@@ -113,7 +113,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     from mcp_memory.context import ApplicationContext
 
-    ctx = ApplicationContext(project_name="workspace-a", db_manager=db_manager, task_queue=queue)
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
 
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
@@ -133,7 +133,7 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(project_override=str(workspace), cwd=workspace)
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     assert runtime.repository is not None
     assert runtime.task_queue is not None
     assert runtime.db_manager is not None
@@ -143,7 +143,7 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         stale_plan = runtime.repository.create_memory(
             title="Old plan",
             content="This plan is stale.",
-            workspace_ids=[runtime.project_name or "global"],
+            workspace_ids=[runtime.workspace_id or "global"],
             memory_type="plan",
             created_at=stale_timestamp,
             updated_at=stale_timestamp,
@@ -151,12 +151,12 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         healthy_memory = runtime.repository.create_memory(
             title="Healthy ext link",
             content="Tracks a valid file.",
-            workspace_ids=[runtime.project_name or "global"],
+            workspace_ids=[runtime.workspace_id or "global"],
         )
         broken_memory = runtime.repository.create_memory(
             title="Broken ext link",
             content="Tracks a missing file.",
-            workspace_ids=[runtime.project_name or "global"],
+            workspace_ids=[runtime.workspace_id or "global"],
         )
         valid_file = workspace / "README.md"
         valid_file.write_text("ok", encoding="utf-8")
@@ -170,7 +170,7 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
             (
                 "old-completed-task",
                 "sweeper",
-                runtime.project_name,
+                runtime.workspace_id,
                 "{}",
                 "completed",
                 100,
@@ -185,7 +185,7 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         )
         conn.execute(
             "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",
-            ("processed note", runtime.project_name, cutoff_timestamp, "processed"),
+            ("processed note", runtime.workspace_id, cutoff_timestamp, "processed"),
         )
         conn.commit()
 
@@ -194,8 +194,8 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
             TaskRecord(
                 id="project-manager-task",
                 task_name=PROJECT_MANAGER_TASK_NAME,
-                data={"workspace_id": runtime.project_name},
-                workspace_id=runtime.project_name,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
                 retries_count=0,
@@ -215,10 +215,10 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
                 id="fact-checker-task",
                 task_name=FACT_CHECKER_TASK_NAME,
                 data={
-                    "workspace_id": runtime.project_name,
+                    "workspace_id": runtime.workspace_id,
                     "workspace_root": str(workspace),
                 },
-                workspace_id=runtime.project_name,
+                workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
                 retries_count=0,
@@ -237,8 +237,8 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
             TaskRecord(
                 id="sweeper-task",
                 task_name=SWEEPER_TASK_NAME,
-                data={"workspace_id": runtime.project_name},
-                workspace_id=runtime.project_name,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
                 retries_count=0,
@@ -271,7 +271,7 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(project_override=None, cwd=workspace)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.journal is not None
     assert runtime.task_queue is not None
     assert runtime.repository is not None
@@ -281,8 +281,8 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
         runtime.journal.record("second queue thought")
         runtime.task_queue.enqueue(
             SYSTEM1_INGEST_TASK_NAME,
-            workspace_id=runtime.project_name,
-            data={"workspace_id": runtime.project_name},
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
             available_at=0.0,
         )
         worker = build_runtime_task_worker(runtime)
@@ -294,6 +294,6 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
             await asyncio.sleep(0.02)
         await worker.stop(0.1)
 
-        assert runtime.repository.list_memories(workspace_id=runtime.project_name)
+        assert runtime.repository.list_memories(workspace_id=runtime.workspace_id)
     finally:
         runtime.close()

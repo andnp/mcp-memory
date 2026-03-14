@@ -45,7 +45,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     task_queue.fail_permanently(task.id, "summary provider offline", failed_at=11.0)
 
     ctx = ApplicationContext(
-        project_name="workspace-a",
+        workspace_id="workspace-a",
         memory_path=db_manager.db_path.parent,
         db_manager=db_manager,
         repository=repository,

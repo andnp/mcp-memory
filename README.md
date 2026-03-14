@@ -1,39 +1,35 @@
 # MCP Memory Server
 
-A standalone Model Context Protocol (MCP) server for persistent AI memory management. This project extracts the high-performance memory subsystem from `mcp-markdown-ragdocs` into a dedicated, lightweight service.
+A standalone Model Context Protocol (MCP) server for persistent AI memory management.
 
 ## 🚀 Overview
 
-The MCP Memory Server provides a persistent "Memory Bank" for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. It uses a sophisticated hybrid search engine (Vector + Keyword + Graph) with specialized recency boosting and cross-corpus linking.
+The MCP Memory Server provides a persistent memory bank for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. The current runtime is relational, workspace-aware, and backed by one shared global SQLite store.
 
 ## 🚧 Current status
 
 The runtime is now **relational-first**.
 
 - New memory CRUD, search, read, and markdown import flows run through the relational runtime.
-- The old file-backed manager/search/tool path has been removed from the active codebase.
-- Background task handling is now part of the runtime surface rather than a future-only design note.
-- Hybrid index modules still exist in `indices/`, but they are no longer the primary runtime path.
+- Background task handling is now part of the active runtime surface.
+- The MCP stdio entrypoint is now a thin proxy that auto-starts a proper workspace daemon on demand.
 
 ### Key Features
 
-- **Hybrid Search**: Combines semantic vector search (FAISS), keyword search (SQLite FTS5), and relationship graph search.
 - **Memory-Specific Recency Boost**: Automatically prioritizes recent memories (journals, plans) while preserving long-term facts.
 - **Graph-Based Linking**: Supports `[[wikilinks]]` between memories and external documents with context-aware edges.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
-- **Local Management API**: A read-only FastAPI dashboard/API exposes runtime health, failed tasks, recent memories, and lineage inspection over localhost.
+- **Workspace Daemon**: One localhost daemon per workspace owns runtime state, background workers, and the management API.
+- **Local Management API**: The daemon exposes a read-only dashboard/API for runtime health, failed tasks, recent memories, and lineage inspection.
 
 ## 🛠 Tech Stack
 
 - **Python 3.13+**
 - **MCP (Model Context Protocol)**: Standard interface for AI tool integration.
-- **LlamaIndex**: Core indexing and retrieval infrastructure.
-- **FAISS**: High-performance vector similarity search.
 - **SQLite (FTS5)**: Robust keyword search and relational storage.
-- **Sentence-Transformers**: Local embedding generation.
-- **NetworkX**: Relationship graph management.
+- **FastAPI + Uvicorn**: Local daemon and management API.
 
 ## 📂 Project Structure
 
@@ -41,14 +37,14 @@ The runtime is now **relational-first**.
 mcp-memory/
 ├── src/
 │   └── mcp_memory/
-│       ├── core/           # Journal, task runtime, and shared utilities
+│       ├── core/           # Journal, task runtime, provider wrappers, and shared utilities
+│       ├── management/     # Dashboard service models and static assets
 │       ├── relational/     # Relational repository, importer, and search services
-│       ├── indices/        # Hybrid index experiments and storage backends
-│       ├── mcp/            # MCP server implementation and tools
-│       ├── models/         # Pydantic data models
-│       ├── utils/          # Shared utilities (Config, IO, Similarity)
+│       ├── mcp/            # MCP tool handlers and runtime wiring
+│       ├── utils/          # Shared utilities (Config, DB, IO)
 │       ├── cli.py          # Command-line interface
-│       └── server.py       # Main entry point
+│       ├── daemon.py       # Workspace daemon and autostart logic
+│       └── server.py       # MCP stdio thin proxy
 ├── tests/                  # Comprehensive test suite
 ├── pyproject.toml          # Dependency management (uv/hatch)
 └── README.md               # You are here
@@ -71,45 +67,72 @@ The following tools are exposed via the MCP server:
 - `import_markdown_memory_file`: Import a legacy markdown memory file into the relational store.
 
 ### Runtime Statistics
-- `get_memory_stats`: Return basic runtime statistics for the journal, relational records, and indexed documents.
+- `get_memory_stats`: Return basic runtime statistics for the journal, relational records, active workspace, and AI configuration.
 
 The public MCP surface is relational-first; removed file-backed tools are intentionally not part of the supported API.
 
 ## ⚙️ Configuration
 
-Configured via `config.toml` or environment variables:
-
-```toml
-[ai]
-provider = "gemini-cli"
-model = "gemini-3-flash-preview"
-command = "gemini"
-model_flag = "--model"
-timeout_seconds = 60
-max_retries = 1
-
-[memory]
-enabled = true
-storage_strategy = "shared"
-score_threshold = 0.1
-
-[memory.recency_journal]
-boost_window_days = 14
-max_boost_amount = 0.2
-boost_decay_rate = 0.95
-```
-
 Preferred config location:
 
 - `~/.config/mcp-memory/config.toml`
-
-Legacy config locations are still read for compatibility.
 
 The runtime stores relational state in a shared global directory, typically:
 
 - `~/.local/share/mcp-memory/memories/indices/memory.db`
 
+If `XDG_DATA_HOME` is set, that location is used instead of `~/.local/share`.
+
 The active workspace ID is derived from the current git root when available, with a stable path-based fallback outside git repos.
+
+### Example `config.toml`
+
+```toml
+[ai]
+provider = "none"
+model = "gemini-3-flash-preview"
+timeout_seconds = 60
+max_retries = 1
+
+[gemini_cli]
+command = "gemini"
+
+[daemon]
+host = "127.0.0.1"
+auto_start_timeout_seconds = 10.0
+shutdown_grace_seconds = 5.0
+healthcheck_interval_seconds = 0.05
+
+[memory]
+enabled = true
+checkpoint_interval_ops = 10
+checkpoint_interval_secs = 300
+
+[memory.recency_journal]
+boost_window_days = 14
+max_boost_amount = 0.2
+boost_decay_rate = 0.95
+
+[memory.recency_plan]
+boost_window_days = 7
+max_boost_amount = 0.5
+boost_decay_rate = 0.9
+
+[memory.recency_fact]
+boost_window_days = 60
+max_boost_amount = 0.2
+boost_decay_rate = 0.99
+
+[memory.recency_observation]
+boost_window_days = 14
+max_boost_amount = 0.2
+boost_decay_rate = 0.95
+
+[memory.recency_reflection]
+boost_window_days = 30
+max_boost_amount = 0.15
+boost_decay_rate = 0.98
+```
 
 ## 🏃 Getting Started
 
@@ -118,19 +141,40 @@ The active workspace ID is derived from the current git root when available, wit
    uv sync
    ```
 
-2. **Run the server**:
+2. **Create the config directory**:
+   ```bash
+   mkdir -p ~/.config/mcp-memory
+   ```
+
+3. **Write your config**:
+   Save the example above to:
+   ```text
+   ~/.config/mcp-memory/config.toml
+   ```
+
+4. **Authenticate your AI provider**:
+  If you set `ai.provider = "gemini-cli"`, make sure the Gemini CLI is installed and authenticated before relying on AI-assisted background tasks.
+
+5. **Run the MCP proxy**:
    ```bash
    uv run mcp-memory run
    ```
 
-3. **Run the management dashboard**:
-  ```bash
-  uv run mcp-memory dashboard --host 127.0.0.1 --port 8765
-  ```
+   This command auto-starts the workspace daemon if it is not already running.
 
-  Then open `http://127.0.0.1:8765/` for the read-only operations snapshot.
+6. **Get the dashboard URL**:
+   ```bash
+   uv run mcp-memory dashboard
+   ```
 
-4. **Configure with your AI Assistant**:
+   This command ensures the daemon is running and prints the dashboard URL.
+
+7. **Run the daemon manually** (optional):
+   ```bash
+   uv run mcp-memory daemon
+   ```
+
+8. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {
@@ -142,6 +186,20 @@ The active workspace ID is derived from the current git root when available, wit
      }
    }
    ```
+
+9. **Smoke test the system**:
+   - confirm the printed dashboard URL loads
+   - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
+   - record a thought through your MCP client
+   - verify that the journal and relational memory counts increase as expected
+
+## Backup
+
+Because the runtime now uses one shared memory store, back up the directory periodically:
+
+```bash
+cp -R ~/.local/share/mcp-memory ~/.local/share/mcp-memory.backup
+```
 
 ## 📄 License
 

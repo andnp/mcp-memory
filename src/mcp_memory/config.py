@@ -1,477 +1,268 @@
-from dataclasses import dataclass, field, fields, is_dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
 from hashlib import sha1
 from pathlib import Path
 from typing import Any, cast
+import logging
 import os
 import re
-import logging
-import tomllib
-import tomlkit
 import tempfile
+import tomllib
+
+import tomlkit
+
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INDEX_PATH = ".index_data/"
 DEFAULT_APP_NAME = "mcp-memory"
 
 
 @dataclass
-class ProjectConfig:
-    name: str
-    path: str
+class MemoryRecencyConfig:
+    boost_window_days: int
+    max_boost_amount: float
+    boost_decay_rate: float
 
-    def __post_init__(self):
-        if not re.match(r"^[a-zA-Z0-9_-]+$", self.name):
-            raise ValueError(
-                f"Invalid project name '{self.name}': "
-                "must contain only alphanumeric characters, hyphens, and underscores"
-            )
-
-        path_obj = Path(self.path).expanduser()
-        if not path_obj.is_absolute():
-            raise ValueError(f"Project path '{self.path}' must be absolute")
-
-        self.path = str(path_obj.resolve())
+    def __post_init__(self) -> None:
+        if self.boost_window_days < 0:
+            raise ValueError("boost_window_days must be non-negative")
+        if not (0.0 <= self.max_boost_amount <= 0.5):
+            raise ValueError("max_boost_amount must be in [0.0, 0.5]")
+        if not (0.0 < self.boost_decay_rate < 1.0):
+            raise ValueError("boost_decay_rate must be in (0.0, 1.0)")
 
 
 @dataclass
-class IndexingConfig:
-    documents_path: str = "."
-    index_path: str = ".index_data/"
-    include: list[str] = field(default_factory=lambda: ["**/*"])
-    exclude: list[str] = field(
-        default_factory=lambda: [
-            "**/.venv/**",
-            "**/venv/**",
-            "**/build/**",
-            "**/dist/**",
-            "**/.git/**",
-            "**/node_modules/**",
-            "**/__pycache__/**",
-            "**/.pytest_cache/**",
-            "**/.codanna/**",
-            "**/*-egg-info/**",
-            "**/.mcp-markdown-ragdocs/**",
-            "**/.stversions/**",
-            "**/.worktree/**",
-            "**/.worktrees/**",
-        ]
+class MemoryConfig:
+    enabled: bool = True
+    checkpoint_interval_ops: int = 10
+    checkpoint_interval_secs: int = 300
+    recency_journal: MemoryRecencyConfig = field(
+        default_factory=lambda: MemoryRecencyConfig(14, 0.2, 0.95)
     )
-    exclude_hidden_dirs: bool = True
-    reconciliation_interval_seconds: int = 3600  # 1 hour, 0 to disable
-    embedding_workers: int = 4
-    delta_full_reindex_threshold: float = 0.5
-    move_detection_threshold: float = 0.8
+    recency_plan: MemoryRecencyConfig = field(
+        default_factory=lambda: MemoryRecencyConfig(7, 0.5, 0.9)
+    )
+    recency_fact: MemoryRecencyConfig = field(
+        default_factory=lambda: MemoryRecencyConfig(60, 0.2, 0.99)
+    )
+    recency_observation: MemoryRecencyConfig = field(
+        default_factory=lambda: MemoryRecencyConfig(14, 0.2, 0.95)
+    )
+    recency_reflection: MemoryRecencyConfig = field(
+        default_factory=lambda: MemoryRecencyConfig(30, 0.15, 0.98)
+    )
 
+    def __post_init__(self) -> None:
+        if self.checkpoint_interval_ops < 1:
+            raise ValueError("checkpoint_interval_ops must be >= 1")
+        if self.checkpoint_interval_secs < 0:
+            raise ValueError("checkpoint_interval_secs must be >= 0")
 
-@dataclass
-class SearchConfig:
-    semantic_weight: float = 1.0
-    keyword_weight: float = 1.0
-    recency_bias: float = 0.5
-    min_confidence: float = 0.3
-    max_chunks_per_doc: int = 2
-    dedup_threshold: float = 0.80
-    reranking_enabled: bool = True
-    rerank_top_n: int = 10
-
-
-@dataclass
-class LLMConfig:
-    embedding_model: str = "local"
-
-    DEFAULT_LOCAL_MODEL = "BAAI/bge-small-en-v1.5"
-
-    @property
-    def resolved_embedding_model(self) -> str:
-        """Return actual embedding model name, resolving 'local' to default.
-
-        This centralizes the embedding model resolution logic.
-        """
-        if self.embedding_model == "local":
-            return self.DEFAULT_LOCAL_MODEL
-        return self.embedding_model
+    def get_recency_config(self, memory_type: str) -> MemoryRecencyConfig:
+        return {
+            "journal": self.recency_journal,
+            "plan": self.recency_plan,
+            "fact": self.recency_fact,
+            "observation": self.recency_observation,
+            "reflection": self.recency_reflection,
+        }.get(memory_type, self.recency_journal)
 
 
 @dataclass
 class AIConfig:
-    provider: str = "gemini-cli"
+    provider: str = "none"
     model: str = "gemini-3-flash-preview"
-    command: str = "gemini"
-    model_flag: str = "--model"
     timeout_seconds: float = 60.0
     max_retries: int = 1
 
-    def __post_init__(self):
-        allowed_providers = {"none", "gemini-cli"}
-        if self.provider not in allowed_providers:
-            raise ValueError(
-                f"Invalid ai.provider {self.provider!r}: expected one of {sorted(allowed_providers)}"
-            )
+    def __post_init__(self) -> None:
+        if self.provider not in {"none", "gemini-cli"}:
+            raise ValueError("ai.provider must be 'none' or 'gemini-cli'")
         if self.timeout_seconds <= 0:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
             raise ValueError("ai.max_retries must be >= 0")
 
 
-def resolve_embedding_model(config: "Config") -> str:
-    """Resolve embedding model name from config with fallback.
-
-    This function provides a robust way to get the embedding model name,
-    handling edge cases where the LLMConfig.resolved_embedding_model property
-    might not be accessible (e.g., in subprocess environments with module
-    loading edge cases).
-
-    Use this function instead of accessing config.llm.resolved_embedding_model
-    directly in contexts where module loading may be unreliable (subprocess,
-    worker processes).
-    """
-    try:
-        return config.llm.resolved_embedding_model
-    except AttributeError:
-        # Fallback: resolve manually if property not accessible
-        model = config.llm.embedding_model
-        if model == "local":
-            return LLMConfig.DEFAULT_LOCAL_MODEL
-        return model
+@dataclass
+class GeminiCLIConfig:
+    command: str = "gemini"
 
 
 @dataclass
-class ChunkingConfig:
-    strategy: str = "header_based"
-    min_chunk_chars: int = 1000
-    max_chunk_chars: int = 3000
-    overlap_chars: int = 200
-    parent_chunk_min_chars: int = 1500
-    parent_chunk_max_chars: int = 4000
+class DaemonConfig:
+    host: str = "127.0.0.1"
+    auto_start_timeout_seconds: float = 10.0
+    shutdown_grace_seconds: float = 5.0
+    healthcheck_interval_seconds: float = 0.05
 
-
-@dataclass
-class GitIndexingConfig:
-    enabled: bool = True
-    watch_enabled: bool = True
-    poll_interval_seconds: float = 30.0
-
-
-@dataclass
-class MemoryRecencyConfig:
-    """Exponential additive recency boost configuration."""
-
-    boost_window_days: int
-    max_boost_amount: float
-    boost_decay_rate: float
-
-    def __post_init__(self):
-        if self.boost_window_days < 0:
-            raise ValueError(
-                f"boost_window_days must be non-negative, got {self.boost_window_days}"
-            )
-        if not (0.0 <= self.max_boost_amount <= 0.5):
-            raise ValueError(
-                f"max_boost_amount must be in [0.0, 0.5], got {self.max_boost_amount}"
-            )
-        if not (0.0 < self.boost_decay_rate < 1.0):
-            raise ValueError(
-                f"boost_decay_rate must be in (0.0, 1.0), got {self.boost_decay_rate}"
-            )
-
-
-@dataclass
-class MemoryConfig:
-    enabled: bool = True
-    storage_strategy: str = "shared"
-    score_threshold: float = 0.1
-    checkpoint_interval_ops: int = 10  # Persist every N operations
-    checkpoint_interval_secs: int = 300  # Or every M seconds (5 min default)
-
-    # Exponential additive recency boost per memory type
-    recency_journal: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(
-            boost_window_days=14,
-            max_boost_amount=0.2,
-            boost_decay_rate=0.95,
-        )
-    )
-    recency_plan: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(
-            boost_window_days=7,
-            max_boost_amount=0.5,
-            boost_decay_rate=0.9,
-        )
-    )
-    recency_fact: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(
-            boost_window_days=60,  # Facts are timeless
-            max_boost_amount=0.2,
-            boost_decay_rate=0.99,
-        )
-    )
-    recency_observation: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(
-            boost_window_days=14,
-            max_boost_amount=0.2,
-            boost_decay_rate=0.95,
-        )
-    )
-    recency_reflection: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(
-            boost_window_days=30,  # Reflections age well
-            max_boost_amount=0.15,
-            boost_decay_rate=0.98,
-        )
-    )
-
-    def __post_init__(self):
-        if self.storage_strategy not in ("shared", "project", "user"):
-            raise ValueError(
-                f"Invalid storage_strategy '{self.storage_strategy}': "
-                "must be 'shared', 'project', or 'user'"
-            )
-
-        if not (0.0 <= self.score_threshold <= 1.0):
-            raise ValueError(
-                f"score_threshold must be in [0.0, 1.0], got {self.score_threshold}"
-            )
-
-        if self.checkpoint_interval_ops < 1:
-            raise ValueError(
-                f"checkpoint_interval_ops must be >= 1, got {self.checkpoint_interval_ops}"
-            )
-
-        if self.checkpoint_interval_secs < 0:
-            raise ValueError(
-                f"checkpoint_interval_secs must be >= 0, got {self.checkpoint_interval_secs}"
-            )
-
-    def get_recency_config(self, memory_type: str) -> MemoryRecencyConfig:
-        """Get recency boost config for memory type."""
-        recency_configs = {
-            "journal": self.recency_journal,
-            "plan": self.recency_plan,
-            "fact": self.recency_fact,
-            "observation": self.recency_observation,
-            "reflection": self.recency_reflection,
-        }
-        if memory_type in recency_configs:
-            return recency_configs[memory_type]
-        logger.debug(
-            f"No recency config for type '{memory_type}', using recency_journal"
-        )
-        return self.recency_journal
+    def __post_init__(self) -> None:
+        if self.auto_start_timeout_seconds <= 0:
+            raise ValueError("daemon.auto_start_timeout_seconds must be > 0")
+        if self.shutdown_grace_seconds < 0:
+            raise ValueError("daemon.shutdown_grace_seconds must be >= 0")
+        if self.healthcheck_interval_seconds <= 0:
+            raise ValueError("daemon.healthcheck_interval_seconds must be > 0")
 
 
 @dataclass
 class Config:
-    indexing: IndexingConfig = field(default_factory=IndexingConfig)
-    git_indexing: GitIndexingConfig = field(default_factory=GitIndexingConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    search: SearchConfig = field(default_factory=SearchConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
     ai: AIConfig = field(default_factory=AIConfig)
-    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
-    projects: list[ProjectConfig] = field(default_factory=list)
-    detected_project: str | None = None
+    gemini_cli: GeminiCLIConfig = field(default_factory=GeminiCLIConfig)
+    daemon: DaemonConfig = field(default_factory=DaemonConfig)
 
 
-def _expand_path(path_str: str):
-    path = Path(path_str).expanduser()
-    if not path.is_absolute():
-        path = path.resolve()
-    return str(path)
-
-
-def _load_dataclass_from_dict[T](
-    cls: type[T], data: dict[str, Any], path_fields: set[str] | None = None
-) -> T:
-    if path_fields is None:
-        path_fields = set()
-
+def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
     kwargs: dict[str, Any] = {}
-    for f in fields(cast(type, cls)):
-        if f.name not in data:
+    for field_info in fields(cls):
+        if field_info.name not in data:
             continue
-
-        value = data[f.name]
-
-        if (
-            is_dataclass(f.type)
-            and isinstance(f.type, type)
-            and isinstance(value, dict)
-        ):
-            value = _load_dataclass_from_dict(f.type, value)
-        elif f.name in path_fields and isinstance(value, str):
-            value = _expand_path(value)
-
-        kwargs[f.name] = value
-
+        value = data[field_info.name]
+        if isinstance(value, dict) and hasattr(field_info.type, "__dataclass_fields__"):
+            value = _load_dataclass_from_dict(cast(type[Any], field_info.type), value)
+        kwargs[field_info.name] = value
     return cls(**kwargs)
 
 
-def _load_memory_config(data: dict[str, Any]):
+def _load_memory_config(data: dict[str, Any]) -> MemoryConfig:
     kwargs: dict[str, Any] = {}
+    for key in {"enabled", "checkpoint_interval_ops", "checkpoint_interval_secs"}:
+        if key in data:
+            kwargs[key] = data[key]
 
-    simple_fields = {
-        "enabled",
-        "storage_strategy",
-        "score_threshold",
-        "checkpoint_interval_ops",
-        "checkpoint_interval_secs",
-    }
-    recency_fields = {
+    for key in {
         "recency_journal",
         "recency_plan",
         "recency_fact",
         "recency_observation",
         "recency_reflection",
-    }
-
-    for key in simple_fields:
-        if key in data:
-            kwargs[key] = data[key]
-
-    for key in recency_fields:
+    }:
         if key in data and isinstance(data[key], dict):
             kwargs[key] = _load_dataclass_from_dict(MemoryRecencyConfig, data[key])
 
     return MemoryConfig(**kwargs)
 
 
-def _find_project_config():
-    current = Path.cwd()
-
-    while True:
-        config_path = current / ".mcp-memory" / "config.toml"
-        if config_path.exists():
-            return config_path
-
-        config_path = current / ".mcp-markdown-ragdocs" / "config.toml"
-        if config_path.exists():
-            return config_path
-
-        parent = current.parent
-        if parent == current:
-            return None
-
-        current = parent
+def resolve_default_config_path() -> Path:
+    return Path.home() / ".config" / DEFAULT_APP_NAME / "config.toml"
 
 
-def load_config():
-    config_locations = []
+def resolve_global_data_dir() -> Path:
+    return Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
 
-    project_config = _find_project_config()
-    if project_config:
-        config_locations.append(project_config)
 
-    config_locations.append(Path.home() / ".config" / DEFAULT_APP_NAME / "config.toml")
-    config_locations.append(
-        Path.home() / ".config" / "mcp-markdown-ragdocs" / "config.toml"
-    )
+def resolve_state_dir() -> Path:
+    return Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local" / "state")) / DEFAULT_APP_NAME
 
-    config_data: dict[str, Any] = {}
-    for config_path in config_locations:
-        if config_path.exists():
-            with open(config_path, "rb") as f:
-                config_data = tomllib.load(f)
-            break
 
-    indexing = _load_dataclass_from_dict(
-        IndexingConfig,
-        config_data.get("indexing", {}),
-        path_fields={"documents_path", "index_path"},
-    )
-    # Always expand paths (defaults may be relative)
-    indexing.documents_path = _expand_path(indexing.documents_path)
-    indexing.index_path = _expand_path(indexing.index_path)
+def ensure_default_config_exists(config_path: Path | None = None) -> Path:
+    resolved_path = config_path or resolve_default_config_path()
+    if resolved_path.exists():
+        return resolved_path
 
-    search = _load_dataclass_from_dict(SearchConfig, config_data.get("search", {}))
-    llm = _load_dataclass_from_dict(LLMConfig, config_data.get("llm", {}))
-    ai = _load_dataclass_from_dict(AIConfig, config_data.get("ai", {}))
-    git_indexing = _load_dataclass_from_dict(
-        GitIndexingConfig, config_data.get("git_indexing", {})
-    )
-    memory = _load_memory_config(config_data.get("memory", {}))
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    document = tomlkit.document()
+    document["ai"] = {
+        "provider": "none",
+        "model": "gemini-3-flash-preview",
+        "timeout_seconds": 60,
+        "max_retries": 1,
+    }
+    document["gemini_cli"] = {"command": "gemini"}
+    document["daemon"] = {
+        "host": "127.0.0.1",
+        "auto_start_timeout_seconds": 10.0,
+        "shutdown_grace_seconds": 5.0,
+        "healthcheck_interval_seconds": 0.05,
+    }
+    document["memory"] = {
+        "enabled": True,
+        "checkpoint_interval_ops": 10,
+        "checkpoint_interval_secs": 300,
+    }
+    for key, value in {
+        "recency_journal": (14, 0.2, 0.95),
+        "recency_plan": (7, 0.5, 0.9),
+        "recency_fact": (60, 0.2, 0.99),
+        "recency_observation": (14, 0.2, 0.95),
+        "recency_reflection": (30, 0.15, 0.98),
+    }.items():
+        document["memory"][key] = {
+            "boost_window_days": value[0],
+            "max_boost_amount": value[1],
+            "boost_decay_rate": value[2],
+        }
 
-    chunking_data = config_data.get(
-        "chunking", config_data.get("chunking_documents", {})
-    )
-    chunking = _load_dataclass_from_dict(ChunkingConfig, chunking_data)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=resolved_path.parent,
+        delete=False,
+        suffix=".tmp",
+        encoding="utf-8",
+    ) as handle:
+        tmp_path = Path(handle.name)
+        tomlkit.dump(document, handle)
 
-    projects_data = config_data.get("projects", [])
-    projects = []
-    if projects_data:
-        for proj_data in projects_data:
-            try:
-                projects.append(
-                    ProjectConfig(name=proj_data["name"], path=proj_data["path"])
-                )
-            except (KeyError, ValueError) as e:
-                logger.warning(
-                    f"Skipping invalid project config: {e}. Project data: {proj_data}"
-                )
+    tmp_path.replace(resolved_path)
+    logger.info("Created default config at %s", resolved_path)
+    return resolved_path
 
-    _validate_projects(projects)
+
+def load_config(config_path: Path | None = None) -> Config:
+    resolved_path = ensure_default_config_exists(config_path)
+    with resolved_path.open("rb") as handle:
+        raw = tomllib.load(handle)
 
     return Config(
-        indexing=indexing,
-        git_indexing=git_indexing,
-        memory=memory,
-        search=search,
-        llm=llm,
-        ai=ai,
-        chunking=chunking,
-        projects=projects,
+        memory=_load_memory_config(raw.get("memory", {})),
+        ai=_load_dataclass_from_dict(AIConfig, raw.get("ai", {})),
+        gemini_cli=_load_dataclass_from_dict(GeminiCLIConfig, raw.get("gemini_cli", {})),
+        daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
     )
-
-
-def resolve_global_data_dir():
-    data_home = os.getenv("XDG_DATA_HOME")
-    if data_home:
-        return Path(data_home)
-    return Path.home() / ".local" / "share"
 
 
 def resolve_workspace_root(
     cwd: Path | None = None,
-    workspace_override: str | None = None,
-):
-    if workspace_override:
-        override_path = Path(workspace_override).expanduser()
-        if override_path.exists():
-            base_path = override_path.resolve()
-        else:
-            base_path = override_path
-    else:
-        base_path = (cwd or Path.cwd()).expanduser().resolve()
-
+    workspace_root: str | None = None,
+) -> Path:
+    base_path = Path(workspace_root).expanduser().resolve() if workspace_root else (cwd or Path.cwd()).expanduser().resolve()
     git_root = _find_git_root(base_path)
-    if git_root is not None:
-        return git_root
-    return base_path
+    return git_root or base_path
 
 
 def resolve_workspace_id(
     cwd: Path | None = None,
-    workspace_override: str | None = None,
-):
-    workspace_root = resolve_workspace_root(cwd, workspace_override)
-    normalized_path = str(workspace_root)
-    digest = sha1(normalized_path.encode("utf-8")).hexdigest()[:12]
-    base_name = workspace_root.name or "workspace"
-    slug = re.sub(r"[^a-zA-Z0-9_-]", "-", base_name)
+    workspace_root: str | None = None,
+) -> str:
+    resolved_root = resolve_workspace_root(cwd, workspace_root)
+    digest = sha1(str(resolved_root).encode("utf-8")).hexdigest()[:12]
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "-", resolved_root.name or "workspace")
     slug = re.sub(r"-+", "-", slug).strip("-") or "workspace"
     return f"{slug}-{digest}"
 
 
-def resolve_workspace_lock_path(memory_path: Path, workspace_id: str):
-    lock_dir = memory_path / "locks"
+def resolve_memory_path(config: Config) -> Path:
+    del config
+    return resolve_global_data_dir() / DEFAULT_APP_NAME / "memories"
+
+
+def resolve_daemon_metadata_path(workspace_id: str) -> Path:
+    metadata_dir = resolve_state_dir() / "daemons"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    return metadata_dir / f"{workspace_id}.json"
+
+
+def resolve_daemon_lock_path(workspace_id: str) -> Path:
+    lock_dir = resolve_state_dir() / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    digest = sha1(workspace_id.encode("utf-8")).hexdigest()[:16]
-    return lock_dir / f"{digest}.lock"
+    return lock_dir / f"{workspace_id}.lock"
 
 
-def _find_git_root(start_path: Path):
+def _find_git_root(start_path: Path) -> Path | None:
     current = start_path if start_path.is_dir() else start_path.parent
-    current = current.resolve()
     while True:
         if (current / ".git").exists():
             return current
@@ -479,317 +270,3 @@ def _find_git_root(start_path: Path):
         if parent == current:
             return None
         current = parent
-
-
-def _validate_projects(projects: list[ProjectConfig]):
-    names = [p.name for p in projects]
-    if len(names) != len(set(names)):
-        dupes = [name for name in names if names.count(name) > 1]
-        raise ValueError(
-            f"Duplicate project names found: {', '.join(set(dupes))}. "
-            "Each project must have a unique name."
-        )
-
-    paths = [p.path for p in projects]
-    if len(paths) != len(set(paths)):
-        dupes = [path for path in paths if paths.count(path) > 1]
-        raise ValueError(
-            f"Duplicate project paths found: {', '.join(set(dupes))}. "
-            "Each project must have a unique path."
-        )
-
-
-def _generate_unique_project_name(base_name: str, existing_names: list[str]):
-    name = re.sub(r"[^a-zA-Z0-9_-]", "-", base_name)
-    name = re.sub(r"-+", "-", name).strip("-")
-
-    if not name or not re.match(r"^[a-zA-Z0-9_-]+$", name):
-        name = "project"
-
-    if name not in existing_names:
-        return name
-
-    counter = 2
-    while f"{name}-{counter}" in existing_names:
-        counter += 1
-
-    return f"{name}-{counter}"
-
-
-def persist_project_to_config(project_name: str, project_path: str):
-    global_config_path = (
-        Path.home() / ".config" / "mcp-markdown-ragdocs" / "config.toml"
-    )
-
-    global_config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    doc: Any
-    if global_config_path.exists():
-        with open(global_config_path, "r") as f:
-            doc = tomlkit.load(f)
-    else:
-        doc = tomlkit.document()
-
-    if "projects" not in doc:
-        doc["projects"] = tomlkit.aot()
-
-    projects_array: Any = doc["projects"]
-    if not isinstance(projects_array, list):
-        from tomlkit.items import AoT
-
-        projects_array = AoT([])
-        doc["projects"] = projects_array
-
-    # Cast to avoid type checker issues with tomlkit types
-    projects_list = cast(list[Any], projects_array)
-
-    for proj_item in projects_list:
-        proj = cast(dict[str, Any], proj_item)
-        if proj.get("name") == project_name:
-            logger.debug(f"Project '{project_name}' already exists in config")
-            return
-        if proj.get("path") == project_path:
-            logger.debug(f"Project path '{project_path}' already registered")
-            return
-
-    new_project: Any = tomlkit.table()
-    new_project["name"] = project_name
-    new_project["path"] = project_path
-    projects_list.append(new_project)
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=global_config_path.parent, delete=False, suffix=".tmp"
-    ) as tmp_file:
-        tmp_path = Path(tmp_file.name)
-        tomlkit.dump(doc, tmp_file)
-
-    tmp_path.replace(global_config_path)
-    logger.info(f"Persisted project '{project_name}' to config: {project_path}")
-
-
-def detect_project(
-    cwd: Path | None = None,
-    projects: list[ProjectConfig] | None = None,
-    project_override: str | None = None,
-):
-    if project_override:
-        if projects is None:
-            global_config_path = (
-                Path.home() / ".config" / "mcp-markdown-ragdocs" / "config.toml"
-            )
-            if global_config_path.exists():
-                with open(global_config_path, "rb") as f:
-                    config_data = tomllib.load(f)
-                projects_data = config_data.get("projects", [])
-                projects = []
-                for proj_data in projects_data:
-                    try:
-                        projects.append(
-                            ProjectConfig(
-                                name=proj_data["name"], path=proj_data["path"]
-                            )
-                        )
-                    except (KeyError, ValueError):
-                        continue
-
-        if projects:
-            for project in projects:
-                if project.name == project_override:
-                    logger.info(
-                        f"Using project from --project flag: {project.name} (path: {project.path})"
-                    )
-                    return project.name
-
-            project_path = Path(project_override).expanduser().resolve()
-            for project in projects:
-                if Path(project.path).resolve() == project_path:
-                    logger.info(
-                        f"Using project from --project flag (matched by path): {project.name}"
-                    )
-                    return project.name
-
-            # Check if project_override path is a subdirectory of a known project (deepest-match-wins)
-            projects_sorted = sorted(
-                projects, key=lambda p: len(Path(p.path).parts), reverse=True
-            )
-            for project in projects_sorted:
-                project_path_resolved = Path(project.path).resolve()
-                try:
-                    project_path.relative_to(project_path_resolved)
-                    logger.info(
-                        f"Using project from --project flag (subdirectory of '{project.name}'): {project.path}"
-                    )
-                    return project.name
-                except ValueError:
-                    continue
-
-        project_path = Path(project_override).expanduser().resolve()
-        if project_path.exists():
-            logger.info(f"Using arbitrary path from --project flag: {project_path}")
-
-            existing_names = [p.name for p in (projects or [])]
-            project_name = _generate_unique_project_name(
-                project_path.name, existing_names
-            )
-
-            try:
-                persist_project_to_config(project_name, str(project_path))
-            except Exception as e:
-                logger.warning(f"Failed to persist project to config: {e}")
-
-            return project_name
-
-        logger.warning(
-            f"Project override '{project_override}' not found in registry and is not a valid path"
-        )
-        return None
-
-    if cwd is None:
-        cwd = Path.cwd()
-
-    if projects is None:
-        global_config_path = (
-            Path.home() / ".config" / "mcp-markdown-ragdocs" / "config.toml"
-        )
-        if not global_config_path.exists():
-            projects = []
-        else:
-            with open(global_config_path, "rb") as f:
-                config_data = tomllib.load(f)
-
-            projects_data = config_data.get("projects", [])
-            projects = []
-            for proj_data in projects_data:
-                try:
-                    projects.append(
-                        ProjectConfig(name=proj_data["name"], path=proj_data["path"])
-                    )
-                except (KeyError, ValueError):
-                    continue
-
-    if not projects:
-        projects = []
-
-    cwd_resolved = cwd.resolve()
-
-    projects_sorted = sorted(
-        projects, key=lambda p: len(Path(p.path).parts), reverse=True
-    )
-
-    for project in projects_sorted:
-        project_path = Path(project.path).resolve()
-
-        try:
-            cwd_resolved.relative_to(project_path)
-            logger.info(f"Detected project: {project.name} (path: {project.path})")
-            return project.name
-        except ValueError:
-            continue
-
-    logger.debug(f"No project match for CWD: {cwd_resolved}")
-
-    if cwd_resolved.exists():
-        logger.info(f"Auto-registering CWD as new project: {cwd_resolved}")
-
-        existing_names = [p.name for p in projects]
-        project_name = _generate_unique_project_name(cwd_resolved.name, existing_names)
-
-        try:
-            persist_project_to_config(project_name, str(cwd_resolved))
-            logger.info(
-                f"Successfully persisted CWD project '{project_name}': {cwd_resolved}"
-            )
-            return project_name
-        except Exception as e:
-            logger.warning(f"Failed to persist CWD project to config: {e}")
-            return None
-
-    return None
-
-
-def resolve_index_path(config: Config, detected_project: str | None = None):
-    index_path_str = config.indexing.index_path
-
-    expanded = Path(index_path_str).expanduser()
-    if not expanded.is_absolute():
-        expanded = expanded.resolve()
-
-    default_resolved = Path(DEFAULT_INDEX_PATH).resolve()
-    if expanded != default_resolved:
-        logger.info(f"Using explicit index path from config: {expanded}")
-        return expanded
-
-    data_home = os.getenv("XDG_DATA_HOME")
-    if data_home:
-        base_dir = Path(data_home)
-    else:
-        base_dir = Path.home() / ".local" / "share"
-
-    if detected_project:
-        safe_project_name = detected_project.replace("/", "_").replace("\\", "_")
-        index_path = base_dir / "mcp-markdown-ragdocs" / safe_project_name
-        logger.info(
-            f"Using global data directory for project '{detected_project}': {index_path}"
-        )
-        return index_path
-
-    cwd = Path.cwd()
-    cwd_name = cwd.name
-    sanitized_name = re.sub(r"[^a-zA-Z0-9_-]", "-", cwd_name)
-    sanitized_name = re.sub(r"-+", "-", sanitized_name).strip("-")
-
-    if not sanitized_name:
-        sanitized_name = "default"
-
-    fallback_name = f"local-{sanitized_name}"
-    index_path = base_dir / "mcp-markdown-ragdocs" / fallback_name
-    logger.info(
-        f"No project detected, using global data directory with fallback: {index_path}"
-    )
-    return index_path
-
-
-def resolve_documents_path(
-    config: Config,
-    detected_project: str | None = None,
-    projects: list[ProjectConfig] | None = None,
-) -> str:
-    # If project detected, use the project's path (ignore config.indexing.documents_path)
-    if detected_project and projects:
-        for project in projects:
-            if project.name == detected_project:
-                project_path = Path(project.path)
-                logger.info(
-                    f"Using project path as documents root for '{detected_project}': {project_path}"
-                )
-                return str(project_path)
-
-    # No project: use documents_path from config
-    documents_path_str = config.indexing.documents_path
-    documents_path = Path(documents_path_str).expanduser()
-
-    # If already absolute, use as-is
-    if documents_path.is_absolute():
-        logger.info(f"Using explicit absolute documents path: {documents_path}")
-        return str(documents_path)
-
-    # Otherwise resolve relative to CWD
-    resolved_path = documents_path.resolve()
-    logger.info(f"Using documents path relative to CWD: {resolved_path}")
-    return str(resolved_path)
-
-
-def resolve_memory_path(
-    config: Config,
-    detected_project: str | None = None,
-    projects: list[ProjectConfig] | None = None,
-) -> Path:
-    if config.memory.storage_strategy != "shared":
-        logger.warning(
-            "memory.storage_strategy=%r is deprecated; using shared global storage instead",
-            config.memory.storage_strategy,
-        )
-
-    memory_path = resolve_global_data_dir() / DEFAULT_APP_NAME / "memories"
-    logger.info("Using shared global memory path: %s", memory_path)
-    return memory_path
