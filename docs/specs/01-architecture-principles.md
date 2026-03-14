@@ -1,7 +1,7 @@
 # Architecture Principles: Relational Memory Server
 
 ## 1. Relational-First Persistence
-The long-term direction for `mcp-memory` is a **relational source of truth** in SQLite. In the current migration phase, relational runtime state coexists with legacy Markdown/index-backed paths used for compatibility and search experimentation. New runtime-backed memory records should be modeled as structured relational data first, with filesystem-backed memories treated as a temporary bridge rather than the target architecture.
+`mcp-memory` now treats SQLite as the operational source of truth for the runtime. New writes, reads, search results, and markdown imports flow through the relational repository and relational search services. Filesystem-backed runtime management has been removed rather than preserved as a long-term compatibility layer.
 
 ## 2. "Soft" Project Context (Workspace IDs)
 Projects are no longer hard silos. Instead of tying context to brittle, absolute file paths:
@@ -20,10 +20,7 @@ To minimize context window bloat, the server enforces a two-stage discovery proc
 - **Read Tool**: Returns the full content.
 Agents are instructed to search first and only "read" memories that are highly relevant to the task.
 
-During the migration, not every stage of this flow is implemented as a public MCP tool yet. Documentation and code should distinguish between:
-- **implemented runtime tools**
-- **internal prototypes/compatibility modules**
-- **target architecture**
+The current public MCP surface already supports this pattern through relational search and read tools. Future work should refine ranking and maintenance quality, not reintroduce a separate file-backed runtime path.
 
 ## 5. Shared Daemon & Reference Counting
 The system operates as a persistent background daemon ("The Brain"). It remains alive only as long as an active client is connected, performing a graceful shutdown when the last client disconnects.

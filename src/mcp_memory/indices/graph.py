@@ -372,7 +372,7 @@ class GraphStore:
                 raise
 
     # ------------------------------------------------------------------
-    # Bulk access (used by ImplicitGraphBuilder and MemorySearchOrchestrator)
+    # Bulk access for graph-oriented callers that need node metadata snapshots.
     # ------------------------------------------------------------------
 
     def get_all_nodes_with_metadata(self) -> list[tuple[str, dict]]:
@@ -411,7 +411,7 @@ class GraphStore:
         """Get outgoing edges as (source, target, edge_data) tuples.
 
         Matches the NetworkX ``out_edges(data=True)`` interface for
-        compatibility with callers like ``MemorySearchOrchestrator``.
+        compatibility with graph-oriented callers that batch over node metadata.
         """
         with self._lock:
             try:

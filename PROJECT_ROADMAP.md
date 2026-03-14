@@ -7,6 +7,8 @@ This roadmap outlines the path to transforming the extracted memory subsystem in
 ## Epic 1: Project Foundation & Refactoring
 **Goal**: Establish a clean, self-contained codebase free of legacy dependencies.
 
+> Status note: the old file-backed runtime manager/search/tool path has been removed. Current roadmap work should assume a relational-first runtime rather than preserving compatibility with the extracted markdown-era architecture.
+
 ### Task 1.1: Namespace & Import Cleanup
 - **What**: Rename internal modules and fix all absolute/relative imports to use the `mcp_memory` namespace.
 - **Why**: To ensure the project is a fully portable package that doesn't conflict with or rely on the `mcp-markdown-ragdocs` structure.

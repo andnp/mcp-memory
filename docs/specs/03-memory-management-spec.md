@@ -3,9 +3,9 @@
 **Status:** ✅ Standalone Migration in Progress
 
 > Current implementation note:
-> - The relational schema and repository now exist and back part of the MCP runtime.
-> - Legacy Markdown/index-backed flows still remain in the package as transitional compatibility layers.
-> - The full progressive discovery/search/read public tool surface below is still a target design, not a fully implemented contract.
+> - The relational schema, repository, importer, and relational search service back the active MCP runtime.
+> - The old file-backed manager/search runtime path has been removed.
+> - Public MCP tools already expose relational create/get/list/search/read/import flows, while some advanced ranking and maintenance behaviors remain implementation work.
 
 ## 1. Relational Schema
 
@@ -20,10 +20,10 @@
 
 To minimize context window bloat, the active AI interacts via a two-stage discovery process:
 
-1. **`search_memories`**: 
+1. **`search_memory_records`**: 
     - **Inputs**: `query`, `limit`. (The `workspace_id` is automatically injected by the MCP proxy).
     - **Outputs**: Returns metadata and a **two-sentence summary** of matches.
-2. **`read_memory`**: 
+2. **`read_memory_record`**: 
     - **Inputs**: `memory_id`.
     - **Outputs**: Returns the **full content**, all structural relationships, AND a list of **superseded memories**. If the read memory supersedes older memories (e.g., a Reflection that summarizes 3 older Journals), the response explicitly lists the IDs and titles of those superseded memories. This allows the AI to trace the "why" and dig into historical context if needed.
     - **Side Effect**: Triggers the **Access Score Decay** logic (see below).
@@ -61,7 +61,7 @@ If a memory's `status` is `stale` (e.g. an untouched, old plan) or `degraded` (e
 ## 4. The Decaying Access Score Mechanics
 To prevent the "Rich Get Richer" algorithmic feedback loop, the system uses a **Time-Decayed Access Score**.
 
-When `read_memory` is called:
+When `read_memory_record` is called:
 1. The system calculates the time elapsed since `last_accessed_at`.
 2. The current `access_score` is decayed using a half-life formula (e.g., losing 50% of its value every 7 days).
 3. A value of `1.0` is added to the decayed score.

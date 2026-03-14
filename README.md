@@ -6,15 +6,14 @@ A standalone Model Context Protocol (MCP) server for persistent AI memory manage
 
 The MCP Memory Server provides a persistent "Memory Bank" for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. It uses a sophisticated hybrid search engine (Vector + Keyword + Graph) with specialized recency boosting and cross-corpus linking.
 
-## 🚧 Migration Status
+## 🚧 Current status
 
-The codebase is currently in a transition from the original Markdown/index-first extraction to the relational architecture described in `docs/specs/`.
+The runtime is now **relational-first**.
 
-- A relational SQLite memory schema now exists alongside the legacy index tables.
-- A SQLite-backed `RelationalMemoryRepository` provides the first UUID-based memory CRUD foundation.
-- The MCP runtime currently uses the relational repository for new runtime-backed memory records and the journal for raw thought capture.
-- Legacy Markdown- and index-backed flows still exist as compatibility/search paths while the architecture is being consolidated.
-- The system does **not** yet expose the full relational search/read tool surface described in the long-term specs.
+- New memory CRUD, search, read, and markdown import flows run through the relational runtime.
+- The old file-backed manager/search/tool path has been removed from the active codebase.
+- Background task handling is now part of the runtime surface rather than a future-only design note.
+- Hybrid index modules still exist in `indices/`, but they are no longer the primary runtime path.
 
 ### Key Features
 
@@ -23,7 +22,7 @@ The codebase is currently in a transition from the original Markdown/index-first
 - **Graph-Based Linking**: Supports `[[wikilinks]]` between memories and external documents with context-aware edges.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspaces, tags, and typed links.
-- **Flexible Storage**: Project-local/user memory directories still exist while file-backed compatibility paths are retired incrementally.
+- **Project-Scoped Runtime State**: The runtime resolves a per-project memory directory and stores relational state in `indices/memory.db`.
 
 ## 🛠 Tech Stack
 
@@ -41,8 +40,9 @@ The codebase is currently in a transition from the original Markdown/index-first
 mcp-memory/
 ├── src/
 │   └── mcp_memory/
-│       ├── core/           # Core memory logic (Manager, Search, Storage)
-│       ├── indices/        # Hybrid indices (Vector, Keyword, Graph)
+│       ├── core/           # Journal, task runtime, and shared utilities
+│       ├── relational/     # Relational repository, importer, and search services
+│       ├── indices/        # Hybrid index experiments and storage backends
 │       ├── mcp/            # MCP server implementation and tools
 │       ├── models/         # Pydantic data models
 │       ├── utils/          # Shared utilities (Config, IO, Similarity)
@@ -72,7 +72,7 @@ The following tools are exposed via the MCP server:
 ### Runtime Statistics
 - `get_memory_stats`: Return basic runtime statistics for the journal, relational records, and indexed documents.
 
-Additional file-backed and hybrid-search capabilities still exist in internal modules, but they are not yet all exposed as stable MCP tools.
+The public MCP surface is relational-first; removed file-backed tools are intentionally not part of the supported API.
 
 ## ⚙️ Configuration
 
