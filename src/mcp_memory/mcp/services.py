@@ -9,6 +9,7 @@ from mcp_memory.core.agent_runtime import (
     SYSTEM1_INGEST_THRESHOLD,
 )
 from mcp_memory.relational.importer import import_markdown_memory
+from mcp_memory.serialization import link_payload, memory_record_payload
 
 
 def _require_string(arguments: dict[str, Any], field_name: str) -> str:
@@ -74,25 +75,6 @@ def _optional_bool(arguments: dict[str, Any], field_name: str, default: bool = F
     if not isinstance(value, bool):
         raise TypeError(f"{field_name} must be a boolean")
     return value
-
-
-def record_to_payload(record) -> dict:
-    return {
-        "id": record.id,
-        "title": record.title,
-        "content": record.content,
-        "summary": record.summary,
-        "type": record.type,
-        "status": record.status,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-        "access_score": record.access_score,
-        "last_accessed_at": record.last_accessed_at,
-        "last_surfaced_at": record.last_surfaced_at,
-        "metadata": record.metadata,
-        "workspace_ids": record.workspace_ids,
-        "tags": record.tags,
-    }
 
 
 def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -184,7 +166,7 @@ def create_memory_record_service(ctx: ApplicationContext, arguments: dict) -> di
         status=_optional_string(arguments, "status") or "active",
         metadata=_optional_object(arguments, "metadata") or {},
     )
-    return {"status": "created", "record": record_to_payload(record)}
+    return {"status": "created", "record": memory_record_payload(record)}
 
 
 def get_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -195,7 +177,7 @@ def get_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
     record = ctx.repository.get_memory(memory_id)
     if record is None:
         return {"status": "error", "error": "memory_not_found"}
-    return {"status": "ok", "record": record_to_payload(record)}
+    return {"status": "ok", "record": memory_record_payload(record)}
 
 
 def list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -210,7 +192,7 @@ def list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dic
     )
     return {
         "status": "ok",
-        "records": [record_to_payload(record) for record in records],
+        "records": [memory_record_payload(record) for record in records],
     }
 
 
@@ -258,20 +240,12 @@ def read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict
 
     return {
         "status": "ok",
-        "record": record_to_payload(result.record),
+        "record": memory_record_payload(result.record),
         "relationships": {
-            direction: [
-                {
-                    "source_id": link.source_id,
-                    "target_id": link.target_id,
-                    "link_type": link.link_type,
-                    "context": link.context,
-                }
-                for link in links
-            ]
+            direction: [link_payload(link) for link in links]
             for direction, links in result.relationships.items()
         },
-        "superseded": [record_to_payload(record) for record in result.superseded],
+        "superseded": [memory_record_payload(record) for record in result.superseded],
     }
 
 
@@ -298,5 +272,5 @@ def import_markdown_memory_file_service(ctx: ApplicationContext, arguments: dict
     imported = import_markdown_memory(ctx.repository, import_path, workspace_ids)
     return {
         "status": "imported",
-        "record": record_to_payload(imported),
+        "record": memory_record_payload(imported),
     }

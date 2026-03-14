@@ -5,7 +5,6 @@ from pathlib import Path
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.models import (
-    CompactMemoryRecord,
     HealthPayload,
     JournalSummary,
     MemoryDetailPayload,
@@ -15,7 +14,12 @@ from mcp_memory.management.models import (
     TaskListPayload,
     TaskStatusSummary,
 )
-from mcp_memory.mcp.services import record_to_payload
+from mcp_memory.serialization import (
+    compact_memory_record_payload,
+    link_payload,
+    memory_record_payload,
+    task_payload,
+)
 
 
 class ManagementService:
@@ -54,13 +58,16 @@ class ManagementService:
             by_type[record.type] = by_type.get(record.type, 0) + 1
             by_status[record.status] = by_status.get(record.status, 0) + 1
 
-        recent_records = [self._compact_record(record) for record in records[:recent_limit]]
+        recent_records = [compact_memory_record_payload(record) for record in records[:recent_limit]]
         task_counts = self._ctx.task_queue.count_by_status() if self._ctx.task_queue is not None else {}
-        failed_tasks = self._serialize_tasks(
+        failed_tasks = [
+            task_payload(task)
+            for task in (
             self._ctx.task_queue.list_tasks(status="failed", limit=failed_limit)
             if self._ctx.task_queue is not None
             else []
-        )
+            )
+        ]
         sqlite_bytes = 0
         sqlite_path = None
         if self._ctx.db_manager is not None:
@@ -94,7 +101,7 @@ class ManagementService:
         if self._ctx.task_queue is None:
             return TaskListPayload(tasks=[])
         tasks = self._ctx.task_queue.list_tasks(status=status, workspace_id=workspace_id, limit=limit)
-        return TaskListPayload(tasks=self._serialize_tasks(tasks))
+        return TaskListPayload(tasks=[task_payload(task) for task in tasks])
 
     def list_memories(
         self,
@@ -111,7 +118,7 @@ class ManagementService:
             status=status,
             limit=limit,
         )
-        return [self._compact_record(record) for record in records]
+        return [compact_memory_record_payload(record) for record in records]
 
     def get_memory_detail(self, memory_id: str):
         if self._ctx.repository is None:
@@ -130,13 +137,13 @@ class ManagementService:
                 continue
             target = self._ctx.repository.get_memory(link.target_id)
             if target is not None:
-                superseded.append(record_to_payload(target))
+                superseded.append(memory_record_payload(target))
 
         return MemoryDetailPayload(
-            record=record_to_payload(record),
+            record=memory_record_payload(record),
             relationships={
-                "incoming": [self._serialize_link(link) for link in incoming],
-                "outgoing": [self._serialize_link(link) for link in outgoing],
+                "incoming": [link_payload(link) for link in incoming],
+                "outgoing": [link_payload(link) for link in outgoing],
             },
             superseded=superseded,
         )
@@ -144,44 +151,3 @@ class ManagementService:
     def load_dashboard_html(self):
         static_path = Path(__file__).with_name("static") / "index.html"
         return static_path.read_text(encoding="utf-8")
-
-    def _compact_record(self, record):
-        return CompactMemoryRecord(
-            id=record.id,
-            title=record.title,
-            summary=record.summary,
-            type=record.type,
-            status=record.status,
-            updated_at=record.updated_at,
-            workspace_ids=list(record.workspace_ids),
-            tags=list(record.tags),
-        )
-
-    def _serialize_tasks(self, tasks: list[TaskRecord]):
-        return [
-            {
-                "id": task.id,
-                "task_name": task.task_name,
-                "workspace_id": task.workspace_id,
-                "status": task.status,
-                "priority": task.priority,
-                "retries_count": task.retries_count,
-                "max_retries": task.max_retries,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at,
-                "available_at": task.available_at,
-                "claimed_at": task.claimed_at,
-                "started_at": task.started_at,
-                "completed_at": task.completed_at,
-                "last_error": task.last_error,
-            }
-            for task in tasks
-        ]
-
-    def _serialize_link(self, link):
-        return {
-            "source_id": link.source_id,
-            "target_id": link.target_id,
-            "link_type": link.link_type,
-            "context": link.context,
-        }
