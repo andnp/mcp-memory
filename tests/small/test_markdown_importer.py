@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.core.importer import import_markdown_memory, parse_markdown_memory
-from mcp_memory.core.repository import RelationalMemoryRepository
+from mcp_memory.relational.importer import import_markdown_memory, parse_markdown_memory
+from mcp_memory.relational.repository import RelationalMemoryRepository
 
 
 pytestmark = pytest.mark.small

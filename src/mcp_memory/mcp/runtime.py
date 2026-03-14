@@ -12,9 +12,9 @@ from mcp_memory.config import (
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.relational_search import RelationalMemorySearchService
-from mcp_memory.core.repository import RelationalMemoryRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.core.storage import ensure_memory_dirs
 from mcp_memory.utils.db import DatabaseManager
 

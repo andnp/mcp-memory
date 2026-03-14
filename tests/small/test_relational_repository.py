@@ -3,7 +3,7 @@ from uuid import UUID
 
 import pytest
 
-from mcp_memory.core.repository import RelationalMemoryRepository
+from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import SCHEMA_VERSION
 
 

@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp_memory.config import Config
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.repository import RelationalMemoryRepository
+from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
 
 

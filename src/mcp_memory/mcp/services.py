@@ -7,7 +7,7 @@ from mcp_memory.core.agent_runtime import (
     SYSTEM1_INGEST_TASK_NAME,
     SYSTEM1_INGEST_THRESHOLD,
 )
-from mcp_memory.core.importer import import_markdown_memory
+from mcp_memory.relational.importer import import_markdown_memory
 
 
 def record_to_payload(record) -> dict:

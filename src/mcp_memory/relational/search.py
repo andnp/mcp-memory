@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
-from mcp_memory.core.repository import MemoryLink, RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord, RelationalMemoryRepository
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")

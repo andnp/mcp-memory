@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from mcp_memory.core.repository import RelationalMemoryRepository
+from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.core.storage import list_memory_files
 
 
