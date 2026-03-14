@@ -17,6 +17,7 @@ dependencies = [
     "watchdog>=6.0.0",
     "click>=8.1.0",
     "rich>=13.0.0",
+    "fastapi>=0.116.0",
     "mcp>=1.0.0",
     "tomlkit>=0.13.0",
     "sentence-transformers>=3.0.0",
@@ -24,6 +25,7 @@ dependencies = [
     "numpy>=2.0.0",
     "networkx>=3.0.0",
     "pyzmq>=27.1.0",
+    "uvicorn>=0.35.0",
 ]
 
 [project.scripts]

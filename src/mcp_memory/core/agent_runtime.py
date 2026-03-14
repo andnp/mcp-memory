@@ -259,7 +259,7 @@ def handle_sweeper_task(
     cutoff_timestamp = cutoff.timestamp()
     conn = ctx.db_manager.get_connection()
     deleted_tasks = conn.execute(
-        "DELETE FROM tasks WHERE status IN ('completed', 'failed') AND updated_at < ?",
+        "DELETE FROM tasks WHERE status = 'completed' AND updated_at < ?",
         (cutoff_timestamp,),
     ).rowcount
     deleted_journal_entries = conn.execute(

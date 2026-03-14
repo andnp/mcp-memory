@@ -23,6 +23,7 @@ The runtime is now **relational-first**.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspaces, tags, and typed links.
 - **Project-Scoped Runtime State**: The runtime resolves a per-project memory directory and stores relational state in `indices/memory.db`.
+- **Local Management API**: A read-only FastAPI dashboard/API exposes runtime health, failed tasks, recent memories, and lineage inspection over localhost.
 
 ## 🛠 Tech Stack
 
@@ -104,7 +105,14 @@ The current runtime resolves a per-project memory directory and stores relationa
    uv run mcp-memory run
    ```
 
-3. **Configure with your AI Assistant**:
+3. **Run the management dashboard**:
+  ```bash
+  uv run mcp-memory dashboard --host 127.0.0.1 --port 8765
+  ```
+
+  Then open `http://127.0.0.1:8765/` for the read-only operations snapshot.
+
+4. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {

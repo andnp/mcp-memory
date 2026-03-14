@@ -38,6 +38,10 @@ class DatabaseManager:
             self._local.connection = conn
         return conn
 
+    @property
+    def db_path(self):
+        return self._db_path
+
     def _initialize_schema_on(self, conn: sqlite3.Connection) -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS documents (

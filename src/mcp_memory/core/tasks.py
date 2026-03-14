@@ -294,6 +294,33 @@ class SQLiteTaskQueue:
         ).fetchall()
         return {str(row[0]): int(row[1]) for row in rows}
 
+    def list_tasks(
+        self,
+        status: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 20,
+    ) -> list[TaskRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        query = "SELECT * FROM tasks"
+
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+
+        query += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = self._db.get_connection().execute(query, params).fetchall()
+        return [self._row_to_record(row) for row in rows]
+
     def _row_to_record(self, row) -> TaskRecord:
         data = row["data"] or "{}"
         return TaskRecord(

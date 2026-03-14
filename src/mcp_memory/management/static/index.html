@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MCP Memory Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --danger: #f85149;
+      --success: #3fb950;
+      --amber: #d29922;
+    }
+    body { margin: 0; font-family: "JetBrains Mono", "Fira Code", monospace; background: var(--bg); color: var(--text); }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1, h2 { margin: 0 0 12px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 24px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .metric { font-size: 28px; font-weight: 700; margin-top: 8px; }
+    .muted { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    a { color: var(--accent); text-decoration: none; }
+    .status-failed { color: var(--danger); }
+    .status-completed { color: var(--success); }
+    .status-pending { color: var(--amber); }
+    pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>MCP Memory Dashboard</h1>
+    <p class="muted">Read-only operations snapshot for the local daemon runtime.</p>
+
+    <section class="grid" id="summary-cards"></section>
+
+    <section class="panel">
+      <h2>Recent Memories</h2>
+      <table>
+        <thead>
+          <tr><th>Title</th><th>Type</th><th>Status</th><th>Updated</th><th>Tags</th></tr>
+        </thead>
+        <tbody id="recent-memories"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top: 16px;">
+      <h2>Failed Tasks</h2>
+      <table>
+        <thead>
+          <tr><th>Task</th><th>Status</th><th>Retries</th><th>Error</th></tr>
+        </thead>
+        <tbody id="failed-tasks"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    async function loadOverview() {
+      const response = await fetch('/api/overview');
+      const payload = await response.json();
+
+      const cards = [
+        ['Memories', payload.memories.total],
+        ['Pending Journal', payload.journal.pending_count],
+        ['Failed Tasks', payload.tasks.failed_count],
+        ['SQLite Size (bytes)', payload.storage.sqlite_bytes],
+      ];
+
+      document.getElementById('summary-cards').innerHTML = cards.map(([label, value]) => `
+        <article class="panel">
+          <div class="muted">${label}</div>
+          <div class="metric">${value}</div>
+        </article>
+      `).join('');
+
+      document.getElementById('recent-memories').innerHTML = payload.recent_memories.map((record) => `
+        <tr>
+          <td><a href="/api/memories/${record.id}" target="_blank" rel="noreferrer">${record.title}</a><div class="muted">${record.summary ?? ''}</div></td>
+          <td>${record.type}</td>
+          <td>${record.status}</td>
+          <td>${record.updated_at}</td>
+          <td>${record.tags.join(', ')}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="5" class="muted">No memories found.</td></tr>';
+
+      document.getElementById('failed-tasks').innerHTML = payload.failed_tasks.map((task) => `
+        <tr>
+          <td>${task.task_name}</td>
+          <td class="status-${task.status}">${task.status}</td>
+          <td>${task.retries_count}/${task.max_retries}</td>
+          <td><pre>${task.last_error ?? ''}</pre></td>
+        </tr>
+      `).join('') || '<tr><td colspan="4" class="muted">No failed tasks.</td></tr>';
+    }
+
+    loadOverview().catch((error) => {
+      document.body.insertAdjacentHTML('beforeend', `<pre>${String(error)}</pre>`);
+    });
+  </script>
+</body>
+</html>
