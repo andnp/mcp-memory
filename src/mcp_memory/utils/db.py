@@ -104,6 +104,8 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS system1_journal (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
+                workspace_id TEXT,
+                author TEXT,
                 timestamp REAL NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending'
             );
@@ -114,8 +116,92 @@ class DatabaseManager:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                summary TEXT,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                access_score REAL NOT NULL DEFAULT 0,
+                last_accessed_at TEXT,
+                last_surfaced_at TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
+            CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
+            CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_memories_last_accessed_at ON memories(last_accessed_at);
+            CREATE INDEX IF NOT EXISTS idx_memories_last_surfaced_at ON memories(last_surfaced_at);
+
+            CREATE TABLE IF NOT EXISTS memory_workspaces (
+                memory_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                PRIMARY KEY (memory_id, workspace_id),
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_workspaces_workspace_id ON memory_workspaces(workspace_id);
+
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS memory_tags (
+                memory_id TEXT NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (memory_id, tag_id),
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_id ON memory_tags(tag_id);
+
+            CREATE TABLE IF NOT EXISTS links (
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                context TEXT DEFAULT '',
+                PRIMARY KEY (source_id, target_id, type),
+                FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_id) REFERENCES memories(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_id);
+            CREATE INDEX IF NOT EXISTS idx_links_target_id ON links(target_id);
+            CREATE INDEX IF NOT EXISTS idx_links_type ON links(type);
         """)
+        self._ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
+        self._ensure_column(conn, "system1_journal", "author", "TEXT")
+        self._ensure_column(conn, "memories", "summary", "TEXT")
+        self._ensure_column(conn, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
+        self._ensure_column(conn, "memories", "created_at", "TEXT")
+        self._ensure_column(conn, "memories", "updated_at", "TEXT")
+        self._ensure_column(conn, "memories", "access_score", "REAL NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "memories", "last_accessed_at", "TEXT")
+        self._ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
+        self._ensure_column(conn, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
+
+    def _ensure_column(
+        self,
+        conn: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_definition: str,
+    ):
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        existing_columns = {row[1] for row in rows}
+        if column_name in existing_columns:
+            return
+        conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+        )
 
     def initialize_schema(self) -> None:
         self._initialize_schema_on(self.get_connection())

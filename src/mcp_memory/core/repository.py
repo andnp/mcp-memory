@@ -1,0 +1,250 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from mcp_memory.utils.db import DatabaseManager
+
+
+@dataclass
+class RelationalMemoryRecord:
+    id: str
+    title: str
+    content: str
+    summary: str | None
+    type: str
+    status: str
+    created_at: str
+    updated_at: str
+    access_score: float
+    last_accessed_at: str | None
+    last_surfaced_at: str | None
+    metadata: dict[str, object] = field(default_factory=dict)
+    workspace_ids: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+
+class RelationalMemoryRepository:
+    def __init__(self, db_manager: DatabaseManager) -> None:
+        self._db = db_manager
+
+    def create_memory(
+        self,
+        title: str,
+        content: str,
+        workspace_ids: list[str],
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        memory_type: str = "journal",
+        status: str = "active",
+        metadata: dict[str, object] | None = None,
+        memory_id: str | None = None,
+    ):
+        now = self._utc_now()
+        normalized_workspace_ids = self._normalize_values(workspace_ids)
+        normalized_tags = self._normalize_values(tags or [])
+        payload = json.dumps(metadata or {}, sort_keys=True)
+        record_id = memory_id or str(uuid4())
+
+        conn = self._db.get_connection()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO memories (
+                    id, title, content, summary, type, status, created_at, updated_at,
+                    access_score, last_accessed_at, last_surfaced_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    title,
+                    content,
+                    summary,
+                    memory_type,
+                    status,
+                    now,
+                    now,
+                    0.0,
+                    None,
+                    None,
+                    payload,
+                ),
+            )
+            self._replace_workspace_mappings(conn, record_id, normalized_workspace_ids)
+            self._replace_tag_mappings(conn, record_id, normalized_tags)
+
+        return self.get_memory(record_id)
+
+    def get_memory(self, memory_id: str):
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM memories WHERE id = ?",
+            (memory_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._hydrate_record(conn, row)
+
+    def update_memory(
+        self,
+        memory_id: str,
+        title: str | None = None,
+        content: str | None = None,
+        summary: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        metadata: dict[str, object] | None = None,
+        workspace_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+        access_score: float | None = None,
+        last_accessed_at: str | None = None,
+        last_surfaced_at: str | None = None,
+    ):
+        conn = self._db.get_connection()
+        if self.get_memory(memory_id) is None:
+            return None
+
+        columns = []
+        values = []
+        updates = {
+            "title": title,
+            "content": content,
+            "summary": summary,
+            "type": memory_type,
+            "status": status,
+            "access_score": access_score,
+            "last_accessed_at": last_accessed_at,
+            "last_surfaced_at": last_surfaced_at,
+        }
+        for column_name, value in updates.items():
+            if value is None:
+                continue
+            columns.append(f"{column_name} = ?")
+            values.append(value)
+
+        if metadata is not None:
+            columns.append("metadata = ?")
+            values.append(json.dumps(metadata, sort_keys=True))
+
+        columns.append("updated_at = ?")
+        values.append(self._utc_now())
+        values.append(memory_id)
+
+        with conn:
+            conn.execute(
+                f"UPDATE memories SET {', '.join(columns)} WHERE id = ?",
+                values,
+            )
+            if workspace_ids is not None:
+                self._replace_workspace_mappings(
+                    conn,
+                    memory_id,
+                    self._normalize_values(workspace_ids),
+                )
+            if tags is not None:
+                self._replace_tag_mappings(
+                    conn,
+                    memory_id,
+                    self._normalize_values(tags),
+                )
+
+        return self.get_memory(memory_id)
+
+    def list_memories(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ):
+        conn = self._db.get_connection()
+        clauses = []
+        params = []
+
+        query = "SELECT DISTINCT memories.* FROM memories"
+        if workspace_id is not None:
+            query += " JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+            clauses.append("memory_workspaces.workspace_id = ?")
+            params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = ?")
+            params.append(memory_type)
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY memories.updated_at DESC, memories.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [self._hydrate_record(conn, row) for row in rows]
+
+    def _hydrate_record(self, conn, row):
+        workspace_rows = conn.execute(
+            "SELECT workspace_id FROM memory_workspaces WHERE memory_id = ? ORDER BY workspace_id ASC",
+            (row["id"],),
+        ).fetchall()
+        tag_rows = conn.execute(
+            """
+            SELECT tags.name
+            FROM tags
+            JOIN memory_tags ON memory_tags.tag_id = tags.id
+            WHERE memory_tags.memory_id = ?
+            ORDER BY tags.name ASC
+            """,
+            (row["id"],),
+        ).fetchall()
+        metadata = json.loads(row["metadata"] or "{}")
+        return RelationalMemoryRecord(
+            id=row["id"],
+            title=row["title"],
+            content=row["content"],
+            summary=row["summary"],
+            type=row["type"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            access_score=row["access_score"],
+            last_accessed_at=row["last_accessed_at"],
+            last_surfaced_at=row["last_surfaced_at"],
+            metadata=metadata,
+            workspace_ids=[workspace_row[0] for workspace_row in workspace_rows],
+            tags=[tag_row[0] for tag_row in tag_rows],
+        )
+
+    def _replace_workspace_mappings(self, conn, memory_id: str, workspace_ids: list[str]):
+        conn.execute("DELETE FROM memory_workspaces WHERE memory_id = ?", (memory_id,))
+        for workspace_id in workspace_ids:
+            conn.execute(
+                "INSERT INTO memory_workspaces (memory_id, workspace_id) VALUES (?, ?)",
+                (memory_id, workspace_id),
+            )
+
+    def _replace_tag_mappings(self, conn, memory_id: str, tags: list[str]):
+        conn.execute("DELETE FROM memory_tags WHERE memory_id = ?", (memory_id,))
+        for tag in tags:
+            conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+            tag_row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()
+            if tag_row is None:
+                continue
+            conn.execute(
+                "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?)",
+                (memory_id, tag_row[0]),
+            )
+
+    def _normalize_values(self, values: list[str]):
+        normalized_values = []
+        seen = set()
+        for value in values:
+            normalized_value = value.strip()
+            if not normalized_value or normalized_value in seen:
+                continue
+            seen.add(normalized_value)
+            normalized_values.append(normalized_value)
+        return normalized_values
+
+    def _utc_now(self):
+        return datetime.now(UTC).isoformat()

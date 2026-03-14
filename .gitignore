@@ -6,8 +6,6 @@ dist/
 wheels/
 *.egg-info
 
-docs/plans
-
 # Virtual environments
 .venv
 
@@ -16,3 +14,9 @@ docs/plans
 .testmondata
 .testmondata-shm
 .testmondata-wal
+
+# Ephemeral planning and local memory state
+docs/plans/
+.memories/
+.index_data/
+.codanna/
