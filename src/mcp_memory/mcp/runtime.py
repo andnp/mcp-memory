@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mcp_memory.config import (
     Config,
+    ProjectConfig,
     detect_project,
     load_config,
     resolve_memory_path,
@@ -33,12 +34,26 @@ def resolve_runtime_spec(
     cwd: Path | None = None,
 ) -> RuntimeSpec:
     config = load_config()
+    runtime_cwd = cwd if cwd is not None else Path.cwd()
     project_name = detect_project(
-        cwd=cwd,
+        cwd=runtime_cwd,
         projects=config.projects,
         project_override=project_override,
     )
     config.detected_project = project_name
+    if project_name is not None and all(project.name != project_name for project in config.projects):
+        project_path = None
+        if project_override is not None:
+            override_path = Path(project_override).expanduser()
+            if override_path.exists():
+                project_path = override_path.resolve()
+        if project_path is None and runtime_cwd.exists():
+            project_path = runtime_cwd.resolve()
+        if project_path is not None:
+            config.projects = [
+                *config.projects,
+                ProjectConfig(name=project_name, path=str(project_path)),
+            ]
     memory_path = resolve_memory_path(config, project_name, config.projects)
     ensure_memory_dirs(memory_path)
     return RuntimeSpec(

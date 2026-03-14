@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.agent_runtime import (
+    SYSTEM1_INGEST_TASK_NAME,
+    SYSTEM1_INGEST_THRESHOLD,
+)
 from mcp_memory.core.importer import import_markdown_memory
-
-
-SYSTEM1_INGEST_TASK_NAME = "ingest-system1"
-SYSTEM1_INGEST_THRESHOLD = 3
 
 
 def record_to_payload(record) -> dict:

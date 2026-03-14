@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcp_memory.core.task_worker import RuntimeTaskWorker
+from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.mcp.runtime import (
     RuntimeSpec,
     create_runtime_from_spec,
@@ -96,12 +96,14 @@ class DaemonLifecycleController:
         lock_timeout_seconds: float | None = DEFAULT_LOCK_TIMEOUT_SECONDS,
         runtime_spec_resolver=resolve_runtime_spec,
         runtime_factory=create_runtime_from_spec,
-        worker_factory=RuntimeTaskWorker,
+        runtime_bootstrap=bootstrap_background_tasks,
+        worker_factory=build_runtime_task_worker,
     ):
         self._shutdown_grace_seconds = shutdown_grace_seconds
         self._lock_timeout_seconds = lock_timeout_seconds
         self._runtime_spec_resolver = runtime_spec_resolver
         self._runtime_factory = runtime_factory
+        self._runtime_bootstrap = runtime_bootstrap
         self._worker_factory = worker_factory
         self._state_lock = asyncio.Lock()
         self._runtime = None
@@ -149,6 +151,7 @@ class DaemonLifecycleController:
                     self._lock_timeout_seconds,
                 )
                 runtime = await asyncio.to_thread(self._runtime_factory, spec)
+                await asyncio.to_thread(self._runtime_bootstrap, runtime)
                 runtime_worker = self._worker_factory(runtime)
                 if runtime_worker is not None:
                     await runtime_worker.start()
