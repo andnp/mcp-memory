@@ -17,7 +17,7 @@ The runtime is now **relational-first**.
 ### Key Features
 
 - **Memory-Specific Recency Boost**: Automatically prioritizes recent memories (journals, plans) while preserving long-term facts.
-- **Graph-Based Linking**: Supports `[[wikilinks]]` between memories and external documents with context-aware edges.
+- **Typed Relational Links**: Memory records can carry explicit typed relationships such as `SUPERSEDES`, `EXTENDS`, and `CONTRADICTS`.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
