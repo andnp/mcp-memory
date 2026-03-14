@@ -20,8 +20,6 @@ class ApplicationContext:
     repository: RelationalMemoryRepository | None = None
     relational_search: Any = None
     task_queue: Any = None
-    memory_manager: Any = None
-    memory_search: Any = None
 
     def close(self) -> None:
         if self.db_manager is not None:
