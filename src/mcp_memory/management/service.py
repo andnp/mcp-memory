@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core import MemoryPipeline
 from mcp_memory.management.models import (
     HealthPayload,
     JournalSummary,
@@ -13,8 +14,6 @@ from mcp_memory.management.models import (
     TaskListPayload,
     TaskStatusSummary,
 )
-from mcp_memory.relational.queries import RelationalMemoryQueries
-from mcp_memory.runtime_facades import JournalFacade, RuntimeInfoFacade, TaskQueueFacade
 from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
@@ -25,14 +24,11 @@ from mcp_memory.serialization import (
 
 class ManagementService:
     def __init__(self, ctx: ApplicationContext, controller) -> None:
-        self._runtime_info = RuntimeInfoFacade.from_context(ctx, controller)
-        self._journal = JournalFacade.from_context(ctx)
-        self._task_queue = TaskQueueFacade.from_context(ctx)
-        self._memory_queries = (
-            RelationalMemoryQueries(ctx.repository)
-            if ctx.repository is not None
-            else None
-        )
+        pipeline = MemoryPipeline.from_context(ctx, controller)
+        self._runtime_info = pipeline.runtime_info
+        self._journal = pipeline.journal
+        self._task_queue = pipeline.task_queue
+        self._memory_queries = pipeline.memory_queries
         self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
 
     def get_health(self):
