@@ -37,6 +37,7 @@ The `mcp-memory` testing suite follows the "Small/Medium/Large" organization pat
 - **Examples**:
   - Boot race condition tests (spawning 3 proxies simultaneously to ensure the `.lock` file holds and only one daemon starts).
   - Full MCP tool execution (Client -> Proxy -> ZMQ -> Daemon -> SQLite -> Daemon -> ZMQ -> Proxy -> Client).
+  - Relational-first user journeys such as thought capture -> ingest -> search/read and shared-daemon persistence across shutdown/reacquire.
 
 ## 3. The "Dummy Data" Strategy
 To avoid brittle mocks, we will rely on a robust set of deterministic fixtures and "Fakes".
