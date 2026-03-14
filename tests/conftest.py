@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 
 import pytest
 
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.utils.db import DatabaseManager
+from tests.sdk.providers import FakeAIProvider, FakeSubprocessInstaller
 
 
 def pytest_configure(config) -> None:
@@ -43,3 +45,15 @@ def db_manager(temp_db_path: Path) -> DatabaseManager:
 @pytest.fixture
 def system1_journal(db_manager: DatabaseManager) -> System1Journal:
     return System1Journal(db_manager)
+
+
+@pytest.fixture
+def fake_ai_provider() -> FakeAIProvider:
+    return FakeAIProvider()
+
+
+@pytest.fixture
+def install_fake_subprocess(monkeypatch) -> FakeSubprocessInstaller:
+    installer = FakeSubprocessInstaller()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", installer)
+    return installer

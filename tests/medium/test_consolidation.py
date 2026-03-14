@@ -3,22 +3,10 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.core.consolidation import FastConsolidation, SlowConsolidation
+from tests.sdk.providers import ConsolidationResponseFactory, FakeAIProvider
 
 
 pytestmark = pytest.mark.medium
-
-
-class FakeAIProvider:
-    def __init__(self, response: dict | None = None, error: Exception | None = None):
-        self._response = response or {"actions": []}
-        self._error = error
-        self.prompts: list[str] = []
-
-    async def ask(self, prompt: str) -> dict:
-        self.prompts.append(prompt)
-        if self._error is not None:
-            raise self._error
-        return self._response
 
 
 def _read_markdown_files(memory_path: Path) -> list[tuple[str, str]]:
@@ -80,20 +68,16 @@ async def test_slow_consolidation_uses_fake_provider_actions(
     third = system1_journal.record("ignore this fleeting scratch note")
 
     provider = FakeAIProvider(
-        response={
-            "actions": [
-                {
-                    "type": "create",
-                    "entry_indices": [0, 1],
-                    "title": "Import Stability Plan",
-                    "content": "Bundle import cleanup with medium test coverage.",
-                },
-                {
-                    "type": "ignore",
-                    "entry_indices": [2],
-                },
-            ]
-        }
+        responses=[
+            ConsolidationResponseFactory.actions(
+                ConsolidationResponseFactory.create(
+                    [0, 1],
+                    "Import Stability Plan",
+                    "Bundle import cleanup with medium test coverage.",
+                ),
+                ConsolidationResponseFactory.ignore([2]),
+            )
+        ]
     )
 
     consolidator = SlowConsolidation(system1_journal, memory_path, provider)
