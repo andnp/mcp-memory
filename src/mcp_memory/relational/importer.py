@@ -56,8 +56,8 @@ def parse_markdown_memory(file_path: Path):
         tags=[str(tag).strip() for tag in tags if str(tag).strip()],
         created_at=created_at,
         metadata={
-            "legacy_memory_name": file_path.stem,
-            "legacy_source_path": str(file_path),
+            "imported_source_name": file_path.stem,
+            "imported_source_path": str(file_path),
         },
     )
 

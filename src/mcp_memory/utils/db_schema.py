@@ -9,58 +9,6 @@ SCHEMA_VERSION = 2
 def initialize_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        CREATE TABLE IF NOT EXISTS documents (
-            doc_id TEXT PRIMARY KEY,
-            file_path TEXT,
-            content_hash TEXT,
-            mtime REAL,
-            status TEXT,
-            indexed_at REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS chunks (
-            chunk_id TEXT PRIMARY KEY,
-            doc_id TEXT,
-            content TEXT,
-            metadata TEXT,
-            vector BLOB,
-            indexed_at REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS kv_store (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
-            chunk_id UNINDEXED,
-            doc_id UNINDEXED,
-            content,
-            title,
-            headers,
-            tags,
-            source_file UNINDEXED
-        );
-
-        CREATE TABLE IF NOT EXISTS graph_nodes (
-            node_id TEXT PRIMARY KEY,
-            metadata TEXT DEFAULT '{}'
-        );
-
-        CREATE TABLE IF NOT EXISTS graph_edges (
-            source TEXT NOT NULL,
-            target TEXT NOT NULL,
-            edge_type TEXT NOT NULL DEFAULT 'related_to',
-            edge_context TEXT DEFAULT '',
-            PRIMARY KEY (source, target, edge_type),
-            FOREIGN KEY (source) REFERENCES graph_nodes(node_id) ON DELETE CASCADE,
-            FOREIGN KEY (target) REFERENCES graph_nodes(node_id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source);
-        CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target);
-        CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);
-
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             task_name TEXT NOT NULL,
@@ -92,11 +40,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_system1_journal_status ON system1_journal(status);
-
-        CREATE TABLE IF NOT EXISTS system_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
 
         CREATE TABLE IF NOT EXISTS schema_metadata (
             key TEXT PRIMARY KEY,

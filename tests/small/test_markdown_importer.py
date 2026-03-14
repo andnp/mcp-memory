@@ -55,5 +55,5 @@ def test_import_markdown_memory_creates_relational_record(db_manager, tmp_path: 
     assert imported.tags == ["ranking", "search"]
     assert imported.workspace_ids == ["workspace-a"]
     assert imported.created_at == "2026-03-02T09:00:00+00:00"
-    assert imported.metadata["legacy_memory_name"] == "search-ranking"
+    assert imported.metadata["imported_source_name"] == "search-ranking"
     assert imported.content.strip() == "Search should become summary-first."

@@ -100,7 +100,7 @@ async def test_import_markdown_memory_file_uses_existing_importer(monkeypatch, t
 
         assert import_payload["status"] == "imported"
         assert import_payload["record"]["title"] == "Epic 01"
-        assert import_payload["record"]["metadata"]["legacy_memory_name"] == "epic-01"
+        assert import_payload["record"]["metadata"]["imported_source_name"] == "epic-01"
 
         search_result = await call_memory_tool(
             runtime,

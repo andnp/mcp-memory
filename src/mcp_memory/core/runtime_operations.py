@@ -26,7 +26,6 @@ class GetMemoryStatsOperation:
 
     def execute(self) -> dict:
         conn = self._db_manager.get_connection()
-        document_count = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
         relational_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         return {
             "status": "ok",
@@ -35,7 +34,6 @@ class GetMemoryStatsOperation:
             "ai_provider": self._config.ai.provider if self._config is not None else None,
             "ai_model": self._config.ai.model if self._config is not None else None,
             "memory_path": str(self._memory_path) if self._memory_path is not None else None,
-            "documents": document_count,
             "relational_memories": relational_count,
             "journal": self._journal.count_by_status() if self._journal is not None else {},
         }

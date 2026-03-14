@@ -6,7 +6,6 @@ from inspect import isawaitable
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.consolidation import _group_related_entries
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
@@ -80,6 +79,34 @@ async def _analyze_ingest_actions(provider: Any, entries) -> list[dict[str, Any]
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
     return actions
+
+
+def _group_related_entries(entries, threshold: float = 0.3):
+    if not entries:
+        return []
+
+    word_sets = [set(entry.content.lower().split()) for entry in entries]
+    used: set[int] = set()
+    groups = []
+
+    for index, entry in enumerate(entries):
+        if index in used:
+            continue
+        group = [entry]
+        used.add(index)
+
+        for candidate_index in range(index + 1, len(entries)):
+            if candidate_index in used:
+                continue
+            intersection = len(word_sets[index] & word_sets[candidate_index])
+            union = len(word_sets[index] | word_sets[candidate_index])
+            if union > 0 and intersection / union >= threshold:
+                group.append(entries[candidate_index])
+                used.add(candidate_index)
+
+        groups.append(group)
+
+    return groups
 
 
 def _execute_ingest_actions(
