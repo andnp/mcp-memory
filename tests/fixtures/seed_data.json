@@ -1,0 +1,78 @@
+{
+  "documents": [
+    {
+      "doc_id": "memory:auth-plan",
+      "file_path": "/workspace/memories/auth-plan.md",
+      "content_hash": "hash-auth-plan",
+      "mtime": 1710000000.0,
+      "status": "indexed",
+      "indexed_at": 1710000100.0
+    },
+    {
+      "doc_id": "memory:search-fact",
+      "file_path": "/workspace/memories/search-fact.md",
+      "content_hash": "hash-search-fact",
+      "mtime": 1710000200.0,
+      "status": "indexed",
+      "indexed_at": 1710000300.0
+    },
+    {
+      "doc_id": "memory:cleanup-observation",
+      "file_path": "/workspace/memories/cleanup-observation.md",
+      "content_hash": "hash-cleanup-observation",
+      "mtime": 1710000400.0,
+      "status": "indexed",
+      "indexed_at": 1710000500.0
+    }
+  ],
+  "chunks": [
+    {
+      "chunk_id": "memory:auth-plan_chunk_0",
+      "doc_id": "memory:auth-plan",
+      "content": "Plan: add auth memory workflows and validate project paths.",
+      "metadata": {
+        "memory_type": "plan",
+        "memory_status": "active",
+        "memory_tags": ["auth", "testing"]
+      }
+    },
+    {
+      "chunk_id": "memory:search-fact_chunk_0",
+      "doc_id": "memory:search-fact",
+      "content": "Fact: search uses hybrid retrieval with vector and keyword fusion.",
+      "metadata": {
+        "memory_type": "fact",
+        "memory_status": "active",
+        "memory_tags": ["search", "retrieval"]
+      }
+    },
+    {
+      "chunk_id": "memory:cleanup-observation_chunk_0",
+      "doc_id": "memory:cleanup-observation",
+      "content": "Observation: import cleanup is needed before bootstrap tests expand.",
+      "metadata": {
+        "memory_type": "observation",
+        "memory_status": "active",
+        "memory_tags": ["cleanup", "bootstrap"]
+      }
+    }
+  ],
+  "journal_entries": [
+    {
+      "content": "record a plan for auth memory migrations",
+      "timestamp": 1710000600.0,
+      "status": "pending"
+    },
+    {
+      "content": "note a search fact about hybrid retrieval",
+      "timestamp": 1710000700.0,
+      "status": "processed"
+    }
+  ],
+  "system_state": [
+    {
+      "key": "last_boot_state",
+      "value": "fresh"
+    }
+  ]
+}
