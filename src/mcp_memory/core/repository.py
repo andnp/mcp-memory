@@ -26,6 +26,14 @@ class RelationalMemoryRecord:
     tags: list[str] = field(default_factory=list)
 
 
+@dataclass
+class MemoryLink:
+    source_id: str
+    target_id: str
+    link_type: str
+    context: str
+
+
 class RelationalMemoryRepository:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
@@ -41,10 +49,15 @@ class RelationalMemoryRepository:
         status: str = "active",
         metadata: dict[str, object] | None = None,
         memory_id: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
     ):
         now = self._utc_now()
+        created_timestamp = created_at or now
+        updated_timestamp = updated_at or created_timestamp
         normalized_workspace_ids = self._normalize_values(workspace_ids)
         normalized_tags = self._normalize_values(tags or [])
+        summary_text = summary or self._build_summary(content)
         payload = json.dumps(metadata or {}, sort_keys=True)
         record_id = memory_id or str(uuid4())
 
@@ -61,11 +74,11 @@ class RelationalMemoryRepository:
                     record_id,
                     title,
                     content,
-                    summary,
+                    summary_text,
                     memory_type,
                     status,
-                    now,
-                    now,
+                    created_timestamp,
+                    updated_timestamp,
                     0.0,
                     None,
                     None,
@@ -76,6 +89,98 @@ class RelationalMemoryRepository:
             self._replace_tag_mappings(conn, record_id, normalized_tags)
 
         return self.get_memory(record_id)
+
+    def add_link(
+        self,
+        source_id: str,
+        target_id: str,
+        link_type: str,
+        context: str = "",
+    ):
+        conn = self._db.get_connection()
+        with conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO links (source_id, target_id, type, context)
+                VALUES (?, ?, ?, ?)
+                """,
+                (source_id, target_id, link_type, context),
+            )
+        return MemoryLink(
+            source_id=source_id,
+            target_id=target_id,
+            link_type=link_type,
+            context=context,
+        )
+
+    def get_links(
+        self,
+        memory_id: str,
+        direction: str = "outgoing",
+        link_type: str | None = None,
+    ):
+        conn = self._db.get_connection()
+        if direction == "incoming":
+            clause = "target_id = ?"
+            order_by = "ORDER BY source_id ASC, target_id ASC"
+        else:
+            clause = "source_id = ?"
+            order_by = "ORDER BY source_id ASC, target_id ASC"
+
+        query = f"SELECT source_id, target_id, type, context FROM links WHERE {clause}"
+        params: list[str] = [memory_id]
+        if link_type is not None:
+            query += " AND type = ?"
+            params.append(link_type)
+        query += f" {order_by}"
+
+        rows = conn.execute(query, params).fetchall()
+        return [
+            MemoryLink(
+                source_id=row["source_id"],
+                target_id=row["target_id"],
+                link_type=row["type"],
+                context=row["context"],
+            )
+            for row in rows
+        ]
+
+    def has_incoming_link(self, memory_id: str, link_type: str):
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT 1 FROM links WHERE target_id = ? AND type = ? LIMIT 1",
+            (memory_id, link_type),
+        ).fetchone()
+        return row is not None
+
+    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str):
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return 0
+
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with conn:
+            cursor = conn.execute(
+                f"UPDATE memories SET last_surfaced_at = ? WHERE id IN ({placeholders})",
+                [surfaced_at, *normalized_ids],
+            )
+        return cursor.rowcount
+
+    def record_access(self, memory_id: str, access_score: float, accessed_at: str):
+        conn = self._db.get_connection()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE memories
+                SET access_score = ?, last_accessed_at = ?
+                WHERE id = ?
+                """,
+                (access_score, accessed_at, memory_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_memory(memory_id)
 
     def get_memory(self, memory_id: str):
         conn = self._db.get_connection()
@@ -248,3 +353,15 @@ class RelationalMemoryRepository:
 
     def _utc_now(self):
         return datetime.now(UTC).isoformat()
+
+    def _build_summary(self, content: str):
+        stripped = content.strip()
+        if not stripped:
+            return ""
+
+        sentences = [segment.strip() for segment in stripped.split(".") if segment.strip()]
+        if len(sentences) >= 2:
+            return ". ".join(sentences[:2]) + "."
+        if len(stripped) <= 220:
+            return stripped
+        return stripped[:217].rstrip() + "..."

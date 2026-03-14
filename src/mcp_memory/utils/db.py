@@ -168,8 +168,7 @@ class DatabaseManager:
                 type TEXT NOT NULL,
                 context TEXT DEFAULT '',
                 PRIMARY KEY (source_id, target_id, type),
-                FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE,
-                FOREIGN KEY (target_id) REFERENCES memories(id) ON DELETE CASCADE
+                FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_id);
