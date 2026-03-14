@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue
 
 
@@ -114,3 +118,98 @@ def test_sqlite_task_queue_rejects_completion_for_non_running_task(db_manager) -
 
     with pytest.raises(ValueError, match="not running"):
         queue.complete(task.id)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    seen_payloads: list[dict[str, str]] = []
+
+    def handle_ingest(ctx: ApplicationContext, task) -> None:
+        seen_payloads.append(task.data)
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        "ingest-system1",
+        data={"memory_id": "123"},
+        available_at=0.0,
+        task_id="ingest-system1",
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"ingest-system1": handle_ingest},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker.start()
+    for _ in range(20):
+        if queue.get_task(task.id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+    await worker.stop(0.05)
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert seen_payloads == [{"memory_id": "123"}]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_retries_and_dead_letters_failures(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    attempts: list[str] = []
+
+    def fail_task(ctx: ApplicationContext, task) -> None:
+        attempts.append(task.id)
+        raise RuntimeError("boom")
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        "failing-task",
+        available_at=0.0,
+        max_retries=2,
+        task_id="failing-task",
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"failing-task": fail_task},
+        poll_interval_seconds=0.01,
+        retry_delay_seconds=0.0,
+    )
+
+    await worker.start()
+    for _ in range(50):
+        if queue.get_task(task.id).status == "failed":
+            break
+        await asyncio.sleep(0.01)
+    await worker.stop(0.05)
+
+    failed = queue.get_task(task.id)
+    assert failed.status == "failed"
+    assert failed.retries_count == 2
+    assert failed.last_error == "boom"
+    assert attempts == ["failing-task", "failing-task"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_dead_letters_unknown_tasks(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        "unknown-task",
+        available_at=0.0,
+        max_retries=5,
+        task_id="unknown-task",
+    )
+    worker = RuntimeTaskWorker(ctx, handlers={}, poll_interval_seconds=0.01)
+
+    await worker.start()
+    for _ in range(20):
+        if queue.get_task(task.id).status == "failed":
+            break
+        await asyncio.sleep(0.01)
+    await worker.stop(0.05)
+
+    failed = queue.get_task(task.id)
+    assert failed.status == "failed"
+    assert failed.retries_count == 5
+    assert failed.last_error == "No task handler registered for unknown-task"

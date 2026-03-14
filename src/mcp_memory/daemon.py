@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.mcp.runtime import (
     RuntimeSpec,
     create_runtime_from_spec,
@@ -95,15 +96,18 @@ class DaemonLifecycleController:
         lock_timeout_seconds: float | None = DEFAULT_LOCK_TIMEOUT_SECONDS,
         runtime_spec_resolver=resolve_runtime_spec,
         runtime_factory=create_runtime_from_spec,
+        worker_factory=RuntimeTaskWorker,
     ):
         self._shutdown_grace_seconds = shutdown_grace_seconds
         self._lock_timeout_seconds = lock_timeout_seconds
         self._runtime_spec_resolver = runtime_spec_resolver
         self._runtime_factory = runtime_factory
+        self._worker_factory = worker_factory
         self._state_lock = asyncio.Lock()
         self._runtime = None
         self._runtime_spec: RuntimeSpec | None = None
         self._runtime_lock: FilesystemLock | None = None
+        self._runtime_worker = None
         self._client_count = 0
         self._shutdown_task: asyncio.Task[None] | None = None
 
@@ -145,13 +149,21 @@ class DaemonLifecycleController:
                     self._lock_timeout_seconds,
                 )
                 runtime = await asyncio.to_thread(self._runtime_factory, spec)
+                runtime_worker = self._worker_factory(runtime)
+                if runtime_worker is not None:
+                    await runtime_worker.start()
             except Exception:
+                if "runtime_worker" in locals() and runtime_worker is not None:
+                    await runtime_worker.stop(0.0)
+                if "runtime" in locals() and runtime is not None:
+                    await asyncio.to_thread(runtime.close)
                 await asyncio.to_thread(runtime_lock.release)
                 raise
 
             self._runtime = runtime
             self._runtime_spec = spec
             self._runtime_lock = runtime_lock
+            self._runtime_worker = runtime_worker
             self._client_count = 1
             return runtime
 
@@ -205,6 +217,7 @@ class DaemonLifecycleController:
     async def _shutdown_if_idle(self, force: bool):
         runtime = None
         runtime_lock = None
+        runtime_worker = None
 
         async with self._state_lock:
             if self._runtime is None:
@@ -217,13 +230,17 @@ class DaemonLifecycleController:
 
             runtime = self._runtime
             runtime_lock = self._runtime_lock
+            runtime_worker = self._runtime_worker
             self._runtime = None
             self._runtime_spec = None
             self._runtime_lock = None
+            self._runtime_worker = None
             self._client_count = 0
             self._shutdown_task = None
 
         try:
+            if runtime_worker is not None:
+                await runtime_worker.stop(self._shutdown_grace_seconds)
             await asyncio.to_thread(runtime.close)
         finally:
             if runtime_lock is not None:

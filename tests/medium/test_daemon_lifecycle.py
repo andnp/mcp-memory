@@ -20,6 +20,18 @@ class FakeRuntime:
         self.close_calls += 1
 
 
+class FakeWorker:
+    def __init__(self):
+        self.start_calls = 0
+        self.stop_calls: list[float] = []
+
+    async def start(self) -> None:
+        self.start_calls += 1
+
+    async def stop(self, grace_period_seconds: float) -> None:
+        self.stop_calls.append(grace_period_seconds)
+
+
 def _make_spec(memory_path: Path):
     return RuntimeSpec(config=None, project_name="demo", memory_path=memory_path)
 
@@ -41,6 +53,7 @@ async def test_controller_reuses_runtime_and_refcounts_clients(tmp_path: Path):
         shutdown_grace_seconds=0.05,
         runtime_spec_resolver=resolve_spec,
         runtime_factory=build_runtime,
+        worker_factory=lambda runtime: None,
     )
 
     runtime_one = await controller.acquire_runtime()
@@ -80,6 +93,7 @@ async def test_controller_cancels_pending_shutdown_when_client_reconnects(tmp_pa
         shutdown_grace_seconds=0.15,
         runtime_spec_resolver=resolve_spec,
         runtime_factory=build_runtime,
+        worker_factory=lambda runtime: None,
     )
 
     runtime_one = await controller.acquire_runtime()
@@ -97,3 +111,35 @@ async def test_controller_cancels_pending_shutdown_when_client_reconnects(tmp_pa
     await asyncio.sleep(0.18)
 
     assert created[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_controller_starts_and_stops_runtime_worker(tmp_path: Path):
+    created_workers: list[FakeWorker] = []
+    spec = _make_spec(tmp_path / "memories")
+
+    def resolve_spec(project_override: str | None, cwd: Path | None):
+        return spec
+
+    def build_runtime(runtime_spec: RuntimeSpec):
+        return FakeRuntime()
+
+    def build_worker(runtime):
+        worker = FakeWorker()
+        created_workers.append(worker)
+        return worker
+
+    controller = DaemonLifecycleController(
+        shutdown_grace_seconds=0.05,
+        runtime_spec_resolver=resolve_spec,
+        runtime_factory=build_runtime,
+        worker_factory=build_worker,
+    )
+
+    runtime = await controller.acquire_runtime()
+    await controller.release_runtime(runtime)
+    await asyncio.sleep(0.08)
+
+    assert len(created_workers) == 1
+    assert created_workers[0].start_calls == 1
+    assert created_workers[0].stop_calls == [0.05]

@@ -192,6 +192,41 @@ class SQLiteTaskQueue:
         conn.commit()
         return self.get_task(task_id)
 
+    def fail_permanently(
+        self,
+        task_id: str,
+        error: str,
+        failed_at: float | None = None,
+    ) -> TaskRecord:
+        now = time.time() if failed_at is None else failed_at
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT max_retries FROM tasks WHERE id = ? AND status = 'running'",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not running")
+
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'failed',
+                retries_count = max_retries,
+                updated_at = ?,
+                available_at = ?,
+                claimed_at = NULL,
+                completed_at = ?,
+                last_error = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (now, now, now, error, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} could not be updated")
+        conn.commit()
+        return self.get_task(task_id)
+
     def get_task(self, task_id: str) -> TaskRecord:
         row = self._db.get_connection().execute(
             "SELECT * FROM tasks WHERE id = ?",
