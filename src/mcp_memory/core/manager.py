@@ -1,33 +1,27 @@
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
 from mcp_memory.chunking.factory import get_chunker
 from mcp_memory.config import Config
+from mcp_memory.core.frontmatter import parse_frontmatter, parse_memory_file
 from mcp_memory.indices.graph import GraphStore
 from mcp_memory.indices.keyword import KeywordIndex
 from mcp_memory.indices.vector import VectorIndex
-from mcp_memory.core.link_parser import extract_links
+from mcp_memory.core.memory_paths import normalize_memory_name, resolve_memory_path
 from mcp_memory.core.models import ExtractedLink, MemoryDocument, MemoryFrontmatter
 from mcp_memory.core.storage import (
     compute_memory_id,
     ensure_memory_dirs,
-    get_memory_file_path,
     get_indices_path,
     list_memory_files,
 )
 from mcp_memory.models import Document
 
 logger = logging.getLogger(__name__)
-
-
-FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 @dataclass
@@ -144,74 +138,17 @@ class MemoryIndexManager:
             self._persist_indices()
             logger.debug("Memory indices checkpointed")
 
-    def _parse_frontmatter(self, content: str) -> tuple[MemoryFrontmatter, str]:
-        match = FRONTMATTER_PATTERN.match(content)
-        if not match:
-            return MemoryFrontmatter(), content
-
-        try:
-            yaml_content = match.group(1)
-            data = yaml.safe_load(yaml_content) or {}
-
-            created_at = data.get("created_at")
-            if isinstance(created_at, str):
-                try:
-                    created_at = datetime.fromisoformat(
-                        created_at.replace("Z", "+00:00")
-                    )
-                except ValueError:
-                    created_at = None
-            elif isinstance(created_at, datetime):
-                pass
-            else:
-                created_at = None
-
-            tags = data.get("tags", [])
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",") if t.strip()]
-
-            frontmatter = MemoryFrontmatter(
-                type=data.get("type", "journal"),
-                status=data.get("status", "active"),
-                tags=tags,
-                created_at=created_at,
-            )
-
-            body = content[match.end() :]
-            return frontmatter, body
-
-        except yaml.YAMLError as e:
-            logger.warning(f"Failed to parse frontmatter: {e}")
-            return MemoryFrontmatter(), content
-
     def _parse_memory_file(self, file_path: Path) -> MemoryDocument:
-        content = file_path.read_text(encoding="utf-8")
-        frontmatter, body = self._parse_frontmatter(content)
-        links = extract_links(body)
-        memory_id = compute_memory_id(self._memory_path, file_path)
-        stat = file_path.stat()
-        modified_time = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        return parse_memory_file(self._memory_path, file_path)
 
-        return MemoryDocument(
-            id=memory_id,
-            content=body,
-            frontmatter=frontmatter,
-            links=links,
-            file_path=str(file_path),
-            modified_time=modified_time,
-        )
+    def _parse_frontmatter(self, content: str) -> tuple[MemoryFrontmatter, str]:
+        return parse_frontmatter(content)
 
     def _normalize_memory_name(self, memory_id: str):
-        if memory_id.startswith("memory:"):
-            return memory_id.split("memory:", 1)[1]
-        return memory_id
+        return normalize_memory_name(memory_id)
 
     def _resolve_memory_path(self, memory_id: str):
-        name = self._normalize_memory_name(memory_id)
-        candidate = get_memory_file_path(self._memory_path, name)
-        if candidate.exists():
-            return candidate
-        return None
+        return resolve_memory_path(self._memory_path, memory_id)
 
     def _memory_to_document(self, memory: MemoryDocument) -> Document:
         metadata: dict[str, str | list[str] | int | float | bool] = {

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from mcp_memory.config import Config
@@ -14,159 +14,17 @@ from mcp_memory.core.models import (
     MemorySearchResult,
     MemorySearchStats,
 )
+from mcp_memory.core.scoring import apply_recency_boost
+from mcp_memory.core.time_filters import (
+    get_filtering_timestamp,
+    normalize_time_filters,
+    passes_time_filter,
+)
 from mcp_memory.search.base_orchestrator import BaseSearchOrchestrator
 from mcp_memory.search.score_pipeline import ScorePipelineConfig
 from mcp_memory.utils.similarity import cosine_similarity_lists
 
 logger = logging.getLogger(__name__)
-
-
-def apply_recency_boost(
-    score: float,
-    created_at: datetime | None,
-    boost_window_days: int,
-    max_boost_amount: float,
-    boost_decay_rate: float,
-) -> float:
-    """
-    Apply exponential additive recency boost to memory score.
-
-    Recent memories receive an exponentially decaying bonus ADDED to their base score.
-    Old memories (beyond boost window) retain their base score without penalty.
-
-    Args:
-        score: Base calibrated score from search
-        created_at: Memory creation timestamp
-        boost_window_days: Days within which to apply boost
-        max_boost_amount: Maximum bonus (at age=0 days)
-        boost_decay_rate: Exponential decay rate (e.g., 0.95)
-
-    Returns:
-        Score with additive recency boost (base + exponential bonus)
-    """
-    if created_at is None:
-        return score
-
-    # Ensure timezone-aware datetime
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-
-    # Calculate age in days
-    age_days = (datetime.now(timezone.utc) - created_at).days
-
-    # Apply exponential additive boost for recent memories
-    if age_days <= boost_window_days:
-        # Exponential decay of boost amount (not score!)
-        boost_factor = boost_decay_rate**age_days
-        bonus = boost_factor * max_boost_amount
-        boosted_score = min(1.0, score + bonus)  # Cap at 1.0
-        return boosted_score
-    else:
-        # Old memories: no boost, but NO PENALTY either!
-        return score
-
-
-def _normalize_time_filters(
-    after_timestamp: int | None,
-    before_timestamp: int | None,
-    relative_days: int | None,
-) -> tuple[int | None, int | None]:
-    """
-    Validate and normalize time filter parameters.
-
-    Args:
-        after_timestamp: Unix timestamp for lower bound (inclusive)
-        before_timestamp: Unix timestamp for upper bound (exclusive)
-        relative_days: Number of days back from now (overrides absolute timestamps)
-
-    Returns:
-        Tuple of (after_timestamp, before_timestamp) with relative_days applied
-
-    Raises:
-        ValueError: If timestamps are invalid or relative_days is negative
-    """
-    # Validate timestamp range
-    if after_timestamp is not None and before_timestamp is not None:
-        if after_timestamp >= before_timestamp:
-            raise ValueError("after_timestamp must be less than before_timestamp")
-
-    # Handle relative_days (overrides absolute timestamps)
-    if relative_days is not None:
-        if relative_days < 0:
-            raise ValueError("relative_days must be non-negative")
-        from datetime import timedelta
-
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=relative_days)
-        return int(cutoff.timestamp()), None
-
-    return after_timestamp, before_timestamp
-
-
-def _get_filtering_timestamp(chunk_data: dict) -> datetime | None:
-    """
-    Extract timestamp for time filtering, with fallback to file mtime.
-
-    Args:
-        chunk_data: Chunk metadata dictionary
-
-    Returns:
-        Datetime for filtering, or None if unavailable
-    """
-    metadata = chunk_data.get("metadata", {})
-    if not isinstance(metadata, dict):
-        return None
-
-    # Try memory_created_at from frontmatter first
-    created_at_str = metadata.get("memory_created_at")
-    if created_at_str:
-        try:
-            return datetime.fromisoformat(created_at_str)
-        except ValueError:
-            pass
-
-    # Fallback to file mtime
-    file_path = chunk_data.get("file_path")
-    if file_path and isinstance(file_path, str):
-        path = Path(file_path)
-        if path.exists():
-            return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
-
-    return None
-
-
-def _passes_time_filter(
-    filtering_timestamp: datetime | None,
-    after_timestamp: int | None,
-    before_timestamp: int | None,
-) -> bool:
-    """
-    Check if a timestamp passes the time filter criteria.
-
-    Args:
-        filtering_timestamp: The datetime to check
-        after_timestamp: Lower bound (inclusive), None to skip
-        before_timestamp: Upper bound (exclusive), None to skip
-
-    Returns:
-        True if timestamp passes filter (or if no timestamp available)
-    """
-    if filtering_timestamp is None:
-        return True
-
-    # Normalize timezone
-    if filtering_timestamp.tzinfo is None:
-        filtering_timestamp = filtering_timestamp.replace(tzinfo=timezone.utc)
-
-    timestamp = int(filtering_timestamp.timestamp())
-
-    if after_timestamp is not None and timestamp < after_timestamp:
-        return False
-
-    if before_timestamp is not None and timestamp > before_timestamp:
-        return False
-
-    return True
 
 
 class MemorySearchOrchestrator(BaseSearchOrchestrator[MemorySearchResult]):
@@ -229,7 +87,7 @@ class MemorySearchOrchestrator(BaseSearchOrchestrator[MemorySearchResult]):
                 return [], stats
             return []
 
-        after_timestamp, before_timestamp = _normalize_time_filters(
+        after_timestamp, before_timestamp = normalize_time_filters(
             after_timestamp, before_timestamp, relative_days
         )
 
@@ -286,8 +144,8 @@ class MemorySearchOrchestrator(BaseSearchOrchestrator[MemorySearchResult]):
 
             # Time filtering (with fallback to file mtime)
             if after_timestamp is not None or before_timestamp is not None:
-                filtering_timestamp = _get_filtering_timestamp(chunk_data)
-                if not _passes_time_filter(
+                filtering_timestamp = get_filtering_timestamp(chunk_data)
+                if not passes_time_filter(
                     filtering_timestamp, after_timestamp, before_timestamp
                 ):
                     stats.filtered_time_range += 1
