@@ -7,9 +7,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from src.models import Chunk, Document
-from src.search.types import SearchResultDict
-from src.storage.db import DatabaseManager
+from mcp_memory.models import Chunk, Document
+from mcp_memory.search.types import SearchResultDict
+from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +345,7 @@ class KeywordIndex:
                 conn = self._conn()
                 rows = conn.execute(
                     """
-                    SELECT chunk_id, doc_id, bm25(search_index) AS score
+                    SELECT chunk_id, doc_id, source_file, bm25(search_index) AS score
                     FROM search_index
                     WHERE search_index MATCH ?
                     ORDER BY score
@@ -365,7 +365,7 @@ class KeywordIndex:
                             self._conn()
                             .execute(
                                 """
-                            SELECT chunk_id, doc_id, -1.0 AS score
+                            SELECT chunk_id, doc_id, source_file, -1.0 AS score
                             FROM search_index
                             WHERE content LIKE ? OR title LIKE ?
                             LIMIT ?
@@ -395,10 +395,11 @@ class KeywordIndex:
                 score = -float(row["score"])
 
                 if excluded_files and docs_root:
-                    from src.search.path_utils import normalize_path
+                    from mcp_memory.search.path_utils import normalize_path
                     from pathlib import Path as PathLib
 
-                    normalized = normalize_path(doc_id, docs_root)
+                    source_file = str(row["source_file"])
+                    normalized = normalize_path(source_file, docs_root)
                     if normalized in excluded_files:
                         continue
                     if PathLib(normalized).name in excluded_files:

@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import os
-import signal
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+
+from mcp_memory.mcp.runtime import create_runtime
 
 # Set environment variables for performance and output stability
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -41,12 +42,20 @@ class MCPServer:
     async def run(self) -> None:
         """Runs the MCP server using stdio."""
         logger.info("Initializing MCP Memory Server...")
-        # Initialize context, indices, etc. here
-        # self.ctx = await asyncio.to_thread(MemoryContext.create, ...)
-
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options(),
+        if self.ctx is None:
+            self.ctx = await asyncio.to_thread(
+                create_runtime,
+                self.project_override,
+                None,
             )
+
+        try:
+            async with stdio_server() as (read_stream, write_stream):
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    self.server.create_initialization_options(),
+                )
+        finally:
+            if self.ctx is not None:
+                self.ctx.close()
