@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import (
@@ -8,6 +9,71 @@ from mcp_memory.core.agent_runtime import (
     SYSTEM1_INGEST_THRESHOLD,
 )
 from mcp_memory.relational.importer import import_markdown_memory
+
+
+def _require_string(arguments: dict[str, Any], field_name: str) -> str:
+    value = arguments.get(field_name)
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    return normalized
+
+
+def _optional_string(arguments: dict[str, Any], field_name: str) -> str | None:
+    value = arguments.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    normalized = value.strip()
+    return normalized or None
+
+
+def _optional_positive_int(arguments: dict[str, Any], field_name: str, default: int) -> int:
+    value = arguments.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 1:
+        raise ValueError(f"{field_name} must be at least 1")
+    return value
+
+
+def _string_list(arguments: dict[str, Any], field_name: str, required: bool = False) -> list[str]:
+    value = arguments.get(field_name)
+    if value is None:
+        if required:
+            raise ValueError(f"{field_name} is required")
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list of strings")
+    normalized_values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise TypeError(f"{field_name} must be a list of strings")
+        normalized = item.strip()
+        if normalized:
+            normalized_values.append(normalized)
+    if required and not normalized_values:
+        raise ValueError(f"{field_name} is required")
+    return normalized_values
+
+
+def _optional_object(arguments: dict[str, Any], field_name: str) -> dict[str, object] | None:
+    value = arguments.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be an object")
+    return dict(value)
+
+
+def _optional_bool(arguments: dict[str, Any], field_name: str, default: bool = False) -> bool:
+    value = arguments.get(field_name, default)
+    if not isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a boolean")
+    return value
 
 
 def record_to_payload(record) -> dict:
@@ -33,9 +99,7 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
 
-    content = str(arguments.get("content", "")).strip()
-    if not content:
-        return {"status": "error", "error": "content is required"}
+    content = _require_string(arguments, "content")
 
     entry = ctx.journal.record(content)
     payload = {
@@ -71,7 +135,7 @@ def get_pending_thoughts_service(ctx: ApplicationContext, arguments: dict) -> di
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
 
-    limit = int(arguments.get("limit", 10))
+    limit = _optional_positive_int(arguments, "limit", 10)
     return {
         "status": "ok",
         "entries": [entry.to_dict() for entry in ctx.journal.get_pending(limit=limit)],
@@ -99,24 +163,19 @@ def create_memory_record_service(ctx: ApplicationContext, arguments: dict) -> di
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    title = str(arguments.get("title", "")).strip()
-    content = str(arguments.get("content", "")).strip()
-    workspace_ids = [str(value) for value in arguments.get("workspace_ids", [])]
-    if not title or not content or not workspace_ids:
-        return {
-            "status": "error",
-            "error": "title, content, and workspace_ids are required",
-        }
+    title = _require_string(arguments, "title")
+    content = _require_string(arguments, "content")
+    workspace_ids = _string_list(arguments, "workspace_ids", required=True)
 
     record = ctx.repository.create_memory(
         title=title,
         content=content,
         workspace_ids=workspace_ids,
-        tags=[str(value) for value in arguments.get("tags", [])],
-        summary=arguments.get("summary"),
-        memory_type=str(arguments.get("memory_type", "journal")),
-        status=str(arguments.get("status", "active")),
-        metadata=dict(arguments.get("metadata", {})),
+        tags=_string_list(arguments, "tags"),
+        summary=_optional_string(arguments, "summary"),
+        memory_type=_optional_string(arguments, "memory_type") or "journal",
+        status=_optional_string(arguments, "status") or "active",
+        metadata=_optional_object(arguments, "metadata") or {},
     )
     return {"status": "created", "record": record_to_payload(record)}
 
@@ -125,7 +184,7 @@ def get_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    memory_id = str(arguments.get("memory_id", "")).strip()
+    memory_id = _require_string(arguments, "memory_id")
     record = ctx.repository.get_memory(memory_id)
     if record is None:
         return {"status": "error", "error": "memory_not_found"}
@@ -137,10 +196,10 @@ def list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dic
         return {"status": "error", "error": "repository_not_initialized"}
 
     records = ctx.repository.list_memories(
-        workspace_id=arguments.get("workspace_id"),
-        memory_type=arguments.get("memory_type"),
-        status=arguments.get("status"),
-        limit=int(arguments.get("limit", 100)),
+        workspace_id=_optional_string(arguments, "workspace_id"),
+        memory_type=_optional_string(arguments, "memory_type"),
+        status=_optional_string(arguments, "status"),
+        limit=_optional_positive_int(arguments, "limit", 100),
     )
     return {
         "status": "ok",
@@ -152,17 +211,15 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
     if ctx.relational_search is None:
         return {"status": "error", "error": "relational_search_not_initialized"}
 
-    query = str(arguments.get("query", "")).strip()
-    if not query:
-        return {"status": "error", "error": "query is required"}
+    query = _require_string(arguments, "query")
 
     results = ctx.relational_search.search_memories(
         query=query,
-        workspace_id=arguments.get("workspace_id"),
-        limit=int(arguments.get("limit", 5)),
-        memory_type=arguments.get("memory_type"),
-        status=arguments.get("status"),
-        include_superseded=bool(arguments.get("include_superseded", False)),
+        workspace_id=_optional_string(arguments, "workspace_id"),
+        limit=_optional_positive_int(arguments, "limit", 5),
+        memory_type=_optional_string(arguments, "memory_type"),
+        status=_optional_string(arguments, "status"),
+        include_superseded=_optional_bool(arguments, "include_superseded", False),
     )
     return {
         "status": "ok",
@@ -186,9 +243,7 @@ def read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict
     if ctx.relational_search is None:
         return {"status": "error", "error": "relational_search_not_initialized"}
 
-    memory_id = str(arguments.get("memory_id", "")).strip()
-    if not memory_id:
-        return {"status": "error", "error": "memory_id is required"}
+    memory_id = _require_string(arguments, "memory_id")
 
     result = ctx.relational_search.read_memory(memory_id)
     if result is None:
@@ -217,15 +272,9 @@ def import_markdown_memory_file_service(ctx: ApplicationContext, arguments: dict
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    file_path = str(arguments.get("file_path", "")).strip()
-    if not file_path:
-        return {"status": "error", "error": "file_path is required"}
+    file_path = _require_string(arguments, "file_path")
 
-    workspace_ids = [
-        str(value).strip()
-        for value in arguments.get("workspace_ids", [])
-        if str(value).strip()
-    ]
+    workspace_ids = _string_list(arguments, "workspace_ids")
     if not workspace_ids:
         if ctx.project_name:
             workspace_ids = [ctx.project_name]
@@ -235,7 +284,11 @@ def import_markdown_memory_file_service(ctx: ApplicationContext, arguments: dict
                 "error": "workspace_ids are required when project_name is unavailable",
             }
 
-    imported = import_markdown_memory(ctx.repository, Path(file_path), workspace_ids)
+    import_path = Path(file_path)
+    if not import_path.exists():
+        raise FileNotFoundError(f"markdown memory file not found: {file_path}")
+
+    imported = import_markdown_memory(ctx.repository, import_path, workspace_ids)
     return {
         "status": "imported",
         "record": record_to_payload(imported),

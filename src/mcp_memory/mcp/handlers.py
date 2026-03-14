@@ -18,6 +18,19 @@ from mcp_memory.mcp.services import (
 def _text_response(payload: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, sort_keys=True))]
 
+
+def _call_service(service, ctx, arguments: dict) -> list[TextContent]:
+    try:
+        return _text_response(service(ctx, arguments))
+    except FileNotFoundError as exc:
+        return _text_response(
+            {"status": "error", "error": "file_not_found", "detail": str(exc)}
+        )
+    except (TypeError, ValueError) as exc:
+        return _text_response(
+            {"status": "error", "error": "invalid_arguments", "detail": str(exc)}
+        )
+
 async def call_memory_tool(ctx, name: str, arguments: dict) -> list[TextContent]:
     if not isinstance(ctx, ApplicationContext):
         return _text_response(
@@ -29,31 +42,31 @@ async def call_memory_tool(ctx, name: str, arguments: dict) -> list[TextContent]
         )
 
     if name == "record_thought":
-        return _text_response(record_thought_service(ctx, arguments))
+        return _call_service(record_thought_service, ctx, arguments)
 
     if name == "get_pending_thoughts":
-        return _text_response(get_pending_thoughts_service(ctx, arguments))
+        return _call_service(get_pending_thoughts_service, ctx, arguments)
 
     if name == "get_memory_stats":
         return _text_response(get_memory_stats_service(ctx))
 
     if name == "create_memory_record":
-        return _text_response(create_memory_record_service(ctx, arguments))
+        return _call_service(create_memory_record_service, ctx, arguments)
 
     if name == "get_memory_record":
-        return _text_response(get_memory_record_service(ctx, arguments))
+        return _call_service(get_memory_record_service, ctx, arguments)
 
     if name == "list_memory_records":
-        return _text_response(list_memory_records_service(ctx, arguments))
+        return _call_service(list_memory_records_service, ctx, arguments)
 
     if name == "search_memory_records":
-        return _text_response(search_memory_records_service(ctx, arguments))
+        return _call_service(search_memory_records_service, ctx, arguments)
 
     if name == "read_memory_record":
-        return _text_response(read_memory_record_service(ctx, arguments))
+        return _call_service(read_memory_record_service, ctx, arguments)
 
     if name == "import_markdown_memory_file":
-        return _text_response(import_markdown_memory_file_service(ctx, arguments))
+        return _call_service(import_markdown_memory_file_service, ctx, arguments)
 
     return _text_response(
         {
