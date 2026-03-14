@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -84,6 +85,36 @@ class SQLiteTaskQueue:
         )
         conn.commit()
         return self.get_task(task_identifier)
+
+    def enqueue_unique(
+        self,
+        task_name: str,
+        data: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+        priority: int = 100,
+        max_retries: int = 3,
+        available_at: float | None = None,
+    ) -> tuple[TaskRecord, bool]:
+        existing = self.find_open_task(task_name, workspace_id)
+        if existing is not None:
+            return existing, False
+
+        try:
+            task = self.enqueue(
+                task_name=task_name,
+                data=data,
+                workspace_id=workspace_id,
+                priority=priority,
+                max_retries=max_retries,
+                available_at=available_at,
+            )
+        except sqlite3.IntegrityError:
+            existing = self.find_open_task(task_name, workspace_id)
+            if existing is None:
+                raise
+            return existing, False
+
+        return task, True
 
     def claim_next(self, now: float | None = None) -> TaskRecord | None:
         claimed_at = time.time() if now is None else now
@@ -234,6 +265,27 @@ class SQLiteTaskQueue:
         ).fetchone()
         if row is None:
             raise ValueError(f"Task {task_id} was not found")
+        return self._row_to_record(row)
+
+    def find_open_task(
+        self,
+        task_name: str,
+        workspace_id: str | None = None,
+    ) -> TaskRecord | None:
+        row = self._db.get_connection().execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE task_name = ?
+              AND ((workspace_id IS NULL AND ? IS NULL) OR workspace_id = ?)
+              AND status IN ('pending', 'running')
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (task_name, workspace_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            return None
         return self._row_to_record(row)
 
     def count_by_status(self) -> dict[str, int]:

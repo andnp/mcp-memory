@@ -6,6 +6,10 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.importer import import_markdown_memory
 
 
+SYSTEM1_INGEST_TASK_NAME = "ingest-system1"
+SYSTEM1_INGEST_THRESHOLD = 3
+
+
 def record_to_payload(record) -> dict:
     return {
         "id": record.id,
@@ -34,10 +38,33 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
         return {"status": "error", "error": "content is required"}
 
     entry = ctx.journal.record(content)
-    return {
+    payload = {
         "status": "recorded",
         "entry": entry.to_dict(),
     }
+
+    if ctx.task_queue is not None:
+        pending_count = ctx.journal.count_by_status().get("pending", 0)
+        if pending_count >= SYSTEM1_INGEST_THRESHOLD:
+            workspace_id = ctx.project_name
+            ingest_task, created = ctx.task_queue.enqueue_unique(
+                task_name=SYSTEM1_INGEST_TASK_NAME,
+                workspace_id=workspace_id,
+                data={
+                    "workspace_id": workspace_id,
+                    "trigger": "system1_threshold",
+                    "pending_count": pending_count,
+                },
+            )
+            payload["ingest_task"] = {
+                "id": ingest_task.id,
+                "status": ingest_task.status,
+                "task_name": ingest_task.task_name,
+                "workspace_id": ingest_task.workspace_id,
+                "created": created,
+            }
+
+    return payload
 
 
 def get_pending_thoughts_service(ctx: ApplicationContext, arguments: dict) -> dict:

@@ -120,6 +120,26 @@ def test_sqlite_task_queue_rejects_completion_for_non_running_task(db_manager) -
         queue.complete(task.id)
 
 
+def test_sqlite_task_queue_enqueue_unique_reuses_existing_open_task(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    first, first_created = queue.enqueue_unique(
+        "ingest-system1",
+        workspace_id="workspace-a",
+        data={"pending_count": 3},
+    )
+    second, second_created = queue.enqueue_unique(
+        "ingest-system1",
+        workspace_id="workspace-a",
+        data={"pending_count": 4},
+    )
+
+    assert first_created is True
+    assert second_created is False
+    assert second.id == first.id
+    assert queue.count_by_status() == {"pending": 1}
+
+
 @pytest.mark.asyncio
 async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
