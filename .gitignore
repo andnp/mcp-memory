@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test tooling state
+.pytest_cache/
+.testmondata
+.testmondata-shm
+.testmondata-wal
