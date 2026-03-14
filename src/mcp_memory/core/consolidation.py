@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.memory.journal import JournalEntry, System1Journal
+from mcp_memory.core.journal import JournalEntry, System1Journal
 
 if TYPE_CHECKING:
-    from src.memory.providers import AIProvider
+    from mcp_memory.core.providers import AIProvider
 
 logger = logging.getLogger(__name__)
 
