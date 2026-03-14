@@ -47,7 +47,7 @@ def get_memory_tools() -> list[Tool]:
                     "status": {"type": "string"},
                     "metadata": {"type": "object"},
                 },
-                "required": ["title", "content", "workspace_ids"],
+                "required": ["title", "content"],
             },
         ),
         Tool(

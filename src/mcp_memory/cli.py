@@ -28,7 +28,7 @@ def main(debug: bool):
 
 
 @main.command()
-@click.option("--project", help="Override project path")
+@click.option("--project", help="Override workspace root path (legacy option name)")
 def run(project: str | None):
     """Run the MCP server over stdio."""
     server = MCPServer(project_override=project)
@@ -50,7 +50,7 @@ def stats():
 @main.command(name="dashboard")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host interface to bind")
 @click.option("--port", default=8765, show_default=True, type=int, help="Port to bind")
-@click.option("--project", help="Override project path")
+@click.option("--project", help="Override workspace root path (legacy option name)")
 def dashboard(host: str, port: int, project: str | None):
     """Run the read-only management API and operations dashboard."""
     app = create_management_app(project_override=project)

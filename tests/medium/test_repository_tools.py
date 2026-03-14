@@ -75,7 +75,6 @@ async def test_repository_tools_persist_across_runtime_recreation(
             {
                 "title": "Persistent fact",
                 "content": "Repository records should survive runtime recreation.",
-                "workspace_ids": ["workspace-a"],
                 "memory_type": "fact",
             },
         )
@@ -97,5 +96,6 @@ async def test_repository_tools_persist_across_runtime_recreation(
 
         assert get_payload["record"]["title"] == "Persistent fact"
         assert stats_payload["relational_memories"] == 1
+        assert stats_payload["workspace_id"] == second_runtime.workspace_id
     finally:
         second_runtime.close()

@@ -109,6 +109,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
 
         assert health["status"] == "ok"
         assert health["runtime_active"] is True
+        assert health["workspace_id"]
+        assert health["workspace_root"] == str(workspace)
         assert overview["memories"]["total"] == 2
         assert overview["tasks"]["failed_count"] == 1
         assert tasks["tasks"][0]["last_error"] == "missing ext link"

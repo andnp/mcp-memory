@@ -30,7 +30,12 @@ class ManagementService:
 
         return HealthPayload(
             status="ok",
-            project_name=self._ctx.project_name,
+            workspace_id=self._ctx.workspace_id,
+            workspace_root=(
+                str(self._ctx.workspace_root)
+                if self._ctx.workspace_root is not None
+                else None
+            ),
             memory_path=str(self._ctx.memory_path) if self._ctx.memory_path is not None else None,
             db_path=db_path,
             runtime_active=self._controller.has_runtime,

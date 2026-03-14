@@ -21,8 +21,8 @@ The runtime is now **relational-first**.
 - **Memory-Specific Recency Boost**: Automatically prioritizes recent memories (journals, plans) while preserving long-term facts.
 - **Graph-Based Linking**: Supports `[[wikilinks]]` between memories and external documents with context-aware edges.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
-- **Relational Memory Foundation**: UUID-backed relational memory records with workspaces, tags, and typed links.
-- **Project-Scoped Runtime State**: The runtime resolves a per-project memory directory and stores relational state in `indices/memory.db`.
+- **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
+- **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Local Management API**: A read-only FastAPI dashboard/API exposes runtime health, failed tasks, recent memories, and lineage inspection over localhost.
 
 ## 🛠 Tech Stack
@@ -80,9 +80,17 @@ The public MCP surface is relational-first; removed file-backed tools are intent
 Configured via `config.toml` or environment variables:
 
 ```toml
+[ai]
+provider = "gemini-cli"
+model = "gemini-3-flash-preview"
+command = "gemini"
+model_flag = "--model"
+timeout_seconds = 60
+max_retries = 1
+
 [memory]
 enabled = true
-storage_strategy = "project"  # or "user"
+storage_strategy = "shared"
 score_threshold = 0.1
 
 [memory.recency_journal]
@@ -91,7 +99,17 @@ max_boost_amount = 0.2
 boost_decay_rate = 0.95
 ```
 
-The current runtime resolves a per-project memory directory and stores relational runtime state in `indices/memory.db` beneath that directory.
+Preferred config location:
+
+- `~/.config/mcp-memory/config.toml`
+
+Legacy config locations are still read for compatibility.
+
+The runtime stores relational state in a shared global directory, typically:
+
+- `~/.local/share/mcp-memory/memories/indices/memory.db`
+
+The active workspace ID is derived from the current git root when available, with a stable path-based fallback outside git repos.
 
 ## 🏃 Getting Started
 

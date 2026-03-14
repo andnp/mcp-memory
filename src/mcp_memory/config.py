@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, fields, is_dataclass
+from hashlib import sha1
 from pathlib import Path
 from typing import Any, cast
 import os
@@ -11,6 +12,7 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 DEFAULT_INDEX_PATH = ".index_data/"
+DEFAULT_APP_NAME = "mcp-memory"
 
 
 @dataclass
@@ -91,6 +93,27 @@ class LLMConfig:
         return self.embedding_model
 
 
+@dataclass
+class AIConfig:
+    provider: str = "gemini-cli"
+    model: str = "gemini-3-flash-preview"
+    command: str = "gemini"
+    model_flag: str = "--model"
+    timeout_seconds: float = 60.0
+    max_retries: int = 1
+
+    def __post_init__(self):
+        allowed_providers = {"none", "gemini-cli"}
+        if self.provider not in allowed_providers:
+            raise ValueError(
+                f"Invalid ai.provider {self.provider!r}: expected one of {sorted(allowed_providers)}"
+            )
+        if self.timeout_seconds <= 0:
+            raise ValueError("ai.timeout_seconds must be > 0")
+        if self.max_retries < 0:
+            raise ValueError("ai.max_retries must be >= 0")
+
+
 def resolve_embedding_model(config: "Config") -> str:
     """Resolve embedding model name from config with fallback.
 
@@ -156,7 +179,7 @@ class MemoryRecencyConfig:
 @dataclass
 class MemoryConfig:
     enabled: bool = True
-    storage_strategy: str = "user"
+    storage_strategy: str = "shared"
     score_threshold: float = 0.1
     checkpoint_interval_ops: int = 10  # Persist every N operations
     checkpoint_interval_secs: int = 300  # Or every M seconds (5 min default)
@@ -199,10 +222,10 @@ class MemoryConfig:
     )
 
     def __post_init__(self):
-        if self.storage_strategy not in ("project", "user"):
+        if self.storage_strategy not in ("shared", "project", "user"):
             raise ValueError(
                 f"Invalid storage_strategy '{self.storage_strategy}': "
-                "must be 'project' or 'user'"
+                "must be 'shared', 'project', or 'user'"
             )
 
         if not (0.0 <= self.score_threshold <= 1.0):
@@ -244,6 +267,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     projects: list[ProjectConfig] = field(default_factory=list)
     detected_project: str | None = None
@@ -316,6 +340,10 @@ def _find_project_config():
     current = Path.cwd()
 
     while True:
+        config_path = current / ".mcp-memory" / "config.toml"
+        if config_path.exists():
+            return config_path
+
         config_path = current / ".mcp-markdown-ragdocs" / "config.toml"
         if config_path.exists():
             return config_path
@@ -334,6 +362,7 @@ def load_config():
     if project_config:
         config_locations.append(project_config)
 
+    config_locations.append(Path.home() / ".config" / DEFAULT_APP_NAME / "config.toml")
     config_locations.append(
         Path.home() / ".config" / "mcp-markdown-ragdocs" / "config.toml"
     )
@@ -356,6 +385,7 @@ def load_config():
 
     search = _load_dataclass_from_dict(SearchConfig, config_data.get("search", {}))
     llm = _load_dataclass_from_dict(LLMConfig, config_data.get("llm", {}))
+    ai = _load_dataclass_from_dict(AIConfig, config_data.get("ai", {}))
     git_indexing = _load_dataclass_from_dict(
         GitIndexingConfig, config_data.get("git_indexing", {})
     )
@@ -387,9 +417,68 @@ def load_config():
         memory=memory,
         search=search,
         llm=llm,
+        ai=ai,
         chunking=chunking,
         projects=projects,
     )
+
+
+def resolve_global_data_dir():
+    data_home = os.getenv("XDG_DATA_HOME")
+    if data_home:
+        return Path(data_home)
+    return Path.home() / ".local" / "share"
+
+
+def resolve_workspace_root(
+    cwd: Path | None = None,
+    workspace_override: str | None = None,
+):
+    if workspace_override:
+        override_path = Path(workspace_override).expanduser()
+        if override_path.exists():
+            base_path = override_path.resolve()
+        else:
+            base_path = override_path
+    else:
+        base_path = (cwd or Path.cwd()).expanduser().resolve()
+
+    git_root = _find_git_root(base_path)
+    if git_root is not None:
+        return git_root
+    return base_path
+
+
+def resolve_workspace_id(
+    cwd: Path | None = None,
+    workspace_override: str | None = None,
+):
+    workspace_root = resolve_workspace_root(cwd, workspace_override)
+    normalized_path = str(workspace_root)
+    digest = sha1(normalized_path.encode("utf-8")).hexdigest()[:12]
+    base_name = workspace_root.name or "workspace"
+    slug = re.sub(r"[^a-zA-Z0-9_-]", "-", base_name)
+    slug = re.sub(r"-+", "-", slug).strip("-") or "workspace"
+    return f"{slug}-{digest}"
+
+
+def resolve_workspace_lock_path(memory_path: Path, workspace_id: str):
+    lock_dir = memory_path / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    digest = sha1(workspace_id.encode("utf-8")).hexdigest()[:16]
+    return lock_dir / f"{digest}.lock"
+
+
+def _find_git_root(start_path: Path):
+    current = start_path if start_path.is_dir() else start_path.parent
+    current = current.resolve()
+    while True:
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def _validate_projects(projects: list[ProjectConfig]):
@@ -695,43 +784,12 @@ def resolve_memory_path(
     detected_project: str | None = None,
     projects: list[ProjectConfig] | None = None,
 ) -> Path:
-    strategy = config.memory.storage_strategy
-
-    if strategy == "project":
-        if detected_project and projects:
-            for project in projects:
-                if project.name == detected_project:
-                    memory_path = Path(project.path) / ".memories"
-                    logger.info(
-                        f"Using project memory path for '{detected_project}': {memory_path}"
-                    )
-                    return memory_path
-
-        cwd = Path.cwd()
-        memory_path = cwd / ".memories"
-        logger.info(f"Using CWD memory path: {memory_path}")
-        return memory_path
-
-    data_home = os.getenv("XDG_DATA_HOME")
-    if data_home:
-        base_dir = Path(data_home)
-    else:
-        base_dir = Path.home() / ".local" / "share"
-
-    if detected_project:
-        safe_project_name = detected_project.replace("/", "_").replace("\\", "_")
-        memory_path = base_dir / "mcp-markdown-ragdocs" / safe_project_name / "memories"
-        logger.info(
-            f"Using user memory path for project '{detected_project}': {memory_path}"
+    if config.memory.storage_strategy != "shared":
+        logger.warning(
+            "memory.storage_strategy=%r is deprecated; using shared global storage instead",
+            config.memory.storage_strategy,
         )
-        return memory_path
 
-    cwd = Path.cwd()
-    sanitized_name = re.sub(r"[^a-zA-Z0-9_-]", "-", cwd.name)
-    sanitized_name = re.sub(r"-+", "-", sanitized_name).strip("-") or "default"
-
-    memory_path = (
-        base_dir / "mcp-markdown-ragdocs" / f"local-{sanitized_name}" / "memories"
-    )
-    logger.info(f"Using fallback user memory path: {memory_path}")
+    memory_path = resolve_global_data_dir() / DEFAULT_APP_NAME / "memories"
+    logger.info("Using shared global memory path: %s", memory_path)
     return memory_path

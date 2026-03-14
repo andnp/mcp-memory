@@ -67,6 +67,7 @@ async def test_call_memory_tool_records_real_journal_entry(
 
         assert payload["status"] == "recorded"
         assert payload["entry"]["content"] == "wire up mcp handlers"
+        assert payload["entry"]["workspace_id"] == runtime.workspace_id
 
         pending = await call_memory_tool(runtime, "get_pending_thoughts", {"limit": 5})
         pending_payload = json.loads(pending[0].text)

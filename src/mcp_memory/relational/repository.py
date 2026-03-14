@@ -194,6 +194,27 @@ class RelationalMemoryRepository:
             return None
         return self.get_memory(memory_id)
 
+    def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
+        normalized_workspace_ids = self._normalize_values(workspace_ids)
+        if not normalized_workspace_ids:
+            return self.get_memory(memory_id)
+
+        current = self.get_memory(memory_id)
+        if current is None:
+            return None
+
+        merged_workspace_ids = self._normalize_values(
+            [*current.workspace_ids, *normalized_workspace_ids]
+        )
+        conn = self._db.get_connection()
+        with conn:
+            self._replace_workspace_mappings(conn, memory_id, merged_workspace_ids)
+            conn.execute(
+                "UPDATE memories SET updated_at = ? WHERE id = ?",
+                (self._utc_now(), memory_id),
+            )
+        return self.get_memory(memory_id)
+
     def get_memory(self, memory_id: str):
         conn = self._db.get_connection()
         row = conn.execute(

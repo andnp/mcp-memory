@@ -22,3 +22,9 @@ def test_project_config_normalizes_absolute_path(tmp_path: Path) -> None:
 def test_memory_config_rejects_invalid_storage_strategy() -> None:
     with pytest.raises(ValueError, match="storage_strategy"):
         MemoryConfig(storage_strategy="elsewhere")
+
+
+def test_memory_config_accepts_shared_storage_strategy() -> None:
+    config = MemoryConfig(storage_strategy="shared")
+
+    assert config.storage_strategy == "shared"

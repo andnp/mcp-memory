@@ -13,15 +13,19 @@ async def test_gemini_cli_provider_returns_parsed_json(
 ) -> None:
     install_fake_subprocess.add(FakeAsyncProcess(stdout_text='{"actions": []}'))
 
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+    provider = GeminiCLIProvider(
+        command="gemini",
+        model="gemini-3-flash-preview",
+        max_retries=0,
+    )
 
     result = await provider.ask("summarize these memories")
 
     assert result == {"actions": []}
     assert len(install_fake_subprocess.calls) == 1
     args, kwargs = install_fake_subprocess.calls[0]
-    assert args[:3] == ("gemini", "ask", "--json")
-    assert args[3] == "summarize these memories"
+    assert args[:5] == ("gemini", "--model", "gemini-3-flash-preview", "ask", "--json")
+    assert args[5] == "summarize these memories"
     assert kwargs == {"stdout": -1, "stderr": -1}
 
 

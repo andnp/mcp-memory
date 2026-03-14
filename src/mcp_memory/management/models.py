@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 
 class HealthPayload(BaseModel):
     status: str
-    project_name: str | None = None
+    workspace_id: str | None = None
+    workspace_root: str | None = None
     memory_path: str | None = None
     db_path: str | None = None
     runtime_active: bool

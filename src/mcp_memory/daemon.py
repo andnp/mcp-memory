@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import IO
 from pathlib import Path
 
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
@@ -31,7 +32,7 @@ class DaemonLockTimeoutError(TimeoutError):
 @dataclass
 class FilesystemLock:
     lock_path: Path
-    _handle: object | None = None
+    _handle: IO[str] | None = None
 
     def acquire(self, timeout_seconds: float | None = DEFAULT_LOCK_TIMEOUT_SECONDS):
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +127,8 @@ class DaemonLifecycleController:
         project_override: str | None = None,
         cwd: Path | None = None,
     ):
+        runtime = None
+        runtime_worker = None
         spec = await asyncio.to_thread(
             self._runtime_spec_resolver,
             project_override,
@@ -143,7 +146,7 @@ class DaemonLifecycleController:
                 self._client_count += 1
                 return self._runtime
 
-            runtime_lock = FilesystemLock(spec.memory_path / ".daemon.lock")
+            runtime_lock = FilesystemLock(spec.lock_path)
 
             try:
                 await asyncio.to_thread(
@@ -156,9 +159,9 @@ class DaemonLifecycleController:
                 if runtime_worker is not None:
                     await runtime_worker.start()
             except Exception:
-                if "runtime_worker" in locals() and runtime_worker is not None:
+                if runtime_worker is not None:
                     await runtime_worker.stop(0.0)
-                if "runtime" in locals() and runtime is not None:
+                if runtime is not None:
                     await asyncio.to_thread(runtime.close)
                 await asyncio.to_thread(runtime_lock.release)
                 raise

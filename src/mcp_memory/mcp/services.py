@@ -101,7 +101,7 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
 
     content = _require_string(arguments, "content")
 
-    entry = ctx.journal.record(content)
+    entry = ctx.journal.record(content, workspace_id=ctx.workspace_id)
     payload = {
         "status": "recorded",
         "entry": entry.to_dict(),
@@ -110,7 +110,7 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.task_queue is not None:
         pending_count = ctx.journal.count_by_status().get("pending", 0)
         if pending_count >= SYSTEM1_INGEST_THRESHOLD:
-            workspace_id = ctx.project_name
+            workspace_id = ctx.workspace_id
             ingest_task, created = ctx.task_queue.enqueue_unique(
                 task_name=SYSTEM1_INGEST_TASK_NAME,
                 workspace_id=workspace_id,
@@ -151,7 +151,10 @@ def get_memory_stats_service(ctx: ApplicationContext) -> dict:
     relational_count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     return {
         "status": "ok",
-        "project": ctx.project_name,
+        "workspace_id": ctx.workspace_id,
+        "workspace_root": str(ctx.workspace_root) if ctx.workspace_root is not None else None,
+        "ai_provider": ctx.config.ai.provider if ctx.config is not None else None,
+        "ai_model": ctx.config.ai.model if ctx.config is not None else None,
         "memory_path": str(ctx.memory_path) if ctx.memory_path is not None else None,
         "documents": document_count,
         "relational_memories": relational_count,
@@ -165,7 +168,11 @@ def create_memory_record_service(ctx: ApplicationContext, arguments: dict) -> di
 
     title = _require_string(arguments, "title")
     content = _require_string(arguments, "content")
-    workspace_ids = _string_list(arguments, "workspace_ids", required=True)
+    workspace_ids = _string_list(arguments, "workspace_ids")
+    if not workspace_ids and ctx.workspace_id is not None:
+        workspace_ids = [ctx.workspace_id]
+    if not workspace_ids:
+        raise ValueError("workspace_ids are required")
 
     record = ctx.repository.create_memory(
         title=title,
@@ -276,12 +283,12 @@ def import_markdown_memory_file_service(ctx: ApplicationContext, arguments: dict
 
     workspace_ids = _string_list(arguments, "workspace_ids")
     if not workspace_ids:
-        if ctx.project_name:
-            workspace_ids = [ctx.project_name]
+        if ctx.workspace_id:
+            workspace_ids = [ctx.workspace_id]
         else:
             return {
                 "status": "error",
-                "error": "workspace_ids are required when project_name is unavailable",
+                "error": "workspace_ids are required when workspace_id is unavailable",
             }
 
     import_path = Path(file_path)

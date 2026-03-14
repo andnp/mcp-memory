@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 class JournalEntry:
     """A single System 1 journal entry."""
 
-    __slots__ = ("id", "content", "timestamp", "status")
+    __slots__ = ("id", "content", "workspace_id", "timestamp", "status")
 
-    def __init__(self, id: int, content: str, timestamp: float, status: str) -> None:
+    def __init__(self, id: int, content: str, workspace_id: str | None, timestamp: float, status: str) -> None:
         self.id = id
         self.content = content
+        self.workspace_id = workspace_id
         self.timestamp = timestamp
         self.status = status
 
@@ -25,6 +26,7 @@ class JournalEntry:
         return {
             "id": self.id,
             "content": self.content,
+            "workspace_id": self.workspace_id,
             "timestamp": self.timestamp,
             "status": self.status,
         }
@@ -41,7 +43,7 @@ class System1Journal:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
 
-    def record(self, content: str) -> JournalEntry:
+    def record(self, content: str, workspace_id: str | None = None) -> JournalEntry:
         """Record a raw thought. Returns the created entry."""
         if not content or not content.strip():
             raise ValueError("Journal content cannot be empty")
@@ -50,8 +52,8 @@ class System1Journal:
         now = time.time()
         conn = self._db.get_connection()
         cursor = conn.execute(
-            "INSERT INTO system1_journal (content, timestamp, status) VALUES (?, ?, ?)",
-            (content, now, "pending"),
+            "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",
+            (content, workspace_id, now, "pending"),
         )
         conn.commit()
         entry_id = cursor.lastrowid
@@ -59,19 +61,19 @@ class System1Journal:
 
         logger.info("Recorded journal entry %d (%d chars)", entry_id, len(content))
         return JournalEntry(
-            id=entry_id, content=content, timestamp=now, status="pending"
+            id=entry_id, content=content, workspace_id=workspace_id, timestamp=now, status="pending"
         )
 
     def get_pending(self, limit: int = 50) -> list[JournalEntry]:
         """Get pending entries, oldest first."""
         conn = self._db.get_connection()
         rows = conn.execute(
-            "SELECT id, content, timestamp, status FROM system1_journal "
+            "SELECT id, content, workspace_id, timestamp, status FROM system1_journal "
             "WHERE status = 'pending' ORDER BY timestamp ASC LIMIT ?",
             (limit,),
         ).fetchall()
         return [
-            JournalEntry(id=r[0], content=r[1], timestamp=r[2], status=r[3])
+            JournalEntry(id=r[0], content=r[1], workspace_id=r[2], timestamp=r[3], status=r[4])
             for r in rows
         ]
 
@@ -115,11 +117,11 @@ class System1Journal:
         """Get most recent entries regardless of status."""
         conn = self._db.get_connection()
         rows = conn.execute(
-            "SELECT id, content, timestamp, status FROM system1_journal "
+            "SELECT id, content, workspace_id, timestamp, status FROM system1_journal "
             "ORDER BY timestamp DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [
-            JournalEntry(id=r[0], content=r[1], timestamp=r[2], status=r[3])
+            JournalEntry(id=r[0], content=r[1], workspace_id=r[2], timestamp=r[3], status=r[4])
             for r in rows
         ]

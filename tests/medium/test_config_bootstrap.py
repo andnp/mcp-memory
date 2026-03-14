@@ -11,6 +11,8 @@ from mcp_memory.config import (
     persist_project_to_config,
     resolve_documents_path,
     resolve_memory_path,
+    resolve_workspace_id,
+    resolve_workspace_root,
 )
 
 
@@ -50,11 +52,33 @@ def test_detect_project_auto_registers_cwd(
 def test_resolve_memory_path_uses_xdg_data_home(tmp_path: Path, monkeypatch) -> None:
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    config = Config(memory=MemoryConfig(storage_strategy="user"))
+    config = Config(memory=MemoryConfig(storage_strategy="shared"))
 
     resolved = resolve_memory_path(config, detected_project="demo-project")
 
-    assert resolved == data_home / "mcp-markdown-ragdocs" / "demo-project" / "memories"
+    assert resolved == data_home / "mcp-memory" / "memories"
+
+
+def test_resolve_workspace_root_prefers_git_root(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    nested = repo_root / "src" / "feature"
+    nested.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+
+    resolved = resolve_workspace_root(cwd=nested)
+
+    assert resolved == repo_root
+
+
+def test_resolve_workspace_id_is_stable_for_non_git_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "scratch" / "notes"
+    workspace.mkdir(parents=True)
+
+    first = resolve_workspace_id(cwd=workspace)
+    second = resolve_workspace_id(cwd=workspace)
+
+    assert first == second
+    assert first.startswith("notes-")
 
 
 def test_resolve_documents_path_prefers_detected_project_path(tmp_path: Path) -> None:

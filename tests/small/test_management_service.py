@@ -68,3 +68,4 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert detail.superseded[0]["id"] == secondary.id
     assert tasks.tasks[0]["status"] == "failed"
     assert health.runtime_active is True
+    assert health.workspace_id == "workspace-a"

@@ -8,6 +8,8 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
+from mcp_memory.config import AIConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,10 +46,14 @@ class GeminiCLIProvider:
         self,
         *,
         command: str = "gemini",
+        model: str | None = None,
+        model_flag: str = "--model",
         timeout: float = 60.0,
         max_retries: int = 1,
     ) -> None:
         self._command = command
+        self._model = model
+        self._model_flag = model_flag
         self._timeout = timeout
         self._max_retries = max_retries
 
@@ -79,11 +85,12 @@ class GeminiCLIProvider:
     async def _execute(self, prompt: str) -> AIResponse:
         """Execute a single CLI call."""
         try:
+            command_args = [self._command]
+            if self._model:
+                command_args.extend([self._model_flag, self._model])
+            command_args.extend(["ask", "--json", prompt])
             proc = await asyncio.create_subprocess_exec(
-                self._command,
-                "ask",
-                "--json",
-                prompt,
+                *command_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -153,3 +160,17 @@ class GeminiCLIProvider:
                 parsed=None,
                 error=f"Invalid JSON: {e}",
             )
+
+
+def build_ai_provider(ai_config: AIConfig):
+    if ai_config.provider == "none":
+        return None
+    if ai_config.provider == "gemini-cli":
+        return GeminiCLIProvider(
+            command=ai_config.command,
+            model=ai_config.model,
+            model_flag=ai_config.model_flag,
+            timeout=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
+        )
+    raise ValueError(f"Unsupported AI provider: {ai_config.provider}")

@@ -28,9 +28,10 @@ def build_runtime_task_worker(
     ctx: ApplicationContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
+    active_provider = provider if provider is not None else getattr(ctx, "ai_provider", None)
     return RuntimeTaskWorker(
         ctx,
-        handlers=build_default_task_handlers(provider),
+        handlers=build_default_task_handlers(active_provider),
         poll_interval_seconds=0.05,
     )
 
@@ -52,7 +53,7 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
     if task_queue is None:
         return
 
-    workspace_id = getattr(ctx, "project_name", None)
+    workspace_id = getattr(ctx, "workspace_id", None)
     for task_name in (
         PROJECT_MANAGER_TASK_NAME,
         FACT_CHECKER_TASK_NAME,
@@ -331,6 +332,7 @@ def _execute_ingest_actions(
                 "ingest_task_id": task.id,
             },
         )
+        assert record is not None
         created_ids.append(record.id)
         processed_ids.extend(entry.id for entry in selected_entries)
         _enqueue_summary_task(ctx, workspace_id, record.id)
@@ -359,6 +361,7 @@ def _fallback_ingest_entries(
                 "ingest_task_id": task.id,
             },
         )
+        assert record is not None
         created_ids.append(record.id)
         processed_ids.extend(entry.id for entry in group)
         _enqueue_summary_task(ctx, workspace_id, record.id)
@@ -387,9 +390,9 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str:
     task_workspace = task.data.get("workspace_id")
     if isinstance(task_workspace, str) and task_workspace.strip():
         return task_workspace.strip()
-    if ctx.project_name:
-        return ctx.project_name
-    return "global"
+    if ctx.workspace_id:
+        return ctx.workspace_id
+    return "workspace-unknown"
 
 
 def _resolve_workspace_root(
@@ -403,10 +406,8 @@ def _resolve_workspace_root(
             return override_path
     if workspace_id is None:
         return None
-    if ctx.config is not None:
-        for project in ctx.config.projects:
-            if project.name == workspace_id:
-                return Path(project.path)
+    if ctx.workspace_root is not None and ctx.workspace_id == workspace_id:
+        return ctx.workspace_root
     path = Path(workspace_id).expanduser()
     if path.exists():
         return path
