@@ -15,16 +15,25 @@ pytestmark = pytest.mark.large
 async def test_server_run_initializes_runtime_and_invokes_stdio(monkeypatch) -> None:
     read_stream = object()
     write_stream = object()
-    fake_runtime = type("FakeRuntime", (), {"close": lambda self: None})()
-    server = MCPServer(project_override="demo")
+    fake_runtime = object()
     captured: dict[str, object] = {}
+
+    class FakeController:
+        async def acquire_runtime(self, project_override: str | None, cwd):
+            captured["project_override"] = project_override
+            captured["cwd"] = cwd
+            return fake_runtime
+
+        async def release_runtime(self, runtime):
+            captured["released_runtime"] = runtime
+
+    server = MCPServer(project_override="demo", controller=FakeController())
 
     async def fake_run(read_arg, write_arg, init_options) -> None:
         captured["read_stream"] = read_arg
         captured["write_stream"] = write_arg
         captured["init_options"] = init_options
 
-    monkeypatch.setattr("mcp_memory.server.create_runtime", lambda project_override, cwd: fake_runtime)
     monkeypatch.setattr(
         "mcp_memory.server.stdio_server",
         lambda: FakeAsyncContextManager((read_stream, write_stream)),
@@ -36,6 +45,8 @@ async def test_server_run_initializes_runtime_and_invokes_stdio(monkeypatch) -> 
     assert server.ctx is fake_runtime
     assert captured["read_stream"] is read_stream
     assert captured["write_stream"] is write_stream
+    assert captured["project_override"] == "demo"
+    assert captured["released_runtime"] is fake_runtime
 
 
 def test_cli_run_invokes_server_with_project_override(monkeypatch) -> None:

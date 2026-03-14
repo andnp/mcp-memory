@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class DatabaseManager:
@@ -95,13 +95,23 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 task_name TEXT NOT NULL,
+                workspace_id TEXT,
                 data TEXT DEFAULT '{}',
                 status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER NOT NULL DEFAULT 100,
+                retries_count INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
                 created_at REAL NOT NULL,
-                updated_at REAL
+                updated_at REAL NOT NULL,
+                available_at REAL NOT NULL,
+                claimed_at REAL,
+                started_at REAL,
+                completed_at REAL,
+                last_error TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, available_at, priority, created_at);
 
             CREATE TABLE IF NOT EXISTS system1_journal (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,6 +194,21 @@ class DatabaseManager:
         """)
         self._ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
         self._ensure_column(conn, "system1_journal", "author", "TEXT")
+        self._ensure_column(conn, "tasks", "workspace_id", "TEXT")
+        self._ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 100")
+        self._ensure_column(conn, "tasks", "retries_count", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "tasks", "max_retries", "INTEGER NOT NULL DEFAULT 3")
+        self._ensure_column(conn, "tasks", "available_at", "REAL NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "tasks", "claimed_at", "REAL")
+        self._ensure_column(conn, "tasks", "started_at", "REAL")
+        self._ensure_column(conn, "tasks", "completed_at", "REAL")
+        self._ensure_column(conn, "tasks", "last_error", "TEXT")
+        conn.execute(
+            "UPDATE tasks SET updated_at = COALESCE(updated_at, created_at, 0) WHERE updated_at IS NULL"
+        )
+        conn.execute(
+            "UPDATE tasks SET available_at = COALESCE(available_at, created_at, 0) WHERE available_at IS NULL"
+        )
         self._ensure_column(conn, "memories", "summary", "TEXT")
         self._ensure_column(conn, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
         self._ensure_column(conn, "memories", "created_at", "TEXT")

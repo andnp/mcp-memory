@@ -77,9 +77,18 @@ async def test_mcp_server_run_uses_stdio_server(monkeypatch) -> None:
     read_stream = object()
     write_stream = object()
     captured: dict[str, object] = {}
-    fake_ctx = type("FakeRuntime", (), {"close": lambda self: None})()
+    fake_ctx = object()
 
-    server = MCPServer()
+    class FakeController:
+        async def acquire_runtime(self, project_override: str | None, cwd):
+            captured["project_override"] = project_override
+            captured["cwd"] = cwd
+            return fake_ctx
+
+        async def release_runtime(self, runtime):
+            captured["released_runtime"] = runtime
+
+    server = MCPServer(controller=FakeController())
 
     async def fake_run(read_arg, write_arg, init_options) -> None:
         captured["read_stream"] = read_arg
@@ -90,7 +99,6 @@ async def test_mcp_server_run_uses_stdio_server(monkeypatch) -> None:
         "mcp_memory.server.stdio_server",
         lambda: FakeAsyncContextManager((read_stream, write_stream)),
     )
-    monkeypatch.setattr("mcp_memory.server.create_runtime", lambda project_override, cwd: fake_ctx)
     monkeypatch.setattr(server.server, "run", fake_run)
 
     await server.run()
@@ -98,6 +106,7 @@ async def test_mcp_server_run_uses_stdio_server(monkeypatch) -> None:
     assert captured["read_stream"] is read_stream
     assert captured["write_stream"] is write_stream
     assert captured["init_options"] is not None
+    assert captured["released_runtime"] is fake_ctx
     assert server.ctx is fake_ctx
 
 

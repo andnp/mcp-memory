@@ -6,7 +6,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.daemon import get_daemon_lifecycle_controller
 
 # Set environment variables for performance and output stability
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 class MCPServer:
-    def __init__(self, project_override: str | None = None):
+    def __init__(self, project_override: str | None = None, controller=None):
         self.project_override = project_override
         self.server = Server("mcp-memory")
         self.ctx = None  # Will hold the Memory Context (ApplicationContext refined for memory)
+        self._controller = controller or get_daemon_lifecycle_controller()
 
         self._setup_handlers()
 
@@ -43,8 +44,7 @@ class MCPServer:
         """Runs the MCP server using stdio."""
         logger.info("Initializing MCP Memory Server...")
         if self.ctx is None:
-            self.ctx = await asyncio.to_thread(
-                create_runtime,
+            self.ctx = await self._controller.acquire_runtime(
                 self.project_override,
                 None,
             )
@@ -58,4 +58,6 @@ class MCPServer:
                 )
         finally:
             if self.ctx is not None:
-                self.ctx.close()
+                shutdown_task = await self._controller.release_runtime(self.ctx)
+                if shutdown_task is not None:
+                    await asyncio.shield(shutdown_task)
