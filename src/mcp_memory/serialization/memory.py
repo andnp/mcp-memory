@@ -3,6 +3,7 @@ from __future__ import annotations
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.models import CompactMemoryRecord
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
+from mcp_memory.relational.search import RelationalSearchResult
 
 
 def memory_record_payload(record: RelationalMemoryRecord) -> dict:
@@ -43,6 +44,19 @@ def link_payload(link: MemoryLink) -> dict:
         "target_id": link.target_id,
         "link_type": link.link_type,
         "context": link.context,
+    }
+
+
+def search_result_payload(result: RelationalSearchResult) -> dict:
+    return {
+        "memory_id": result.memory_id,
+        "title": result.title,
+        "summary": result.summary,
+        "memory_type": result.memory_type,
+        "status": result.status,
+        "tags": list(result.tags),
+        "workspace_ids": list(result.workspace_ids),
+        "score": result.score,
     }
 
 
