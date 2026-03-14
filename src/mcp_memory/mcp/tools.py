@@ -74,4 +74,43 @@ def get_memory_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="search_memory_records",
+            description="Search relational memory records with summary-first results.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "include_superseded": {"type": "boolean"},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="read_memory_record",
+            description="Read a relational memory record with relationships and superseded breadcrumbs.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="import_markdown_memory_file",
+            description="Import a legacy markdown memory file into the relational repository.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["file_path"],
+            },
+        ),
     ]

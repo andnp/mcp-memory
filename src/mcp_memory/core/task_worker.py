@@ -46,11 +46,12 @@ class RuntimeTaskWorker:
             self._runner = None
 
     async def _run_loop(self) -> None:
-        if self._ctx.task_queue is None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
             return
 
         while not self._stop_event.is_set():
-            task = await asyncio.to_thread(self._ctx.task_queue.claim_next)
+            task = await asyncio.to_thread(task_queue.claim_next)
             if task is None:
                 await asyncio.sleep(self._poll_interval_seconds)
                 continue
@@ -58,13 +59,14 @@ class RuntimeTaskWorker:
             await self._process_task(task)
 
     async def _process_task(self, task: TaskRecord) -> None:
-        if self._ctx.task_queue is None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
             return
 
         handler = self._handlers.get(task.task_name)
         if handler is None:
             await asyncio.to_thread(
-                self._ctx.task_queue.fail_permanently,
+                task_queue.fail_permanently,
                 task.id,
                 f"No task handler registered for {task.task_name}",
             )
@@ -76,11 +78,11 @@ class RuntimeTaskWorker:
                 await result
         except Exception as exc:
             await asyncio.to_thread(
-                self._ctx.task_queue.fail,
+                task_queue.fail,
                 task.id,
                 str(exc),
                 self._retry_delay_seconds,
             )
             return
 
-        await asyncio.to_thread(self._ctx.task_queue.complete, task.id)
+        await asyncio.to_thread(task_queue.complete, task.id)

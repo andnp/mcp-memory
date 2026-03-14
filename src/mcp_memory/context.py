@@ -18,6 +18,7 @@ class ApplicationContext:
     db_manager: DatabaseManager | None = None
     journal: System1Journal | None = None
     repository: RelationalMemoryRepository | None = None
+    relational_search: Any = None
     task_queue: Any = None
     memory_manager: Any = None
     memory_search: Any = None

@@ -11,6 +11,7 @@ from mcp_memory.config import (
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.relational_search import RelationalMemorySearchService
 from mcp_memory.core.repository import RelationalMemoryRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.core.storage import ensure_memory_dirs
@@ -51,6 +52,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
     db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
     journal = System1Journal(db_manager)
     repository = RelationalMemoryRepository(db_manager)
+    relational_search = RelationalMemorySearchService(repository, spec.config)
     task_queue = SQLiteTaskQueue(db_manager)
     return ApplicationContext(
         config=spec.config,
@@ -59,6 +61,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         db_manager=db_manager,
         journal=journal,
         repository=repository,
+        relational_search=relational_search,
         task_queue=task_queue,
     )
 

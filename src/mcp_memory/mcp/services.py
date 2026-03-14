@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.importer import import_markdown_memory
 
 
 def record_to_payload(record) -> dict:
@@ -115,4 +118,98 @@ def list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dic
     return {
         "status": "ok",
         "records": [record_to_payload(record) for record in records],
+    }
+
+
+def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.relational_search is None:
+        return {"status": "error", "error": "relational_search_not_initialized"}
+
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        return {"status": "error", "error": "query is required"}
+
+    results = ctx.relational_search.search_memories(
+        query=query,
+        workspace_id=arguments.get("workspace_id"),
+        limit=int(arguments.get("limit", 5)),
+        memory_type=arguments.get("memory_type"),
+        status=arguments.get("status"),
+        include_superseded=bool(arguments.get("include_superseded", False)),
+    )
+    return {
+        "status": "ok",
+        "results": [
+            {
+                "memory_id": result.memory_id,
+                "title": result.title,
+                "summary": result.summary,
+                "memory_type": result.memory_type,
+                "status": result.status,
+                "tags": result.tags,
+                "workspace_ids": result.workspace_ids,
+                "score": result.score,
+            }
+            for result in results
+        ],
+    }
+
+
+def read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.relational_search is None:
+        return {"status": "error", "error": "relational_search_not_initialized"}
+
+    memory_id = str(arguments.get("memory_id", "")).strip()
+    if not memory_id:
+        return {"status": "error", "error": "memory_id is required"}
+
+    result = ctx.relational_search.read_memory(memory_id)
+    if result is None:
+        return {"status": "error", "error": "memory_not_found"}
+
+    return {
+        "status": "ok",
+        "record": record_to_payload(result.record),
+        "relationships": {
+            direction: [
+                {
+                    "source_id": link.source_id,
+                    "target_id": link.target_id,
+                    "link_type": link.link_type,
+                    "context": link.context,
+                }
+                for link in links
+            ]
+            for direction, links in result.relationships.items()
+        },
+        "superseded": [record_to_payload(record) for record in result.superseded],
+    }
+
+
+def import_markdown_memory_file_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    file_path = str(arguments.get("file_path", "")).strip()
+    if not file_path:
+        return {"status": "error", "error": "file_path is required"}
+
+    workspace_ids = [
+        str(value).strip()
+        for value in arguments.get("workspace_ids", [])
+        if str(value).strip()
+    ]
+    if not workspace_ids:
+        if ctx.project_name:
+            workspace_ids = [ctx.project_name]
+        else:
+            return {
+                "status": "error",
+                "error": "workspace_ids are required when project_name is unavailable",
+            }
+
+    imported = import_markdown_memory(ctx.repository, Path(file_path), workspace_ids)
+    return {
+        "status": "imported",
+        "record": record_to_payload(imported),
     }

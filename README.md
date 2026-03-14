@@ -65,6 +65,9 @@ The following tools are exposed via the MCP server:
 - `create_memory_record`: Create a UUID-backed relational memory record.
 - `get_memory_record`: Fetch a relational memory record by ID.
 - `list_memory_records`: List relational memory records with optional filters.
+- `search_memory_records`: Search relational memory records with summary-first results.
+- `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
+- `import_markdown_memory_file`: Import a legacy markdown memory file into the relational store.
 
 ### Runtime Statistics
 - `get_memory_stats`: Return basic runtime statistics for the journal, relational records, and indexed documents.
