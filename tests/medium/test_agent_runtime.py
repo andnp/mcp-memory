@@ -638,6 +638,148 @@ async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_graph_linker_skips_provider_when_fallback_is_sufficient(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="Auth rollout plan",
+            content="Roll out auth across services.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+            tags=["auth", "rollout"],
+        )
+        second = runtime.repository.create_memory(
+            title="Auth api contract",
+            content="Document the auth api contract.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "api"],
+        )
+        third = runtime.repository.create_memory(
+            title="Auth frontend tasks",
+            content="Update the auth frontend screens.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+            tags=["auth", "ui"],
+        )
+        assert first is not None and second is not None and third is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "links": [
+                        {
+                            "source_id": first.id,
+                            "target_id": third.id,
+                            "link_type": "DEPENDS_ON",
+                            "context": "provider result",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-fallback-task",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["created"] >= 2
+        assert provider.call_count == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        records = []
+        for index in range(16):
+            record = runtime.repository.create_memory(
+                    title=f"topic{index}",
+                    content=f"body{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                    tags=[f"tag{index}"],
+            )
+            assert record is not None
+            records.append(record)
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "conflicts": [
+                        {
+                            "left_id": records[0].id,
+                            "right_id": records[1].id,
+                            "context": "provider detected semantic conflict",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_conflict_detector_task(
+            runtime,
+            TaskRecord(
+                id="conflict-detector-ai-task",
+                task_name=CONFLICT_DETECTOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["created"] == 2
+        assert provider.call_count == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -736,6 +878,170 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_defragmenter_skips_provider_for_small_groups(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="Short note one",
+            content="Brief auth note.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth"],
+        )
+        second = runtime.repository.create_memory(
+            title="Short note two",
+            content="Another brief auth note.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth"],
+        )
+        assert first is not None and second is not None
+
+        provider = FakeAIProvider(responses=[{"title": "Provider title", "content": "Provider content"}])
+        result = await handle_defragmenter_task(
+            runtime,
+            TaskRecord(
+                id="defragmenter-small-task",
+                task_name=DEFRAGMENTER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        reflections = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="reflection",
+            limit=10,
+        )
+        assert result["created"] == 1
+        assert provider.call_count == 0
+        assert reflections[0].title in {"Reflection: Short note one", "Reflection: Short note two"}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_skips_provider_when_deterministic_normalization_suffices(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Tagged fact",
+            content="A fact with messy tags.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["Tests", "Authn"],
+        )
+        assert record is not None
+
+        provider = FakeAIProvider(responses=[{"tags": ["provider"]}])
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-deterministic-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated = runtime.repository.get_memory(record.id)
+        assert result["updated"] == 1
+        assert provider.call_count == 0
+        assert updated is not None and updated.tags == ["auth", "testing"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_uses_provider_for_untagged_records(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert record is not None
+
+        provider = FakeAIProvider(responses=[{"tags": ["Authn", "Tests"]}])
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-provider-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated = runtime.repository.get_memory(record.id)
+        assert result["updated"] == 1
+        assert provider.call_count == 1
+        assert updated is not None and updated.tags == ["auth", "testing"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -817,6 +1123,82 @@ async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkey
             for link in fact_links
         )
         assert any(link.target_id == new_observation.id and link.link_type == "SUPERSEDES" for link in fact_links)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deduplicator_skips_provider_for_subset_merge(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    runtime.embedder = _SemanticFakeEmbedder()
+    runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="JWT requirement",
+            content="JWTs are required for all clients. Bearer tokens are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="JWT requirement summary",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = FakeAIProvider(
+            responses=[{"title": "Provider merged title", "content": "Provider merged content"}]
+        )
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-subset-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_canonical = runtime.repository.get_memory(canonical.id)
+        updated_duplicate = runtime.repository.get_memory(duplicate.id)
+        active_facts = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="fact",
+            status="active",
+            limit=10,
+        )
+
+        assert result["merged"] >= 1
+        assert provider.call_count == 0
+        assert updated_canonical is not None
+        assert updated_duplicate is not None
+        assert len(active_facts) == 1
+        assert active_facts[0].title != "Provider merged title"
+        assert {updated_canonical.status, updated_duplicate.status} == {"active", "archived"}
     finally:
         runtime.close()
 

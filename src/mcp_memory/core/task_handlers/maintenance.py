@@ -22,6 +22,13 @@ from mcp_memory.core.tasks import TaskRecord
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 FACT_DEDUPLICATION_THRESHOLD = 0.72
 OBSERVATION_ABSORPTION_THRESHOLD = 0.62
+GRAPH_LINKER_AI_MIN_CANDIDATES = 12
+GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
+CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
+DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
+DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
+DEDUPLICATOR_AI_MIN_COMBINED_LINES = 8
+DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
 
 
 def handle_project_manager_task(
@@ -233,7 +240,10 @@ async def handle_defragmenter_task(
     workspace_id = _resolve_workspace_id(ctx, task) or "workspace-unknown"
     for group in groups:
         source_lines = sum(_count_text_lines(item.content) for item in group)
-        title, content = await _build_defragmented_memory(group, provider)
+        title, content = await _build_defragmented_memory(
+            group,
+            provider if _should_use_provider_for_defragment_group(group, source_lines) else None,
+        )
         reflection_lines = _count_text_lines(content)
         record = ctx.repository.create_memory(
             title=title,
@@ -336,7 +346,12 @@ async def handle_taxonomist_task(
     updated = 0
     for record in candidates:
         normalized_tags = _normalize_tag_values(record.tags)
-        if provider is not None:
+        if normalized_tags != record.tags:
+            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
+            if refreshed is not None:
+                updated += 1
+            continue
+        if provider is not None and not record.tags:
             normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
         if normalized_tags == record.tags:
             continue
@@ -417,6 +432,14 @@ async def _propose_graph_links(
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str, str]]:
+    fallback = _fallback_graph_links(candidates)
+    if (
+        provider is None
+        or len(fallback) >= GRAPH_LINKER_FALLBACK_LINK_TARGET
+        or len(candidates) <= GRAPH_LINKER_AI_MIN_CANDIDATES
+    ):
+        return fallback
+
     if provider is not None:
         prompt = _build_linker_prompt(candidates)
         response = provider.ask(prompt)
@@ -437,13 +460,17 @@ async def _propose_graph_links(
             if normalized:
                 return normalized
 
-    return _fallback_graph_links(candidates)
+    return fallback
 
 
 async def _propose_conflicts(
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str]]:
+    fallback = _fallback_conflicts(candidates)
+    if provider is None or fallback or len(candidates) <= CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
+        return fallback
+
     if provider is not None:
         prompt = _build_conflict_prompt(candidates)
         response = provider.ask(prompt)
@@ -463,7 +490,7 @@ async def _propose_conflicts(
             if normalized:
                 return normalized
 
-    return _fallback_conflicts(candidates)
+    return fallback
 
 
 def _fallback_graph_links(candidates: list) -> list[tuple[str, str, str, str]]:
@@ -608,6 +635,10 @@ def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> l
     return candidates[:12]
 
 
+def _should_use_provider_for_defragment_group(group: list, source_lines: int) -> bool:
+    return len(group) >= DEFRAGMENTER_AI_MIN_GROUP_SIZE and source_lines >= DEFRAGMENTER_AI_MIN_SOURCE_LINES
+
+
 def _choose_canonical_fact(ctx: ApplicationContext, facts: list):
     assert ctx.repository is not None
     repository = ctx.repository
@@ -641,7 +672,11 @@ async def _merge_into_canonical_fact(
     provider: Any = None,
 ):
     assert ctx.repository is not None
-    merged_title, merged_content = await _build_merged_fact_content(canonical, source, provider)
+    merged_title, merged_content = await _build_merged_fact_content(
+        canonical,
+        source,
+        provider if _should_use_provider_for_merge(canonical, source) else None,
+    )
     merged_tags = _normalize_tag_values([*canonical.tags, *source.tags])
     merged_metadata = dict(canonical.metadata)
     merged_source_ids = merged_metadata.get("merged_source_ids", [])
@@ -698,6 +733,23 @@ def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> 
         semantic_similarity = cosine_similarity(embedding_by_id[left.id], embedding_by_id[right.id])
     tag_bonus = 0.15 if shared_tags else 0.0
     return max(lexical_similarity, semantic_similarity + tag_bonus)
+
+
+def _should_use_provider_for_merge(canonical, source) -> bool:
+    canonical_content = canonical.content.strip()
+    source_content = source.content.strip()
+    if not canonical_content or not source_content:
+        return False
+    if source_content in canonical_content or canonical_content in source_content:
+        return False
+    combined_lines = _count_text_lines(canonical_content) + _count_text_lines(source_content)
+    if combined_lines < DEDUPLICATOR_AI_MIN_COMBINED_LINES:
+        return False
+    overlap = _token_overlap(
+        canonical.title + " " + canonical_content,
+        source.title + " " + source_content,
+    )
+    return overlap < DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD
 
 
 def _record_embedding_text(record) -> str:
