@@ -38,6 +38,13 @@ class MemoryLink:
     context: str
 
 
+@dataclass
+class RankedMemoryCandidate:
+    record: RelationalMemoryRecord
+    incoming_links_count: int
+    has_incoming_supersedes: bool = False
+
+
 class RelationalMemoryRepository:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
@@ -174,7 +181,8 @@ class RelationalMemoryRepository:
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
-        normalized_query = " ".join(part.strip() for part in query.split() if part.strip())
+        tokens = [part.strip() for part in query.split() if part.strip()]
+        normalized_query = " OR ".join(tokens)
         if not normalized_query:
             return []
 
@@ -186,9 +194,6 @@ class RelationalMemoryRepository:
             joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
             clauses.append("memory_workspaces.workspace_id = ?")
             params.append(workspace_id)
-        if memory_type is not None:
-            clauses.append("memories.type = ?")
-            params.append(memory_type)
         if status is not None:
             clauses.append("memories.status = ?")
             params.append(status)
@@ -207,6 +212,87 @@ class RelationalMemoryRepository:
         )
         rows = conn.execute(query_sql, params).fetchall()
         return [str(row["id"]) for row in rows]
+
+    def get_ranking_candidates(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RankedMemoryCandidate]:
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return []
+
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in normalized_ids)
+        clauses = [f"memories.id IN ({placeholders})"]
+        params: list[object] = [*normalized_ids]
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append("COALESCE(link_counts.has_incoming_supersedes, 0) = 0")
+
+        rows = conn.execute(
+            """
+            SELECT
+                memories.*, 
+                COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv,
+                COALESCE(tag_agg.tags, '') AS tags_csv,
+                COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
+                COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes
+            FROM memories
+            LEFT JOIN (
+                SELECT memory_id, GROUP_CONCAT(DISTINCT workspace_id) AS workspace_ids
+                FROM memory_workspaces
+                GROUP BY memory_id
+            ) workspace_agg ON workspace_agg.memory_id = memories.id
+            LEFT JOIN (
+                SELECT memory_tags.memory_id, GROUP_CONCAT(DISTINCT tags.name) AS tags
+                FROM memory_tags
+                JOIN tags ON tags.id = memory_tags.tag_id
+                GROUP BY memory_tags.memory_id
+            ) tag_agg ON tag_agg.memory_id = memories.id
+            LEFT JOIN (
+                SELECT
+                    target_id AS memory_id,
+                    COUNT(*) AS incoming_links_count,
+                    MAX(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes
+                FROM links
+                GROUP BY target_id
+            ) link_counts ON link_counts.memory_id = memories.id
+            WHERE
+            """
+            + " AND ".join(clauses),
+            params,
+        ).fetchall()
+
+        ranked_by_id: dict[str, RankedMemoryCandidate] = {}
+        for row in rows:
+            metadata = json.loads(row["metadata"] or "{}")
+            ranked_by_id[str(row["id"])] = RankedMemoryCandidate(
+                record=RelationalMemoryRecord(
+                    id=row["id"],
+                    title=row["title"],
+                    content=row["content"],
+                    summary=row["summary"],
+                    type=row["type"],
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    read_count=int(row["read_count"] or 0),
+                    access_score=row["access_score"],
+                    last_accessed_at=row["last_accessed_at"],
+                    last_surfaced_at=row["last_surfaced_at"],
+                    metadata=metadata,
+                    workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
+                    tags=_split_csv_values(row["tags_csv"]),
+                ),
+                incoming_links_count=int(row["incoming_links_count"] or 0),
+                has_incoming_supersedes=bool(row["has_incoming_supersedes"]),
+            )
+        return [ranked_by_id[memory_id] for memory_id in normalized_ids if memory_id in ranked_by_id]
 
     def get_links(
         self,
@@ -589,3 +675,9 @@ class RelationalMemoryRepository:
         if len(stripped) <= 220:
             return stripped
         return stripped[:217].rstrip() + "..."
+
+
+def _split_csv_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item for item in value.split(",") if item]

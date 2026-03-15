@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
-from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.relational.repository import MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -109,6 +109,14 @@ class RankingEngine:
         capped_links = min(incoming_links_count, self._weights.authority_link_cap)
         return 1.0 + (capped_links * self._weights.authority_link_step)
 
+    def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> float:
+        if isinstance(candidate, RankedMemoryCandidate):
+            incoming_links_count = candidate.incoming_links_count
+        else:
+            incoming_links_count = self._repository.count_incoming_links(candidate.id)
+        capped_links = min(incoming_links_count, self._weights.authority_link_cap)
+        return 1.0 + (capped_links * self._weights.authority_link_step)
+
     def degradation_multiplier(self, record: RelationalMemoryRecord) -> float:
         if record.status not in {"stale", "degraded"}:
             return 1.0
@@ -130,15 +138,22 @@ class RankingEngine:
 
     def rank_records(
         self,
-        records: list[RelationalMemoryRecord],
+        records: list[RankedMemoryCandidate | RelationalMemoryRecord],
         rrf_scores: dict[str, float],
         workspace_id: str | None = None,
     ) -> list[tuple[RelationalMemoryRecord, float]]:
         ranked: list[tuple[RelationalMemoryRecord, float]] = []
-        for record in records:
+        for candidate in records:
+            record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
             if record.id not in rrf_scores:
                 continue
-            ranked.append((record, self.score_from_rrf(record, rrf_scores[record.id], workspace_id)))
+            score = self.calibrate_score(rrf_scores[record.id])
+            score = min(score + self.type_aware_recency_bonus(record), 1.0)
+            score *= self.workspace_multiplier(record, workspace_id)
+            score += self.access_bonus(record)
+            score *= self.authority_multiplier_for_candidate(candidate)
+            score *= self.degradation_multiplier(record)
+            ranked.append((record, min(max(score, 0.0), 1.0)))
         ranked.sort(key=lambda item: item[1], reverse=True)
         return ranked
 
@@ -170,53 +185,62 @@ class RelationalMemorySearchService:
             return []
 
         tokens = _tokenize(query)
+        keyword_ids = self._repository.search_keyword_memory_ids(
+            query,
+            status=status,
+            include_superseded=include_superseded,
+            limit=50,
+        )
+        semantic_ids = self._semantic_candidate_ids(
+            query,
+            status=status,
+            limit=50,
+        )
+        lexical_ids = self._lexical_candidate_ids(
+            tokens,
+            status=status,
+            include_superseded=include_superseded,
+            limit=50,
+        )
+        engine = RankingEngine(self._repository, self._config)
+        rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
+        for memory_id in lexical_ids:
+            rrf_scores.setdefault(memory_id, 0.0)
+        if not rrf_scores:
+            return []
 
-        candidates = self._repository.list_memories(status=status, limit=500)
-        semantic_scores = self._semantic_scores(query, candidates, workspace_id, limit=max(limit * 5, 20))
-        ranked: list[RelationalSearchResult] = []
-        surfaced_ids: list[str] = []
-
-        for candidate in candidates:
-            if not include_superseded and self._repository.has_incoming_link(candidate.id, "SUPERSEDES"):
-                continue
-
-            base_score = _base_match_score(candidate, tokens)
-            semantic_score = semantic_scores.get(candidate.id, 0.0)
-            if base_score <= 0 and semantic_score <= 0:
-                continue
-
-            score = max(_normalize_base_score(base_score), semantic_score)
-            score = _apply_recency_boost(score, candidate, self._config)
-            score = _apply_access_boost(score, candidate)
-            score = _apply_graph_authority_boost(score, candidate, self._repository)
-
-            if workspace_id and workspace_id in candidate.workspace_ids:
-                score *= WORKSPACE_BOOST
-
-            if candidate.status in {"stale", "degraded"}:
-                score *= DEGRADATION_PENALTY
-
-            score = _apply_memory_type_boost(score, candidate, memory_type)
-
-            ranked.append(
-                RelationalSearchResult(
-                    memory_id=candidate.id,
-                    title=candidate.title,
-                    summary=candidate.summary or "",
-                    memory_type=candidate.type,
-                    status=candidate.status,
-                    tags=list(candidate.tags),
-                    workspace_ids=list(candidate.workspace_ids),
-                    score=round(score, 6),
-                )
+        candidates = self._repository.get_ranking_candidates(
+            list(rrf_scores.keys()),
+            status=status,
+            include_superseded=include_superseded,
+        )
+        ranked = [
+            RelationalSearchResult(
+                memory_id=record.id,
+                title=record.title,
+                summary=record.summary or "",
+                memory_type=record.type,
+                status=record.status,
+                tags=list(record.tags),
+                workspace_ids=list(record.workspace_ids),
+                score=round(
+                    _apply_memory_type_boost(
+                        max(score, _normalize_base_score(_base_match_score(record, tokens))),
+                        record,
+                        memory_type,
+                    ),
+                    6,
+                ),
             )
-
+            for record, score in engine.rank_records(candidates, rrf_scores, workspace_id)
+        ]
         ranked.sort(key=lambda item: item.score, reverse=True)
-        final_results = ranked[:limit]
-        surfaced_ids.extend(result.memory_id for result in final_results)
+        ranked = ranked[:limit]
+
+        surfaced_ids = [result.memory_id for result in ranked]
         if surfaced_ids:
             self._repository.touch_last_surfaced(surfaced_ids, _utc_now())
-        return final_results
+        return ranked
 
     def read_memory(self, memory_id: str):
         record = self._repository.get_memory(memory_id)
@@ -276,6 +300,38 @@ class RelationalMemorySearchService:
             for memory_id, score in matches
             if score > 0
         }
+
+    def _semantic_candidate_ids(
+        self,
+        query: str,
+        *,
+        status: str | None,
+        limit: int,
+    ) -> list[str]:
+        candidates = self._repository.list_memories(status=status, limit=500)
+        semantic_scores = self._semantic_scores(query, candidates, None, limit=limit)
+        ranked = sorted(semantic_scores.items(), key=lambda item: item[1], reverse=True)
+        return [memory_id for memory_id, _ in ranked[:limit]]
+
+    def _lexical_candidate_ids(
+        self,
+        tokens: list[str],
+        *,
+        status: str | None,
+        include_superseded: bool,
+        limit: int,
+    ) -> list[str]:
+        candidates = self._repository.list_memories(status=status, limit=500)
+        scored: list[tuple[str, float]] = []
+        for candidate in candidates:
+            if not include_superseded and self._repository.has_incoming_link(candidate.id, "SUPERSEDES"):
+                continue
+            base_score = _base_match_score(candidate, tokens)
+            if base_score <= 0:
+                continue
+            scored.append((candidate.id, base_score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [memory_id for memory_id, _ in scored[:limit]]
 
     def _ensure_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
         assert self._embedder is not None
