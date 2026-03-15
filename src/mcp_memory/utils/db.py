@@ -62,3 +62,6 @@ class DatabaseManager:
         if conn is not None:
             conn.close()
             self._local.connection = None
+
+
+__all__ = ["DatabaseManager", "SCHEMA_VERSION"]

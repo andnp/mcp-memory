@@ -24,16 +24,25 @@ Use a SQLite-backed `tasks` table with a worker loop.
 ### 3.2 Execute
 - the daemon starts a runtime worker
 - the worker claims ready tasks from SQLite
-- handlers process tasks and update status
+- handlers process tasks, update status, and append immutable run logs to `task_runs`
 
 ### 3.3 Failure
 - retries increment on failure
 - tasks stop retrying after `max_retries`
 - permanently failed tasks remain visible for inspection
 
+### 3.4 Observability
+- every execution attempt is logged in SQLite via `task_runs`
+- overview/dashboard and CLI stats read directly from those task-run records
+- task recency, average duration, and compressed-line totals are derived from the run log
+
 ## 4. Current Implemented Task Families
 - ingest
 - summarize
+- graph linker
+- conflict detector
+- defragmenter
+- taxonomist
 - fact checker
 - project manager
 - sweeper

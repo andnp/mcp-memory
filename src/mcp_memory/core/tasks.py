@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -27,6 +27,36 @@ class TaskRecord:
     started_at: float | None
     completed_at: float | None
     last_error: str | None
+
+
+@dataclass
+class TaskRunRecord:
+    id: str
+    task_id: str
+    task_name: str
+    workspace_id: str | None
+    status: str
+    started_at: float
+    completed_at: float
+    duration_seconds: float
+    result: dict[str, Any]
+    error_text: str | None
+
+
+@dataclass
+class TaskRunSummary:
+    task_name: str
+    total_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    retry_runs: int = 0
+    last_status: str | None = None
+    last_started_at: float | None = None
+    last_completed_at: float | None = None
+    last_error: str | None = None
+    last_result: dict[str, Any] = field(default_factory=dict)
+    avg_duration_seconds: float = 0.0
+    total_lines_compressed: int = 0
 
 
 class SQLiteTaskQueue:
@@ -162,9 +192,21 @@ class SQLiteTaskQueue:
             conn.rollback()
             raise
 
-    def complete(self, task_id: str, completed_at: float | None = None) -> TaskRecord:
+    def complete(
+        self,
+        task_id: str,
+        completed_at: float | None = None,
+        run_result: dict[str, Any] | None = None,
+    ) -> TaskRecord:
         now = time.time() if completed_at is None else completed_at
         conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT task_name, workspace_id, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not running")
+
         cursor = conn.execute(
             """
             UPDATE tasks
@@ -179,6 +221,17 @@ class SQLiteTaskQueue:
         if cursor.rowcount != 1:
             conn.rollback()
             raise ValueError(f"Task {task_id} is not running")
+        self._insert_task_run(
+            conn,
+            task_id=task_id,
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status="completed",
+            started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
+            completed_at=now,
+            result=run_result or {},
+            error_text=None,
+        )
         conn.commit()
         return self.get_task(task_id)
 
@@ -192,7 +245,7 @@ class SQLiteTaskQueue:
         now = time.time() if failed_at is None else failed_at
         conn = self._db.get_connection()
         row = conn.execute(
-            "SELECT retries_count, max_retries FROM tasks WHERE id = ? AND status = 'running'",
+            "SELECT task_name, workspace_id, retries_count, max_retries, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
             (task_id,),
         ).fetchone()
         if row is None:
@@ -220,6 +273,17 @@ class SQLiteTaskQueue:
         if cursor.rowcount != 1:
             conn.rollback()
             raise ValueError(f"Task {task_id} could not be updated")
+        self._insert_task_run(
+            conn,
+            task_id=task_id,
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status="failed" if terminal else "retry",
+            started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
+            completed_at=now,
+            result={},
+            error_text=error,
+        )
         conn.commit()
         return self.get_task(task_id)
 
@@ -232,7 +296,7 @@ class SQLiteTaskQueue:
         now = time.time() if failed_at is None else failed_at
         conn = self._db.get_connection()
         row = conn.execute(
-            "SELECT max_retries FROM tasks WHERE id = ? AND status = 'running'",
+            "SELECT task_name, workspace_id, max_retries, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
             (task_id,),
         ).fetchone()
         if row is None:
@@ -255,6 +319,17 @@ class SQLiteTaskQueue:
         if cursor.rowcount != 1:
             conn.rollback()
             raise ValueError(f"Task {task_id} could not be updated")
+        self._insert_task_run(
+            conn,
+            task_id=task_id,
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status="failed",
+            started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
+            completed_at=now,
+            result={},
+            error_text=error,
+        )
         conn.commit()
         return self.get_task(task_id)
 
@@ -321,6 +396,79 @@ class SQLiteTaskQueue:
         rows = self._db.get_connection().execute(query, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def list_task_runs(
+        self,
+        task_name: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> list[TaskRunRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        query = "SELECT * FROM task_runs"
+
+        if task_name is not None:
+            clauses.append("task_name = ?")
+            params.append(task_name)
+
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+
+        query += " ORDER BY completed_at DESC, started_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = self._db.get_connection().execute(query, params).fetchall()
+        return [self._row_to_task_run(row) for row in rows]
+
+    def summarize_task_runs(
+        self,
+        task_names: list[str],
+        workspace_id: str | None = None,
+    ) -> list[TaskRunSummary]:
+        if not task_names:
+            return []
+
+        summaries = {name: TaskRunSummary(task_name=name) for name in task_names}
+        placeholders = ",".join("?" for _ in task_names)
+        params: list[object] = [*task_names]
+        query = f"SELECT * FROM task_runs WHERE task_name IN ({placeholders})"
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        query += " ORDER BY completed_at DESC, started_at DESC"
+
+        rows = self._db.get_connection().execute(query, params).fetchall()
+        duration_totals: dict[str, float] = {name: 0.0 for name in task_names}
+        for row in rows:
+            task_name = str(row["task_name"])
+            summary = summaries[task_name]
+            summary.total_runs += 1
+            duration_totals[task_name] += float(row["duration_seconds"] or 0.0)
+            if row["status"] == "completed":
+                summary.completed_runs += 1
+            elif row["status"] == "failed":
+                summary.failed_runs += 1
+            else:
+                summary.retry_runs += 1
+
+            result = _decode_json_object(row["result_json"])
+            summary.total_lines_compressed += _coerce_int(result.get("lines_compressed"), default=0)
+
+            if summary.last_completed_at is None:
+                summary.last_status = str(row["status"])
+                summary.last_started_at = float(row["started_at"])
+                summary.last_completed_at = float(row["completed_at"])
+                summary.last_error = row["error_text"]
+                summary.last_result = result
+
+        for summary in summaries.values():
+            if summary.total_runs > 0:
+                summary.avg_duration_seconds = duration_totals[summary.task_name] / summary.total_runs
+        return [summaries[name] for name in task_names]
+
     def _row_to_record(self, row) -> TaskRecord:
         data = row["data"] or "{}"
         return TaskRecord(
@@ -346,3 +494,86 @@ class SQLiteTaskQueue:
             ),
             last_error=row["last_error"],
         )
+
+    def _row_to_task_run(self, row) -> TaskRunRecord:
+        return TaskRunRecord(
+            id=str(row["id"]),
+            task_id=str(row["task_id"]),
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status=str(row["status"]),
+            started_at=float(row["started_at"]),
+            completed_at=float(row["completed_at"]),
+            duration_seconds=float(row["duration_seconds"] or 0.0),
+            result=_decode_json_object(row["result_json"]),
+            error_text=row["error_text"],
+        )
+
+    def _insert_task_run(
+        self,
+        conn,
+        *,
+        task_id: str,
+        task_name: str,
+        workspace_id: str | None,
+        status: str,
+        started_at: float,
+        completed_at: float,
+        result: dict[str, Any],
+        error_text: str | None,
+    ) -> None:
+        duration_seconds = max(completed_at - started_at, 0.0)
+        conn.execute(
+            """
+            INSERT INTO task_runs (
+                id,
+                task_id,
+                task_name,
+                workspace_id,
+                status,
+                started_at,
+                completed_at,
+                duration_seconds,
+                result_json,
+                error_text
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                task_id,
+                task_name,
+                workspace_id,
+                status,
+                started_at,
+                completed_at,
+                duration_seconds,
+                json.dumps(result or {}, sort_keys=True),
+                error_text,
+            ),
+        )
+
+
+def _decode_json_object(value: object) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {}
+    decoded = json.loads(value)
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _coalesce_float(*values: object) -> float:
+    for value in values:
+        if isinstance(value, bool):
+            return float(int(value))
+        if isinstance(value, (int, float, str)):
+            return float(value)
+    return time.time()
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return default

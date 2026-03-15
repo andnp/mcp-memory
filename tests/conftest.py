@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,7 @@ def temp_db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def db_manager(temp_db_path: Path) -> DatabaseManager:
+def db_manager(temp_db_path: Path) -> Generator[DatabaseManager, None, None]:
     manager = DatabaseManager(temp_db_path)
     try:
         yield manager

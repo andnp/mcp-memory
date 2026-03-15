@@ -91,7 +91,7 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     assert captured["init_options"] is not None
 
 
-def test_cli_help_lists_run_daemon_dashboard_and_import_commands() -> None:
+def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -> None:
     runner = CliRunner()
 
     result = runner.invoke(main, ["--help"])
@@ -100,4 +100,6 @@ def test_cli_help_lists_run_daemon_dashboard_and_import_commands() -> None:
     assert "run" in result.output
     assert "daemon" in result.output
     assert "dashboard" in result.output
+    assert "agents" in result.output
+    assert "stats" in result.output
     assert "import-markdown" in result.output

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
+from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.models import (
+    AgentRunPayload,
     HealthPayload,
     JournalSummary,
     MemoryListPayload,
     MemoryDetailPayload,
+    MemoryMetricsPayload,
     OverviewCounts,
     OverviewPayload,
     StorageSummary,
@@ -26,6 +30,8 @@ from mcp_memory.serialization import (
 class ManagementService:
     def __init__(self, ctx: ApplicationContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
+        self._db_manager = ctx.db_manager
+        self._workspace_id = ctx.workspace_id
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
@@ -46,29 +52,34 @@ class ManagementService:
         )
 
     def get_overview(self, recent_limit: int = 10, failed_limit: int = 10):
-        records = [] if self._memory_queries is None else self._memory_queries.list_memories(limit=500)
-
-        by_type: dict[str, int] = {}
-        by_status: dict[str, int] = {}
-        for record in records:
-            by_type[record.type] = by_type.get(record.type, 0) + 1
-            by_status[record.status] = by_status.get(record.status, 0) + 1
-
-        recent_records = [compact_memory_record_payload(record) for record in records[:recent_limit]]
-        task_counts = self._task_queue.count_by_status()
+        records = [] if self._memory_queries is None else self._memory_queries.list_memories(
+            workspace_id=self._workspace_id,
+            limit=recent_limit,
+        )
+        by_type, by_status, total_memories = self._build_memory_counts()
+        recent_records = [compact_memory_record_payload(record) for record in records]
+        task_counts = self._build_task_counts()
         failed_tasks = [
             task_payload(task)
-            for task in self._task_queue.list_tasks(status="failed", limit=failed_limit)
+            for task in self._task_queue.list_tasks(
+                status="failed",
+                workspace_id=self._workspace_id,
+                limit=failed_limit,
+            )
         ]
         sqlite_bytes = 0
         sqlite_path = self._runtime_info.db_path
         if sqlite_path is not None and sqlite_path.exists():
             sqlite_bytes = sqlite_path.stat().st_size
 
-        journal_counts = self._journal.count_by_status()
+        memory_metrics = self._build_memory_metrics()
+        journal_counts = {"pending": memory_metrics.thought_buffer_entries}
+        agent_runs = self._build_agent_runs()
 
         return OverviewPayload(
-            memories=OverviewCounts(total=len(records), by_type=by_type, by_status=by_status),
+            memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
+            memory_metrics=memory_metrics,
+            agent_runs=agent_runs,
             recent_memories=recent_records,
             tasks=TaskStatusSummary(
                 by_status=task_counts,
@@ -81,6 +92,31 @@ class ManagementService:
                 sqlite_path=str(sqlite_path) if sqlite_path is not None else None,
             ),
         )
+
+    def enqueue_background_task(
+        self,
+        task_name: str,
+        *,
+        force: bool = False,
+    ) -> dict:
+        if task_name not in TRIGGERABLE_BACKGROUND_TASK_NAMES:
+            raise ValueError(f"unknown_background_task:{task_name}")
+
+        payload = {"workspace_id": self._workspace_id}
+        if force:
+            task = self._task_queue.enqueue(task_name=task_name, workspace_id=self._workspace_id, data=payload)
+            return {"status": "enqueued", "created": True, "task": task_payload(task)}
+
+        task, created = self._task_queue.enqueue_unique(
+            task_name=task_name,
+            workspace_id=self._workspace_id,
+            data=payload,
+        )
+        return {
+            "status": "enqueued" if created else "already_pending",
+            "created": created,
+            "task": task_payload(task),
+        }
 
     def get_memory_detail(self, memory_id: str):
         if self._memory_queries is None:
@@ -186,3 +222,121 @@ class ManagementService:
 
     def load_dashboard_html(self):
         return self._dashboard_static_path.read_text(encoding="utf-8")
+
+    def _build_memory_counts(self) -> tuple[dict[str, int], dict[str, int], int]:
+        if self._db_manager is None:
+            return {}, {}, 0
+        conn = self._db_manager.get_connection()
+        query = (
+            "SELECT memories.type, memories.status, COUNT(*) AS count "
+            "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+        )
+        params: list[object] = []
+        if self._workspace_id is not None:
+            query += " WHERE memory_workspaces.workspace_id = ?"
+            params.append(self._workspace_id)
+        query += " GROUP BY memories.type, memories.status"
+        rows = conn.execute(query, params).fetchall()
+        by_type: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+        total = 0
+        for row in rows:
+            count = int(row["count"])
+            total += count
+            by_type[str(row["type"])] = by_type.get(str(row["type"]), 0) + count
+            by_status[str(row["status"])] = by_status.get(str(row["status"]), 0) + count
+        return by_type, by_status, total
+
+    def _build_task_counts(self) -> dict[str, int]:
+        if self._db_manager is None:
+            return {}
+        conn = self._db_manager.get_connection()
+        query = "SELECT status, COUNT(*) AS count FROM tasks"
+        params: list[object] = []
+        if self._workspace_id is not None:
+            query += " WHERE workspace_id = ?"
+            params.append(self._workspace_id)
+        query += " GROUP BY status"
+        rows = conn.execute(query, params).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def _build_memory_metrics(self) -> MemoryMetricsPayload:
+        if self._db_manager is None:
+            return MemoryMetricsPayload(
+                total_memories=0,
+                total_memory_lines=0,
+                total_summary_lines=0,
+                total_lines_compressed=0,
+                thought_buffer_entries=0,
+                thought_buffer_lines=0,
+            )
+
+        conn = self._db_manager.get_connection()
+        memory_query = (
+            "SELECT "
+            "COUNT(*) AS total_memories, "
+            "COALESCE(SUM(CASE WHEN memories.content = '' THEN 0 ELSE 1 + LENGTH(memories.content) - LENGTH(REPLACE(memories.content, CHAR(10), '')) END), 0) AS total_memory_lines, "
+            "COALESCE(SUM(CASE WHEN memories.summary IS NULL OR memories.summary = '' THEN 0 ELSE 1 + LENGTH(memories.summary) - LENGTH(REPLACE(memories.summary, CHAR(10), '')) END), 0) AS total_summary_lines "
+            "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+        )
+        memory_params: list[object] = []
+        if self._workspace_id is not None:
+            memory_query += " WHERE memory_workspaces.workspace_id = ?"
+            memory_params.append(self._workspace_id)
+        memory_row = conn.execute(memory_query, memory_params).fetchone()
+
+        journal_query = (
+            "SELECT "
+            "COUNT(*) AS thought_buffer_entries, "
+            "COALESCE(SUM(CASE WHEN content = '' THEN 0 ELSE 1 + LENGTH(content) - LENGTH(REPLACE(content, CHAR(10), '')) END), 0) AS thought_buffer_lines "
+            "FROM system1_journal WHERE status = 'pending'"
+        )
+        journal_params: list[object] = []
+        if self._workspace_id is not None:
+            journal_query += " AND workspace_id = ?"
+            journal_params.append(self._workspace_id)
+        journal_row = conn.execute(journal_query, journal_params).fetchone()
+
+        total_lines_compressed = sum(
+            max(agent_run.total_lines_compressed, 0)
+            for agent_run in self._task_queue.summarize_task_runs(
+                list(TRIGGERABLE_BACKGROUND_TASK_NAMES),
+                workspace_id=self._workspace_id,
+            )
+        )
+        return MemoryMetricsPayload(
+            total_memories=0 if memory_row is None else int(memory_row["total_memories"]),
+            total_memory_lines=0 if memory_row is None else int(memory_row["total_memory_lines"]),
+            total_summary_lines=0 if memory_row is None else int(memory_row["total_summary_lines"]),
+            total_lines_compressed=total_lines_compressed,
+            thought_buffer_entries=0 if journal_row is None else int(journal_row["thought_buffer_entries"]),
+            thought_buffer_lines=0 if journal_row is None else int(journal_row["thought_buffer_lines"]),
+        )
+
+    def _build_agent_runs(self) -> list[AgentRunPayload]:
+        now = time.time()
+        summaries = self._task_queue.summarize_task_runs(
+            list(TRIGGERABLE_BACKGROUND_TASK_NAMES),
+            workspace_id=self._workspace_id,
+        )
+        payloads: list[AgentRunPayload] = []
+        for summary in summaries:
+            seconds_since_last_completion = None
+            if summary.last_completed_at is not None:
+                seconds_since_last_completion = max(now - summary.last_completed_at, 0.0)
+            payloads.append(
+                AgentRunPayload(
+                    task_name=summary.task_name,
+                    total_runs=summary.total_runs,
+                    completed_runs=summary.completed_runs,
+                    failed_runs=summary.failed_runs,
+                    retry_runs=summary.retry_runs,
+                    avg_duration_seconds=summary.avg_duration_seconds,
+                    total_lines_compressed=summary.total_lines_compressed,
+                    last_status=summary.last_status,
+                    last_completed_at=summary.last_completed_at,
+                    seconds_since_last_completion=seconds_since_last_completion,
+                    last_error=summary.last_error,
+                )
+            )
+        return payloads

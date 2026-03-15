@@ -138,8 +138,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert health["workspace_id"] == seed_runtime.workspace_id
         assert health["workspace_root"] == str(workspace)
         assert overview["memories"]["total"] == 2
+        assert overview["memory_metrics"]["total_memories"] == 2
+        assert "agent_runs" in overview
         assert overview["tasks"]["failed_count"] == 1
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
+        fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
+        assert fact_checker["failed_runs"] == 1
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
@@ -147,6 +151,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"
         assert "MCP Memory Dashboard" in dashboard
-        assert "Admin Link Editor" in dashboard
+        assert "Background Agents" in dashboard
+        assert "Memory Metrics" in dashboard
     finally:
         _stop_server(server, thread)

@@ -13,7 +13,6 @@ from mcp_memory.core.task_handlers import (
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
-    SYSTEM1_INGEST_THRESHOLD,
     TAXONOMIST_TASK_NAME,
     handle_defragmenter_task,
     handle_conflict_detector_task,

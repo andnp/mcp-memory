@@ -7,7 +7,7 @@ from typing import Any
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -84,4 +84,61 @@ class TaskQueueFacade:
             status=status,
             workspace_id=workspace_id,
             limit=limit,
+        )
+
+    def enqueue(
+        self,
+        *,
+        task_name: str,
+        data: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+        priority: int = 100,
+        max_retries: int = 3,
+        available_at: float | None = None,
+        task_id: str | None = None,
+    ) -> TaskRecord:
+        if self.task_queue is None:
+            raise ValueError("task_queue_not_initialized")
+        return self.task_queue.enqueue(
+            task_name=task_name,
+            data=data,
+            workspace_id=workspace_id,
+            priority=priority,
+            max_retries=max_retries,
+            available_at=available_at,
+            task_id=task_id,
+        )
+
+    def enqueue_unique(
+        self,
+        *,
+        task_name: str,
+        data: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+        priority: int = 100,
+        max_retries: int = 3,
+        available_at: float | None = None,
+    ) -> tuple[TaskRecord, bool]:
+        if self.task_queue is None:
+            raise ValueError("task_queue_not_initialized")
+        return self.task_queue.enqueue_unique(
+            task_name=task_name,
+            data=data,
+            workspace_id=workspace_id,
+            priority=priority,
+            max_retries=max_retries,
+            available_at=available_at,
+        )
+
+    def summarize_task_runs(
+        self,
+        task_names: list[str],
+        *,
+        workspace_id: str | None = None,
+    ) -> list[TaskRunSummary]:
+        if self.task_queue is None:
+            return []
+        return self.task_queue.summarize_task_runs(
+            task_names,
+            workspace_id=workspace_id,
         )

@@ -60,6 +60,9 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
 
     assert overview.memories.total == 2
     assert overview.memories.by_status == {"active": 1, "stale": 1}
+    assert overview.memory_metrics.total_memories == 2
+    assert overview.memory_metrics.thought_buffer_entries == 0
+    assert overview.agent_runs[0].task_name == "ingest-system1"
     assert overview.tasks.failed_count == 1
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
     assert detail.record["id"] == primary.id

@@ -63,6 +63,9 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 
 ### Admin / Maintenance Commands
 - `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
+- `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
+- `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
+- `uv run mcp-memory stats`: print background task and memory statistics from SQLite.
 - `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
@@ -174,7 +177,14 @@ boost_decay_rate = 0.98
    uv run mcp-memory import-markdown /path/to/memory.md
    ```
 
-9. **Configure with your AI Assistant**:
+9. **Trigger or inspect background agents** (optional admin flow):
+   ```bash
+   uv run mcp-memory agents run sweeper
+   uv run mcp-memory agents run-all
+   uv run mcp-memory stats
+   ```
+
+10. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {
@@ -187,11 +197,12 @@ boost_decay_rate = 0.98
    }
    ```
 
-10. **Smoke test the system**:
+11. **Smoke test the system**:
    - confirm the printed dashboard URL loads
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client
    - verify that the thought becomes searchable and readable through the MCP client
+   - run `uv run mcp-memory stats` and confirm the task/memory metrics look sane
 
 ## Backup
 

@@ -3,6 +3,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
+    MAINTENANCE_TASK_NAMES,
     CONFLICT_DETECTOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
@@ -13,6 +14,7 @@ from mcp_memory.core.task_handlers.constants import (
     SYSTEM1_INGEST_TASK_NAME,
     SYSTEM1_INGEST_THRESHOLD,
     TAXONOMIST_TASK_NAME,
+    TRIGGERABLE_BACKGROUND_TASK_NAMES,
 )
 from mcp_memory.core.task_handlers.ingest import handle_ingest_system1_task
 from mcp_memory.core.task_handlers.maintenance import (
@@ -31,6 +33,7 @@ __all__ = [
     "DEFAULT_AGENT_SCAN_LIMIT",
     "DEFAULT_STALE_PLAN_DAYS",
     "DEFAULT_SWEEP_RETENTION_DAYS",
+    "MAINTENANCE_TASK_NAMES",
     "CONFLICT_DETECTOR_TASK_NAME",
     "DEFRAGMENTER_TASK_NAME",
     "FACT_CHECKER_TASK_NAME",
@@ -41,6 +44,7 @@ __all__ = [
     "SYSTEM1_INGEST_TASK_NAME",
     "SYSTEM1_INGEST_THRESHOLD",
     "TAXONOMIST_TASK_NAME",
+    "TRIGGERABLE_BACKGROUND_TASK_NAMES",
     "handle_conflict_detector_task",
     "handle_defragmenter_task",
     "handle_fact_checker_task",

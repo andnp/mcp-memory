@@ -64,6 +64,7 @@ async def test_search_and_read_tools_persist_across_runtime_recreation(
     first_runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         assert first_runtime.repository is not None
+        assert first_runtime.workspace_id is not None
         record = first_runtime.repository.create_memory(
             title="Persistent fact",
             content="Repository records should survive runtime recreation.",

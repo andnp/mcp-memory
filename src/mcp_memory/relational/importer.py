@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from mcp_memory.core.journal import System1Journal
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.core.storage import list_memory_files
 
@@ -133,6 +134,35 @@ def import_markdown_memory_paths(
     for file_path in resolve_markdown_import_paths(paths_or_globs):
         imported.append(import_markdown_memory(repository, file_path, workspace_ids))
     return imported
+
+
+def record_markdown_memory_as_thought(
+    journal: System1Journal,
+    file_path: Path,
+    workspace_id: str | None = None,
+) -> tuple[int, str]:
+    """Record a markdown file as a thought in the journal buffer.
+    
+    Returns a tuple of (entry_id, file_name).
+    """
+    normalized = parse_markdown_memory(file_path)
+    entry = journal.record(content=normalized.content, workspace_id=workspace_id)
+    return entry.id, file_path.stem
+
+
+def record_markdown_memory_paths_as_thoughts(
+    journal: System1Journal,
+    paths_or_globs: list[str | Path],
+    workspace_id: str | None = None,
+) -> list[tuple[int, str]]:
+    """Record multiple markdown files as thoughts in the journal buffer.
+    
+    Returns a list of tuples (entry_id, file_name).
+    """
+    recorded = []
+    for file_path in resolve_markdown_import_paths(paths_or_globs):
+        recorded.append(record_markdown_memory_as_thought(journal, file_path, workspace_id))
+    return recorded
 
 
 def _derive_title(file_path: Path):

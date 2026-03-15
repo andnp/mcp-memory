@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -29,6 +29,24 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, available_at, priority, created_at);
+
+        CREATE TABLE IF NOT EXISTS task_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            task_name TEXT NOT NULL,
+            workspace_id TEXT,
+            status TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            completed_at REAL NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            result_json TEXT NOT NULL DEFAULT '{}',
+            error_text TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_task_runs_task_name_completed_at
+            ON task_runs(task_name, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_runs_workspace_task_name_completed_at
+            ON task_runs(workspace_id, task_name, completed_at DESC);
 
         CREATE TABLE IF NOT EXISTS system1_journal (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

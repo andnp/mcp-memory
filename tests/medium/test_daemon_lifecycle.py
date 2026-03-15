@@ -7,7 +7,6 @@ import pytest
 
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, ensure_daemon_started, read_daemon_metadata
-from mcp_memory.mcp.runtime import RuntimeSpec
 
 
 pytestmark = pytest.mark.medium

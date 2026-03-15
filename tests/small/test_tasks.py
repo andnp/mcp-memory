@@ -62,6 +62,10 @@ def test_sqlite_task_queue_complete_marks_terminal_state(db_manager) -> None:
     assert completed.completed_at == 30.0
     assert completed.last_error is None
     assert queue.count_by_status() == {"completed": 1}
+    task_runs = queue.list_task_runs(task_name="complete-me")
+    assert len(task_runs) == 1
+    assert task_runs[0].status == "completed"
+    assert task_runs[0].duration_seconds == 5.0
 
 
 def test_sqlite_task_queue_fail_requeues_before_dead_letter(db_manager) -> None:
@@ -110,6 +114,31 @@ def test_sqlite_task_queue_fail_transitions_to_dead_letter_at_retry_limit(db_man
     assert dead_letter.completed_at == 7.0
     assert dead_letter.last_error == "second failure"
     assert queue.count_by_status() == {"failed": 1}
+    task_runs = queue.list_task_runs(task_name="poison-pill")
+    assert [task_run.status for task_run in task_runs] == ["failed", "retry"]
+
+
+def test_sqlite_task_queue_summarize_task_runs_aggregates_status_and_compression(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue(
+        "defragmenter",
+        workspace_id="workspace-a",
+        available_at=10.0,
+        task_id="defragmenter-1",
+    )
+
+    assert queue.claim_next(now=10.0) is not None
+    queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 7})
+
+    summary = queue.summarize_task_runs(["defragmenter"], workspace_id="workspace-a")[0]
+
+    assert summary.task_name == "defragmenter"
+    assert summary.total_runs == 1
+    assert summary.completed_runs == 1
+    assert summary.failed_runs == 0
+    assert summary.retry_runs == 0
+    assert summary.avg_duration_seconds == 4.0
+    assert summary.total_lines_compressed == 7
 
 
 def test_sqlite_task_queue_rejects_completion_for_non_running_task(db_manager) -> None:
@@ -171,6 +200,9 @@ async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     completed = queue.get_task(task.id)
     assert completed.status == "completed"
     assert seen_payloads == [{"memory_id": "123"}]
+    task_runs = queue.list_task_runs(task_name="ingest-system1")
+    assert len(task_runs) == 1
+    assert task_runs[0].status == "completed"
 
 
 @pytest.mark.asyncio
@@ -208,6 +240,8 @@ async def test_runtime_task_worker_retries_and_dead_letters_failures(db_manager)
     assert failed.retries_count == 2
     assert failed.last_error == "boom"
     assert attempts == ["failing-task", "failing-task"]
+    task_runs = queue.list_task_runs(task_name="failing-task")
+    assert [task_run.status for task_run in task_runs] == ["failed", "retry"]
 
 
 @pytest.mark.asyncio

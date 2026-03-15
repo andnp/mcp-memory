@@ -199,11 +199,13 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "shutdown_grace_seconds": 5.0,
         "healthcheck_interval_seconds": 0.05,
     }
-    document["memory"] = {
+    memory_table = tomlkit.table()
+    memory_table.update({
         "enabled": True,
         "checkpoint_interval_ops": 10,
         "checkpoint_interval_secs": 300,
-    }
+    })
+    document["memory"] = memory_table
     for key, value in {
         "recency_journal": (14, 0.2, 0.95),
         "recency_plan": (7, 0.5, 0.9),
@@ -211,7 +213,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "recency_observation": (14, 0.2, 0.95),
         "recency_reflection": (30, 0.15, 0.98),
     }.items():
-        document["memory"][key] = {
+        memory_table[key] = {
             "boost_window_days": value[0],
             "max_boost_amount": value[1],
             "boost_decay_rate": value[2],

@@ -39,6 +39,8 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
 
     runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.task_queue is not None
+    assert runtime.repository is not None
+    assert runtime.workspace_id is not None
     try:
         first = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite journal progress"}))
         second = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite worker retries"}))
@@ -89,6 +91,7 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
     runtime_one = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
         assert runtime_one.repository is not None
+        assert runtime_one.workspace_id is not None
         record = runtime_one.repository.create_memory(
             title="Shared fact",
             content="Shared runtimes should see one relational store.",
@@ -101,6 +104,7 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
 
     runtime_two = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
+        assert runtime_two.workspace_id is not None
         search_payload = _payload_text(
             await call_memory_tool(
                 runtime_two,

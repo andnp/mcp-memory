@@ -45,8 +45,33 @@ class JournalSummary(BaseModel):
     pending_count: int
 
 
+class MemoryMetricsPayload(BaseModel):
+    total_memories: int
+    total_memory_lines: int
+    total_summary_lines: int
+    total_lines_compressed: int
+    thought_buffer_entries: int
+    thought_buffer_lines: int
+
+
+class AgentRunPayload(BaseModel):
+    task_name: str
+    total_runs: int
+    completed_runs: int
+    failed_runs: int
+    retry_runs: int
+    avg_duration_seconds: float
+    total_lines_compressed: int
+    last_status: str | None = None
+    last_completed_at: float | None = None
+    seconds_since_last_completion: float | None = None
+    last_error: str | None = None
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
+    memory_metrics: MemoryMetricsPayload
+    agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
     tasks: TaskStatusSummary
     failed_tasks: list[dict] = Field(default_factory=list)

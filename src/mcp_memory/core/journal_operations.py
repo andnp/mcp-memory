@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.core.agent_runtime import (
+from mcp_memory.core.task_handlers import (
     SYSTEM1_INGEST_TASK_NAME,
     SYSTEM1_INGEST_THRESHOLD,
 )

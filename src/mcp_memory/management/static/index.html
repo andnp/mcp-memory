@@ -36,9 +36,29 @@
 <body>
   <main>
     <h1>MCP Memory Dashboard</h1>
-    <p class="muted">Operations snapshot plus lightweight admin link editing for the local daemon runtime.</p>
+    <p class="muted">Operations snapshot for the local daemon runtime, including background-agent health and memory compression stats.</p>
 
     <section class="grid" id="summary-cards"></section>
+
+    <section class="panel" style="margin-bottom: 16px;">
+      <h2>Background Agents</h2>
+      <table>
+        <thead>
+          <tr><th>Agent</th><th>Last Completion</th><th>Age</th><th>Runs</th><th>Failures</th><th>Avg Duration</th><th>Compressed</th></tr>
+        </thead>
+        <tbody id="agent-runs"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-bottom: 16px;">
+      <h2>Memory Metrics</h2>
+      <table>
+        <thead>
+          <tr><th>Metric</th><th>Value</th></tr>
+        </thead>
+        <tbody id="memory-metrics"></tbody>
+      </table>
+    </section>
 
     <section class="panel">
       <h2>Recent Memories</h2>
@@ -77,6 +97,29 @@
   </main>
 
   <script>
+    function formatTimestamp(value) {
+      if (value == null) {
+        return 'never';
+      }
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    function formatAge(value) {
+      if (value == null) {
+        return 'never';
+      }
+      if (value < 60) {
+        return `${Math.floor(value)}s`;
+      }
+      if (value < 3600) {
+        return `${Math.floor(value / 60)}m`;
+      }
+      if (value < 86400) {
+        return `${Math.floor(value / 3600)}h`;
+      }
+      return `${Math.floor(value / 86400)}d`;
+    }
+
     async function submitLink(path) {
       const payload = {
         source_id: document.getElementById('link-source').value.trim(),
@@ -100,7 +143,9 @@
 
       const cards = [
         ['Memories', payload.memories.total],
-        ['Pending Journal', payload.journal.pending_count],
+        ['Memory Lines', payload.memory_metrics.total_memory_lines],
+        ['Compressed Lines', payload.memory_metrics.total_lines_compressed],
+        ['Thought Buffer', payload.memory_metrics.thought_buffer_entries],
         ['Failed Tasks', payload.tasks.failed_count],
         ['SQLite Size (bytes)', payload.storage.sqlite_bytes],
       ];
@@ -130,6 +175,30 @@
           <td><pre>${task.last_error ?? ''}</pre></td>
         </tr>
       `).join('') || '<tr><td colspan="4" class="muted">No failed tasks.</td></tr>';
+
+      document.getElementById('agent-runs').innerHTML = payload.agent_runs.map((agent) => `
+        <tr>
+          <td>${agent.task_name}</td>
+          <td>${formatTimestamp(agent.last_completed_at)}</td>
+          <td>${formatAge(agent.seconds_since_last_completion)}</td>
+          <td>${agent.total_runs}</td>
+          <td>${agent.failed_runs}</td>
+          <td>${agent.avg_duration_seconds.toFixed(2)}s</td>
+          <td>${agent.total_lines_compressed}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="7" class="muted">No agent runs recorded yet.</td></tr>';
+
+      const metricRows = [
+        ['Total memories', payload.memory_metrics.total_memories],
+        ['Total memory lines', payload.memory_metrics.total_memory_lines],
+        ['Total summary lines', payload.memory_metrics.total_summary_lines],
+        ['Total lines compressed', payload.memory_metrics.total_lines_compressed],
+        ['Thought buffer entries', payload.memory_metrics.thought_buffer_entries],
+        ['Thought buffer lines', payload.memory_metrics.thought_buffer_lines],
+      ];
+      document.getElementById('memory-metrics').innerHTML = metricRows.map(([label, value]) => `
+        <tr><td>${label}</td><td>${value}</td></tr>
+      `).join('');
     }
 
     document.getElementById('create-link').addEventListener('click', () => {

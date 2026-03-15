@@ -9,6 +9,8 @@ The active dashboard is a localhost operations view for the daemon.
 ### 1.1 Current Capabilities
 - dark, monospace presentation
 - daemon-backed overview cards
+- background-agent run history and recency summaries
+- memory metrics such as total lines, compressed lines, and thought-buffer size
 - recent memories table
 - failed tasks table
 - memory detail endpoints through the management API
@@ -39,6 +41,8 @@ The dashboard consumes the daemon’s localhost API.
 ## 3. Current UX Goals
 
 - low-friction daemon observability
+- visibility into background-agent freshness by type
+- visibility into SQLite-backed maintenance outcomes
 - visibility into recent memories via overview
 - visibility into failed tasks via overview
 - safe read-only access during early iterations

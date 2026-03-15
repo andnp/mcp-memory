@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from mcp_memory.core.providers import GeminiCLIProvider

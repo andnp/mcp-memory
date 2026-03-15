@@ -75,7 +75,7 @@ class RuntimeTaskWorker:
         try:
             result = handler(self._ctx, task)
             if isawaitable(result):
-                await result
+                result = await result
         except Exception as exc:
             await asyncio.to_thread(
                 task_queue.fail,
@@ -85,4 +85,5 @@ class RuntimeTaskWorker:
             )
             return
 
-        await asyncio.to_thread(task_queue.complete, task.id)
+        normalized_result = result if isinstance(result, dict) else {}
+        await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)

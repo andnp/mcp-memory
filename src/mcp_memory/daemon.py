@@ -13,7 +13,7 @@ from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_process import (
     find_free_port as _find_free_port,
     is_daemon_healthy as _is_daemon_healthy,
-    read_daemon_metadata,
+    read_daemon_metadata as _read_daemon_metadata,
     spawn_daemon_process as _spawn_daemon_process,
 )
 from mcp_memory.mcp.runtime import resolve_runtime_spec
@@ -29,7 +29,7 @@ def ensure_daemon_started(
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
-        existing = read_daemon_metadata(metadata_path)
+        existing = _read_daemon_metadata(metadata_path)
         if existing is not None and _is_daemon_healthy(existing):
             return existing
 
@@ -37,7 +37,7 @@ def ensure_daemon_started(
         _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            current = read_daemon_metadata(metadata_path)
+            current = _read_daemon_metadata(metadata_path)
             if current is not None and _is_daemon_healthy(current):
                 return current
             time.sleep(spec.config.daemon.healthcheck_interval_seconds)
@@ -47,10 +47,18 @@ def ensure_daemon_started(
 
 
 def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
-    from mcp_memory.daemon_process import read_daemon_metadata as _read_daemon_metadata
-
     return _read_daemon_metadata(metadata_path)
 
 
 def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:
     return ensure_daemon_started(workspace_root_override, cwd).base_url
+
+
+__all__ = [
+    "DaemonLockTimeoutError",
+    "DaemonMetadata",
+    "create_daemon_app",
+    "daemon_url",
+    "ensure_daemon_started",
+    "read_daemon_metadata",
+]

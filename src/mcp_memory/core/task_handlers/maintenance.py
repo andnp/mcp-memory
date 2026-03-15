@@ -224,9 +224,12 @@ async def handle_defragmenter_task(
 
     created = 0
     archived = 0
+    lines_compressed = 0
     workspace_id = _resolve_workspace_id(ctx, task) or "workspace-unknown"
     for group in groups:
+        source_lines = sum(_count_text_lines(item.content) for item in group)
         title, content = await _build_defragmented_memory(group, provider)
+        reflection_lines = _count_text_lines(content)
         record = ctx.repository.create_memory(
             title=title,
             content=content,
@@ -237,13 +240,14 @@ async def handle_defragmenter_task(
         )
         assert record is not None
         created += 1
+        lines_compressed += max(source_lines - reflection_lines, 0)
         for item in group:
             ctx.repository.add_link(record.id, item.id, "SUPERSEDES", "Auto-defragmented into a reflection.")
             updated = ctx.repository.update_memory(item.id, status="archived")
             if updated is not None:
                 archived += 1
 
-    return {"created": created, "archived": archived}
+    return {"created": created, "archived": archived, "lines_compressed": lines_compressed}
 
 
 async def handle_taxonomist_task(
@@ -452,6 +456,13 @@ def _normalize_tag_values(tags: list[str]) -> list[str]:
         seen.add(normalized_tag)
         normalized.append(normalized_tag)
     return sorted(normalized)
+
+
+def _count_text_lines(value: str) -> int:
+    text = value.strip()
+    if not text:
+        return 0
+    return text.count("\n") + 1
 
 
 def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type: str) -> bool:

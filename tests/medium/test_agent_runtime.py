@@ -96,6 +96,7 @@ async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_p
             workspace_ids=[runtime.workspace_id or "global"],
             summary="stale",
         )
+        assert record is not None
         task = runtime.task_queue.enqueue(
             SUMMARIZE_MEMORY_TASK_NAME,
             data={"memory_id": record.id},
@@ -170,6 +171,9 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
             content="Tracks a missing file.",
             workspace_ids=[runtime.workspace_id or "global"],
         )
+        assert stale_plan is not None
+        assert healthy_memory is not None
+        assert broken_memory is not None
         valid_file = workspace / "README.md"
         valid_file.write_text("ok", encoding="utf-8")
         runtime.repository.add_link(healthy_memory.id, f"ext:{valid_file.name}", "REFERENCES")
@@ -269,9 +273,12 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         assert fact_result["degraded"] == 1
         assert sweep_result["deleted_tasks"] == 1
         assert sweep_result["deleted_journal_entries"] == 1
-        assert runtime.repository.get_memory(stale_plan.id).status == "stale"
-        assert runtime.repository.get_memory(healthy_memory.id).status == "active"
-        assert runtime.repository.get_memory(broken_memory.id).status == "degraded"
+        refreshed_stale = runtime.repository.get_memory(stale_plan.id)
+        refreshed_healthy = runtime.repository.get_memory(healthy_memory.id)
+        refreshed_broken = runtime.repository.get_memory(broken_memory.id)
+        assert refreshed_stale is not None and refreshed_stale.status == "stale"
+        assert refreshed_healthy is not None and refreshed_healthy.status == "active"
+        assert refreshed_broken is not None and refreshed_broken.status == "degraded"
     finally:
         runtime.close()
 
