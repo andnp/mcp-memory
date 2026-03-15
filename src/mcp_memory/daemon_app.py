@@ -175,6 +175,20 @@ def create_daemon_app(
             limit=limit,
         ).model_dump()
 
+    @app.get("/api/logs")
+    async def logs(
+        level: str | None = Query(default=None),
+        logger_name: str | None = Query(default=None),
+        source: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ):
+        return app.state.routes.service.list_logs(
+            level=level,
+            logger_name=logger_name,
+            source=source,
+            limit=limit,
+        ).model_dump()
+
     @app.get("/api/memories/{memory_id}")
     async def memory_detail(memory_id: str):
         try:

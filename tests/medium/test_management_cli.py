@@ -1,6 +1,7 @@
 import json
 from click.testing import CliRunner
 from pathlib import Path
+import logging
 
 from mcp_memory.cli import main
 from mcp_memory.mcp.runtime import create_runtime
@@ -150,6 +151,73 @@ def test_hook_runner_returns_empty_json_on_invalid_payload() -> None:
     assert result.exit_code == 0
     assert "mcp-memory hook-runner:" in result.output
     assert result.output.strip().endswith("{}")
+
+
+def test_logs_command_prints_runtime_logs(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime.workspace_id,
+                "daemon",
+                "mcp_memory.server",
+                "WARNING",
+                "stored warning",
+                123.0,
+                "{}",
+            ),
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["logs", "--workspace-root", str(workspace), "--source", "daemon"])
+
+    assert result.exit_code == 0
+    assert "Runtime Logs" in result.output
+    assert "stored warning" in result.output
+    assert "mcp_memory.server" in result.output
+
+
+def test_run_command_records_logs_without_polluting_stdio(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    async def fake_run(self) -> None:
+        logging.getLogger("mcp_memory.server").info("stdio bootstrap log")
+
+    monkeypatch.setattr("mcp_memory.cli.MCPServer.run", fake_run)
+
+    result = runner.invoke(main, ["run", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert result.output == ""
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        payload = runtime.db_manager.get_connection().execute(
+            "SELECT source, message FROM runtime_logs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        runtime.close()
+
+    assert payload is not None
+    assert payload["source"] == "stdio"
+    assert payload["message"] == "stdio bootstrap log"
 
 
 def test_prefetch_model_command_caches_embedding_model(monkeypatch) -> None:

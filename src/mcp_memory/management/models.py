@@ -89,12 +89,27 @@ class AgentRunHistoryPayload(BaseModel):
     result_summary: str | None = None
 
 
+class RuntimeLogPayload(BaseModel):
+    id: int
+    created_at: float
+    level: str
+    logger_name: str
+    source: str
+    message: str
+    data: dict[str, object] = Field(default_factory=dict)
+
+
+class RuntimeLogListPayload(BaseModel):
+    logs: list[RuntimeLogPayload] = Field(default_factory=list)
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     memory_metrics: MemoryMetricsPayload
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     recent_agent_runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
+    recent_logs: list[RuntimeLogPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
     tasks: TaskStatusSummary
     failed_tasks: list[dict] = Field(default_factory=list)

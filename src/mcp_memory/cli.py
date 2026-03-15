@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import json
-import logging
 import socket
 import sys
 from types import SimpleNamespace
 
 import click
 from rich.console import Console
-from rich.logging import RichHandler
 from rich.table import Table
 import uvicorn
 
@@ -24,6 +22,7 @@ from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
     record_markdown_memory_paths_as_thoughts,
 )
+from mcp_memory.runtime_logging import configure_cli_logging, configure_workspace_logging
 from mcp_memory.server import MCPServer
 
 console = Console()
@@ -31,34 +30,45 @@ console = Console()
 
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def main(debug: bool) -> None:
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, console=console)],
-    )
+@click.pass_context
+def main(ctx: click.Context, debug: bool) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["debug"] = debug
+    configure_cli_logging(debug)
 
 
 @main.command()
 @click.option("--workspace-root", help="Override the active workspace root")
-def run(workspace_root: str | None) -> None:
+@click.pass_context
+def run(ctx: click.Context, workspace_root: str | None) -> None:
     """Run the MCP stdio proxy, auto-starting the workspace daemon when needed."""
+    configure_workspace_logging(
+        bool(ctx.obj.get("debug", False)),
+        workspace_root_override=workspace_root,
+        console_output=False,
+        source="stdio",
+    )
     server = MCPServer(workspace_root=workspace_root)
     try:
         asyncio.run(server.run())
     except KeyboardInterrupt:
         return
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
+        click.echo(f"mcp-memory: {exc}", err=True)
         sys.exit(1)
 
 
 @main.command(name="internal-run", hidden=True)
 @click.option("--workspace-root", help="Override the active workspace root")
-def internal_run(workspace_root: str | None) -> None:
+@click.pass_context
+def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
     """Run the internal maintenance MCP stdio proxy for trusted tool-using agents."""
+    configure_workspace_logging(
+        bool(ctx.obj.get("debug", False)),
+        workspace_root_override=workspace_root,
+        console_output=False,
+        source="internal-stdio",
+    )
     server = MCPServer(
         workspace_root=workspace_root,
         server_name="mcp-memory-internal",
@@ -69,7 +79,7 @@ def internal_run(workspace_root: str | None) -> None:
     except KeyboardInterrupt:
         return
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
+        click.echo(f"mcp-memory: {exc}", err=True)
         sys.exit(1)
 
 
@@ -77,8 +87,15 @@ def internal_run(workspace_root: str | None) -> None:
 @click.option("--workspace-root", help="Override the active workspace root")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
 @click.option("--port", default=0, show_default=True, type=int, help="Daemon bind port")
-def daemon(workspace_root: str | None, host: str, port: int) -> None:
+@click.pass_context
+def daemon(ctx: click.Context, workspace_root: str | None, host: str, port: int) -> None:
     """Run the workspace daemon backend."""
+    configure_workspace_logging(
+        bool(ctx.obj.get("debug", False)),
+        workspace_root_override=workspace_root,
+        console_output=True,
+        source="daemon",
+    )
     daemon_port = port
     if daemon_port == 0:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -98,6 +115,47 @@ def dashboard(workspace_root: str | None) -> None:
         console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)
     console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+
+
+@main.command(name="logs")
+@click.option("--workspace-root", help="Override the active workspace root")
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+def logs(workspace_root: str | None, limit: int, level: str | None, logger_name: str | None, source: str | None) -> None:
+    """Print recent structured runtime logs from SQLite."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).list_logs(
+            level=None if level is None else level.upper(),
+            logger_name=logger_name,
+            source=source,
+            limit=limit,
+        )
+        table = Table(title="Runtime Logs")
+        table.add_column("Time", no_wrap=True)
+        table.add_column("Level", no_wrap=True)
+        table.add_column("Source", no_wrap=True)
+        table.add_column("Logger", no_wrap=True)
+        table.add_column("Message")
+        if not payload.logs:
+            table.add_row("-", "-", "-", "-", "No logs found")
+        for entry in payload.logs:
+            table.add_row(
+                _format_timestamp(entry.created_at),
+                entry.level,
+                entry.source,
+                entry.logger_name,
+                entry.message,
+            )
+        console.print(table)
+    finally:
+        runtime.close()
 
 
 @main.command(name="install")

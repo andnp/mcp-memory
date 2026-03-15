@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -151,6 +151,22 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_hook_conversations_workspace_id
             ON hook_conversations(workspace_id);
+
+        CREATE TABLE IF NOT EXISTS runtime_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            source TEXT NOT NULL,
+            logger_name TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            data_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_logs_workspace_created_at
+            ON runtime_logs(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_runtime_logs_level_created_at
+            ON runtime_logs(level, created_at DESC, id DESC);
         """
     )
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
@@ -184,6 +200,14 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "hook_conversations", "last_payload_json", "TEXT NOT NULL DEFAULT '{}'"
     )
     ensure_column(conn, "hook_conversations", "ended_at", "REAL")
+    ensure_column(conn, "runtime_logs", "workspace_id", "TEXT")
+    ensure_column(conn, "runtime_logs", "source", "TEXT NOT NULL DEFAULT 'runtime'")
+    ensure_column(conn, "runtime_logs", "logger_name", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "runtime_logs", "level", "TEXT NOT NULL DEFAULT 'INFO'")
+    ensure_column(conn, "runtime_logs", "message", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "runtime_logs", "created_at", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "runtime_logs", "data_json", "TEXT NOT NULL DEFAULT '{}'"
+    )
     conn.execute(
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),

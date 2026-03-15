@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import logging
 
 import pytest
 
@@ -6,6 +7,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.management.service import ManagementService
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 
 
 pytestmark = pytest.mark.small
@@ -14,6 +16,11 @@ pytestmark = pytest.mark.small
 def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
+    handler = SQLiteStructuredLogHandler(
+        db_manager=db_manager,
+        workspace_id="workspace-a",
+        source="daemon",
+    )
 
     primary = repository.create_memory(
         title="Dashboard plan",
@@ -43,6 +50,17 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     )
     assert task_queue.claim_next(now=10.0) is not None
     task_queue.fail_permanently(task.id, "summary provider offline", failed_at=11.0)
+    handler.emit(
+        logging.LogRecord(
+            name="mcp_memory.tests",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=42,
+            msg="daemon log row",
+            args=(),
+            exc_info=None,
+        )
+    )
 
     ctx = ApplicationContext(
         workspace_id="workspace-a",
@@ -65,6 +83,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.agent_runs[0].task_name == "ingest-system1"
     assert overview.tasks.failed_count == 1
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
+    assert overview.recent_logs[0].message == "daemon log row"
+    assert overview.recent_logs[0].source == "daemon"
     assert detail.record["id"] == primary.id
     assert detail.relationships["outgoing"][0]["link_type"] == "SUPERSEDES"
     assert detail.superseded[0]["id"] == secondary.id

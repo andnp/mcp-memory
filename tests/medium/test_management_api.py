@@ -78,6 +78,19 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert seed_runtime.repository is not None
         assert seed_runtime.task_queue is not None
         assert seed_runtime.workspace_id is not None
+        seed_runtime.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                seed_runtime.workspace_id,
+                "daemon",
+                "mcp_memory.server",
+                "INFO",
+                "seeded daemon log",
+                12.0,
+                "{}",
+            ),
+        )
+        seed_runtime.db_manager.get_connection().commit()
         primary = seed_runtime.repository.create_memory(
             title="Management API plan",
             content="Expose runtime health and recent memories.",
@@ -113,6 +126,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     try:
         health = _fetch_json(f"http://127.0.0.1:{port}/api/health")
         overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
+        logs = _fetch_json(f"http://127.0.0.1:{port}/api/logs?source=daemon")
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
@@ -169,8 +183,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["embeddings"]["model_name"] is not None
         assert overview["memory_metrics"]["total_memories"] == 2
         assert "agent_runs" in overview
+        assert overview["recent_logs"][0]["message"] == "seeded daemon log"
         assert overview["tasks"]["failed_count"] == 1
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
+        assert logs["logs"][0]["source"] == "daemon"
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
         assert fact_checker["failed_runs"] == 1
         assert overview["recent_agent_runs"]
@@ -195,6 +211,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "Memory Metrics" in dashboard
         assert "Embedding Backend" in dashboard
         assert "Recent Agent Runs" in dashboard
+        assert "Recent Logs" in dashboard
         assert "Agent Controls" in dashboard
     finally:
         _stop_server(server, thread)

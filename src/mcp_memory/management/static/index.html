@@ -104,6 +104,16 @@
     </section>
 
     <section class="panel" style="margin-top: 16px;">
+      <h2>Recent Logs</h2>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Level</th><th>Source</th><th>Logger</th><th>Message</th></tr>
+        </thead>
+        <tbody id="recent-logs"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top: 16px;">
       <h2>Admin Link Editor</h2>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 16px;">
         <label>Source ID<br /><input id="link-source" style="width: 100%; margin-top: 6px;" /></label>
@@ -238,6 +248,16 @@
           <td>${run.error_text ?? '-'}</td>
         </tr>
       `).join('') || '<tr><td colspan="6" class="muted">No recent agent runs.</td></tr>';
+
+      document.getElementById('recent-logs').innerHTML = payload.recent_logs.map((entry) => `
+        <tr>
+          <td>${formatTimestamp(entry.created_at)}</td>
+          <td>${entry.level}</td>
+          <td>${entry.source}</td>
+          <td>${entry.logger_name}</td>
+          <td><pre>${entry.message}</pre></td>
+        </tr>
+      `).join('') || '<tr><td colspan="5" class="muted">No logs recorded yet.</td></tr>';
 
       document.getElementById('agent-select').innerHTML = payload.agent_runs.map((agent) => `
         <option value="${agent.task_name}">${agent.task_name}</option>

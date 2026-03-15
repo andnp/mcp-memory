@@ -19,6 +19,8 @@ from mcp_memory.management.models import (
     MemoryMetricsPayload,
     OverviewCounts,
     OverviewPayload,
+    RuntimeLogListPayload,
+    RuntimeLogPayload,
     StorageSummary,
     TaskListPayload,
     TaskStatusSummary,
@@ -83,6 +85,7 @@ class ManagementService:
         journal_counts = {"pending": memory_metrics.thought_buffer_entries}
         agent_runs = self._build_agent_runs()
         recent_agent_runs = self._build_recent_agent_runs()
+        recent_logs = self.list_logs(limit=10).logs
 
         return OverviewPayload(
             memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
@@ -90,6 +93,7 @@ class ManagementService:
             memory_metrics=memory_metrics,
             agent_runs=agent_runs,
             recent_agent_runs=recent_agent_runs,
+            recent_logs=recent_logs,
             recent_memories=recent_records,
             tasks=TaskStatusSummary(
                 by_status=task_counts,
@@ -244,6 +248,55 @@ class ManagementService:
         )
         return MemoryListPayload(
             records=[compact_memory_record_payload(record) for record in records]
+        )
+
+    def list_logs(
+        self,
+        *,
+        level: str | None = None,
+        logger_name: str | None = None,
+        source: str | None = None,
+        limit: int = 50,
+    ) -> RuntimeLogListPayload:
+        if self._db_manager is None:
+            return RuntimeLogListPayload()
+
+        query = (
+            "SELECT id, created_at, level, logger_name, source, message, data_json "
+            "FROM runtime_logs"
+        )
+        clauses: list[str] = []
+        params: list[object] = []
+        if self._workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(self._workspace_id)
+        if level is not None:
+            clauses.append("level = ?")
+            params.append(level)
+        if logger_name is not None:
+            clauses.append("logger_name = ?")
+            params.append(logger_name)
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._db_manager.get_connection().execute(query, params).fetchall()
+        return RuntimeLogListPayload(
+            logs=[
+                RuntimeLogPayload(
+                    id=int(row["id"]),
+                    created_at=float(row["created_at"]),
+                    level=str(row["level"]),
+                    logger_name=str(row["logger_name"]),
+                    source=str(row["source"]),
+                    message=str(row["message"]),
+                    data=_decode_log_data(row["data_json"]),
+                )
+                for row in rows
+            ]
         )
 
     def load_dashboard_html(self):
@@ -458,6 +511,16 @@ def _format_result_summary(result: dict[str, object]) -> str | None:
 
 
 def _decode_run_result(raw_result: object) -> dict[str, object]:
+    if not isinstance(raw_result, str) or not raw_result.strip():
+        return {}
+    try:
+        decoded = json.loads(raw_result)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _decode_log_data(raw_result: object) -> dict[str, object]:
     if not isinstance(raw_result, str) or not raw_result.strip():
         return {}
     try:
