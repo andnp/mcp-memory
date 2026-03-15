@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
@@ -69,14 +70,11 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
     workspace_id = getattr(ctx, "workspace_id", None)
     journal = getattr(ctx, "journal", None)
 
-    if journal is not None and journal.count_by_status().get("pending", 0) > 0:
-        task_queue.enqueue_unique(
-            task_name=SYSTEM1_INGEST_TASK_NAME,
-            workspace_id=workspace_id,
-            data={
-                "workspace_id": workspace_id,
-                "trigger": "bootstrap_pending_thoughts",
-            },
+    if journal is not None:
+        schedule_system1_ingest(
+            task_queue,
+            journal,
+            workspace_id,
         )
 
     for task_name, interval_seconds in RECURRING_TASK_INTERVAL_SECONDS.items():

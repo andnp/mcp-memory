@@ -216,7 +216,30 @@ def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(
 
     ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
     assert ingest_task is not None
-    assert ingest_task.data["trigger"] == "bootstrap_pending_thoughts"
+    assert ingest_task.data["trigger"] == "system1_debounce"
+    assert ingest_task.available_at > ingest_task.created_at
+
+
+def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    journal = System1Journal(db_manager)
+    for index in range(10):
+        journal.record(f"capture pending context {index}", workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        db_manager=db_manager,
+        task_queue=queue,
+        journal=journal,
+    )
+
+    bootstrap_background_tasks(ctx)
+
+    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
+    assert ingest_task is not None
+    assert ingest_task.data["trigger"] == "system1_threshold"
+    assert ingest_task.available_at <= ingest_task.updated_at
 
 
 def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch, db_manager) -> None:
@@ -692,6 +715,63 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
         await worker.stop(0.1)
 
         assert runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        runtime.journal.record("provider-backed ingest thought", workspace_id=runtime.workspace_id)
+        runtime.ai_provider = FakeAIProvider(
+            responses=[
+                {
+                    "actions": [
+                        {
+                            "type": "create",
+                            "entry_indices": [0],
+                            "title": "Provider-backed ingest thought",
+                            "content": "Provider-backed ingest content.",
+                        }
+                    ]
+                }
+            ]
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="provider-backed-ingest",
+        )
+        worker = build_runtime_task_worker(runtime)
+
+        await worker.start()
+        for _ in range(50):
+            if runtime.task_queue.get_task(task.id).status == "completed":
+                break
+            await asyncio.sleep(0.02)
+        await worker.stop(0.1)
+
+        assert runtime.ai_provider.call_count >= 1
+        assert runtime.ai_provider.prompts
+        assert any(
+            "Analyze these system1 journal entries" in prompt
+            for prompt in runtime.ai_provider.prompts
+        )
+        records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+        assert records
+        assert records[0].title == "Provider-backed ingest thought"
     finally:
         runtime.close()
 
