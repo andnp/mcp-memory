@@ -28,6 +28,257 @@ from mcp_memory.runtime_logging import configure_cli_logging, configure_workspac
 from mcp_memory.server import MCPServer
 
 console = Console()
+workspace_root_option = click.option("--workspace-root", help="Override the active workspace root")
+
+
+def _exit_cli_error(exc: Exception) -> None:
+    console.print(f"[red]Error:[/] {exc}")
+    sys.exit(1)
+
+
+def _run_stdio_proxy(
+    debug_enabled: bool,
+    workspace_root: str | None,
+    source: str,
+    server_name: str,
+    tool_path_prefix: str,
+) -> None:
+    configure_workspace_logging(
+        debug_enabled,
+        workspace_root_override=workspace_root,
+        console_output=False,
+        source=source,
+    )
+    server = MCPServer(
+        workspace_root=workspace_root,
+        server_name=server_name,
+        tool_path_prefix=tool_path_prefix,
+    )
+    try:
+        asyncio.run(server.run())
+    except KeyboardInterrupt:
+        return
+    except Exception as exc:
+        click.echo(f"mcp-memory: {exc}", err=True)
+        sys.exit(1)
+
+
+def _resolve_daemon_port(host: str, port: int) -> int:
+    if port != 0:
+        return port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int) -> None:
+    configure_workspace_logging(
+        debug_enabled,
+        workspace_root_override=workspace_root,
+        console_output=True,
+        source="daemon",
+    )
+    daemon_port = _resolve_daemon_port(host, port)
+    app = create_daemon_app(
+        workspace_root_override=workspace_root,
+        host=host,
+        port=daemon_port,
+        enable_idle_shutdown=True,
+    )
+    uvicorn.run(app, host=host, port=daemon_port, log_level="info")
+
+
+def _print_daemon_status(workspace_root: str | None) -> None:
+    workspace_id, metadata, healthy = inspect_daemon(workspace_root, None)
+    if metadata is None:
+        console.print(f"[yellow]Daemon not registered[/] for {workspace_id}")
+        return
+    console.print(f"[bold]Workspace:[/] {workspace_id}")
+    console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
+    console.print(f"[bold]PID:[/] {metadata.pid}")
+    console.print(f"[bold]URL:[/] {metadata.base_url}")
+    console.print(f"[bold]Started:[/] {_format_timestamp(metadata.started_at)}")
+
+
+def _stop_daemon_command(workspace_root: str | None) -> None:
+    try:
+        metadata = stop_daemon(workspace_root, None)
+    except Exception as exc:
+        _exit_cli_error(exc)
+    if metadata is None:
+        console.print("[yellow]No daemon metadata found.[/]")
+        return
+    console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} workspace={metadata.workspace_id}")
+
+
+def _restart_daemon_command(workspace_root: str | None) -> None:
+    try:
+        stop_daemon(workspace_root, None)
+        metadata = ensure_daemon_started(workspace_root, None)
+    except Exception as exc:
+        _exit_cli_error(exc)
+    console.print(f"[green]Daemon restarted:[/] {metadata.base_url}/ (pid={metadata.pid})")
+
+
+def _print_dashboard_url(workspace_root: str | None) -> None:
+    try:
+        metadata = ensure_daemon_started(workspace_root, None)
+    except Exception as exc:
+        _exit_cli_error(exc)
+    console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+
+
+def _render_logs_table(payload) -> None:
+    table = Table(title="Runtime Logs")
+    table.add_column("Time", no_wrap=True)
+    table.add_column("Level", no_wrap=True)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Logger", no_wrap=True)
+    table.add_column("Message")
+    if not payload.logs:
+        table.add_row("-", "-", "-", "-", "No logs found")
+    for entry in payload.logs:
+        table.add_row(
+            _format_timestamp(entry.created_at),
+            entry.level,
+            entry.source,
+            entry.logger_name,
+            entry.message,
+        )
+    console.print(table)
+
+
+def _render_log_summary(payload) -> None:
+    console.print(f"[bold]Matching logs:[/] {payload.total}")
+
+    by_level = Table(title="By Level")
+    by_level.add_column("Level")
+    by_level.add_column("Count", justify="right")
+    if not payload.by_level:
+        by_level.add_row("-", "0")
+    for level_name, count in sorted(payload.by_level.items()):
+        by_level.add_row(level_name, str(count))
+    console.print(by_level)
+
+    by_source = Table(title="By Source")
+    by_source.add_column("Source")
+    by_source.add_column("Count", justify="right")
+    if not payload.by_source:
+        by_source.add_row("-", "0")
+    for source_name, count in sorted(payload.by_source.items()):
+        by_source.add_row(source_name, str(count))
+    console.print(by_source)
+
+
+def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:
+    metrics = Table(title="Memory Metrics")
+    metrics.add_column("Metric")
+    metrics.add_column("Value", justify="right")
+    metrics.add_row("Total memories", str(overview.memory_metrics.total_memories))
+    metrics.add_row("Total memory lines", str(overview.memory_metrics.total_memory_lines))
+    metrics.add_row("Total summary lines", str(overview.memory_metrics.total_summary_lines))
+    metrics.add_row("Total lines compressed", str(overview.memory_metrics.total_lines_compressed))
+    metrics.add_row("Pending journal entries", str(journal_counts.get("pending", 0)))
+    metrics.add_row("Processed journal entries", str(journal_counts.get("processed", 0)))
+    metrics.add_row("Archived journal entries", str(journal_counts.get("archived", 0)))
+    metrics.add_row("Pending journal lines", str(overview.memory_metrics.thought_buffer_lines))
+    console.print(metrics)
+
+
+def _render_agent_table(overview) -> None:
+    agent_table = Table(title="Background Agents")
+    agent_table.add_column("Agent", no_wrap=True)
+    agent_table.add_column("Running", justify="right")
+    agent_table.add_column("Age")
+    agent_table.add_column("Next")
+    agent_table.add_column("Last status")
+    agent_table.add_column("Runs", justify="right")
+    agent_table.add_column("Failures", justify="right")
+    agent_table.add_column("Avg duration", justify="right")
+    agent_table.add_column("Compressed", justify="right")
+    agent_table.add_column("Last result")
+    for agent in overview.agent_runs:
+        agent_table.add_row(
+            agent.task_name,
+            str(agent.running_count),
+            _format_age(agent.seconds_since_last_completion),
+            _format_age(agent.seconds_until_next_run),
+            agent.last_status or "never",
+            str(agent.total_runs),
+            str(agent.failed_runs),
+            f"{agent.avg_duration_seconds:.2f}s",
+            str(agent.total_lines_compressed),
+            agent.last_result_summary or "-",
+        )
+    console.print(agent_table)
+
+
+def _render_provider_usage_table(overview) -> None:
+    provider_table = Table(title="AI Provider Usage")
+    provider_table.add_column("Provider", no_wrap=True)
+    provider_table.add_column("Model")
+    provider_table.add_column("Calls (1h)", justify="right")
+    provider_table.add_column("Calls (24h)", justify="right")
+    provider_table.add_column("Failures (1h)", justify="right")
+    provider_table.add_column("Failures (24h)", justify="right")
+    provider_table.add_column("Avg Duration (1h)", justify="right")
+    provider_table.add_column("Avg Duration (24h)", justify="right")
+    if not overview.provider_usage:
+        provider_table.add_row("-", "-", "0", "0", "0", "0", "0.00s", "0.00s")
+    for usage in overview.provider_usage:
+        provider_table.add_row(
+            usage.provider_key,
+            usage.model_name,
+            str(usage.calls_last_hour),
+            str(usage.calls_last_day),
+            str(usage.failures_last_hour),
+            str(usage.failures_last_day),
+            f"{usage.avg_duration_last_hour:.2f}s",
+            f"{usage.avg_duration_last_day:.2f}s",
+        )
+    console.print(provider_table)
+
+
+def _render_top_reads_table(overview) -> None:
+    top_reads_table = Table(title="Top Read Memories")
+    top_reads_table.add_column("Reads", justify="right", no_wrap=True)
+    top_reads_table.add_column("Type", no_wrap=True)
+    top_reads_table.add_column("Title")
+    if not overview.top_read_memories:
+        top_reads_table.add_row("0", "-", "No memories have been read yet")
+    for record in overview.top_read_memories:
+        top_reads_table.add_row(
+            str(record.read_count),
+            record.type,
+            record.title,
+        )
+    console.print(top_reads_table)
+
+
+def _print_agent_details(overview) -> None:
+    console.print("[bold]Agent Details[/]")
+    for agent in overview.agent_runs:
+        console.print(
+            "- "
+            f"{agent.task_name}: "
+            f"running={agent.running_count} "
+            f"next={_format_age(agent.seconds_until_next_run)} "
+            f"last_status={agent.last_status or 'never'} "
+            f"last_result={agent.last_result_summary or '-'}"
+        )
+
+
+def _print_recent_agent_runs(overview) -> None:
+    console.print("[bold]Recent Agent Runs[/]")
+    for run in overview.recent_agent_runs:
+        console.print(
+            "- "
+            f"{run.task_name}: "
+            f"status={run.status} "
+            f"duration={run.duration_seconds:.2f}s "
+            f"result={run.result_summary or '-'} "
+            f"error={run.error_text or '-'}"
+        )
 
 
 @click.group()
@@ -40,135 +291,99 @@ def main(ctx: click.Context, debug: bool) -> None:
 
 
 @main.command()
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.pass_context
 def run(ctx: click.Context, workspace_root: str | None) -> None:
     """Run the MCP stdio proxy, auto-starting the workspace daemon when needed."""
-    configure_workspace_logging(
+    _run_stdio_proxy(
         bool(ctx.obj.get("debug", False)),
-        workspace_root_override=workspace_root,
-        console_output=False,
-        source="stdio",
+        workspace_root,
+        "stdio",
+        "mcp-memory",
+        "/internal/tools",
     )
-    server = MCPServer(workspace_root=workspace_root)
-    try:
-        asyncio.run(server.run())
-    except KeyboardInterrupt:
-        return
-    except Exception as exc:
-        click.echo(f"mcp-memory: {exc}", err=True)
-        sys.exit(1)
 
 
 @main.command(name="internal-run", hidden=True)
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.pass_context
 def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
     """Run the internal maintenance MCP stdio proxy for trusted tool-using agents."""
-    configure_workspace_logging(
+    _run_stdio_proxy(
         bool(ctx.obj.get("debug", False)),
-        workspace_root_override=workspace_root,
-        console_output=False,
-        source="internal-stdio",
+        workspace_root,
+        "internal-stdio",
+        "mcp-memory-internal",
+        "/internal/maintenance/tools",
     )
-    server = MCPServer(
-        workspace_root=workspace_root,
-        server_name="mcp-memory-internal",
-        tool_path_prefix="/internal/maintenance/tools",
-    )
-    try:
-        asyncio.run(server.run())
-    except KeyboardInterrupt:
-        return
-    except Exception as exc:
-        click.echo(f"mcp-memory: {exc}", err=True)
-        sys.exit(1)
 
 
-@main.command()
-@click.option("--workspace-root", help="Override the active workspace root")
+@main.group(name="daemon", invoke_without_command=True)
+@workspace_root_option
 @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
 @click.option("--port", default=0, show_default=True, type=int, help="Daemon bind port")
 @click.pass_context
-def daemon(ctx: click.Context, workspace_root: str | None, host: str, port: int) -> None:
-    """Run the workspace daemon backend."""
-    configure_workspace_logging(
-        bool(ctx.obj.get("debug", False)),
-        workspace_root_override=workspace_root,
-        console_output=True,
-        source="daemon",
-    )
-    daemon_port = port
-    if daemon_port == 0:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind((host, 0))
-            daemon_port = int(sock.getsockname()[1])
-    app = create_daemon_app(
-        workspace_root_override=workspace_root,
-        host=host,
-        port=daemon_port,
-        enable_idle_shutdown=True,
-    )
-    uvicorn.run(app, host=host, port=daemon_port, log_level="info")
+def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int) -> None:
+    """Run and manage the workspace daemon."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
 
 
-@main.command(name="daemon-status")
-@click.option("--workspace-root", help="Override the active workspace root")
+@daemon_group.command(name="status")
+@workspace_root_option
 def daemon_status(workspace_root: str | None) -> None:
     """Print the current daemon status for the active workspace."""
-    workspace_id, metadata, healthy = inspect_daemon(workspace_root, None)
-    if metadata is None:
-        console.print(f"[yellow]Daemon not registered[/] for {workspace_id}")
-        return
-    console.print(f"[bold]Workspace:[/] {workspace_id}")
-    console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
-    console.print(f"[bold]PID:[/] {metadata.pid}")
-    console.print(f"[bold]URL:[/] {metadata.base_url}")
-    console.print(f"[bold]Started:[/] {_format_timestamp(metadata.started_at)}")
+    _print_daemon_status(workspace_root)
 
 
-@main.command(name="daemon-stop")
-@click.option("--workspace-root", help="Override the active workspace root")
+@daemon_group.command(name="stop")
+@workspace_root_option
 def daemon_stop(workspace_root: str | None) -> None:
     """Stop the workspace daemon if it is running."""
-    try:
-        metadata = stop_daemon(workspace_root, None)
-    except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
-    if metadata is None:
-        console.print("[yellow]No daemon metadata found.[/]")
-        return
-    console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} workspace={metadata.workspace_id}")
+    _stop_daemon_command(workspace_root)
 
 
-@main.command(name="daemon-restart")
-@click.option("--workspace-root", help="Override the active workspace root")
+@daemon_group.command(name="restart")
+@workspace_root_option
 def daemon_restart(workspace_root: str | None) -> None:
     """Restart the workspace daemon and print the fresh dashboard URL."""
-    try:
-        stop_daemon(workspace_root, None)
-        metadata = ensure_daemon_started(workspace_root, None)
-    except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
-    console.print(f"[green]Daemon restarted:[/] {metadata.base_url}/ (pid={metadata.pid})")
+    _restart_daemon_command(workspace_root)
 
 
-@main.command(name="dashboard")
-@click.option("--workspace-root", help="Override the active workspace root")
+@daemon_group.command(name="dashboard")
+@workspace_root_option
 def dashboard(workspace_root: str | None) -> None:
     """Ensure the daemon is running and print the dashboard URL."""
-    try:
-        metadata = ensure_daemon_started(workspace_root, None)
-    except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
-    console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+    _print_dashboard_url(workspace_root)
+
+
+@main.command(name="daemon-status", hidden=True)
+@workspace_root_option
+def daemon_status_alias(workspace_root: str | None) -> None:
+    _print_daemon_status(workspace_root)
+
+
+@main.command(name="daemon-stop", hidden=True)
+@workspace_root_option
+def daemon_stop_alias(workspace_root: str | None) -> None:
+    _stop_daemon_command(workspace_root)
+
+
+@main.command(name="daemon-restart", hidden=True)
+@workspace_root_option
+def daemon_restart_alias(workspace_root: str | None) -> None:
+    _restart_daemon_command(workspace_root)
+
+
+@main.command(name="dashboard", hidden=True)
+@workspace_root_option
+def dashboard_alias(workspace_root: str | None) -> None:
+    _print_dashboard_url(workspace_root)
 
 
 @main.command(name="logs")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
 @click.option(
     "--level",
@@ -207,29 +422,13 @@ def logs(
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
-        table = Table(title="Runtime Logs")
-        table.add_column("Time", no_wrap=True)
-        table.add_column("Level", no_wrap=True)
-        table.add_column("Source", no_wrap=True)
-        table.add_column("Logger", no_wrap=True)
-        table.add_column("Message")
-        if not payload.logs:
-            table.add_row("-", "-", "-", "-", "No logs found")
-        for entry in payload.logs:
-            table.add_row(
-                _format_timestamp(entry.created_at),
-                entry.level,
-                entry.source,
-                entry.logger_name,
-                entry.message,
-            )
-        console.print(table)
+        _render_logs_table(payload)
     finally:
         runtime.close()
 
 
 @main.command(name="log-summary")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option(
     "--level",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
@@ -265,31 +464,13 @@ def log_summary(
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
-        console.print(f"[bold]Matching logs:[/] {payload.total}")
-
-        by_level = Table(title="By Level")
-        by_level.add_column("Level")
-        by_level.add_column("Count", justify="right")
-        if not payload.by_level:
-            by_level.add_row("-", "0")
-        for level_name, count in sorted(payload.by_level.items()):
-            by_level.add_row(level_name, str(count))
-        console.print(by_level)
-
-        by_source = Table(title="By Source")
-        by_source.add_column("Source")
-        by_source.add_column("Count", justify="right")
-        if not payload.by_source:
-            by_source.add_row("-", "0")
-        for source_name, count in sorted(payload.by_source.items()):
-            by_source.add_row(source_name, str(count))
-        console.print(by_source)
+        _render_log_summary(payload)
     finally:
         runtime.close()
 
 
 @main.command(name="log-prune")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
 @click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
@@ -378,7 +559,7 @@ def hook_runner(workspace_root: str | None) -> None:
 
 
 @main.command(name="prefetch-model")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""
     runtime = create_runtime(workspace_root_override=workspace_root)
@@ -397,8 +578,7 @@ def prefetch_model(workspace_root: str | None) -> None:
         if status is not None:
             console.print(f"backend={status.backend} cached={status.model_cached}")
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
@@ -410,7 +590,7 @@ def agents() -> None:
 
 @agents.command(name="run")
 @click.argument("agent_name", type=click.Choice(TRIGGERABLE_BACKGROUND_TASK_NAMES))
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option("--force", is_flag=True, help="Enqueue a new task even if one is already open")
 def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
     """Trigger one background agent for the active workspace."""
@@ -421,14 +601,13 @@ def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
         console.print(f"[green]{payload['status']}[/]: {agent_name}")
         console.print(f"task_id={payload['task']['id']} status={payload['task']['status']}")
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
 
 @agents.command(name="run-all")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option("--force", is_flag=True, help="Enqueue new tasks even if matching tasks are already open")
 def run_all_agents(workspace_root: str | None, force: bool) -> None:
     """Trigger all background agents for the active workspace."""
@@ -442,14 +621,13 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
         for result in results:
             console.print(f"- {result['task']['task_name']}: {result['status']}")
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
 
 @main.command(name="stats")
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 def stats(workspace_root: str | None) -> None:
     """Print background task and memory statistics."""
     ensure_daemon_started(workspace_root, None)
@@ -466,114 +644,21 @@ def stats(workspace_root: str | None) -> None:
         console.print("[bold]Stats scope:[/] global")
         console.print(f"[bold]Database:[/] {health.db_path}")
 
-        metrics = Table(title="Memory Metrics")
-        metrics.add_column("Metric")
-        metrics.add_column("Value", justify="right")
-        metrics.add_row("Total memories", str(overview.memory_metrics.total_memories))
-        metrics.add_row("Total memory lines", str(overview.memory_metrics.total_memory_lines))
-        metrics.add_row("Total summary lines", str(overview.memory_metrics.total_summary_lines))
-        metrics.add_row("Total lines compressed", str(overview.memory_metrics.total_lines_compressed))
-        metrics.add_row("Pending journal entries", str(journal_counts.get("pending", 0)))
-        metrics.add_row("Processed journal entries", str(journal_counts.get("processed", 0)))
-        metrics.add_row("Archived journal entries", str(journal_counts.get("archived", 0)))
-        metrics.add_row("Pending journal lines", str(overview.memory_metrics.thought_buffer_lines))
-        console.print(metrics)
-
-        agent_table = Table(title="Background Agents")
-        agent_table.add_column("Agent", no_wrap=True)
-        agent_table.add_column("Running", justify="right")
-        agent_table.add_column("Age")
-        agent_table.add_column("Next")
-        agent_table.add_column("Last status")
-        agent_table.add_column("Runs", justify="right")
-        agent_table.add_column("Failures", justify="right")
-        agent_table.add_column("Avg duration", justify="right")
-        agent_table.add_column("Compressed", justify="right")
-        agent_table.add_column("Last result")
-        for agent in overview.agent_runs:
-            agent_table.add_row(
-                agent.task_name,
-                str(agent.running_count),
-                _format_age(agent.seconds_since_last_completion),
-                _format_age(agent.seconds_until_next_run),
-                agent.last_status or "never",
-                str(agent.total_runs),
-                str(agent.failed_runs),
-                f"{agent.avg_duration_seconds:.2f}s",
-                str(agent.total_lines_compressed),
-                agent.last_result_summary or "-",
-            )
-        console.print(agent_table)
-
-        provider_table = Table(title="AI Provider Usage")
-        provider_table.add_column("Provider", no_wrap=True)
-        provider_table.add_column("Model")
-        provider_table.add_column("Calls (1h)", justify="right")
-        provider_table.add_column("Calls (24h)", justify="right")
-        provider_table.add_column("Failures (1h)", justify="right")
-        provider_table.add_column("Failures (24h)", justify="right")
-        provider_table.add_column("Avg Duration (1h)", justify="right")
-        provider_table.add_column("Avg Duration (24h)", justify="right")
-        if not overview.provider_usage:
-            provider_table.add_row("-", "-", "0", "0", "0", "0", "0.00s", "0.00s")
-        for usage in overview.provider_usage:
-            provider_table.add_row(
-                usage.provider_key,
-                usage.model_name,
-                str(usage.calls_last_hour),
-                str(usage.calls_last_day),
-                str(usage.failures_last_hour),
-                str(usage.failures_last_day),
-                f"{usage.avg_duration_last_hour:.2f}s",
-                f"{usage.avg_duration_last_day:.2f}s",
-            )
-        console.print(provider_table)
-
-        top_reads_table = Table(title="Top Read Memories")
-        top_reads_table.add_column("Reads", justify="right", no_wrap=True)
-        top_reads_table.add_column("Type", no_wrap=True)
-        top_reads_table.add_column("Title")
-        if not overview.top_read_memories:
-            top_reads_table.add_row("0", "-", "No memories have been read yet")
-        for record in overview.top_read_memories:
-            top_reads_table.add_row(
-                str(record.read_count),
-                record.type,
-                record.title,
-            )
-        console.print(top_reads_table)
-
-        console.print("[bold]Agent Details[/]")
-        for agent in overview.agent_runs:
-            console.print(
-                "- "
-                f"{agent.task_name}: "
-                f"running={agent.running_count} "
-                f"next={_format_age(agent.seconds_until_next_run)} "
-                f"last_status={agent.last_status or 'never'} "
-                f"last_result={agent.last_result_summary or '-'}"
-            )
-
-        console.print("[bold]Recent Agent Runs[/]")
-        for run in overview.recent_agent_runs:
-            console.print(
-                "- "
-                f"{run.task_name}: "
-                f"status={run.status} "
-                f"duration={run.duration_seconds:.2f}s "
-                f"result={run.result_summary or '-'} "
-                f"error={run.error_text or '-'}"
-            )
+        _render_memory_metrics_table(overview, journal_counts)
+        _render_agent_table(overview)
+        _render_provider_usage_table(overview)
+        _render_top_reads_table(overview)
+        _print_agent_details(overview)
+        _print_recent_agent_runs(overview)
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
 
 @main.command(name="import-markdown")
 @click.argument("file_paths", nargs=-1, type=str)
-@click.option("--workspace-root", help="Override the active workspace root")
+@workspace_root_option
 @click.option(
     "--workspace-id",
     "workspace_ids",
@@ -599,16 +684,14 @@ def import_markdown(
     try:
         resolved_workspace_id = None
         if workspace_ids:
-            # When --thought is used with multiple workspace IDs, use the first one
             resolved_workspace_id = next(
-                (wid.strip() for wid in workspace_ids if wid.strip()), 
+                (wid.strip() for wid in workspace_ids if wid.strip()),
                 None
             )
         elif runtime.workspace_id is not None:
             resolved_workspace_id = runtime.workspace_id
 
         if thought:
-            # Import as thoughts into the journal buffer
             if runtime.journal is None:
                 raise RuntimeError("journal_not_initialized")
 
@@ -621,7 +704,6 @@ def import_markdown(
                 console.print(f"[green]Recorded thought:[/] {file_name} (entry {entry_id})")
             console.print(f"[green]Recorded total:[/] {len(recorded)} thoughts → buffer")
         else:
-            # Import directly to relational storage (existing behavior)
             if runtime.repository is None:
                 raise RuntimeError("repository_not_initialized")
 
@@ -638,8 +720,7 @@ def import_markdown(
                 console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
             console.print(f"[green]Imported total:[/] {len(imported_records)}")
     except Exception as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        sys.exit(1)
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
