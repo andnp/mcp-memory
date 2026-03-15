@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from uuid import uuid4
 
@@ -57,6 +58,25 @@ class InstrumentedAIProvider:
                     subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
                     request_id=request_id,
                 )
+            if payload.get("event") == "started":
+                started_value = float(payload.get("started_at", started_at))
+                self._usage_repository.record_conversation(
+                    request_id=request_id,
+                    attempt=int(payload.get("attempt", 1)),
+                    task_name=self._task_name,
+                    task_id=self._task_id,
+                    provider_key=self._provider_key,
+                    provider_name=self._provider_name,
+                    model_name=self._model_name,
+                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                    prompt_text=prompt,
+                    response_text="",
+                    parsed=None,
+                    status="running",
+                    error_text=None,
+                    started_at=started_value,
+                    completed_at=started_value,
+                )
                 return
             if payload.get("event") != "finished":
                 return
@@ -86,6 +106,23 @@ class InstrumentedAIProvider:
             provider = binder(_observer)
         try:
             response = await provider.ask(prompt)
+        except asyncio.CancelledError:
+            self._usage_repository.record_call(
+                task_name=self._task_name,
+                task_id=self._task_id,
+                request_id=request_id,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                status=_extract_status(last_event, fallback="cancelled"),
+                duration_seconds=max(time.time() - started_at, 0.0),
+                created_at=time.time(),
+                error_text="Command cancelled",
+            )
+            if self._task_queue is not None and self._task_id is not None:
+                self._task_queue.clear_running_process(self._task_id)
+            raise
         except Exception as exc:
             self._usage_repository.record_call(
                 task_name=self._task_name,

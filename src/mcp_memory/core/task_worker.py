@@ -86,6 +86,16 @@ class RuntimeTaskWorker:
             result = handler(self._ctx, task)
             if isawaitable(result):
                 result = await result
+        except asyncio.CancelledError:
+            if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
+                await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+            else:
+                await asyncio.to_thread(
+                    task_queue.fail_permanently,
+                    task.id,
+                    "Task interrupted during worker shutdown",
+                )
+            raise
         except Exception as exc:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
                 await asyncio.to_thread(task_queue.finalize_cancellation, task.id)

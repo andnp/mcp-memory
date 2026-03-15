@@ -175,3 +175,18 @@ def test_management_service_can_cancel_running_task_and_list_conversations(db_ma
     assert cancel_payload["task"]["cancellation_reason"] == "manual_cancel"
     assert conversations.conversations[0].request_id == "req-123"
     assert conversations.conversations[0].subprocess_pid == 4321
+
+
+def test_terminate_process_escalates_to_sigkill_when_sigterm_does_not_exit(monkeypatch) -> None:
+    sent_signals: list[int] = []
+    alive_states = iter([True, True, False])
+
+    monkeypatch.setattr("mcp_memory.management.service.os.kill", lambda pid, sig: sent_signals.append(sig))
+    monkeypatch.setattr("mcp_memory.management.service.time.sleep", lambda _: None)
+    monkeypatch.setattr("mcp_memory.management.service.time.monotonic", iter([0.0, 0.2, 0.4, 1.2]).__next__)
+    monkeypatch.setattr("mcp_memory.management.service._is_process_alive", lambda pid: next(alive_states))
+
+    result = __import__("mcp_memory.management.service", fromlist=["_terminate_process"])._terminate_process(1234)
+
+    assert result is True
+    assert sent_signals == [15, 9]

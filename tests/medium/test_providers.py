@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from mcp_memory.config import AIConfig, Config, CopilotCLIConfig, GeminiCLIConfig, OllamaCLIConfig, OpenCodeCLIConfig
@@ -226,3 +228,71 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
     assert conversation_row["response_text"] == '{"actions": []}'
     assert refreshed.subprocess_pid is None
     assert refreshed.active_request_id is None
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_persists_running_conversation_before_finish(db_manager) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "started_at": 10.0,
+                }
+            )
+            started.set()
+            await release.wait()
+            self._observer(
+                {
+                    "event": "finished",
+                    "attempt": 1,
+                    "status": "success",
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "raw_text": '{"ok": true}',
+                    "parsed": {"ok": True},
+                    "error": None,
+                    "started_at": 10.0,
+                    "completed_at": 12.0,
+                    "duration_seconds": 2.0,
+                }
+            )
+            return {"ok": True}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="memory-curator", task_id="task-123", workspace_id="workspace-a")
+
+    task = asyncio.create_task(provider.ask("long running prompt"))
+    await started.wait()
+    running_rows = repository.list_conversations(status="running")
+    assert len(running_rows) == 1
+    assert running_rows[0].task_id == "task-123"
+    assert running_rows[0].subprocess_pid == 31337
+    assert running_rows[0].prompt_text == "long running prompt"
+
+    release.set()
+    result = await task
+    finished_rows = repository.list_conversations(status="success")
+
+    assert result == {"ok": True}
+    assert len(finished_rows) == 1
+    assert finished_rows[0].response_text == '{"ok": true}'

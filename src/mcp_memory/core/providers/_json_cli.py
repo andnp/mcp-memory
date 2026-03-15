@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 from dataclasses import dataclass
+import time
 from typing import Any, Callable
 
 
@@ -76,7 +77,7 @@ class JSONCLIProvider:
         raise NotImplementedError
 
     async def _execute(self, prompt: str, *, attempt: int) -> AIResponse:
-        started_at = asyncio.get_event_loop().time()
+        started_at = time.time()
         try:
             if self._cwd is None:
                 proc = await asyncio.create_subprocess_exec(
@@ -97,6 +98,7 @@ class JSONCLIProvider:
                     "attempt": attempt,
                     "prompt": prompt,
                     "subprocess_pid": proc.pid,
+                    "started_at": started_at,
                 }
             )
             try:
@@ -104,10 +106,31 @@ class JSONCLIProvider:
                     proc.communicate(),
                     timeout=self._timeout_seconds,
                 )
+            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+                completed_at = time.time()
+                self._notify(
+                    {
+                        "event": "finished",
+                        "attempt": attempt,
+                        "status": "cancelled",
+                        "prompt": prompt,
+                        "subprocess_pid": proc.pid,
+                        "returncode": proc.returncode,
+                        "raw_text": "",
+                        "parsed": None,
+                        "error": "Command cancelled",
+                        "started_at": started_at,
+                        "completed_at": completed_at,
+                        "duration_seconds": max(completed_at - started_at, 0.0),
+                    }
+                )
+                raise
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-                completed_at = asyncio.get_event_loop().time()
+                completed_at = time.time()
                 response = AIResponse(raw_text="", parsed=None, error="Command timed out", subprocess_pid=proc.pid)
                 self._notify(
                     {
@@ -137,7 +160,7 @@ class JSONCLIProvider:
                     subprocess_pid=proc.pid,
                     returncode=proc.returncode,
                 )
-                completed_at = asyncio.get_event_loop().time()
+                completed_at = time.time()
                 self._notify(
                     {
                         "event": "finished",
@@ -158,7 +181,7 @@ class JSONCLIProvider:
             response = self._parse_response(stdout_text)
             response.subprocess_pid = proc.pid
             response.returncode = proc.returncode
-            completed_at = asyncio.get_event_loop().time()
+            completed_at = time.time()
             self._notify(
                 {
                     "event": "finished",
@@ -177,7 +200,7 @@ class JSONCLIProvider:
             )
             return response
         except FileNotFoundError:
-            completed_at = asyncio.get_event_loop().time()
+            completed_at = time.time()
             response = AIResponse(raw_text="", parsed=None, error=f"Command not found: {self._command}")
             self._notify(
                 {
@@ -197,7 +220,7 @@ class JSONCLIProvider:
             )
             return response
         except OSError as exc:
-            completed_at = asyncio.get_event_loop().time()
+            completed_at = time.time()
             response = AIResponse(raw_text="", parsed=None, error=f"OS error: {exc}")
             self._notify(
                 {

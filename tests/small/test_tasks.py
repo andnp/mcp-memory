@@ -466,3 +466,34 @@ async def test_runtime_task_worker_recovers_abandoned_running_tasks_on_start(db_
         monkeypatch.undo()
 
     assert queue.get_task(task.id).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled_error(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "cancel-me",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="cancel-me",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.request_cancel(task.id, cancelled_by="cli", reason="operator_cancelled", requested_at=2.0)
+
+    async def cancelled_handler(ctx: ApplicationContext, task) -> None:
+        raise asyncio.CancelledError
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"cancel-me": cancelled_handler},
+        poll_interval_seconds=0.01,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker._process_task(claimed)  # noqa: SLF001
+
+    cancelled = queue.get_task(task.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.cancellation_reason == "operator_cancelled"
