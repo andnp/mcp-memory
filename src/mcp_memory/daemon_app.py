@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import time
+from contextlib import suppress
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -20,6 +23,18 @@ from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spe
 from mcp_memory.mcp.tools import get_memory_tools
 
 
+logger = logging.getLogger(__name__)
+
+
+async def _warm_embedding_model(embedder: Any) -> bool:
+    if embedder is None:
+        return False
+    cache_model = getattr(embedder, "cache_model", None)
+    if not callable(cache_model):
+        return False
+    return bool(await asyncio.to_thread(cache_model))
+
+
 def create_daemon_app(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -36,6 +51,7 @@ def create_daemon_app(
         runtime = create_runtime_from_spec(spec)
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)
+        warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
         if worker is not None:
             await worker.start()
 
@@ -58,6 +74,10 @@ def create_daemon_app(
         try:
             yield
         finally:
+            if not warmup_task.done():
+                warmup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await warmup_task
             if worker is not None:
                 await worker.stop(spec.config.daemon.shutdown_grace_seconds)
             runtime.close()

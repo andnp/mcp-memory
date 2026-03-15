@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -9,6 +10,9 @@ from typing import Any, Protocol
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder(Protocol):
@@ -56,6 +60,19 @@ class SentenceTransformerEmbedder:
             show_progress_bar=False,
         )
         return [list(map(float, vector)) for vector in vectors]
+
+    def cache_model(self) -> bool:
+        if self._model is not None and not self._use_fallback:
+            return True
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(self.model_name, local_files_only=False)
+            self._use_fallback = False
+            return True
+        except Exception as exc:
+            logger.warning("Failed to cache embedding model %s: %s", self.model_name, exc)
+            return False
 
 
 class HashingEmbedder:

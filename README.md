@@ -166,6 +166,8 @@ boost_decay_rate = 0.98
 
 Local semantic embeddings are now part of the default runtime behavior. The runtime will prefer `sentence-transformers` locally and falls back to a deterministic local hashing embedder if the configured model cannot be loaded yet.
 
+On daemon startup, the runtime also makes a best-effort background attempt to download and cache the configured embedding model locally.
+
    This command auto-starts the workspace daemon if it is not already running.
 
 6. **Get the dashboard URL**:

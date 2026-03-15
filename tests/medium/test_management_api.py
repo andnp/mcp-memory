@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import threading
@@ -155,3 +156,33 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "Memory Metrics" in dashboard
     finally:
         _stop_server(server, thread)
+
+
+@pytest.mark.asyncio
+async def test_daemon_lifespan_attempts_embedding_model_cache(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    cache_calls: list[str] = []
+
+    class FakeEmbedder:
+        model_name = "fake-local-model"
+
+        def cache_model(self) -> bool:
+            cache_calls.append("called")
+            return True
+
+    runtime.embedder = FakeEmbedder()
+    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+
+    try:
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0.05)
+            assert cache_calls == ["called"]
+    finally:
+        runtime.close()
