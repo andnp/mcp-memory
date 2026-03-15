@@ -727,9 +727,16 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
             await asyncio.sleep(0.02)
         await worker.stop(0.1)
 
-        assert runtime.journal.count_by_status().get("pending", 0) == 0
-        summary = runtime.task_queue.summarize_task_runs([SYSTEM1_INGEST_TASK_NAME], workspace_id=runtime.workspace_id)[0]
-        assert summary.total_runs >= 3
+        pending_counts = runtime.journal.count_by_status()
+        assert pending_counts.get("pending", 0) == 5
+        assert pending_counts.get("processed", 0) == 40
+        delayed_tasks = runtime.task_queue.list_tasks(
+            status="pending",
+            workspace_id=runtime.workspace_id,
+            limit=5,
+        )
+        assert len(delayed_tasks) == 1
+        assert delayed_tasks[0].available_at > delayed_tasks[0].updated_at
     finally:
         runtime.close()
 

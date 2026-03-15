@@ -10,6 +10,9 @@ from uuid import uuid4
 from mcp_memory.utils.db import DatabaseManager
 
 
+_ANY_WORKSPACE = object()
+
+
 @dataclass
 class TaskRecord:
     id: str
@@ -146,20 +149,26 @@ class SQLiteTaskQueue:
 
         return task, True
 
-    def claim_next(self, now: float | None = None) -> TaskRecord | None:
+    def claim_next(
+        self,
+        now: float | None = None,
+        workspace_id: str | None | object = _ANY_WORKSPACE,
+    ) -> TaskRecord | None:
         claimed_at = time.time() if now is None else now
         conn = self._db.get_connection()
         conn.execute("BEGIN IMMEDIATE")
         try:
+            clauses = ["status = 'pending'", "available_at <= ?"]
+            params: list[object] = [claimed_at]
+            if workspace_id is None:
+                clauses.append("workspace_id IS NULL")
+            elif workspace_id is not _ANY_WORKSPACE:
+                clauses.append("workspace_id = ?")
+                params.append(workspace_id)
+
             row = conn.execute(
-                """
-                SELECT *
-                FROM tasks
-                WHERE status = 'pending' AND available_at <= ?
-                ORDER BY priority ASC, created_at ASC
-                LIMIT 1
-                """,
-                (claimed_at,),
+                "SELECT * FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY priority ASC, created_at ASC LIMIT 1",
+                params,
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -341,6 +350,34 @@ class SQLiteTaskQueue:
         if row is None:
             raise ValueError(f"Task {task_id} was not found")
         return self._row_to_record(row)
+
+    def update_pending_task(
+        self,
+        task_id: str,
+        *,
+        data: dict[str, Any] | None = None,
+        available_at: float | None = None,
+    ) -> TaskRecord:
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT data, available_at FROM tasks WHERE id = ? AND status = 'pending'",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not pending")
+
+        next_data = dict(json.loads(row["data"] or "{}")) if data is None else data
+        next_available_at = float(row["available_at"]) if available_at is None else available_at
+        now = time.time()
+        cursor = conn.execute(
+            "UPDATE tasks SET data = ?, available_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            (json.dumps(next_data, sort_keys=True), next_available_at, now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not pending")
+        conn.commit()
+        return self.get_task(task_id)
 
     def find_open_task(
         self,

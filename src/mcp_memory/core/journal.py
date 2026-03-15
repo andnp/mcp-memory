@@ -8,6 +8,7 @@ import time
 from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
+_ALL_WORKSPACES = object()
 
 
 class JournalEntry:
@@ -64,14 +65,22 @@ class System1Journal:
             id=entry_id, content=content, workspace_id=workspace_id, timestamp=now, status="pending"
         )
 
-    def get_pending(self, limit: int = 50) -> list[JournalEntry]:
+    def get_pending(self, limit: int = 50, workspace_id: str | None | object = _ALL_WORKSPACES) -> list[JournalEntry]:
         """Get pending entries, oldest first."""
         conn = self._db.get_connection()
-        rows = conn.execute(
-            "SELECT id, content, workspace_id, timestamp, status FROM system1_journal "
-            "WHERE status = 'pending' ORDER BY timestamp ASC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        clauses = ["status = 'pending'"]
+        params: list[object] = []
+        if workspace_id is None:
+            clauses.append("workspace_id IS NULL")
+        elif workspace_id is not _ALL_WORKSPACES:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        query = (
+            "SELECT id, content, workspace_id, timestamp, status FROM system1_journal WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY timestamp ASC LIMIT ?"
+        )
+        rows = conn.execute(query, [*params, limit]).fetchall()
         return [
             JournalEntry(id=r[0], content=r[1], workspace_id=r[2], timestamp=r[3], status=r[4])
             for r in rows
@@ -105,13 +114,39 @@ class System1Journal:
         conn.commit()
         return cursor.rowcount
 
-    def count_by_status(self) -> dict[str, int]:
+    def count_by_status(self, workspace_id: str | None | object = _ALL_WORKSPACES) -> dict[str, int]:
         """Count entries by status."""
         conn = self._db.get_connection()
-        rows = conn.execute(
-            "SELECT status, COUNT(*) FROM system1_journal GROUP BY status"
-        ).fetchall()
+        clauses: list[str] = []
+        params: list[object] = []
+        query = "SELECT status, COUNT(*) FROM system1_journal"
+        if workspace_id is None:
+            clauses.append("workspace_id IS NULL")
+        elif workspace_id is not _ALL_WORKSPACES:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " GROUP BY status"
+        rows = conn.execute(query, params).fetchall()
         return {row[0]: row[1] for row in rows}
+
+    def get_oldest_pending_timestamp(self, workspace_id: str | None | object = _ALL_WORKSPACES):
+        conn = self._db.get_connection()
+        clauses = ["status = 'pending'"]
+        params: list[object] = []
+        if workspace_id is None:
+            clauses.append("workspace_id IS NULL")
+        elif workspace_id is not _ALL_WORKSPACES:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        row = conn.execute(
+            "SELECT MIN(timestamp) FROM system1_journal WHERE " + " AND ".join(clauses),
+            params,
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
 
     def get_recent(self, limit: int = 10) -> list[JournalEntry]:
         """Get most recent entries regardless of status."""

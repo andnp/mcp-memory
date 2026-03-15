@@ -22,25 +22,27 @@ async def test_record_thought_enqueues_single_ingest_task_at_threshold(
     runtime = create_runtime(workspace_root_override=None, cwd=workspace)
 
     try:
-        first = await call_memory_tool(runtime, "record_thought", {"content": "first note"})
-        second = await call_memory_tool(runtime, "record_thought", {"content": "second note"})
-        third = await call_memory_tool(runtime, "record_thought", {"content": "third note"})
-        fourth = await call_memory_tool(runtime, "record_thought", {"content": "fourth note"})
+        payloads = []
+        for index in range(10):
+            response = await call_memory_tool(runtime, "record_thought", {"content": f"note {index}"})
+            payloads.append(json.loads(response[0].text))
 
-        first_payload = json.loads(first[0].text)
-        second_payload = json.loads(second[0].text)
-        third_payload = json.loads(third[0].text)
-        fourth_payload = json.loads(fourth[0].text)
+        eleventh = await call_memory_tool(runtime, "record_thought", {"content": "note 10"})
+        eleventh_payload = json.loads(eleventh[0].text)
 
-        assert "ingest_task" not in first_payload
-        assert "ingest_task" not in second_payload
-        assert third_payload["ingest_task"]["task_name"] == "ingest-system1"
-        assert third_payload["ingest_task"]["created"] is True
-        assert fourth_payload["ingest_task"]["id"] == third_payload["ingest_task"]["id"]
-        assert fourth_payload["ingest_task"]["created"] is False
+        for payload in payloads[:9]:
+            assert "ingest_task" not in payload
+        tenth_payload = payloads[9]
+        assert tenth_payload["ingest_task"]["task_name"] == "ingest-system1"
+        assert tenth_payload["ingest_task"]["created"] is False
+        assert eleventh_payload["ingest_task"]["id"] == tenth_payload["ingest_task"]["id"]
+        assert eleventh_payload["ingest_task"]["created"] is False
 
         assert runtime.task_queue is not None
         counts = runtime.task_queue.count_by_status()
         assert counts == {"pending": 1}
+        pending_tasks = runtime.task_queue.list_tasks(status="pending", workspace_id=runtime.workspace_id, limit=5)
+        assert len(pending_tasks) == 1
+        assert pending_tasks[0].available_at <= pending_tasks[0].updated_at
     finally:
         runtime.close()

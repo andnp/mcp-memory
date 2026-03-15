@@ -8,6 +8,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
+from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
@@ -28,13 +29,19 @@ async def handle_ingest_system1_task(
     if ctx.journal is None or ctx.repository is None:
         return {"created_memory_ids": [], "processed_entry_ids": []}
 
+    journal_workspace_id = resolve_pending_workspace_id(
+        ctx.journal,
+        task.workspace_id if task.workspace_id is not None else ctx.workspace_id,
+    )
+    workspace_id = _resolve_workspace_id(ctx, task)
+
     entries = ctx.journal.get_pending(
-        limit=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE))
+        limit=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
+        workspace_id=journal_workspace_id,
     )
     if not entries:
         return {"created_memory_ids": [], "processed_entry_ids": []}
 
-    workspace_id = _resolve_workspace_id(ctx, task)
     created_ids: list[str] = []
     processed_ids: list[int] = []
     grouped_entries = _build_ingest_groups(ctx, entries, workspace_id)

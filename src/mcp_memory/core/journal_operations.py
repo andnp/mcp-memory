@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.core.task_handlers import (
-    SYSTEM1_INGEST_TASK_NAME,
-    SYSTEM1_INGEST_THRESHOLD,
-)
+from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue
 
@@ -27,17 +24,10 @@ class RecordThoughtOperation:
         }
 
         if self._task_queue is not None:
-            pending_count = self._journal.count_by_status().get("pending", 0)
-            if pending_count >= SYSTEM1_INGEST_THRESHOLD:
-                ingest_task, created = self._task_queue.enqueue_unique(
-                    task_name=SYSTEM1_INGEST_TASK_NAME,
-                    workspace_id=self._workspace_id,
-                    data={
-                        "workspace_id": self._workspace_id,
-                        "trigger": "system1_threshold",
-                        "pending_count": pending_count,
-                    },
-                )
+            scheduled = schedule_system1_ingest(self._task_queue, self._journal, self._workspace_id)
+            if scheduled is not None and scheduled.trigger == "system1_threshold":
+                ingest_task = scheduled.task
+                created = scheduled.created
                 payload["ingest_task"] = {
                     "id": ingest_task.id,
                     "status": ingest_task.status,
