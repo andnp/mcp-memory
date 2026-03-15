@@ -180,3 +180,67 @@ async def test_relational_runtime_search_combines_keyword_and_semantic_candidate
         assert payload["recommended_follow_up_tool"] == "read_memory_record"
     finally:
         runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_relational_runtime_search_debug_explains_workspace_and_degradation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        local_active = runtime.repository.create_memory(
+            title="Search quality active",
+            content="Search quality notes for the active workspace.",
+            summary="Active quality summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            tags=["search"],
+        )
+        cross_workspace = runtime.repository.create_memory(
+            title="Search quality cross workspace",
+            content="Search quality notes from another workspace.",
+            summary="Cross quality summary.",
+            workspace_ids=["workspace-other"],
+            memory_type="fact",
+            tags=["search"],
+        )
+        local_stale = runtime.repository.create_memory(
+            title="Search quality stale",
+            content="Search quality notes that are stale.",
+            summary="Stale quality summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            status="stale",
+            tags=["search"],
+        )
+        assert local_active is not None and cross_workspace is not None and local_stale is not None
+
+        payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {
+                        "query": "search quality summary",
+                        "workspace_id": runtime.workspace_id,
+                        "limit": 5,
+                        "debug": True,
+                    },
+                )
+            )[0].text
+        )
+
+        returned_ids = [result["memory_id"] for result in payload["results"]]
+        debug_by_id = {result["memory_id"]: result["ranking_debug"] for result in payload["results"]}
+
+        assert returned_ids == [local_active.id, cross_workspace.id, local_stale.id]
+        assert debug_by_id[local_active.id]["workspace_match"] is True
+        assert debug_by_id[local_active.id]["workspace_multiplier"] == 1.2
+        assert debug_by_id[cross_workspace.id]["workspace_match"] is False
+        assert debug_by_id[cross_workspace.id]["workspace_multiplier"] == 1.0
+        assert debug_by_id[local_stale.id]["degradation_multiplier"] == 0.3
+        assert debug_by_id[local_active.id]["matched_by_keyword"] is True
+    finally:
+        runtime.close()

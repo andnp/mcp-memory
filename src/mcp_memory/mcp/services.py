@@ -49,11 +49,17 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
         memory_type=optional_string(arguments, "memory_type"),
         status=optional_string(arguments, "status"),
         include_superseded=optional_bool(arguments, "include_superseded", False),
+        debug=optional_bool(arguments, "debug", False),
     )
+    debug_enabled = optional_bool(arguments, "debug", False)
     return {
         "status": "ok",
         "recommended_follow_up_tool": "read_memory_record",
-        "results": [search_result_payload(result) for result in results],
+        "results": [
+            search_result_payload(result)
+            | ({"ranking_debug": result.ranking_debug} if debug_enabled and result.ranking_debug is not None else {})
+            for result in results
+        ],
         "guidance": SEARCH_READ_GUIDANCE,
     }
 

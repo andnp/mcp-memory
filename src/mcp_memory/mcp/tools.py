@@ -29,6 +29,7 @@ def get_memory_tools() -> list[Tool]:
                     "memory_type": {"type": "string"},
                     "status": {"type": "string"},
                     "include_superseded": {"type": "boolean"},
+                    "debug": {"type": "boolean"},
                 },
                 "required": ["query"],
             },

@@ -26,6 +26,7 @@ class RelationalSearchResult:
     tags: list[str] = field(default_factory=list)
     workspace_ids: list[str] = field(default_factory=list)
     score: float = 0.0
+    ranking_debug: dict[str, float | str | bool] | None = None
 
 
 @dataclass(slots=True)
@@ -171,6 +172,40 @@ class RankingEngine:
         ranked.sort(key=lambda item: item[1], reverse=True)
         return ranked
 
+    def explain_candidate(
+        self,
+        candidate: RankedMemoryCandidate | RelationalMemoryRecord,
+        rrf_score: float,
+        workspace_id: str | None = None,
+    ) -> dict[str, float | str | bool]:
+        record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
+        calibrated_score = self.calibrate_score(rrf_score)
+        recency_bonus = self.type_aware_recency_bonus(record)
+        workspace_multiplier = self.workspace_multiplier(record, workspace_id)
+        access_bonus = self.access_bonus(record)
+        authority_multiplier = self.authority_multiplier_for_candidate(candidate)
+        degradation_multiplier = self.degradation_multiplier(record)
+        score_after_recency = min(calibrated_score + recency_bonus, 1.0)
+        final_score = score_after_recency
+        final_score *= workspace_multiplier
+        final_score += access_bonus
+        final_score *= authority_multiplier
+        final_score *= degradation_multiplier
+        final_score = min(max(final_score, 0.0), 1.0)
+        return {
+            "rrf_score": round(rrf_score, 6),
+            "calibrated_score": round(calibrated_score, 6),
+            "recency_bonus": round(recency_bonus, 6),
+            "workspace_multiplier": round(workspace_multiplier, 6),
+            "access_bonus": round(access_bonus, 6),
+            "authority_multiplier": round(authority_multiplier, 6),
+            "degradation_multiplier": round(degradation_multiplier, 6),
+            "final_score": round(final_score, 6),
+            "memory_type": record.type,
+            "status": record.status,
+            "workspace_match": bool(workspace_id and workspace_id in record.workspace_ids),
+        }
+
 
 class RelationalMemorySearchService:
     def __init__(
@@ -194,6 +229,7 @@ class RelationalMemorySearchService:
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
+        debug: bool = False,
     ):
         if not query.strip():
             return []
@@ -219,6 +255,12 @@ class RelationalMemorySearchService:
             status=status,
             include_superseded=include_superseded,
         )
+        candidate_by_id = {
+            (candidate.record.id if isinstance(candidate, RankedMemoryCandidate) else candidate.id): candidate
+            for candidate in candidates
+        }
+        keyword_id_set = set(keyword_ids)
+        semantic_id_set = set(semantic_ids)
         ranked = [
             RelationalSearchResult(
                 memory_id=record.id,
@@ -229,6 +271,15 @@ class RelationalMemorySearchService:
                 tags=list(record.tags),
                 workspace_ids=list(record.workspace_ids),
                 score=round(score, 6),
+                ranking_debug=(
+                    engine.explain_candidate(candidate_by_id[record.id], rrf_scores[record.id], workspace_id)
+                    | {
+                        "matched_by_keyword": record.id in keyword_id_set,
+                        "matched_by_semantic": record.id in semantic_id_set,
+                    }
+                )
+                if debug
+                else None,
             )
             for record, score in engine.rank_records(candidates, rrf_scores, workspace_id)
         ]

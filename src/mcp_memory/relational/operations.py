@@ -16,6 +16,7 @@ class SearchMemoryRecordsOperation:
         memory_type: str | None,
         status: str | None,
         include_superseded: bool,
+        debug: bool = False,
     ):
         return self._search_service.search_memories(
             query=query,
@@ -24,6 +25,7 @@ class SearchMemoryRecordsOperation:
             memory_type=memory_type,
             status=status,
             include_superseded=include_superseded,
+            debug=debug,
         )
 
 

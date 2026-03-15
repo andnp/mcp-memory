@@ -18,6 +18,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                     "memory_type": {"type": "string"},
                     "status": {"type": "string"},
                     "include_superseded": {"type": "boolean"},
+                    "debug": {"type": "boolean"},
                 },
                 "required": ["query"],
             },
