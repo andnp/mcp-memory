@@ -18,7 +18,9 @@ pytestmark = pytest.mark.medium
 async def test_gemini_cli_provider_returns_parsed_json(
     install_fake_subprocess,
 ) -> None:
-    install_fake_subprocess.add(FakeAsyncProcess(stdout_text='{"actions": []}'))
+    install_fake_subprocess.add(
+        FakeAsyncProcess(stdout_text='{"session_id":"abc","response":"{\\"actions\\": []}"}')
+    )
 
     provider = GeminiCLIProvider(
         command="gemini",
@@ -31,9 +33,29 @@ async def test_gemini_cli_provider_returns_parsed_json(
     assert result == {"actions": []}
     assert len(install_fake_subprocess.calls) == 1
     args, kwargs = install_fake_subprocess.calls[0]
-    assert args[:5] == ("gemini", "--model", "gemini-3-flash-preview", "ask", "--json")
-    assert args[5] == "summarize these memories"
+    assert args[:6] == (
+        "gemini",
+        "--model",
+        "gemini-3-flash-preview",
+        "--output-format",
+        "json",
+        "--prompt",
+    )
+    assert args[6] == "summarize these memories"
     assert kwargs == {"stdout": -1, "stderr": -1}
+
+
+@pytest.mark.asyncio
+async def test_gemini_cli_provider_preserves_plain_json_objects(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(FakeAsyncProcess(stdout_text='{"actions": []}'))
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+
+    result = await provider.ask("plain json still works")
+
+    assert result == {"actions": []}
 
 
 @pytest.mark.asyncio
