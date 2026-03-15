@@ -6,8 +6,10 @@ import time
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
+from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     AgentRunPayload,
+    EmbeddingStatusPayload,
     HealthPayload,
     JournalSummary,
     MemoryListPayload,
@@ -37,9 +39,11 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
+        self._embedder = ctx.embedder
         self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
 
     def get_health(self):
+        embedder_status = self._build_embedding_status()
         return HealthPayload(
             status="ok",
             workspace_id=self._runtime_info.workspace_id,
@@ -49,6 +53,7 @@ class ManagementService:
             runtime_active=self._runtime_info.runtime_active,
             client_count=self._runtime_info.client_count,
             task_queue_enabled=self._runtime_info.task_queue_enabled,
+            embeddings=embedder_status,
         )
 
     def get_overview(self, recent_limit: int = 10, failed_limit: int = 10):
@@ -78,6 +83,7 @@ class ManagementService:
 
         return OverviewPayload(
             memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
+            embeddings=self._build_embedding_status(),
             memory_metrics=memory_metrics,
             agent_runs=agent_runs,
             recent_memories=recent_records,
@@ -91,6 +97,16 @@ class ManagementService:
                 sqlite_bytes=sqlite_bytes,
                 sqlite_path=str(sqlite_path) if sqlite_path is not None else None,
             ),
+        )
+
+    def _build_embedding_status(self) -> EmbeddingStatusPayload:
+        status = describe_embedder(self._embedder)
+        if status is None:
+            return EmbeddingStatusPayload()
+        return EmbeddingStatusPayload(
+            model_name=status.model_name,
+            backend=status.backend,
+            model_cached=status.model_cached,
         )
 
     def enqueue_background_task(

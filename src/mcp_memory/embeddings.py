@@ -34,6 +34,13 @@ class EmbeddingRecord:
     updated_at: float
 
 
+@dataclass(slots=True)
+class EmbedderStatus:
+    model_name: str
+    backend: str
+    model_cached: bool
+
+
 class SentenceTransformerEmbedder:
     def __init__(self, config: EmbeddingsConfig) -> None:
         self.model_name = config.model
@@ -72,6 +79,13 @@ class SentenceTransformerEmbedder:
         self._use_fallback = False
         return True
 
+    def status(self) -> EmbedderStatus:
+        return EmbedderStatus(
+            model_name=self.model_name,
+            backend="fallback" if self._use_fallback else "sentence-transformer",
+            model_cached=_is_model_cached_locally(self.model_name),
+        )
+
 
 class HashingEmbedder:
     def __init__(self, model_name: str = "hashing-local", dimensions: int = 64) -> None:
@@ -80,6 +94,13 @@ class HashingEmbedder:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [_hash_text_to_unit_vector(text, self._dimensions) for text in texts]
+
+    def status(self) -> EmbedderStatus:
+        return EmbedderStatus(
+            model_name=self.model_name,
+            backend="hashing",
+            model_cached=True,
+        )
 
 
 class SQLiteVectorStore:
@@ -190,6 +211,24 @@ class SQLiteVectorStore:
 
 def build_embedder(config: EmbeddingsConfig) -> Embedder | None:
     return SentenceTransformerEmbedder(config)
+
+
+def describe_embedder(embedder: Any) -> EmbedderStatus | None:
+    if embedder is None:
+        return None
+    status = getattr(embedder, "status", None)
+    if callable(status):
+        result = status()
+        if isinstance(result, EmbedderStatus):
+            return result
+    model_name = getattr(embedder, "model_name", None)
+    if not isinstance(model_name, str) or not model_name.strip():
+        return None
+    return EmbedderStatus(
+        model_name=model_name,
+        backend=type(embedder).__name__,
+        model_cached=False,
+    )
 
 
 def _load_sentence_transformer(model_name: str, *, local_files_only: bool) -> Any | None:

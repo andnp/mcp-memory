@@ -36,7 +36,7 @@
 <body>
   <main>
     <h1>MCP Memory Dashboard</h1>
-    <p class="muted">Operations snapshot for the local daemon runtime, including background-agent health and memory compression stats.</p>
+    <p class="muted">Operations snapshot for the local daemon runtime, including background-agent health, embedding state, and memory compression stats.</p>
 
     <section class="grid" id="summary-cards"></section>
 
@@ -44,7 +44,7 @@
       <h2>Background Agents</h2>
       <table>
         <thead>
-          <tr><th>Agent</th><th>Last Completion</th><th>Age</th><th>Runs</th><th>Failures</th><th>Avg Duration</th><th>Compressed</th></tr>
+          <tr><th>Agent</th><th>Running</th><th>Last Completion</th><th>Age</th><th>Next</th><th>Last Status</th><th>Runs</th><th>Failures</th><th>Avg Duration</th><th>Compressed</th><th>Last Result</th></tr>
         </thead>
         <tbody id="agent-runs"></tbody>
       </table>
@@ -147,6 +147,8 @@
         ['Compressed Lines', payload.memory_metrics.total_lines_compressed],
         ['Thought Buffer', payload.memory_metrics.thought_buffer_entries],
         ['Failed Tasks', payload.tasks.failed_count],
+        ['Embedding Backend', payload.embeddings.backend ?? 'none'],
+        ['Embedding Cached', payload.embeddings.model_cached ? 'yes' : 'no'],
         ['SQLite Size (bytes)', payload.storage.sqlite_bytes],
       ];
 
@@ -179,14 +181,18 @@
       document.getElementById('agent-runs').innerHTML = payload.agent_runs.map((agent) => `
         <tr>
           <td>${agent.task_name}</td>
+          <td>${agent.running_count}</td>
           <td>${formatTimestamp(agent.last_completed_at)}</td>
           <td>${formatAge(agent.seconds_since_last_completion)}</td>
+          <td>${formatAge(agent.seconds_until_next_run)}</td>
+          <td>${agent.last_status ?? 'never'}</td>
           <td>${agent.total_runs}</td>
           <td>${agent.failed_runs}</td>
           <td>${agent.avg_duration_seconds.toFixed(2)}s</td>
           <td>${agent.total_lines_compressed}</td>
+          <td>${agent.last_result_summary ?? '-'}</td>
         </tr>
-      `).join('') || '<tr><td colspan="7" class="muted">No agent runs recorded yet.</td></tr>';
+      `).join('') || '<tr><td colspan="11" class="muted">No agent runs recorded yet.</td></tr>';
 
       const metricRows = [
         ['Total memories', payload.memory_metrics.total_memories],
@@ -195,6 +201,9 @@
         ['Total lines compressed', payload.memory_metrics.total_lines_compressed],
         ['Thought buffer entries', payload.memory_metrics.thought_buffer_entries],
         ['Thought buffer lines', payload.memory_metrics.thought_buffer_lines],
+        ['Embedding model', payload.embeddings.model_name ?? 'none'],
+        ['Embedding backend', payload.embeddings.backend ?? 'none'],
+        ['Embedding model cached', payload.embeddings.model_cached ? 'yes' : 'no'],
       ];
       document.getElementById('memory-metrics').innerHTML = metricRows.map(([label, value]) => `
         <tr><td>${label}</td><td>${value}</td></tr>

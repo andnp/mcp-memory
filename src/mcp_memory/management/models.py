@@ -3,6 +3,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class EmbeddingStatusPayload(BaseModel):
+    model_name: str | None = None
+    backend: str | None = None
+    model_cached: bool = False
+
+
 class HealthPayload(BaseModel):
     status: str
     workspace_id: str | None = None
@@ -12,6 +18,7 @@ class HealthPayload(BaseModel):
     runtime_active: bool
     client_count: int
     task_queue_enabled: bool
+    embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
 
 
 class OverviewCounts(BaseModel):
@@ -74,6 +81,7 @@ class AgentRunPayload(BaseModel):
 
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
+    embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     memory_metrics: MemoryMetricsPayload
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
