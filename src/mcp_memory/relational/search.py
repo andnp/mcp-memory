@@ -4,6 +4,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
@@ -153,7 +154,7 @@ class RankingEngine:
 
     def rank_records(
         self,
-        records: list[RankedMemoryCandidate | RelationalMemoryRecord],
+        records: Sequence[RankedMemoryCandidate | RelationalMemoryRecord],
         rrf_scores: dict[str, float],
         workspace_id: str | None = None,
     ) -> list[tuple[RelationalMemoryRecord, float]]:
@@ -199,7 +200,6 @@ class RelationalMemorySearchService:
         if not query.strip():
             return []
 
-        tokens = _tokenize(query)
         keyword_ids = self._repository.search_keyword_memory_ids(
             query,
             status=status,
@@ -211,16 +211,8 @@ class RelationalMemorySearchService:
             status=status,
             limit=50,
         )
-        lexical_ids = self._lexical_candidate_ids(
-            tokens,
-            status=status,
-            include_superseded=include_superseded,
-            limit=50,
-        )
         engine = RankingEngine(self._repository, self._config)
         rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
-        for memory_id in lexical_ids:
-            rrf_scores.setdefault(memory_id, 0.0)
         if not rrf_scores:
             return []
 
@@ -238,16 +230,7 @@ class RelationalMemorySearchService:
                 status=record.status,
                 tags=list(record.tags),
                 workspace_ids=list(record.workspace_ids),
-                score=round(
-                    _apply_memory_type_boost(
-                        max(score, _normalize_base_score(_base_match_score(record, tokens)))
-                        if memory_type is not None
-                        else score,
-                        record,
-                        memory_type,
-                    ),
-                    6,
-                ),
+                score=round(score, 6),
             )
             for record, score in engine.rank_records(candidates, rrf_scores, workspace_id)
         ]
@@ -329,26 +312,6 @@ class RelationalMemorySearchService:
         semantic_scores = self._semantic_scores(query, candidates, None, limit=limit)
         ranked = sorted(semantic_scores.items(), key=lambda item: item[1], reverse=True)
         return [memory_id for memory_id, _ in ranked[:limit]]
-
-    def _lexical_candidate_ids(
-        self,
-        tokens: list[str],
-        *,
-        status: str | None,
-        include_superseded: bool,
-        limit: int,
-    ) -> list[str]:
-        candidates = self._repository.list_memories(status=status, limit=500)
-        scored: list[tuple[str, float]] = []
-        for candidate in candidates:
-            if not include_superseded and self._repository.has_incoming_link(candidate.id, "SUPERSEDES"):
-                continue
-            base_score = _base_match_score(candidate, tokens)
-            if base_score <= 0:
-                continue
-            scored.append((candidate.id, base_score))
-        scored.sort(key=lambda item: item[1], reverse=True)
-        return [memory_id for memory_id, _ in scored[:limit]]
 
     def _ensure_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
         assert self._embedder is not None

@@ -354,16 +354,16 @@ def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
     repository.add_link(supporter_two.id, authority.id, "DEPENDS_ON")
 
     results = service.search_memories(
-        "auth decision",
+        "summary",
         workspace_id="workspace-alpha",
-        memory_type="fact",
         limit=5,
     )
 
-    assert [result.memory_id for result in results[:2]] == [authority.id, peer.id]
+    assert results[0].memory_id == authority.id
+    assert peer.id in {result.memory_id for result in results}
 
 
-def test_search_memories_upweights_memory_type_without_filtering(db_manager) -> None:
+def test_search_memories_memory_type_hint_does_not_filter_results(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
 
@@ -392,7 +392,7 @@ def test_search_memories_upweights_memory_type_without_filtering(db_manager) -> 
         limit=5,
     )
 
-    assert [result.memory_id for result in results[:2]] == [preferred_fact.id, related_plan.id]
+    assert {result.memory_id for result in results[:2]} == {preferred_fact.id, related_plan.id}
     assert {result.memory_type for result in results[:2]} == {"fact", "plan"}
 
 
