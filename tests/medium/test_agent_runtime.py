@@ -26,6 +26,7 @@ from mcp_memory.core.agent_runtime import (
     handle_sweeper_task,
     handle_taxonomist_task,
 )
+from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
 from tests.sdk.providers import FakeAIProvider
@@ -135,6 +136,26 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
+
+
+def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    journal = System1Journal(db_manager)
+    journal.record("capture pending context", workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        db_manager=db_manager,
+        task_queue=queue,
+        journal=journal,
+    )
+
+    bootstrap_background_tasks(ctx)
+
+    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
+    assert ingest_task is not None
+    assert ingest_task.data["trigger"] == "bootstrap_pending_thoughts"
 
 
 def test_project_manager_fact_checker_and_sweeper_tasks_update_state(

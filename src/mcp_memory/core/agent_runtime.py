@@ -62,6 +62,18 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
         return
 
     workspace_id = getattr(ctx, "workspace_id", None)
+    journal = getattr(ctx, "journal", None)
+
+    if journal is not None and journal.count_by_status().get("pending", 0) > 0:
+        task_queue.enqueue_unique(
+            task_name=SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=workspace_id,
+            data={
+                "workspace_id": workspace_id,
+                "trigger": "bootstrap_pending_thoughts",
+            },
+        )
+
     for task_name in (
         PROJECT_MANAGER_TASK_NAME,
         FACT_CHECKER_TASK_NAME,

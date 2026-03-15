@@ -128,6 +128,7 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 @click.option("--workspace-root", help="Override the active workspace root")
 def stats(workspace_root: str | None) -> None:
     """Print background task and memory statistics."""
+    ensure_daemon_started(workspace_root, None)
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
         service = _build_management_service(runtime)

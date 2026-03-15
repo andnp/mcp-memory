@@ -111,6 +111,11 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+
     runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     try:
         assert runtime.repository is not None
@@ -150,6 +155,11 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+
     runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     try:
         assert runtime.task_queue is not None
@@ -170,3 +180,25 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     assert "Background Agents" in result.output
     assert "graph-linker" in result.output
     assert "Running" in result.output
+
+
+def test_stats_command_autostarts_daemon(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    calls: list[tuple[str | None, object | None]] = []
+
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(
+        "mcp_memory.cli.ensure_daemon_started",
+        lambda workspace_root, cwd=None: calls.append((workspace_root, cwd)) or FakeMetadata(),
+    )
+
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert calls == [(str(workspace), None)]
