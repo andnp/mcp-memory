@@ -146,13 +146,13 @@ max_boost_amount = 0.2
 boost_decay_rate = 0.95
 
 [memory.recency_plan]
-boost_window_days = 7
-max_boost_amount = 0.5
-boost_decay_rate = 0.9
+boost_window_days = 30
+max_boost_amount = 0.15
+boost_decay_rate = 0.97
 
 [memory.recency_fact]
-boost_window_days = 60
-max_boost_amount = 0.2
+boost_window_days = 180
+max_boost_amount = 0.05
 boost_decay_rate = 0.99
 
 [memory.recency_observation]
@@ -161,9 +161,9 @@ max_boost_amount = 0.2
 boost_decay_rate = 0.95
 
 [memory.recency_reflection]
-boost_window_days = 30
-max_boost_amount = 0.15
-boost_decay_rate = 0.98
+boost_window_days = 180
+max_boost_amount = 0.05
+boost_decay_rate = 0.99
 ```
 
 ## 🏃 Getting Started

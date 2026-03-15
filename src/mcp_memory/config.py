@@ -42,16 +42,16 @@ class MemoryConfig:
         default_factory=lambda: MemoryRecencyConfig(14, 0.2, 0.95)
     )
     recency_plan: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(7, 0.5, 0.9)
+        default_factory=lambda: MemoryRecencyConfig(30, 0.15, 0.97)
     )
     recency_fact: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(60, 0.2, 0.99)
+        default_factory=lambda: MemoryRecencyConfig(180, 0.05, 0.99)
     )
     recency_observation: MemoryRecencyConfig = field(
         default_factory=lambda: MemoryRecencyConfig(14, 0.2, 0.95)
     )
     recency_reflection: MemoryRecencyConfig = field(
-        default_factory=lambda: MemoryRecencyConfig(30, 0.15, 0.98)
+        default_factory=lambda: MemoryRecencyConfig(180, 0.05, 0.99)
     )
 
     def __post_init__(self) -> None:
@@ -289,10 +289,10 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     document["memory"] = memory_table
     for key, value in {
         "recency_journal": (14, 0.2, 0.95),
-        "recency_plan": (7, 0.5, 0.9),
-        "recency_fact": (60, 0.2, 0.99),
+        "recency_plan": (30, 0.15, 0.97),
+        "recency_fact": (180, 0.05, 0.99),
         "recency_observation": (14, 0.2, 0.95),
-        "recency_reflection": (30, 0.15, 0.98),
+        "recency_reflection": (180, 0.05, 0.99),
     }.items():
         memory_table[key] = {
             "boost_window_days": value[0],

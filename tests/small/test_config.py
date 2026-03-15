@@ -33,6 +33,10 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.ollama.command == "ollama"
     assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"
     assert loaded.search_ranking.rrf_k == 60.0
+    assert loaded.memory.recency_plan.max_boost_amount == 0.15
+    assert loaded.memory.recency_plan.boost_decay_rate == 0.97
+    assert loaded.memory.recency_fact.max_boost_amount == 0.05
+    assert loaded.memory.recency_reflection.max_boost_amount == 0.05
 
 
 def test_search_ranking_config_rejects_invalid_rrf_k() -> None:
