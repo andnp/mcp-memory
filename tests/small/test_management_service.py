@@ -56,7 +56,6 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
 
     overview = service.get_overview()
     detail = service.get_memory_detail(primary.id)
-    tasks = service.list_tasks(status="failed", limit=5)
     health = service.get_health()
 
     assert overview.memories.total == 2
@@ -66,6 +65,6 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert detail.record["id"] == primary.id
     assert detail.relationships["outgoing"][0]["link_type"] == "SUPERSEDES"
     assert detail.superseded[0]["id"] == secondary.id
-    assert tasks.tasks[0]["status"] == "failed"
+    assert overview.failed_tasks[0]["status"] == "failed"
     assert health.runtime_active is True
     assert health.workspace_id == "workspace-a"

@@ -22,7 +22,7 @@ The runtime is now **relational-first**.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Workspace Daemon**: One localhost daemon per workspace owns runtime state, background workers, and the management API.
-- **Local Management API**: The daemon exposes a read-only dashboard/API for runtime health, failed tasks, recent memories, and lineage inspection.
+- **Local Management API**: The daemon exposes a small read-only dashboard/API for runtime health, overview, and lineage inspection.
 
 ## 🛠 Tech Stack
 
@@ -60,6 +60,10 @@ The following tools are exposed via the MCP server:
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.
+
+### Admin / Maintenance Commands
+- `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
+- `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 
 ## ⚙️ Configuration
 
@@ -164,7 +168,12 @@ boost_decay_rate = 0.98
    uv run mcp-memory daemon
    ```
 
-8. **Configure with your AI Assistant**:
+8. **Import legacy markdown** (optional admin flow):
+   ```bash
+   uv run mcp-memory import-markdown /path/to/memory.md
+   ```
+
+9. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {
@@ -177,7 +186,7 @@ boost_decay_rate = 0.98
    }
    ```
 
-9. **Smoke test the system**:
+10. **Smoke test the system**:
    - confirm the printed dashboard URL loads
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client

@@ -54,11 +54,15 @@ class OverviewPayload(BaseModel):
     storage: StorageSummary
 
 
-class TaskListPayload(BaseModel):
-    tasks: list[dict] = Field(default_factory=list)
-
-
 class MemoryDetailPayload(BaseModel):
     record: dict
     relationships: dict[str, list[dict]] = Field(default_factory=dict)
     superseded: list[dict] = Field(default_factory=list)
+
+
+class TaskListPayload(BaseModel):
+    tasks: list[dict] = Field(default_factory=list)
+
+
+class MemoryListPayload(BaseModel):
+    records: list[CompactMemoryRecord] = Field(default_factory=list)

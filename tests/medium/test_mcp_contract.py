@@ -71,6 +71,8 @@ async def test_removed_tools_are_rejected_as_unknown_tool() -> None:
         "get_memory_record",
         "list_memory_records",
         "import_markdown_memory_file",
+        "create_memory_link",
+        "delete_memory_link",
     ]:
         payload = json.loads((await call_memory_tool(ApplicationContext(), tool_name, {}))[0].text)
 

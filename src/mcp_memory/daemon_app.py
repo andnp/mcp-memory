@@ -100,13 +100,12 @@ def create_daemon_app(
         status: str | None = Query(default=None),
         limit: int = Query(default=20, ge=1, le=200),
     ):
-        records = app.state.routes.service.list_memories(
+        return app.state.routes.service.list_memories(
             workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,
             limit=limit,
-        )
-        return {"records": [record.model_dump() for record in records]}
+        ).model_dump()
 
     @app.get("/api/memories/{memory_id}")
     async def memory_detail(memory_id: str):

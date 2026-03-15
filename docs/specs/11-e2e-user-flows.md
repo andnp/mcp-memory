@@ -8,11 +8,12 @@ This document defines the highest-value user journeys that should stay green as 
 
 **Runtime path:**
 - `record_thought`
-- `System1Journal`
+- `system1_journal`
 - task queue threshold rule
 - background ingest worker
 - relational repository
-- relational search/read tools
+- `search_memory_records`
+- `read_memory_record`
 
 **Key invariants:**
 - the ingest task is created once at the threshold and reused afterward
@@ -20,37 +21,46 @@ This document defines the highest-value user journeys that should stay green as 
 - at least one relational memory is created
 - the created memory is searchable and readable through MCP tools
 
-## 2. Shared Runtime Across Clients
+## 2. Explicit Link Authoring
+
+**Goal:** a client can create or remove a typed relationship without mutating memory body content.
+
+**Runtime path:**
+- `create_memory_link`
+- `delete_memory_link`
+- relational `links` table
+- `read_memory_record`
+
+**Key invariants:**
+- creating a link makes it visible in the read payload immediately
+- deleting a link removes it from the read payload immediately
+- invalid source or target references fail safely
+- explicit `ext:` targets remain supported
+
+## 3. Shared Runtime Across Clients
 
 **Goal:** multiple clients attached to the same workspace share one runtime and see the same state immediately.
 
 **Runtime path:**
-- `DaemonLifecycleController.acquire_runtime()`
+- daemon startup/bootstrap
 - MCP tool handlers on the shared runtime
 - relational repository/search service
 
 **Key invariants:**
-- two clients acquire the same runtime object
 - writes from one client are visible to the other without restart
-- releasing one client does not shut down the runtime while another is active
+- the shared store stays coherent across clients for the same workspace
 
-## 3. Import and Persistence Across Restart
+## 4. Import and Persistence Across Restart
 
-**Goal:** records seeded into the relational store survive runtime shutdown; a later session reopens the workspace and can still search and read them through the minimal MCP surface.
+**Goal:** records seeded into the relational store survive runtime shutdown; a later session reopens the workspace and can still search and read them through the MCP surface.
 
 **Runtime path:**
 - relational SQLite storage
 - daemon shutdown/reacquire
-- `search_memory_records`, `read_memory_record`
+- `search_memory_records`
+- `read_memory_record`
 
 **Key invariants:**
 - seeded records survive runtime shutdown
 - search and read results remain consistent after reacquire
 - new runtime acquisition after shutdown gets a fresh runtime object backed by the same data
-
-## 4. Coverage Mapping
-
-- `tests/large/test_e2e_user_flows.py::test_e2e_record_thought_ingests_and_becomes_searchable`
-- `tests/large/test_e2e_user_flows.py::test_e2e_shared_runtime_persists_records_across_shutdown`
-
-These tests complement the smaller runtime, contract, and daemon lifecycle suites by proving the full user journeys work together.

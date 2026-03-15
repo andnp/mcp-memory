@@ -7,6 +7,7 @@ from mcp_memory.core import MemoryPipeline
 from mcp_memory.management.models import (
     HealthPayload,
     JournalSummary,
+    MemoryListPayload,
     MemoryDetailPayload,
     OverviewCounts,
     OverviewPayload,
@@ -80,32 +81,6 @@ class ManagementService:
             ),
         )
 
-    def list_tasks(
-        self,
-        status: str | None = None,
-        workspace_id: str | None = None,
-        limit: int = 20,
-    ):
-        tasks = self._task_queue.list_tasks(status=status, workspace_id=workspace_id, limit=limit)
-        return TaskListPayload(tasks=[task_payload(task) for task in tasks])
-
-    def list_memories(
-        self,
-        workspace_id: str | None = None,
-        memory_type: str | None = None,
-        status: str | None = None,
-        limit: int = 20,
-    ):
-        if self._memory_queries is None:
-            return []
-        records = self._memory_queries.list_memories(
-            workspace_id=workspace_id,
-            memory_type=memory_type,
-            status=status,
-            limit=limit,
-        )
-        return [compact_memory_record_payload(record) for record in records]
-
     def get_memory_detail(self, memory_id: str):
         if self._memory_queries is None:
             raise ValueError("repository_not_initialized")
@@ -128,6 +103,38 @@ class ManagementService:
                 "outgoing": [link_payload(link) for link in outgoing],
             },
             superseded=superseded,
+        )
+
+    def list_tasks(
+        self,
+        status: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 20,
+    ) -> TaskListPayload:
+        tasks = self._task_queue.list_tasks(
+            status=status,
+            workspace_id=workspace_id,
+            limit=limit,
+        )
+        return TaskListPayload(tasks=[task_payload(task) for task in tasks])
+
+    def list_memories(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> MemoryListPayload:
+        if self._memory_queries is None:
+            return MemoryListPayload()
+        records = self._memory_queries.list_memories(
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
+        return MemoryListPayload(
+            records=[compact_memory_record_payload(record) for record in records]
         )
 
     def load_dashboard_html(self):

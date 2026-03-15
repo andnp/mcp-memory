@@ -110,6 +110,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert health["workspace_root"] == str(workspace)
         assert overview["memories"]["total"] == 2
         assert overview["tasks"]["failed_count"] == 1
+        assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id

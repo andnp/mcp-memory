@@ -34,18 +34,23 @@ The dashboard consumes the daemon’s localhost API.
 - `/`
 - `/api/health`
 - `/api/overview`
-- `/api/tasks`
-- `/api/memories`
 - `/api/memories/{memory_id}`
 
 ## 3. Current UX Goals
 
 - low-friction daemon observability
-- visibility into recent memories
-- visibility into failed tasks
+- visibility into recent memories via overview
+- visibility into failed tasks via overview
 - safe read-only access during early iterations
 
-## 4. Future Expansion Options
+## 4. Import and Maintenance Boundary
+
+Markdown import is not part of the dashboard API.
+
+- import stays in explicit CLI/admin flows
+- dashboard stays read-only and operational
+
+## 5. Future Expansion Options
 
 If the dashboard grows beyond read-only, the next most plausible additions are:
 
@@ -56,7 +61,7 @@ If the dashboard grows beyond read-only, the next most plausible additions are:
 - agent audit visibility
 - richer search and filtering controls
 
-## 5. Deliberate Open Decision
+## 6. Deliberate Open Decision
 
 The dashboard is currently a read-only operational tool.
 A future product decision is required before building the larger command-center UI described in earlier drafts.
