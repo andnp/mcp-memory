@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from fastapi.testclient import TestClient
 import pytest
 import uvicorn
 
@@ -204,6 +205,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
         assert overview["provider_usage"][0]["calls_last_day"] == 1
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
+        assert overview["top_read_memories"] == []
         assert overview["tasks"]["failed_count"] == 1
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
         assert logs["logs"][0]["source"] == "daemon"
@@ -219,9 +221,13 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert any(tool["name"] == "internal_merge_memory_into_canonical" for tool in internal_tools["tools"])
         assert detail["superseded"][0]["id"] == superseded.id
         assert hook_start["status"] == "ok"
+        assert hook_start["active_client_count"] == 1
+        assert hook_start["shutdown_scheduled"] is False
         assert hook_noop == {}
         assert "record_thought" in hook_reminder["systemMessage"]
         assert hook_end["status"] == "ok"
+        assert hook_end["active_client_count"] == 0
+        assert hook_end["shutdown_scheduled"] is False
         assert "running_count" in fact_checker
         assert "next_available_at" in fact_checker
         assert "last_result_summary" in fact_checker
@@ -270,3 +276,106 @@ async def test_daemon_lifespan_attempts_embedding_model_cache(monkeypatch, tmp_p
             assert cache_calls == ["called"]
     finally:
         runtime.close()
+
+
+def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconnect(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    shutdown_calls: list[tuple[int, int]] = []
+
+    monkeypatch.setattr("mcp_memory.daemon_app.os.kill", lambda pid, sig: shutdown_calls.append((pid, sig)))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    runtime.embedder = None
+    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
+
+    try:
+        with TestClient(app) as client:
+            start = client.post("/api/hooks/session-start", json={"sessionId": "conv-1", "timestamp": 100.0}).json()
+            health = client.get("/api/health").json()
+            end = client.post("/api/hooks/session-end", json={"sessionId": "conv-1", "timestamp": 101.0}).json()
+
+            assert start["active_client_count"] == 1
+            assert health["client_count"] == 1
+            assert end["active_client_count"] == 0
+            assert end["shutdown_scheduled"] is True
+
+            time.sleep(0.35)
+            assert len(shutdown_calls) == 1
+    finally:
+        runtime.close()
+
+    shutdown_calls.clear()
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    runtime.embedder = None
+    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
+
+    try:
+        with TestClient(app) as client:
+            client.post("/api/hooks/session-start", json={"sessionId": "conv-2", "timestamp": 200.0})
+            end = client.post("/api/hooks/session-end", json={"sessionId": "conv-2", "timestamp": 201.0}).json()
+            reconnect = client.post("/api/hooks/session-start", json={"sessionId": "conv-3", "timestamp": 202.0}).json()
+
+            assert end["shutdown_scheduled"] is True
+            assert reconnect["active_client_count"] == 1
+
+            time.sleep(0.35)
+            assert shutdown_calls == []
+            assert client.get("/api/health").json()["client_count"] == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_management_api_overview_includes_top_read_memories(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.workspace_id is not None
+        alpha = runtime.repository.create_memory(
+            title="Alpha read memory",
+            content="Alpha details.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        beta = runtime.repository.create_memory(
+            title="Beta read memory",
+            content="Beta details.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        assert alpha is not None and beta is not None
+        runtime.repository.record_access(alpha.id, 1.0, "2026-03-15T10:00:00+00:00", increment_read_count=True)
+        runtime.repository.record_access(alpha.id, 2.0, "2026-03-15T10:05:00+00:00", increment_read_count=True)
+        runtime.repository.record_access(beta.id, 1.0, "2026-03-15T10:10:00+00:00", increment_read_count=True)
+    finally:
+        runtime.close()
+
+    port = _free_port()
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace, host="127.0.0.1", port=port)
+    server, thread = _start_server(app, port)
+    try:
+        overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
+
+        assert [record["title"] for record in overview["top_read_memories"]] == [
+            "Alpha read memory",
+            "Beta read memory",
+        ]
+        assert [record["read_count"] for record in overview["top_read_memories"]] == [2, 1]
+    finally:
+        _stop_server(server, thread)

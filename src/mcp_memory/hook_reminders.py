@@ -142,6 +142,19 @@ class HookReminderService:
             ended_at=None if row["ended_at"] is None else float(row["ended_at"]),
         )
 
+    def get_active_client_count(self) -> int:
+        conn = self._db.get_connection()
+        if self._workspace_id is None:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM hook_conversations WHERE workspace_id IS NULL AND ended_at IS NULL"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM hook_conversations WHERE workspace_id = ? AND ended_at IS NULL",
+                (self._workspace_id,),
+            ).fetchone()
+        return 0 if row is None else int(row["count"])
+
 
 def _conversation_id_from_payload(payload: dict[str, Any]) -> str:
     raw = payload.get("conversation_id") or payload.get("sessionId") or payload.get("session_id")

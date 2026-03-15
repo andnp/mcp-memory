@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+from urllib.error import URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -32,6 +34,7 @@ class MCPServer:
         self.server = Server(server_name)
         self._daemon = None
         self._tool_path_prefix = tool_path_prefix
+        self._session_id: str | None = None
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -59,12 +62,17 @@ class MCPServer:
     async def run(self) -> None:
         logger.info("Initializing MCP Memory Server proxy...")
         self._daemon = await asyncio.to_thread(ensure_daemon_started, self.workspace_root, None)
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options(),
-            )
+        self._session_id = str(uuid4())
+        await asyncio.to_thread(self._send_session_hook, "session-start")
+        try:
+            async with stdio_server() as (read_stream, write_stream):
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    self.server.create_initialization_options(),
+                )
+        finally:
+            await asyncio.to_thread(self._send_session_hook, "session-end")
 
     def _request_json(self, path: str, payload: dict | None):
         if self._daemon is None:
@@ -79,3 +87,18 @@ class MCPServer:
         )
         with urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _send_session_hook(self, event_name: str) -> None:
+        if self._session_id is None:
+            return
+        try:
+            self._request_json(
+                f"/api/hooks/{event_name}",
+                {
+                    "session_id": self._session_id,
+                    "source": "mcp-stdio",
+                    "workspace_root": self.workspace_root,
+                },
+            )
+        except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to send %s hook for session %s: %s", event_name, self._session_id, exc)

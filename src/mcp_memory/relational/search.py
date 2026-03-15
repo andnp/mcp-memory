@@ -14,6 +14,7 @@ TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
+MEMORY_TYPE_BOOST = 1.15
 
 
 @dataclass(slots=True)
@@ -63,7 +64,7 @@ class RelationalMemorySearchService:
 
         tokens = _tokenize(query)
 
-        candidates = self._repository.list_memories(memory_type=memory_type, status=status, limit=500)
+        candidates = self._repository.list_memories(status=status, limit=500)
         semantic_scores = self._semantic_scores(query, candidates, workspace_id, limit=max(limit * 5, 20))
         ranked: list[RelationalSearchResult] = []
         surfaced_ids: list[str] = []
@@ -87,6 +88,8 @@ class RelationalMemorySearchService:
 
             if candidate.status in {"stale", "degraded"}:
                 score *= DEGRADATION_PENALTY
+
+            score = _apply_memory_type_boost(score, candidate, memory_type)
 
             ranked.append(
                 RelationalSearchResult(
@@ -114,7 +117,12 @@ class RelationalMemorySearchService:
             return None
 
         decayed_score = _decayed_access_score(record.access_score, record.last_accessed_at)
-        updated_record = self._repository.record_access(memory_id, decayed_score + 1.0, _utc_now())
+        updated_record = self._repository.record_access(
+            memory_id,
+            decayed_score + 1.0,
+            _utc_now(),
+            increment_read_count=True,
+        )
         current = updated_record or record
 
         outgoing = self._repository.get_links(memory_id, direction="outgoing")
@@ -253,6 +261,12 @@ def _apply_graph_authority_boost(
         return score
     multiplier = 1.0 + min(0.15, math.log1p(incoming_links) / 10.0)
     return min(1.0, score * multiplier)
+
+
+def _apply_memory_type_boost(score: float, record: RelationalMemoryRecord, memory_type: str | None):
+    if memory_type is None or record.type != memory_type:
+        return score
+    return score * MEMORY_TYPE_BOOST
 
 
 def _memory_embedding_text(record: RelationalMemoryRecord) -> str:

@@ -92,12 +92,56 @@ def test_read_memory_returns_superseded_breadcrumbs_and_updates_access_score(db_
     )
 
     result = service.read_memory(current_fact.id)
+    refreshed = repository.get_memory(current_fact.id)
 
     assert result is not None
     assert result.record.id == current_fact.id
     assert result.record.access_score > 2.9
+    assert result.record.read_count == 1
+    assert refreshed is not None
+    assert refreshed.read_count == 1
     assert [memory.id for memory in result.superseded] == [old_fact.id]
     assert result.relationships["outgoing"][0].link_type == "SUPERSEDES"
+
+
+def test_list_most_read_memories_orders_by_explicit_read_count(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    alpha = repository.create_memory(
+        title="Alpha memory",
+        content="Alpha content.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    beta = repository.create_memory(
+        title="Beta memory",
+        content="Beta content.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    gamma = repository.create_memory(
+        title="Gamma memory",
+        content="Gamma content.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+    )
+    assert alpha is not None and beta is not None and gamma is not None
+
+    service.read_memory(beta.id)
+    service.read_memory(alpha.id)
+    service.read_memory(alpha.id)
+    service.read_memory(gamma.id)
+
+    workspace_results = repository.list_most_read_memories(workspace_id="workspace-alpha", limit=10)
+    global_results = repository.list_most_read_memories(limit=10)
+
+    assert [record.id for record in workspace_results] == [alpha.id, beta.id]
+    assert [record.read_count for record in workspace_results] == [2, 1]
+    assert global_results[0].id == alpha.id
+    assert global_results[0].read_count == 2
+    assert {record.id for record in global_results[1:3]} == {beta.id, gamma.id}
+    assert {record.read_count for record in global_results[1:3]} == {1}
 
 
 def test_search_memories_penalizes_stale_records_and_updates_last_surfaced(db_manager) -> None:
@@ -178,6 +222,39 @@ def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
     )
 
     assert [result.memory_id for result in results[:2]] == [authority.id, peer.id]
+
+
+def test_search_memories_upweights_memory_type_without_filtering(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    preferred_fact = repository.create_memory(
+        title="Auth decision fact",
+        content="Authoritative auth decision for token rotation.",
+        summary="Fact summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    related_plan = repository.create_memory(
+        title="Auth decision rollout plan",
+        content="Plan for rolling out the auth decision to all clients.",
+        summary="Plan summary.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert preferred_fact is not None and related_plan is not None
+
+    results = service.search_memories(
+        "auth decision",
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        limit=5,
+    )
+
+    assert [result.memory_id for result in results[:2]] == [preferred_fact.id, related_plan.id]
+    assert {result.memory_type for result in results[:2]} == {"fact", "plan"}
 
 
 class _FakeEmbedder:

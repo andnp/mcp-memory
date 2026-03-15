@@ -41,6 +41,7 @@ from mcp_memory.serialization import (
 class ManagementService:
     def __init__(self, ctx: ApplicationContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
+        self._controller = controller
         self._db_manager = ctx.db_manager
         self._workspace_id = ctx.workspace_id
         self._runtime_info = pipeline.runtime_info
@@ -65,8 +66,8 @@ class ManagementService:
             workspace_root=str(self._runtime_info.workspace_root) if self._runtime_info.workspace_root is not None else None,
             memory_path=str(self._runtime_info.memory_path) if self._runtime_info.memory_path is not None else None,
             db_path=str(self._runtime_info.db_path) if self._runtime_info.db_path is not None else None,
-            runtime_active=self._runtime_info.runtime_active,
-            client_count=self._runtime_info.client_count,
+            runtime_active=bool(getattr(self._controller, "has_runtime", self._runtime_info.runtime_active)),
+            client_count=int(getattr(self._controller, "client_count", self._runtime_info.client_count)),
             task_queue_enabled=self._runtime_info.task_queue_enabled,
             embeddings=embedder_status,
         )
@@ -76,8 +77,13 @@ class ManagementService:
             workspace_id=self._workspace_id,
             limit=recent_limit,
         )
+        top_read_records = [] if self._repository is None else self._repository.list_most_read_memories(
+            workspace_id=self._workspace_id,
+            limit=10,
+        )
         by_type, by_status, total_memories = self._build_memory_counts()
         recent_records = [compact_memory_record_payload(record) for record in records]
+        top_read_payloads = [compact_memory_record_payload(record) for record in top_read_records]
         task_counts = self._build_task_counts()
         failed_tasks = [
             task_payload(task)
@@ -108,6 +114,7 @@ class ManagementService:
             recent_agent_runs=recent_agent_runs,
             recent_logs=recent_logs,
             recent_memories=recent_records,
+            top_read_memories=top_read_payloads,
             tasks=TaskStatusSummary(
                 by_status=task_counts,
                 failed_count=task_counts.get("failed", 0),

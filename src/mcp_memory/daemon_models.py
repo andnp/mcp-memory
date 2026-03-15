@@ -30,11 +30,16 @@ class DaemonRoutes:
     metadata_path: Path
 
 
+@dataclass(frozen=True)
 class DaemonControllerView:
+    hook_service: Any | None = None
+
     @property
     def has_runtime(self) -> bool:
         return True
 
     @property
     def client_count(self) -> int:
-        return 1
+        if self.hook_service is None:
+            return 0
+        return int(self.hook_service.get_active_client_count())

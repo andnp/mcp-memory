@@ -103,7 +103,12 @@ def daemon(ctx: click.Context, workspace_root: str | None, host: str, port: int)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((host, 0))
             daemon_port = int(sock.getsockname()[1])
-    app = create_daemon_app(workspace_root_override=workspace_root, host=host, port=daemon_port)
+    app = create_daemon_app(
+        workspace_root_override=workspace_root,
+        host=host,
+        port=daemon_port,
+        enable_idle_shutdown=True,
+    )
     uvicorn.run(app, host=host, port=daemon_port, log_level="info")
 
 
@@ -523,6 +528,20 @@ def stats(workspace_root: str | None) -> None:
                 f"{usage.avg_duration_last_day:.2f}s",
             )
         console.print(provider_table)
+
+        top_reads_table = Table(title="Top Read Memories")
+        top_reads_table.add_column("Reads", justify="right", no_wrap=True)
+        top_reads_table.add_column("Type", no_wrap=True)
+        top_reads_table.add_column("Title")
+        if not overview.top_read_memories:
+            top_reads_table.add_row("0", "-", "No memories have been read yet")
+        for record in overview.top_read_memories:
+            top_reads_table.add_row(
+                str(record.read_count),
+                record.type,
+                record.title,
+            )
+        console.print(top_reads_table)
 
         console.print("[bold]Agent Details[/]")
         for agent in overview.agent_runs:

@@ -21,6 +21,7 @@ class RelationalMemoryRecord:
     status: str
     created_at: str
     updated_at: str
+    read_count: int
     access_score: float
     last_accessed_at: str | None
     last_surfaced_at: str | None
@@ -79,8 +80,8 @@ class RelationalMemoryRepository:
                 """
                 INSERT INTO memories (
                     id, title, content, summary, type, status, created_at, updated_at,
-                    access_score, last_accessed_at, last_surfaced_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
@@ -91,6 +92,7 @@ class RelationalMemoryRepository:
                     normalized_status,
                     created_timestamp,
                     updated_timestamp,
+                    0,
                     0.0,
                     None,
                     None,
@@ -200,13 +202,20 @@ class RelationalMemoryRepository:
             )
         return cursor.rowcount
 
-    def record_access(self, memory_id: str, access_score: float, accessed_at: str):
+    def record_access(
+        self,
+        memory_id: str,
+        access_score: float,
+        accessed_at: str,
+        increment_read_count: bool = False,
+    ):
         conn = self._db.get_connection()
+        read_count_clause = "read_count = read_count + 1, " if increment_read_count else ""
         with conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE memories
-                SET access_score = ?, last_accessed_at = ?
+                SET {read_count_clause}access_score = ?, last_accessed_at = ?
                 WHERE id = ?
                 """,
                 (access_score, accessed_at, memory_id),
@@ -214,6 +223,21 @@ class RelationalMemoryRepository:
         if cursor.rowcount == 0:
             return None
         return self.get_memory(memory_id)
+
+    def list_most_read_memories(self, workspace_id: str | None = None, limit: int = 10):
+        conn = self._db.get_connection()
+        params: list[object] = []
+        query = "SELECT DISTINCT memories.* FROM memories"
+        if workspace_id is not None:
+            query += " JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+            params.append(workspace_id)
+            query += " WHERE memory_workspaces.workspace_id = ? AND memories.read_count > 0"
+        else:
+            query += " WHERE memories.read_count > 0"
+        query += " ORDER BY memories.read_count DESC, memories.last_accessed_at DESC, memories.updated_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [self._hydrate_record(conn, row) for row in rows]
 
     def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
         normalized_workspace_ids = self._normalize_values(workspace_ids)
@@ -381,6 +405,7 @@ class RelationalMemoryRepository:
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            read_count=int(row["read_count"] or 0),
             access_score=row["access_score"],
             last_accessed_at=row["last_accessed_at"],
             last_surfaced_at=row["last_surfaced_at"],

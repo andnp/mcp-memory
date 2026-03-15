@@ -34,6 +34,7 @@ class CompactMemoryRecord(BaseModel):
     type: str
     status: str
     updated_at: str
+    read_count: int = 0
     workspace_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
@@ -136,6 +137,7 @@ class OverviewPayload(BaseModel):
     recent_agent_runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
     recent_logs: list[RuntimeLogPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
+    top_read_memories: list[CompactMemoryRecord] = Field(default_factory=list)
     tasks: TaskStatusSummary
     failed_tasks: list[dict] = Field(default_factory=list)
     journal: JournalSummary

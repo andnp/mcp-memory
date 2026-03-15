@@ -534,6 +534,15 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
             workspace_ids=[runtime.workspace_id],
             memory_type="fact",
         )
+        read_memory = runtime.repository.create_memory(
+            title="Most read fact",
+            content="Read me twice.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        assert read_memory is not None
+        runtime.repository.record_access(read_memory.id, 1.0, "2026-03-15T10:00:00+00:00", increment_read_count=True)
+        runtime.repository.record_access(read_memory.id, 2.0, "2026-03-15T10:05:00+00:00", increment_read_count=True)
         task = runtime.task_queue.enqueue(
             "defragmenter",
             task_id="defrag-stats",
@@ -556,9 +565,11 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "Memory Metrics" in result.output
     assert "Background Agents" in result.output
     assert "AI Provider Usage" in result.output
+    assert "Top Read Memories" in result.output
     assert "Agent Details" in result.output
     assert "Recent Agent Runs" in result.output
     assert "Total lines compressed" in result.output
+    assert "Most read fact" in result.output
     assert "defragmenter" in result.output
     assert "gemini-cli" in result.output
     assert "lines_compressed=3" in result.output

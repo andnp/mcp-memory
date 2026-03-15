@@ -21,6 +21,11 @@ from mcp_memory.serialization import (
 )
 
 
+SEARCH_READ_GUIDANCE = (
+    "Use the read_memory_record tool to read detailed memory contents for the most promising memories."
+)
+
+
 def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
@@ -45,6 +50,7 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
     return {
         "status": "ok",
         "results": [search_result_payload(result) for result in results],
+        "guidance": SEARCH_READ_GUIDANCE,
     }
 
 

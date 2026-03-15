@@ -117,6 +117,7 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     read_stream = object()
     write_stream = object()
     captured: dict[str, object] = {}
+    hook_calls: list[tuple[str, dict[str, object]]] = []
 
     server = MCPServer(workspace_root="demo")
 
@@ -130,6 +131,11 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
 
     monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
     monkeypatch.setattr(
+        server,
+        "_request_json",
+        lambda path, payload: hook_calls.append((path, payload)) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
         "mcp_memory.server.stdio_server",
         lambda: FakeAsyncContextManager((read_stream, write_stream)),
     )
@@ -140,6 +146,41 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     assert captured["read_stream"] is read_stream
     assert captured["write_stream"] is write_stream
     assert captured["init_options"] is not None
+    assert [path for path, _ in hook_calls] == ["/api/hooks/session-start", "/api/hooks/session-end"]
+    start_payload = hook_calls[0][1]
+    end_payload = hook_calls[1][1]
+    assert start_payload["session_id"] == end_payload["session_id"]
+    assert start_payload["source"] == "mcp-stdio"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_run_still_sends_session_end_hook_on_failure(monkeypatch) -> None:
+    hook_calls: list[tuple[str, dict[str, object]]] = []
+    server = MCPServer(workspace_root="demo")
+
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    async def fake_run(*_args) -> None:
+        raise RuntimeError("stdio disconnected")
+
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr(
+        server,
+        "_request_json",
+        lambda path, payload: hook_calls.append((path, payload)) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        "mcp_memory.server.stdio_server",
+        lambda: FakeAsyncContextManager((object(), object())),
+    )
+    monkeypatch.setattr(server.server, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="stdio disconnected"):
+        await server.run()
+
+    assert [path for path, _ in hook_calls] == ["/api/hooks/session-start", "/api/hooks/session-end"]
+    assert hook_calls[0][1]["session_id"] == hook_calls[1][1]["session_id"]
 
 
 def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -> None:

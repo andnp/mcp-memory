@@ -53,8 +53,12 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
         read_payload = json.loads(read_result[0].text)
 
         assert [result["memory_id"] for result in search_payload["results"]] == [first.id]
+        assert search_payload["guidance"] == (
+            "Use the read_memory_record tool to read detailed memory contents for the most promising memories."
+        )
         assert search_payload["results"][0]["summary"] == "Summary-first auth search plan."
         assert read_payload["record"]["id"] == first.id
+        assert read_payload["record"]["read_count"] == 1
         assert [record["id"] for record in read_payload["superseded"]] == [second.id]
         assert read_payload["relationships"]["outgoing"][0]["link_type"] == "SUPERSEDES"
     finally:

@@ -42,6 +42,9 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert primary is not None and secondary is not None
 
     repository.add_link(primary.id, secondary.id, "SUPERSEDES", "Replaced during epic 6")
+    repository.record_access(primary.id, access_score=1.0, accessed_at="2026-03-15T10:00:00+00:00", increment_read_count=True)
+    repository.record_access(primary.id, access_score=2.0, accessed_at="2026-03-15T10:05:00+00:00", increment_read_count=True)
+    repository.record_access(secondary.id, access_score=1.0, accessed_at="2026-03-15T10:10:00+00:00", increment_read_count=True)
 
     task = task_queue.enqueue(
         "summarize-memory",
@@ -97,6 +100,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
     assert overview.recent_logs[0].message == "daemon log row"
     assert overview.recent_logs[0].source == "daemon"
+    assert [record.id for record in overview.top_read_memories] == [primary.id, secondary.id]
+    assert [record.read_count for record in overview.top_read_memories] == [2, 1]
     assert filtered_logs.logs[0].logger_name == "mcp_memory.tests"
     assert summary.total == 1
     assert summary.by_level == {"WARNING": 1}

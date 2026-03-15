@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
@@ -26,6 +27,7 @@ from mcp_memory.mcp.tools import get_memory_tools
 
 
 logger = logging.getLogger(__name__)
+_IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 
 
 async def _warm_embedding_model(embedder: Any) -> bool:
@@ -37,11 +39,46 @@ async def _warm_embedding_model(embedder: Any) -> bool:
     return bool(await asyncio.to_thread(cache_model))
 
 
+async def _cancel_idle_shutdown_task(app: FastAPI) -> None:
+    shutdown_task = getattr(app.state, "idle_shutdown_task", None)
+    if shutdown_task is None:
+        return
+    if shutdown_task.done():
+        app.state.idle_shutdown_task = None
+        return
+    shutdown_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await shutdown_task
+    app.state.idle_shutdown_task = None
+
+
+async def _shutdown_daemon_when_idle(app: FastAPI) -> None:
+    try:
+        await asyncio.sleep(_IDLE_SHUTDOWN_DELAY_SECONDS)
+        active_clients = app.state.routes.hook_service.get_active_client_count()
+        if active_clients > 0:
+            logger.debug("Skipping idle daemon shutdown; %s client(s) remain active", active_clients)
+            return
+        logger.info("Stopping daemon after last MCP client exited")
+        os.kill(os.getpid(), signal.SIGTERM)
+    finally:
+        app.state.idle_shutdown_task = None
+
+
+def _schedule_idle_shutdown_if_needed(app: FastAPI) -> None:
+    shutdown_task = getattr(app.state, "idle_shutdown_task", None)
+    if shutdown_task is not None and not shutdown_task.done():
+        return
+    app.state.idle_shutdown_task = asyncio.create_task(_shutdown_daemon_when_idle(app))
+
+
 def create_daemon_app(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
     host: str | None = None,
     port: int | None = None,
+    *,
+    enable_idle_shutdown: bool = False,
 ):
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     daemon_host = host or spec.config.daemon.host
@@ -58,13 +95,17 @@ def create_daemon_app(
         if worker is not None:
             await worker.start()
 
+        hook_service = HookReminderService(runtime.db_manager, runtime.workspace_id)
+
         routes = DaemonRoutes(
             ctx=runtime,
-            service=ManagementService(runtime, controller=DaemonControllerView()),
-            hook_service=HookReminderService(runtime.db_manager, runtime.workspace_id),
+            service=ManagementService(runtime, controller=DaemonControllerView(hook_service=hook_service)),
+            hook_service=hook_service,
             metadata_path=metadata_path,
         )
         app.state.routes = routes
+        app.state.idle_shutdown_task = None
+        app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.metadata = DaemonMetadata(
             workspace_id=spec.workspace_id,
             workspace_root=str(spec.workspace_root),
@@ -78,6 +119,7 @@ def create_daemon_app(
         try:
             yield
         finally:
+            await _cancel_idle_shutdown_task(app)
             if not warmup_task.done():
                 warmup_task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -125,10 +167,14 @@ def create_daemon_app(
     @app.post("/api/hooks/session-start")
     async def hook_session_start(arguments: dict[str, Any]):
         try:
-            return app.state.routes.hook_service.record_session_start(
+            await _cancel_idle_shutdown_task(app)
+            response = app.state.routes.hook_service.record_session_start(
                 str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
                 arguments,
             )
+            response["active_client_count"] = app.state.routes.hook_service.get_active_client_count()
+            response["shutdown_scheduled"] = False
+            return response
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -142,10 +188,19 @@ def create_daemon_app(
     @app.post("/api/hooks/session-end")
     async def hook_session_end(arguments: dict[str, Any]):
         try:
-            return app.state.routes.hook_service.record_session_end(
+            response = app.state.routes.hook_service.record_session_end(
                 str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
                 arguments,
             )
+            active_client_count = app.state.routes.hook_service.get_active_client_count()
+            should_schedule_shutdown = bool(app.state.enable_idle_shutdown) and active_client_count == 0
+            if should_schedule_shutdown:
+                _schedule_idle_shutdown_if_needed(app)
+            else:
+                await _cancel_idle_shutdown_task(app)
+            response["active_client_count"] = active_client_count
+            response["shutdown_scheduled"] = should_schedule_shutdown
+            return response
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

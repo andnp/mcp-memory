@@ -16,6 +16,7 @@ def memory_record_payload(record: RelationalMemoryRecord) -> dict:
         "status": record.status,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "read_count": record.read_count,
         "access_score": record.access_score,
         "last_accessed_at": record.last_accessed_at,
         "last_surfaced_at": record.last_surfaced_at,
@@ -33,6 +34,7 @@ def compact_memory_record_payload(record: RelationalMemoryRecord) -> CompactMemo
         type=record.type,
         status=record.status,
         updated_at=record.updated_at,
+        read_count=record.read_count,
         workspace_ids=list(record.workspace_ids),
         tags=list(record.tags),
     )

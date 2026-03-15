@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -73,6 +73,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            read_count INTEGER NOT NULL DEFAULT 0,
             access_score REAL NOT NULL DEFAULT 0,
             last_accessed_at TEXT,
             last_surfaced_at TEXT,
@@ -207,6 +208,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
     ensure_column(conn, "memories", "created_at", "TEXT")
     ensure_column(conn, "memories", "updated_at", "TEXT")
+    ensure_column(conn, "memories", "read_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "memories", "access_score", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "memories", "last_accessed_at", "TEXT")
     ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
