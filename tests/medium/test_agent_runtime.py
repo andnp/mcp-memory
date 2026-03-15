@@ -10,6 +10,7 @@ from mcp_memory.core.agent_runtime import (
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
+    RECURRING_TASK_INTERVAL_SECONDS,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
@@ -157,6 +158,30 @@ def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(
     ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
     assert ingest_task is not None
     assert ingest_task.data["trigger"] == "bootstrap_pending_thoughts"
+
+
+def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch, db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 200.0)
+
+    task = queue.enqueue(
+        PROJECT_MANAGER_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="project-manager-seed",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+    queue.complete(task.id, completed_at=120.0, run_result={"updated": 1})
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    bootstrap_background_tasks(ctx)
+
+    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a")
+    assert scheduled is not None
+    assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
 
 
 def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
@@ -522,6 +547,44 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
         await worker.stop(0.1)
 
         assert runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+
+    try:
+        for index in range(45):
+            runtime.journal.record(f"sqlite queue batch item {index}")
+
+        runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="drain-ingest-test",
+        )
+
+        worker = build_runtime_task_worker(runtime)
+        await worker.start()
+        for _ in range(150):
+            if runtime.journal.count_by_status().get("pending", 0) == 0:
+                break
+            await asyncio.sleep(0.02)
+        await worker.stop(0.1)
+
+        assert runtime.journal.count_by_status().get("pending", 0) == 0
+        summary = runtime.task_queue.summarize_task_runs([SYSTEM1_INGEST_TASK_NAME], workspace_id=runtime.workspace_id)[0]
+        assert summary.total_runs >= 3
     finally:
         runtime.close()
 

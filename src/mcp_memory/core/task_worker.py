@@ -6,6 +6,7 @@ from inspect import isawaitable
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -77,13 +78,53 @@ class RuntimeTaskWorker:
             if isawaitable(result):
                 result = await result
         except Exception as exc:
-            await asyncio.to_thread(
+            failed_task = await asyncio.to_thread(
                 task_queue.fail,
                 task.id,
                 str(exc),
                 self._retry_delay_seconds,
             )
+            await self._schedule_follow_up(task, failed_task)
             return
 
         normalized_result = result if isinstance(result, dict) else {}
-        await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
+        completed_task = await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
+        await self._schedule_follow_up(task, completed_task)
+
+    async def _schedule_follow_up(self, task: TaskRecord, terminal_task: TaskRecord) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+
+        if task.task_name == SYSTEM1_INGEST_TASK_NAME and terminal_task.status == "completed":
+            journal = getattr(self._ctx, "journal", None)
+            if journal is not None and journal.count_by_status().get("pending", 0) > 0:
+                await asyncio.to_thread(
+                    task_queue.enqueue_unique,
+                    task.task_name,
+                    {
+                        "workspace_id": task.workspace_id,
+                        "trigger": "drain_pending_thoughts",
+                    },
+                    task.workspace_id,
+                )
+            return
+
+        interval_seconds = RECURRING_TASK_INTERVAL_SECONDS.get(task.task_name)
+        if interval_seconds is None or terminal_task.status not in {"completed", "failed"}:
+            return
+
+        next_available_at = (terminal_task.completed_at or terminal_task.updated_at) + interval_seconds
+        await asyncio.to_thread(
+            task_queue.enqueue_unique,
+            task.task_name,
+            {
+                "workspace_id": task.workspace_id,
+                "trigger": "recurring_follow_up",
+                "interval_seconds": interval_seconds,
+            },
+            task.workspace_id,
+            100,
+            3,
+            next_available_at,
+        )
