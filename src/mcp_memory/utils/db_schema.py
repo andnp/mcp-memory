@@ -186,6 +186,15 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON provider_usage(workspace_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
             ON provider_usage(provider_key, created_at DESC, id DESC);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+            memory_id UNINDEXED,
+            title,
+            summary,
+            content,
+            tags,
+            tokenize='unicode61'
+        );
         """
     )
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
@@ -241,6 +250,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),
     )
+    rebuild_memories_fts(conn)
     conn.commit()
 
 
@@ -256,4 +266,23 @@ def ensure_column(
         return
     conn.execute(
         f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+    )
+
+
+def rebuild_memories_fts(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM memories_fts")
+    conn.execute(
+        """
+        INSERT INTO memories_fts(memory_id, title, summary, content, tags)
+        SELECT
+            memories.id,
+            memories.title,
+            COALESCE(memories.summary, ''),
+            memories.content,
+            COALESCE(GROUP_CONCAT(DISTINCT tags.name), '')
+        FROM memories
+        LEFT JOIN memory_tags ON memory_tags.memory_id = memories.id
+        LEFT JOIN tags ON tags.id = memory_tags.tag_id
+        GROUP BY memories.id, memories.title, memories.summary, memories.content
+        """
     )

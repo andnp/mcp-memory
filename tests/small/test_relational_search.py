@@ -104,6 +104,43 @@ def test_ranking_engine_applies_stage_boosts_and_penalties_in_order(db_manager) 
     assert scores[evergreen.id] > scores[stale.id]
 
 
+def test_repository_keyword_candidates_use_fts_and_hide_superseded(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    old_plan = repository.create_memory(
+        title="Legacy auth rollout",
+        content="Old auth rollout plan.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    current_plan = repository.create_memory(
+        title="Current auth rollout",
+        content="Current auth rollout plan.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    cross_workspace = repository.create_memory(
+        title="Auth notes",
+        content="Shared auth notes.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        tags=["auth"],
+    )
+    assert old_plan is not None and current_plan is not None and cross_workspace is not None
+
+    repository.add_link(current_plan.id, old_plan.id, "SUPERSEDES")
+
+    ids = repository.search_keyword_memory_ids(
+        "auth rollout",
+        workspace_id="workspace-alpha",
+        limit=10,
+    )
+
+    assert ids == [current_plan.id]
+
+
 def test_search_memories_prioritizes_workspace_and_hides_superseded(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())

@@ -101,6 +101,14 @@ class RelationalMemoryRepository:
             )
             self._replace_workspace_mappings(conn, record_id, normalized_workspace_ids)
             self._replace_tag_mappings(conn, record_id, normalized_tags)
+            self._replace_fts_row(
+                conn,
+                record_id,
+                title=normalized_title,
+                summary=summary_text,
+                content=normalized_content,
+                tags=normalized_tags,
+            )
 
         return self.get_memory(record_id)
 
@@ -152,8 +160,53 @@ class RelationalMemoryRepository:
                 "DELETE FROM links WHERE source_id = ? OR target_id = ?",
                 (memory_id, memory_id),
             )
+            conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
             conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         return existing
+
+    def search_keyword_memory_ids(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[str]:
+        normalized_query = " ".join(part.strip() for part in query.split() if part.strip())
+        if not normalized_query:
+            return []
+
+        conn = self._db.get_connection()
+        clauses = ["memories_fts MATCH ?"]
+        params: list[object] = [normalized_query]
+        joins = ["JOIN memories ON memories.id = memories_fts.memory_id"]
+        if workspace_id is not None:
+            joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
+            clauses.append("memory_workspaces.workspace_id = ?")
+            params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = ?")
+            params.append(memory_type)
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        params.append(limit)
+        query_sql = (
+            "SELECT DISTINCT memories.id, bm25(memories_fts) AS rank FROM memories_fts "
+            + " ".join(joins)
+            + " WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY rank ASC, memories.updated_at DESC LIMIT ?"
+        )
+        rows = conn.execute(query_sql, params).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def get_links(
         self,
@@ -361,6 +414,33 @@ class RelationalMemoryRepository:
                     memory_id,
                     self._normalize_values(tags),
                 )
+            current_row = conn.execute(
+                "SELECT title, summary, content FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            current_tags = (
+                self._normalize_values(tags)
+                if tags is not None
+                else [row[0] for row in conn.execute(
+                    """
+                    SELECT tags.name
+                    FROM tags
+                    JOIN memory_tags ON memory_tags.tag_id = tags.id
+                    WHERE memory_tags.memory_id = ?
+                    ORDER BY tags.name ASC
+                    """,
+                    (memory_id,),
+                ).fetchall()]
+            )
+            assert current_row is not None
+            self._replace_fts_row(
+                conn,
+                memory_id,
+                title=str(current_row["title"]),
+                summary=str(current_row["summary"] or ""),
+                content=str(current_row["content"]),
+                tags=current_tags,
+            )
 
         return self.get_memory(memory_id)
 
@@ -447,6 +527,22 @@ class RelationalMemoryRepository:
                 "INSERT INTO memory_tags (memory_id, tag_id) VALUES (?, ?)",
                 (memory_id, tag_row[0]),
             )
+
+    def _replace_fts_row(
+        self,
+        conn,
+        memory_id: str,
+        *,
+        title: str,
+        summary: str,
+        content: str,
+        tags: list[str],
+    ):
+        conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
+        conn.execute(
+            "INSERT INTO memories_fts(memory_id, title, summary, content, tags) VALUES (?, ?, ?, ?, ?)",
+            (memory_id, title, summary, content, " ".join(tags)),
+        )
 
     def _normalize_values(self, values: list[str]):
         normalized_values = []
