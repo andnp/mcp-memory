@@ -67,6 +67,9 @@ class AgentRunPayload(BaseModel):
     last_completed_at: float | None = None
     seconds_since_last_completion: float | None = None
     last_error: str | None = None
+    last_result_summary: str | None = None
+    next_available_at: float | None = None
+    seconds_until_next_run: float | None = None
 
 
 class OverviewPayload(BaseModel):

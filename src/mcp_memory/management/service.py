@@ -320,9 +320,20 @@ class ManagementService:
             workspace_id=self._workspace_id,
             limit=200,
         )
+        pending_tasks = self._task_queue.list_tasks(
+            status="pending",
+            workspace_id=self._workspace_id,
+            limit=200,
+        )
         running_by_name: dict[str, int] = {}
         for task in running_tasks:
             running_by_name[task.task_name] = running_by_name.get(task.task_name, 0) + 1
+
+        next_pending_by_name: dict[str, float] = {}
+        for task in pending_tasks:
+            current = next_pending_by_name.get(task.task_name)
+            if current is None or task.available_at < current:
+                next_pending_by_name[task.task_name] = task.available_at
 
         summaries = self._task_queue.summarize_task_runs(
             list(TRIGGERABLE_BACKGROUND_TASK_NAMES),
@@ -333,6 +344,10 @@ class ManagementService:
             seconds_since_last_completion = None
             if summary.last_completed_at is not None:
                 seconds_since_last_completion = max(now - summary.last_completed_at, 0.0)
+            next_available_at = next_pending_by_name.get(summary.task_name)
+            seconds_until_next_run = None
+            if next_available_at is not None:
+                seconds_until_next_run = max(next_available_at - now, 0.0)
             payloads.append(
                 AgentRunPayload(
                     task_name=summary.task_name,
@@ -347,6 +362,44 @@ class ManagementService:
                     last_completed_at=summary.last_completed_at,
                     seconds_since_last_completion=seconds_since_last_completion,
                     last_error=summary.last_error,
+                    last_result_summary=_format_result_summary(summary.last_result),
+                    next_available_at=next_available_at,
+                    seconds_until_next_run=seconds_until_next_run,
                 )
             )
         return payloads
+
+
+def _format_result_summary(result: dict[str, object]) -> str | None:
+    if not result:
+        return None
+    preferred_keys = (
+        "created",
+        "updated",
+        "archived",
+        "degraded",
+        "restored",
+        "deleted_tasks",
+        "deleted_journal_entries",
+        "processed_entry_ids",
+        "created_memory_ids",
+        "lines_compressed",
+    )
+    formatted_parts: list[str] = []
+    for key in preferred_keys:
+        if key not in result:
+            continue
+        value = result[key]
+        if isinstance(value, list):
+            formatted_parts.append(f"{key}={len(value)}")
+        else:
+            formatted_parts.append(f"{key}={value}")
+
+    if formatted_parts:
+        return ", ".join(formatted_parts)
+
+    for key in sorted(result):
+        value = result[key]
+        if isinstance(value, (str, int, float, bool)):
+            formatted_parts.append(f"{key}={value}")
+    return ", ".join(formatted_parts) if formatted_parts else None

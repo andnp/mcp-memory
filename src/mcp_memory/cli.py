@@ -153,21 +153,38 @@ def stats(workspace_root: str | None) -> None:
         agent_table.add_column("Agent", no_wrap=True)
         agent_table.add_column("Running", justify="right")
         agent_table.add_column("Age")
+        agent_table.add_column("Next")
+        agent_table.add_column("Last status")
         agent_table.add_column("Runs", justify="right")
         agent_table.add_column("Failures", justify="right")
         agent_table.add_column("Avg duration", justify="right")
         agent_table.add_column("Compressed", justify="right")
+        agent_table.add_column("Last result")
         for agent in overview.agent_runs:
             agent_table.add_row(
                 agent.task_name,
-            str(agent.running_count),
+                str(agent.running_count),
                 _format_age(agent.seconds_since_last_completion),
+                _format_age(agent.seconds_until_next_run),
+                agent.last_status or "never",
                 str(agent.total_runs),
                 str(agent.failed_runs),
                 f"{agent.avg_duration_seconds:.2f}s",
                 str(agent.total_lines_compressed),
+                agent.last_result_summary or "-",
             )
         console.print(agent_table)
+
+        console.print("[bold]Agent Details[/]")
+        for agent in overview.agent_runs:
+            console.print(
+                "- "
+                f"{agent.task_name}: "
+                f"running={agent.running_count} "
+                f"next={_format_age(agent.seconds_until_next_run)} "
+                f"last_status={agent.last_status or 'never'} "
+                f"last_result={agent.last_result_summary or '-'}"
+            )
     except Exception as exc:
         console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)

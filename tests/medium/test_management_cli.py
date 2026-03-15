@@ -143,8 +143,10 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
     assert "Memory Metrics" in result.output
     assert "Background Agents" in result.output
+    assert "Agent Details" in result.output
     assert "Total lines compressed" in result.output
     assert "defragmenter" in result.output
+    assert "lines_compressed=3" in result.output
 
 
 def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Path) -> None:
@@ -179,7 +181,8 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
     assert "Background Agents" in result.output
     assert "graph-linker" in result.output
-    assert "Running" in result.output
+    assert "running=1" in result.output
+    assert "next=" in result.output
 
 
 def test_stats_command_autostarts_daemon(monkeypatch, tmp_path: Path) -> None:
