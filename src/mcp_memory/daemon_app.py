@@ -180,13 +180,37 @@ def create_daemon_app(
         level: str | None = Query(default=None),
         logger_name: str | None = Query(default=None),
         source: str | None = Query(default=None),
+        q: str | None = Query(default=None),
+        after: float | None = Query(default=None),
+        before: float | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
     ):
         return app.state.routes.service.list_logs(
             level=level,
             logger_name=logger_name,
             source=source,
+            query=q,
+            after=after,
+            before=before,
             limit=limit,
+        ).model_dump()
+
+    @app.get("/api/logs/summary")
+    async def logs_summary(
+        level: str | None = Query(default=None),
+        logger_name: str | None = Query(default=None),
+        source: str | None = Query(default=None),
+        q: str | None = Query(default=None),
+        after: float | None = Query(default=None),
+        before: float | None = Query(default=None),
+    ):
+        return app.state.routes.service.summarize_logs(
+            level=level,
+            logger_name=logger_name,
+            source=source,
+            query=q,
+            after=after,
+            before=before,
         ).model_dump()
 
     @app.get("/api/memories/{memory_id}")

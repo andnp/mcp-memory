@@ -103,6 +103,12 @@ class RuntimeLogListPayload(BaseModel):
     logs: list[RuntimeLogPayload] = Field(default_factory=list)
 
 
+class RuntimeLogSummaryPayload(BaseModel):
+    total: int = 0
+    by_level: dict[str, int] = Field(default_factory=dict)
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)

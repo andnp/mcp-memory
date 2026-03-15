@@ -21,6 +21,7 @@ from mcp_memory.management.models import (
     OverviewPayload,
     RuntimeLogListPayload,
     RuntimeLogPayload,
+    RuntimeLogSummaryPayload,
     StorageSummary,
     TaskListPayload,
     TaskStatusSummary,
@@ -256,12 +257,15 @@ class ManagementService:
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
+        query: str | None = None,
+        after: float | None = None,
+        before: float | None = None,
         limit: int = 50,
     ) -> RuntimeLogListPayload:
         if self._db_manager is None:
             return RuntimeLogListPayload()
 
-        query = (
+        sql = (
             "SELECT id, created_at, level, logger_name, source, message, data_json "
             "FROM runtime_logs"
         )
@@ -279,11 +283,21 @@ class ManagementService:
         if source is not None:
             clauses.append("source = ?")
             params.append(source)
+        if query is not None and query.strip():
+            clauses.append("(message LIKE ? OR logger_name LIKE ? OR source LIKE ?)")
+            needle = f"%{query.strip()}%"
+            params.extend([needle, needle, needle])
+        if after is not None:
+            clauses.append("created_at >= ?")
+            params.append(after)
+        if before is not None:
+            clauses.append("created_at <= ?")
+            params.append(before)
         if clauses:
-            query += " WHERE " + " AND ".join(clauses)
-        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         params.append(limit)
-        rows = self._db_manager.get_connection().execute(query, params).fetchall()
+        rows = self._db_manager.get_connection().execute(sql, params).fetchall()
         return RuntimeLogListPayload(
             logs=[
                 RuntimeLogPayload(
@@ -297,6 +311,53 @@ class ManagementService:
                 )
                 for row in rows
             ]
+        )
+
+    def summarize_logs(
+        self,
+        *,
+        level: str | None = None,
+        logger_name: str | None = None,
+        source: str | None = None,
+        query: str | None = None,
+        after: float | None = None,
+        before: float | None = None,
+    ) -> RuntimeLogSummaryPayload:
+        if self._db_manager is None:
+            return RuntimeLogSummaryPayload()
+
+        where_clause, params = _build_log_filters(
+            workspace_id=self._workspace_id,
+            level=level,
+            logger_name=logger_name,
+            source=source,
+            query=query,
+            after=after,
+            before=before,
+        )
+        conn = self._db_manager.get_connection()
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM runtime_logs" + where_clause,
+            params,
+        ).fetchone()
+        grouped_rows = conn.execute(
+            "SELECT level, source, COUNT(*) AS count FROM runtime_logs"
+            + where_clause
+            + " GROUP BY level, source",
+            params,
+        ).fetchall()
+        by_level: dict[str, int] = {}
+        by_source: dict[str, int] = {}
+        for row in grouped_rows:
+            level_name = str(row["level"])
+            source_name = str(row["source"])
+            count = int(row["count"])
+            by_level[level_name] = by_level.get(level_name, 0) + count
+            by_source[source_name] = by_source.get(source_name, 0) + count
+        return RuntimeLogSummaryPayload(
+            total=0 if total_row is None else int(total_row["count"]),
+            by_level=by_level,
+            by_source=by_source,
         )
 
     def load_dashboard_html(self):
@@ -528,3 +589,40 @@ def _decode_log_data(raw_result: object) -> dict[str, object]:
     except ValueError:
         return {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+def _build_log_filters(
+    *,
+    workspace_id: str | None,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+) -> tuple[str, list[object]]:
+    clauses: list[str] = []
+    params: list[object] = []
+    if workspace_id is not None:
+        clauses.append("workspace_id = ?")
+        params.append(workspace_id)
+    if level is not None:
+        clauses.append("level = ?")
+        params.append(level)
+    if logger_name is not None:
+        clauses.append("logger_name = ?")
+        params.append(logger_name)
+    if source is not None:
+        clauses.append("source = ?")
+        params.append(source)
+    if query is not None and query.strip():
+        needle = f"%{query.strip()}%"
+        clauses.append("(message LIKE ? OR logger_name LIKE ? OR source LIKE ?)")
+        params.extend([needle, needle, needle])
+    if after is not None:
+        clauses.append("created_at >= ?")
+        params.append(after)
+    if before is not None:
+        clauses.append("created_at <= ?")
+        params.append(before)
+    return ("" if not clauses else " WHERE " + " AND ".join(clauses)), params

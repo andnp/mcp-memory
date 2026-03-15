@@ -105,6 +105,27 @@
 
     <section class="panel" style="margin-top: 16px;">
       <h2>Recent Logs</h2>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 16px; align-items: end;">
+        <label>Query<br /><input id="log-query" style="width: 100%; margin-top: 6px;" placeholder="message, logger, source" /></label>
+        <label>Level<br />
+          <select id="log-level" style="width: 100%; margin-top: 6px;">
+            <option value="">all</option>
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </label>
+        <label>Source<br /><input id="log-source" style="width: 100%; margin-top: 6px;" placeholder="daemon / stdio" /></label>
+        <label>Logger<br /><input id="log-logger" style="width: 100%; margin-top: 6px;" placeholder="mcp_memory.server" /></label>
+        <label>Limit<br /><input id="log-limit" type="number" min="1" max="200" value="20" style="width: 100%; margin-top: 6px;" /></label>
+      </div>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; align-items: center;">
+        <button id="refresh-logs">Refresh Logs</button>
+        <label><input id="logs-auto-refresh" type="checkbox" checked /> Auto-refresh</label>
+      </div>
+      <div id="log-summary" class="muted" style="margin-bottom: 12px;">No log summary loaded yet.</div>
       <table>
         <thead>
           <tr><th>Time</th><th>Level</th><th>Source</th><th>Logger</th><th>Message</th></tr>
@@ -181,6 +202,56 @@
       await loadOverview();
     }
 
+    function buildLogQueryParams() {
+      const params = new URLSearchParams();
+      const query = document.getElementById('log-query').value.trim();
+      const level = document.getElementById('log-level').value.trim();
+      const source = document.getElementById('log-source').value.trim();
+      const loggerName = document.getElementById('log-logger').value.trim();
+      const limit = document.getElementById('log-limit').value.trim();
+      if (query) {
+        params.set('q', query);
+      }
+      if (level) {
+        params.set('level', level);
+      }
+      if (source) {
+        params.set('source', source);
+      }
+      if (loggerName) {
+        params.set('logger_name', loggerName);
+      }
+      if (limit) {
+        params.set('limit', limit);
+      }
+      return params;
+    }
+
+    async function loadLogs() {
+      const params = buildLogQueryParams();
+      const suffix = params.toString() ? `?${params.toString()}` : '';
+      const [logsResponse, summaryResponse] = await Promise.all([
+        fetch(`/api/logs${suffix}`),
+        fetch(`/api/logs/summary${suffix}`),
+      ]);
+      const logsPayload = await logsResponse.json();
+      const summaryPayload = await summaryResponse.json();
+
+      document.getElementById('recent-logs').innerHTML = logsPayload.logs.map((entry) => `
+        <tr>
+          <td>${formatTimestamp(entry.created_at)}</td>
+          <td>${entry.level}</td>
+          <td>${entry.source}</td>
+          <td>${entry.logger_name}</td>
+          <td><pre>${entry.message}</pre></td>
+        </tr>
+      `).join('') || '<tr><td colspan="5" class="muted">No logs recorded yet.</td></tr>';
+
+      const levelSummary = Object.entries(summaryPayload.by_level || {}).map(([name, count]) => `${name}:${count}`).join(' • ') || 'none';
+      const sourceSummary = Object.entries(summaryPayload.by_source || {}).map(([name, count]) => `${name}:${count}`).join(' • ') || 'none';
+      document.getElementById('log-summary').textContent = `matching=${summaryPayload.total} | levels=${levelSummary} | sources=${sourceSummary}`;
+    }
+
     async function loadOverview() {
       const response = await fetch('/api/overview');
       const payload = await response.json();
@@ -249,16 +320,6 @@
         </tr>
       `).join('') || '<tr><td colspan="6" class="muted">No recent agent runs.</td></tr>';
 
-      document.getElementById('recent-logs').innerHTML = payload.recent_logs.map((entry) => `
-        <tr>
-          <td>${formatTimestamp(entry.created_at)}</td>
-          <td>${entry.level}</td>
-          <td>${entry.source}</td>
-          <td>${entry.logger_name}</td>
-          <td><pre>${entry.message}</pre></td>
-        </tr>
-      `).join('') || '<tr><td colspan="5" class="muted">No logs recorded yet.</td></tr>';
-
       document.getElementById('agent-select').innerHTML = payload.agent_runs.map((agent) => `
         <option value="${agent.task_name}">${agent.task_name}</option>
       `).join('');
@@ -277,6 +338,8 @@
       document.getElementById('memory-metrics').innerHTML = metricRows.map(([label, value]) => `
         <tr><td>${label}</td><td>${value}</td></tr>
       `).join('');
+
+      await loadLogs();
     }
 
     document.getElementById('create-link').addEventListener('click', () => {
@@ -307,6 +370,27 @@
         document.getElementById('agent-action-result').textContent = String(error);
       });
     });
+
+    document.getElementById('refresh-logs').addEventListener('click', () => {
+      loadLogs().catch((error) => {
+        document.getElementById('log-summary').textContent = String(error);
+      });
+    });
+
+    ['log-query', 'log-level', 'log-source', 'log-logger', 'log-limit'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', () => {
+        loadLogs().catch((error) => {
+          document.getElementById('log-summary').textContent = String(error);
+        });
+      });
+    });
+
+    setInterval(() => {
+      if (!document.getElementById('logs-auto-refresh').checked) {
+        return;
+      }
+      loadLogs().catch(() => {});
+    }, 5000);
 
     loadOverview().catch((error) => {
       document.body.insertAdjacentHTML('beforeend', `<pre>${String(error)}</pre>`);

@@ -127,7 +127,21 @@ def dashboard(workspace_root: str | None) -> None:
 )
 @click.option("--logger", "logger_name", help="Filter by logger name")
 @click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-def logs(workspace_root: str | None, limit: int, level: str | None, logger_name: str | None, source: str | None) -> None:
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def logs(
+    workspace_root: str | None,
+    limit: int,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
     """Print recent structured runtime logs from SQLite."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
@@ -135,8 +149,14 @@ def logs(workspace_root: str | None, limit: int, level: str | None, logger_name:
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
+            query=query,
+            after=after,
+            before=before,
             limit=limit,
         )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
         table = Table(title="Runtime Logs")
         table.add_column("Time", no_wrap=True)
         table.add_column("Level", no_wrap=True)
@@ -154,6 +174,66 @@ def logs(workspace_root: str | None, limit: int, level: str | None, logger_name:
                 entry.message,
             )
         console.print(table)
+    finally:
+        runtime.close()
+
+
+@main.command(name="log-summary")
+@click.option("--workspace-root", help="Override the active workspace root")
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
+def log_summary(
+    workspace_root: str | None,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    """Print aggregated runtime log counts."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).summarize_logs(
+            level=None if level is None else level.upper(),
+            logger_name=logger_name,
+            source=source,
+            query=query,
+            after=after,
+            before=before,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        console.print(f"[bold]Matching logs:[/] {payload.total}")
+
+        by_level = Table(title="By Level")
+        by_level.add_column("Level")
+        by_level.add_column("Count", justify="right")
+        if not payload.by_level:
+            by_level.add_row("-", "0")
+        for level_name, count in sorted(payload.by_level.items()):
+            by_level.add_row(level_name, str(count))
+        console.print(by_level)
+
+        by_source = Table(title="By Source")
+        by_source.add_column("Source")
+        by_source.add_column("Count", justify="right")
+        if not payload.by_source:
+            by_source.add_row("-", "0")
+        for source_name, count in sorted(payload.by_source.items()):
+            by_source.add_row(source_name, str(count))
+        console.print(by_source)
     finally:
         runtime.close()
 

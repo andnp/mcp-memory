@@ -181,12 +181,85 @@ def test_logs_command_prints_runtime_logs(monkeypatch, tmp_path: Path) -> None:
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["logs", "--workspace-root", str(workspace), "--source", "daemon"])
+    result = runner.invoke(
+        main,
+        ["logs", "--workspace-root", str(workspace), "--source", "daemon", "--query", "warning"],
+    )
 
     assert result.exit_code == 0
     assert "Runtime Logs" in result.output
     assert "stored warning" in result.output
     assert "mcp_memory.server" in result.output
+
+
+def test_logs_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime.workspace_id,
+                "stdio",
+                "mcp_memory.server",
+                "INFO",
+                "json log entry",
+                124.0,
+                "{}",
+            ),
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(
+        main,
+        ["logs", "--workspace-root", str(workspace), "--source", "stdio", "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["logs"][0]["message"] == "json log entry"
+
+
+def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().executemany(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (runtime.workspace_id, "daemon", "mcp_memory.server", "INFO", "one", 1.0, "{}"),
+                (runtime.workspace_id, "daemon", "mcp_memory.server", "ERROR", "two", 2.0, "{}"),
+            ],
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["log-summary", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Matching logs:" in result.output
+    assert "By Level" in result.output
+    assert "By Source" in result.output
+    assert "daemon" in result.output
 
 
 def test_run_command_records_logs_without_polluting_stdio(monkeypatch, tmp_path: Path) -> None:

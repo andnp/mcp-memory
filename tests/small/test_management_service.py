@@ -75,6 +75,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     overview = service.get_overview()
     detail = service.get_memory_detail(primary.id)
     health = service.get_health()
+    filtered_logs = service.list_logs(query="daemon", source="daemon")
+    summary = service.summarize_logs(source="daemon")
 
     assert overview.memories.total == 2
     assert overview.memories.by_status == {"active": 1, "stale": 1}
@@ -85,6 +87,10 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
     assert overview.recent_logs[0].message == "daemon log row"
     assert overview.recent_logs[0].source == "daemon"
+    assert filtered_logs.logs[0].logger_name == "mcp_memory.tests"
+    assert summary.total == 1
+    assert summary.by_level == {"WARNING": 1}
+    assert summary.by_source == {"daemon": 1}
     assert detail.record["id"] == primary.id
     assert detail.relationships["outgoing"][0]["link_type"] == "SUPERSEDES"
     assert detail.superseded[0]["id"] == secondary.id
