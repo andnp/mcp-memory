@@ -13,6 +13,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
 )
+from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -50,7 +51,7 @@ async def handle_ingest_system1_task(
         actions = None
         if provider is not None:
             try:
-                actions = await _analyze_ingest_actions(provider, group)
+                actions = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
             except Exception:
                 actions = None
 
@@ -86,20 +87,33 @@ async def handle_ingest_system1_task(
     }
 
 
-async def _analyze_ingest_actions(provider: Any, entries) -> list[dict[str, Any]]:
+async def _analyze_ingest_actions(
+    ctx: ApplicationContext,
+    provider: Any,
+    workspace_id: str,
+    entries,
+) -> list[dict[str, Any]]:
     entry_text = "\n".join(f"[{index}] {entry.content}" for index, entry in enumerate(entries))
     prompt = (
         "Analyze these system1 journal entries and return JSON with actions.\n"
         'Allowed actions: {"type": "create"|"ignore"|"append", "entry_indices": [...], '
         '"target_memory_id": "...", "title": "...", "content": "..."}.\n'
+        f"Active workspace_id: {workspace_id}. "
         "If a thought clearly belongs in an existing canonical memory, prefer append and identify the target_memory_id. "
-        "You may use internal maintenance tools to search and read memories before choosing a target.\n\n"
+        "Use internal maintenance tools to search and read existing memories before choosing a target whenever append might apply.\n\n"
         f"Entries:\n{entry_text}"
     )
-    response = provider.ask(prompt)
-    if isawaitable(response):
-        response = await response
-    actions = response.get("actions", [])
+    response = await run_internal_tool_loop(
+        ctx,
+        provider,
+        prompt=prompt,
+        allowed_tool_names=[
+            "internal_search_memory_records",
+            "internal_read_memory_record",
+            "internal_list_memory_records",
+        ],
+    )
+    actions = response.response.get("actions", [])
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
     return actions
@@ -242,6 +256,10 @@ def _execute_ingest_actions(
             if target is None:
                 continue
             updated = _append_entries_to_existing_memory(ctx, target, selected_entries, task)
+            if workspace_id not in updated.workspace_ids:
+                refreshed = ctx.repository.append_workspace_ids(updated.id, [workspace_id])
+                if refreshed is not None:
+                    updated = refreshed
             processed_ids.extend(entry.id for entry in selected_entries)
             created_ids.append(updated.id)
             continue

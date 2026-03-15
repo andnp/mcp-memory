@@ -63,3 +63,51 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
         assert read_payload["relationships"]["outgoing"][0]["link_type"] == "SUPERSEDES"
     finally:
         runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_search_memory_tool_defaults_to_active_workspace(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        local = runtime.repository.create_memory(
+            title="Workspace scoped auth note",
+            content="Local workspace auth search result.",
+            summary="Local auth summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        other = runtime.repository.create_memory(
+            title="Cross workspace auth note",
+            content="Other workspace auth search result.",
+            summary="Cross auth summary.",
+            workspace_ids=["workspace-other"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert local is not None and other is not None
+
+        implicit_result = await call_memory_tool(
+            runtime,
+            "search_memory_records",
+            {"query": "auth note", "limit": 5},
+        )
+        explicit_result = await call_memory_tool(
+            runtime,
+            "search_memory_records",
+            {"query": "auth note", "workspace_id": runtime.workspace_id, "limit": 5},
+        )
+
+        implicit_payload = json.loads(implicit_result[0].text)
+        explicit_payload = json.loads(explicit_result[0].text)
+
+        assert [result["memory_id"] for result in implicit_payload["results"]] == [
+            result["memory_id"] for result in explicit_payload["results"]
+        ]
+        assert implicit_payload["results"][0]["memory_id"] == local.id
+    finally:
+        runtime.close()

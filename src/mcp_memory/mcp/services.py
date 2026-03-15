@@ -39,9 +39,12 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
         return {"status": "error", "error": "relational_search_not_initialized"}
 
     operation = SearchMemoryRecordsOperation(ctx.relational_search)
+    workspace_id = optional_string(arguments, "workspace_id")
+    if workspace_id is None:
+        workspace_id = ctx.workspace_id
     results = operation.execute(
         query=require_string(arguments, "query"),
-        workspace_id=optional_string(arguments, "workspace_id"),
+        workspace_id=workspace_id,
         limit=optional_positive_int(arguments, "limit", 5),
         memory_type=optional_string(arguments, "memory_type"),
         status=optional_string(arguments, "status"),

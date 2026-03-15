@@ -6,6 +6,7 @@ import pytest
 
 from mcp_memory.core.agent_runtime import (
     CONFLICT_DETECTOR_TASK_NAME,
+    CURATOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
@@ -20,6 +21,7 @@ from mcp_memory.core.agent_runtime import (
     build_runtime_task_worker,
     handle_defragmenter_task,
     handle_conflict_detector_task,
+    handle_memory_curator_task,
     handle_deduplicator_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
@@ -140,6 +142,140 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_ingest_append_accumulates_workspace_ids_across_runtimes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True, exist_ok=True)
+    workspace_b.mkdir(parents=True, exist_ok=True)
+
+    runtime_a = create_runtime(workspace_root_override=None, cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=None, cwd=workspace_b)
+    assert runtime_a.repository is not None
+    assert runtime_b.repository is not None
+    assert runtime_b.journal is not None
+    assert runtime_b.task_queue is not None
+
+    try:
+        target = runtime_a.repository.create_memory(
+            title="Shared testing preferences",
+            content="Prefer pytest integration coverage.",
+            workspace_ids=[runtime_a.workspace_id or "workspace-a"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+
+        runtime_b.journal.record(
+            "The user applies the same testing preference in this workspace.",
+            workspace_id=runtime_b.workspace_id,
+        )
+        task = runtime_b.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime_b.workspace_id,
+            data={"workspace_id": runtime_b.workspace_id},
+            available_at=0.0,
+            task_id="cross-workspace-append",
+        )
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "actions": [
+                        {
+                            "type": "append",
+                            "entry_indices": [0],
+                            "target_memory_id": target.id,
+                            "content": "Prefer pytest integration coverage.",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_ingest_system1_task(runtime_b, task, provider)
+        updated = runtime_b.repository.get_memory(target.id)
+
+        assert result["created_memory_ids"] == [target.id]
+        assert updated is not None
+        assert set(updated.workspace_ids) == {runtime_a.workspace_id, runtime_b.workspace_id}
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_can_use_internal_tools_before_appending(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        runtime.journal.record("The user also prefers deterministic fixtures for pytest.")
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-tool-loop-test",
+        )
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "tool_calls": [
+                        {
+                            "name": "internal_search_memory_records",
+                            "arguments": {
+                                "query": "pytest deterministic fixtures",
+                                "workspace_id": runtime.workspace_id,
+                                "limit": 5,
+                            },
+                        }
+                    ]
+                },
+                {
+                    "actions": [
+                        {
+                            "type": "append",
+                            "entry_indices": [0],
+                            "target_memory_id": target.id,
+                            "content": "Prefer deterministic fixtures for pytest.",
+                        }
+                    ]
+                },
+            ]
+        )
+
+        result = await handle_ingest_system1_task(runtime, task, provider)
+        updated = runtime.repository.get_memory(target.id)
+
+        assert result["created_memory_ids"] == [target.id]
+        assert updated is not None
+        assert "deterministic fixtures" in updated.content
+        assert provider.call_count == 2
+        assert "internal_search_memory_records" in provider.prompts[1]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -188,7 +324,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 8}
+    assert queue.count_by_status() == {"pending": 9}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, "workspace-a") is not None
@@ -197,6 +333,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(CURATOR_TASK_NAME, "workspace-a") is not None
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -680,6 +817,84 @@ async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkey
             for link in fact_links
         )
         assert any(link.target_id == new_observation.id and link.link_type == "SUPERSEDES" for link in fact_links)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="Canonical auth fact",
+            content="JWTs are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs must be required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "tool_calls": [
+                        {
+                            "name": "internal_merge_memory_into_canonical",
+                            "arguments": {
+                                "canonical_memory_id": canonical.id,
+                                "source_memory_id": duplicate.id,
+                            },
+                        }
+                    ]
+                },
+                {"summary": "Merged duplicate auth fact into canonical memory.", "actions_taken": 1},
+            ]
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_canonical = runtime.repository.get_memory(canonical.id)
+        updated_duplicate = runtime.repository.get_memory(duplicate.id)
+
+        assert result["summary"] == "Merged duplicate auth fact into canonical memory."
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
+        assert updated_canonical is not None and "JWTs must be required" in updated_canonical.content
+        assert updated_duplicate is not None and updated_duplicate.status == "archived"
     finally:
         runtime.close()
 
