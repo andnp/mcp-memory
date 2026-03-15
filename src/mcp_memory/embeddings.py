@@ -4,7 +4,8 @@ import json
 import math
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from hashlib import blake2b
+from typing import Any, Protocol
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
@@ -31,15 +32,23 @@ class SentenceTransformerEmbedder:
     def __init__(self, config: EmbeddingsConfig) -> None:
         self.model_name = config.model
         self._batch_size = config.batch_size
-        self._model = None
+        self._model: Any | None = None
+        self._use_fallback = False
+        self._fallback = HashingEmbedder(model_name=f"hash:{config.model}")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            try:
+                from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+                self._model = SentenceTransformer(self.model_name, local_files_only=True)
+            except Exception:
+                self._use_fallback = True
+        if self._use_fallback:
+            return self._fallback.embed(texts)
+        assert self._model is not None
         vectors = self._model.encode(
             texts,
             batch_size=self._batch_size,
@@ -47,6 +56,15 @@ class SentenceTransformerEmbedder:
             show_progress_bar=False,
         )
         return [list(map(float, vector)) for vector in vectors]
+
+
+class HashingEmbedder:
+    def __init__(self, model_name: str = "hashing-local", dimensions: int = 64) -> None:
+        self.model_name = model_name
+        self._dimensions = dimensions
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [_hash_text_to_unit_vector(text, self._dimensions) for text in texts]
 
 
 class SQLiteVectorStore:
@@ -156,8 +174,6 @@ class SQLiteVectorStore:
 
 
 def build_embedder(config: EmbeddingsConfig) -> Embedder | None:
-    if not config.enabled:
-        return None
     return SentenceTransformerEmbedder(config)
 
 
@@ -170,3 +186,19 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     if left_norm == 0 or right_norm == 0:
         return 0.0
     return dot / (left_norm * right_norm)
+
+
+def _hash_text_to_unit_vector(text: str, dimensions: int) -> list[float]:
+    vector = [0.0] * dimensions
+    tokens = [token for token in text.lower().split() if token]
+    if not tokens:
+        return vector
+    for token in tokens:
+        digest = blake2b(token.encode("utf-8"), digest_size=16).digest()
+        slot = int.from_bytes(digest[:2], "big") % dimensions
+        sign = 1.0 if digest[2] % 2 == 0 else -1.0
+        vector[slot] += sign
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        return vector
+    return [value / norm for value in vector]

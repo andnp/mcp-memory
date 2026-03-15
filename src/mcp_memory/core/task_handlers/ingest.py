@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from inspect import isawaitable
+import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
@@ -15,7 +16,8 @@ from mcp_memory.core.tasks import TaskRecord
 
 
 SEMANTIC_CLUSTER_SIZE = 5
-SEMANTIC_SIMILARITY_THRESHOLD = 0.55
+SEMANTIC_SIMILARITY_THRESHOLD = 0.3
+TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 
 async def handle_ingest_system1_task(
@@ -153,7 +155,14 @@ def _build_ingest_groups(
             continue
         seed_embedding = by_id[entry.id]
         scored = [
-            (candidate_id, cosine_similarity(seed_embedding, by_id[candidate_id]))
+            (
+                candidate_id,
+                _entry_similarity(
+                    entry_map[entry.id].content,
+                    entry_map[candidate_id].content,
+                    cosine_similarity(seed_embedding, by_id[candidate_id]),
+                ),
+            )
             for candidate_id in pending_ids
             if candidate_id in remaining
         ]
@@ -168,6 +177,15 @@ def _build_ingest_groups(
         groups.append([entry_map[group_id] for group_id in group_ids])
 
     return groups or _group_related_entries(entries)
+
+
+def _entry_similarity(left: str, right: str, semantic_similarity: float) -> float:
+    left_tokens = {token.lower() for token in TOKEN_PATTERN.findall(left)}
+    right_tokens = {token.lower() for token in TOKEN_PATTERN.findall(right)}
+    lexical_similarity = 0.0
+    if left_tokens and right_tokens:
+        lexical_similarity = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    return max(semantic_similarity, lexical_similarity)
 
 
 def _cleanup_processed_thought_embeddings(ctx: ApplicationContext, processed_ids: list[int]) -> None:

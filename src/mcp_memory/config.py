@@ -124,7 +124,6 @@ class DaemonConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    enabled: bool = False
     model: str = "sentence-transformers/all-MiniLM-L6-v2"
     batch_size: int = 32
 
@@ -212,7 +211,6 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "healthcheck_interval_seconds": 0.05,
     }
     document["embeddings"] = {
-        "enabled": False,
         "model": "sentence-transformers/all-MiniLM-L6-v2",
         "batch_size": 32,
     }
