@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
+from inspect import isawaitable
 from pathlib import Path
+import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.constants import (
+    DEFAULT_AGENT_SCAN_LIMIT,
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
 from mcp_memory.core.tasks import TaskRecord
+
+
+TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 
 def handle_project_manager_task(
@@ -129,6 +136,205 @@ def handle_sweeper_task(
         "deleted_tasks": deleted_tasks,
         "deleted_journal_entries": deleted_journal_entries,
     }
+
+
+async def handle_graph_linker_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any = None,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"created": 0}
+
+    candidates = ctx.repository.list_memories(
+        workspace_id=_resolve_workspace_id(ctx, task),
+        status="active",
+        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+    )
+    if len(candidates) < 2:
+        return {"created": 0}
+
+    proposed_pairs = await _propose_graph_links(candidates, provider)
+    created = 0
+    for source_id, target_id, link_type, context in proposed_pairs:
+        if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
+            continue
+        ctx.repository.add_link(source_id, target_id, link_type, context)
+        created += 1
+
+    return {"created": created}
+
+
+async def handle_conflict_detector_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any = None,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"created": 0}
+
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=_resolve_workspace_id(ctx, task),
+            status="active",
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if record.type in {"fact", "plan"}
+    ]
+    if len(candidates) < 2:
+        return {"created": 0}
+
+    proposed_pairs = await _propose_conflicts(candidates, provider)
+    created = 0
+    for left_id, right_id, context in proposed_pairs:
+        if left_id == right_id:
+            continue
+        if not _has_link(ctx, left_id, right_id, "CONTRADICTS"):
+            ctx.repository.add_link(left_id, right_id, "CONTRADICTS", context)
+            created += 1
+        if not _has_link(ctx, right_id, left_id, "CONTRADICTS"):
+            ctx.repository.add_link(right_id, left_id, "CONTRADICTS", context)
+            created += 1
+
+    return {"created": created}
+
+
+async def _propose_graph_links(
+    candidates: list,
+    provider: Any = None,
+) -> list[tuple[str, str, str, str]]:
+    if provider is not None:
+        prompt = _build_linker_prompt(candidates)
+        response = provider.ask(prompt)
+        if isawaitable(response):
+            response = await response
+        proposals = response.get("links", [])
+        if isinstance(proposals, list):
+            normalized: list[tuple[str, str, str, str]] = []
+            for item in proposals:
+                if not isinstance(item, dict):
+                    continue
+                source_id = str(item.get("source_id", "")).strip()
+                target_id = str(item.get("target_id", "")).strip()
+                link_type = str(item.get("link_type", "")).strip() or "DEPENDS_ON"
+                context = str(item.get("context", "")).strip() or "Auto-linked by graph linker."
+                if source_id and target_id:
+                    normalized.append((source_id, target_id, link_type, context))
+            if normalized:
+                return normalized
+
+    return _fallback_graph_links(candidates)
+
+
+async def _propose_conflicts(
+    candidates: list,
+    provider: Any = None,
+) -> list[tuple[str, str, str]]:
+    if provider is not None:
+        prompt = _build_conflict_prompt(candidates)
+        response = provider.ask(prompt)
+        if isawaitable(response):
+            response = await response
+        proposals = response.get("conflicts", [])
+        if isinstance(proposals, list):
+            normalized: list[tuple[str, str, str]] = []
+            for item in proposals:
+                if not isinstance(item, dict):
+                    continue
+                left_id = str(item.get("left_id", "")).strip()
+                right_id = str(item.get("right_id", "")).strip()
+                context = str(item.get("context", "")).strip() or "Potential contradiction detected."
+                if left_id and right_id:
+                    normalized.append((left_id, right_id, context))
+            if normalized:
+                return normalized
+
+    return _fallback_conflicts(candidates)
+
+
+def _fallback_graph_links(candidates: list) -> list[tuple[str, str, str, str]]:
+    proposals: list[tuple[str, str, str, str]] = []
+    for source, target in _iter_candidate_pairs(candidates):
+        shared_tags = sorted(set(source.tags) & set(target.tags))
+        token_overlap = _token_overlap(source.title, target.title)
+        if not shared_tags and token_overlap < 0.34:
+            continue
+        newer, older = _sort_newer_first(source, target)
+        link_type = "AMENDS" if newer.type == older.type else "DEPENDS_ON"
+        context = (
+            f"Auto-linked from shared tags ({', '.join(shared_tags)})"
+            if shared_tags
+            else "Auto-linked from title similarity."
+        )
+        proposals.append((newer.id, older.id, link_type, context))
+    return proposals[:10]
+
+
+def _fallback_conflicts(candidates: list) -> list[tuple[str, str, str]]:
+    proposals: list[tuple[str, str, str]] = []
+    for left, right in _iter_candidate_pairs(candidates):
+        if left.type != right.type:
+            continue
+        if left.content.strip() == right.content.strip():
+            continue
+        shared_tags = set(left.tags) & set(right.tags)
+        title_overlap = _token_overlap(left.title, right.title)
+        if title_overlap < 0.5 and not shared_tags:
+            continue
+        proposals.append((left.id, right.id, "Potential contradiction detected from overlapping titles/tags."))
+    return proposals[:10]
+
+
+def _iter_candidate_pairs(candidates: Iterable) -> Iterable[tuple[Any, Any]]:
+    candidate_list = list(candidates)
+    for index, left in enumerate(candidate_list):
+        for right in candidate_list[index + 1 :]:
+            yield left, right
+
+
+def _sort_newer_first(left, right):
+    return (left, right) if left.updated_at >= right.updated_at else (right, left)
+
+
+def _token_overlap(left: str, right: str) -> float:
+    left_tokens = {token.lower() for token in TOKEN_PATTERN.findall(left)}
+    right_tokens = {token.lower() for token in TOKEN_PATTERN.findall(right)}
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type: str) -> bool:
+    assert ctx.repository is not None
+    return any(
+        link.target_id == target_id and link.link_type == link_type
+        for link in ctx.repository.get_links(source_id, direction="outgoing")
+    )
+
+
+def _build_linker_prompt(candidates: list) -> str:
+    entries = "\n".join(
+        f"- id={record.id} type={record.type} title={record.title!r} tags={record.tags}"
+        for record in candidates[:20]
+    )
+    return (
+        "Review these memories and propose useful typed links.\n"
+        'Return JSON: {"links": [{"source_id": "...", "target_id": "...", "link_type": "DEPENDS_ON|AMENDS", "context": "..."}]}\n\n'
+        f"Memories:\n{entries}"
+    )
+
+
+def _build_conflict_prompt(candidates: list) -> str:
+    entries = "\n".join(
+        f"- id={record.id} type={record.type} title={record.title!r} tags={record.tags} content={record.content[:120]!r}"
+        for record in candidates[:20]
+    )
+    return (
+        "Review these memories and propose contradictions when two active records appear to disagree.\n"
+        'Return JSON: {"conflicts": [{"left_id": "...", "right_id": "...", "context": "..."}]}\n\n'
+        f"Memories:\n{entries}"
+    )
 
 
 def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | None:

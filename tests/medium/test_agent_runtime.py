@@ -5,14 +5,18 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.core.agent_runtime import (
+    CONFLICT_DETECTOR_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     bootstrap_background_tasks,
     build_runtime_task_worker,
+    handle_conflict_detector_task,
     handle_fact_checker_task,
+    handle_graph_linker_task,
     handle_ingest_system1_task,
     handle_project_manager_task,
     handle_summarize_memory_task,
@@ -118,9 +122,11 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 3}
+    assert queue.count_by_status() == {"pending": 5}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
 
 
@@ -260,6 +266,94 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         assert runtime.repository.get_memory(stale_plan.id).status == "stale"
         assert runtime.repository.get_memory(healthy_memory.id).status == "active"
         assert runtime.repository.get_memory(broken_memory.id).status == "degraded"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        authority_fact = runtime.repository.create_memory(
+            title="Auth contract",
+            content="Bearer tokens are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "api"],
+        )
+        related_plan = runtime.repository.create_memory(
+            title="Auth rollout",
+            content="Ship the auth contract to all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+            tags=["auth", "rollout"],
+        )
+        conflicting_fact = runtime.repository.create_memory(
+            title="Auth contract",
+            content="Bearer tokens are optional.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "api"],
+        )
+        assert authority_fact is not None and related_plan is not None and conflicting_fact is not None
+
+        graph_result = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-task",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+        conflict_result = await handle_conflict_detector_task(
+            runtime,
+            TaskRecord(
+                id="conflict-detector-task",
+                task_name=CONFLICT_DETECTOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        outgoing_from_plan = runtime.repository.get_links(related_plan.id, direction="outgoing")
+        outgoing_from_fact = runtime.repository.get_links(authority_fact.id, direction="outgoing")
+        incoming_to_fact = runtime.repository.get_links(authority_fact.id, direction="incoming")
+
+        assert graph_result["created"] >= 1
+        assert any(link.target_id == authority_fact.id for link in outgoing_from_plan)
+        assert conflict_result["created"] == 2
+        assert any(link.link_type == "CONTRADICTS" for link in outgoing_from_fact)
+        assert any(link.link_type == "CONTRADICTS" for link in incoming_to_fact)
     finally:
         runtime.close()
 

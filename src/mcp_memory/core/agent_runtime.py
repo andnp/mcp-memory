@@ -5,13 +5,17 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers import (
+    CONFLICT_DETECTOR_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     SYSTEM1_INGEST_THRESHOLD,
+    handle_conflict_detector_task,
     handle_fact_checker_task,
+    handle_graph_linker_task,
     handle_ingest_system1_task,
     handle_project_manager_task,
     handle_summarize_memory_task,
@@ -39,6 +43,8 @@ def build_default_task_handlers(
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, provider),
         SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, provider),
+        GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, provider),
+        CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, provider),
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,
         SWEEPER_TASK_NAME: handle_sweeper_task,
@@ -54,6 +60,8 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
     for task_name in (
         PROJECT_MANAGER_TASK_NAME,
         FACT_CHECKER_TASK_NAME,
+        GRAPH_LINKER_TASK_NAME,
+        CONFLICT_DETECTOR_TASK_NAME,
         SWEEPER_TASK_NAME,
     ):
         task_queue.enqueue_unique(task_name=task_name, workspace_id=workspace_id)
