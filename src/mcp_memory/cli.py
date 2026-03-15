@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import json
 import logging
 import socket
 import sys
@@ -16,6 +17,7 @@ import uvicorn
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import create_daemon_app, ensure_daemon_started
 from mcp_memory.embeddings import describe_embedder
+from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.relational.importer import (
@@ -96,6 +98,66 @@ def dashboard(workspace_root: str | None) -> None:
         console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)
     console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+
+
+@main.command(name="install")
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    type=click.Choice(["all", "copilot", "claude", "gemini"]),
+    help="Install for selected tool integrations (defaults to all).",
+)
+@click.option(
+    "--component",
+    "components",
+    multiple=True,
+    type=click.Choice(["all", "hooks", "mcp"]),
+    help="Install only selected integration components (defaults to all).",
+)
+@click.option(
+    "--scope",
+    type=click.Choice(["workspace", "user"]),
+    default="workspace",
+    show_default=True,
+    help="Target workspace-local or user-level config files where supported.",
+)
+@click.option("--workspace-root", help="Override the target workspace root")
+def install(tools: tuple[str, ...], components: tuple[str, ...], scope: str, workspace_root: str | None) -> None:
+    """Install hook and MCP integration config for supported tools."""
+    try:
+        result = install_integrations(
+            tools=tools,
+            components=components,
+            scope=scope,
+            workspace_root=workspace_root,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        sys.exit(1)
+
+    console.print(f"[green]Install target:[/] {result.workspace_root}")
+    for action in result.actions:
+        console.print(
+            f"- {action.tool}/{action.component}: {action.status} → {action.path}"
+        )
+
+
+@main.command(name="hook-runner", hidden=True)
+@click.option("--workspace-root", help="Override the target workspace root")
+def hook_runner(workspace_root: str | None) -> None:
+    """Forward VS Code hook payloads into the workspace daemon."""
+    try:
+        payload = load_hook_payload(sys.stdin)
+    except (json.JSONDecodeError, ValueError) as exc:
+        click.echo(f"mcp-memory hook-runner: {exc}", err=True)
+        click.echo("{}")
+        return
+
+    response, error_message = safe_forward_hook_event(payload, workspace_root=workspace_root)
+    if error_message is not None:
+        click.echo(f"mcp-memory hook-runner: {error_message}", err=True)
+    click.echo(json.dumps(response, sort_keys=True))
 
 
 @main.command(name="prefetch-model")
@@ -329,6 +391,8 @@ def _format_timestamp(value: float | None) -> str:
     if value is None:
         return "never"
     return datetime.fromtimestamp(value).isoformat(timespec="seconds")
+
+
 def _format_age(value: float | None) -> str:
     if value is None:
         return "never"

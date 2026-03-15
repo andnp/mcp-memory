@@ -200,7 +200,22 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    uv run mcp-memory stats
    ```
 
-10. **Configure with your AI Assistant**:
+10. **Install local tool integrations** (optional admin flow):
+   ```bash
+   uv run mcp-memory install
+   uv run mcp-memory install --tool copilot --component hooks
+   uv run mcp-memory install --tool claude --scope user --component hooks
+   uv run mcp-memory install --tool gemini --component mcp
+   ```
+
+   This installer can write:
+   - workspace Copilot hook config in `.github/hooks/mcp-memory.json`
+   - Claude-format hook config in `.claude/settings.local.json` or `~/.claude/settings.json`
+   - Gemini MCP config in `.gemini/settings.json`
+
+   The installed hook commands forward `SessionStart`, `PostToolUse`, and `Stop` payloads into the workspace daemon through the hidden `hook-runner` command.
+
+11. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {
@@ -213,7 +228,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    }
    ```
 
-11. **Smoke test the system**:
+12. **Smoke test the system**:
    - confirm the printed dashboard URL loads
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client

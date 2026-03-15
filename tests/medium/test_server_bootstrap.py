@@ -151,6 +151,7 @@ def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -
     assert "run" in result.output
     assert "daemon" in result.output
     assert "dashboard" in result.output
+    assert "install" in result.output
     assert "agents" in result.output
     assert "stats" in result.output
     assert "import-markdown" in result.output

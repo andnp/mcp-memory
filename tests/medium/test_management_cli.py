@@ -1,3 +1,4 @@
+import json
 from click.testing import CliRunner
 from pathlib import Path
 
@@ -20,6 +21,135 @@ def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None
 
     assert result.exit_code == 0
     assert "http://127.0.0.1:8123/" in result.output
+
+
+def test_install_command_writes_workspace_hook_and_gemini_configs(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    result = runner.invoke(
+        main,
+        [
+            "install",
+            "--tool",
+            "copilot",
+            "--tool",
+            "gemini",
+            "--workspace-root",
+            str(workspace),
+        ],
+    )
+
+    hook_path = workspace / ".github" / "hooks" / "mcp-memory.json"
+    gemini_path = workspace / ".gemini" / "settings.json"
+    hook_payload = json.loads(hook_path.read_text(encoding="utf-8"))
+    gemini_payload = json.loads(gemini_path.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert hook_path.exists()
+    assert gemini_path.exists()
+    assert set(hook_payload["hooks"]) == {"SessionStart", "PostToolUse", "Stop"}
+    assert "hook-runner" in hook_payload["hooks"]["PostToolUse"][0]["command"]
+    assert gemini_payload["mcp"]["allowed"] == ["mcp-memory-internal"]
+    assert gemini_payload["mcpServers"]["mcp-memory-internal"]["command"] == "uv"
+
+
+def test_install_command_updates_user_claude_settings_without_duplicate_hooks(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    home_dir = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    settings_path = home_dir / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "type": "command",
+                            "command": "existing-hook",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    first = runner.invoke(
+        main,
+        [
+            "install",
+            "--tool",
+            "claude",
+            "--scope",
+            "user",
+            "--workspace-root",
+            str(workspace),
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "install",
+            "--tool",
+            "claude",
+            "--scope",
+            "user",
+            "--workspace-root",
+            str(workspace),
+        ],
+    )
+
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    session_start_commands = [entry["command"] for entry in payload["hooks"]["SessionStart"]]
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert payload["theme"] == "dark"
+    assert session_start_commands.count("existing-hook") == 1
+    assert sum("hook-runner" in command for command in session_start_commands) == 1
+
+
+def test_hook_runner_forwards_payload_and_prints_response(monkeypatch) -> None:
+    runner = CliRunner()
+
+    captured: dict[str, object] = {}
+
+    def fake_forward(payload: dict, workspace_root: str | None = None):
+        captured["payload"] = payload
+        captured["workspace_root"] = workspace_root
+        return {"systemMessage": "remember to record thought"}, None
+
+    monkeypatch.setattr("mcp_memory.cli.safe_forward_hook_event", fake_forward)
+
+    result = runner.invoke(
+        main,
+        ["hook-runner", "--workspace-root", "/tmp/demo"],
+        input=json.dumps({"hookEventName": "SessionStart", "sessionId": "conv-1"}),
+    )
+
+    assert result.exit_code == 0
+    assert captured["workspace_root"] == "/tmp/demo"
+    assert captured["payload"] == {"hookEventName": "SessionStart", "sessionId": "conv-1"}
+    assert json.loads(result.output) == {"systemMessage": "remember to record thought"}
+
+
+def test_hook_runner_returns_empty_json_on_invalid_payload() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["hook-runner"], input="not-json")
+
+    assert result.exit_code == 0
+    assert "mcp-memory hook-runner:" in result.output
+    assert result.output.strip().endswith("{}")
 
 
 def test_prefetch_model_command_caches_embedding_model(monkeypatch) -> None:
