@@ -1,32 +1,42 @@
 # Architecture Principles: Relational Memory Server
 
 ## 1. Relational-First Persistence
-`mcp-memory` now treats SQLite as the operational source of truth for the runtime. New writes, reads, search results, and markdown imports flow through the relational repository and relational search services. Filesystem-backed runtime management has been removed rather than preserved as a long-term compatibility layer.
+The runtime source of truth is SQLite.
 
-## 2. "Soft" Project Context (Workspace IDs)
-Projects are no longer hard silos. Instead of tying context to brittle, absolute file paths:
-- **Workspace IDs**: Every client connection establishes a Workspace ID (e.g., hashing the local Git origin URL or the repo's first commit SHA).
-- **Origin Tracking**: Every thought and memory stores the `workspace_id` of the client that created it.
-- **Contextual Search**: When searching, the Orchestrator applies a significant **contextual boost** to memories associated with the active Workspace ID. This allows seamless cross-pollination while maintaining project relevance.
+- memories, links, tags, workspaces, journal entries, and tasks all persist relationally
+- new runtime features should extend the relational model rather than reintroducing file-backed state management
 
-## 3. Human & AI Asymmetry (The Human CLI)
-While the AI accesses memory via the background daemon and MCP proxy, humans need a zero-friction way to inject knowledge without breaking flow.
-- **The Human CLI**: A tool like `mcp-memory stash "The new auth endpoint needs a bearer token"` instantly appends to the System 1 journal.
-- This ensures the daemon can ingest high-signal human insights asynchronously without requiring the user to open a Web UI or explain things to an AI chat window.
+## 2. Workspace Context Without Hard Silos
+Workspace context should guide relevance without fragmenting the store.
 
-## 4. Progressive Discovery (Search vs. Read)
-To minimize context window bloat, the server enforces a two-stage discovery process:
-- **Search Tool**: Returns IDs, titles, types, and a **two-sentence summary**.
-- **Read Tool**: Returns the full content.
-Agents are instructed to search first and only "read" memories that are highly relevant to the task.
+- each runtime resolves an active `workspace_id`
+- thoughts, tasks, and memories carry workspace association
+- search applies workspace-aware boosting rather than hard partitioning
 
-The current public MCP surface already supports this pattern through relational search and read tools. Future work should refine ranking and maintenance quality, not reintroduce a separate file-backed runtime path.
+## 3. Progressive Discovery
+The public API should prefer search-first, read-second workflows.
 
-## 5. Shared Daemon & Reference Counting
-The system operates as a persistent background daemon ("The Brain"). It remains alive only as long as an active client is connected, performing a graceful shutdown when the last client disconnects.
+- search returns compact summaries and metadata
+- read returns full content plus structural context
+- future improvements should refine ranking quality, not inflate payload size by default
 
-## 6. Agentic Maintenance
-The daemon runs low-priority, resource-gated background agents:
-- **Summarizer**: Maintains the two-sentence summary for every memory.
-- **Ingestor**: Promotes System 1 thoughts to System 2.
-- **Consolidator**: Merges redundant knowledge and detects contradictions.
+## 4. Thin Proxy, Shared Daemon
+The MCP-facing process should stay thin.
+
+- `mcp-memory run` is a proxy
+- the workspace daemon owns runtime state
+- daemon responsibilities include background work, management API, and persistence coordination
+
+## 5. Explicit Provider Boundaries
+Provider-specific behavior belongs in provider-specific wrappers.
+
+- avoid generic CLI-flag abstractions
+- keep invocation details inside each wrapper
+- keep user-facing configuration minimal and explicit
+
+## 6. Conservative Background Automation
+Autonomous mutation must degrade safely.
+
+- deterministic fallback paths should exist where practical
+- failed tasks must remain inspectable
+- new agents should be added only when their behavior is explicit and testable
