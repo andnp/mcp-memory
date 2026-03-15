@@ -78,8 +78,8 @@ class AIConfig:
     max_retries: int = 1
 
     def __post_init__(self) -> None:
-        if self.provider not in {"none", "gemini-cli"}:
-            raise ValueError("ai.provider must be 'none' or 'gemini-cli'")
+        if self.provider not in {"none", "gemini-cli", "copilot-cli", "opencode", "ollama"}:
+            raise ValueError("ai.provider must be one of 'none', 'gemini-cli', 'copilot-cli', 'opencode', or 'ollama'")
         if self.timeout_seconds <= 0:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
@@ -89,6 +89,21 @@ class AIConfig:
 @dataclass
 class GeminiCLIConfig:
     command: str = "gemini"
+
+
+@dataclass
+class CopilotCLIConfig:
+    command: str = "copilot"
+
+
+@dataclass
+class OpenCodeCLIConfig:
+    command: str = "opencode"
+
+
+@dataclass
+class OllamaCLIConfig:
+    command: str = "ollama"
 
 
 @dataclass
@@ -112,6 +127,9 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     gemini_cli: GeminiCLIConfig = field(default_factory=GeminiCLIConfig)
+    copilot_cli: CopilotCLIConfig = field(default_factory=CopilotCLIConfig)
+    opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
+    ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
 
 
@@ -172,6 +190,9 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "max_retries": 1,
     }
     document["gemini_cli"] = {"command": "gemini"}
+    document["copilot_cli"] = {"command": "copilot"}
+    document["opencode"] = {"command": "opencode"}
+    document["ollama"] = {"command": "ollama"}
     document["daemon"] = {
         "host": "127.0.0.1",
         "auto_start_timeout_seconds": 10.0,
@@ -220,6 +241,9 @@ def load_config(config_path: Path | None = None) -> Config:
         memory=_load_memory_config(raw.get("memory", {})),
         ai=_load_dataclass_from_dict(AIConfig, raw.get("ai", {})),
         gemini_cli=_load_dataclass_from_dict(GeminiCLIConfig, raw.get("gemini_cli", {})),
+        copilot_cli=_load_dataclass_from_dict(CopilotCLIConfig, raw.get("copilot_cli", {})),
+        opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),
+        ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
     )
 

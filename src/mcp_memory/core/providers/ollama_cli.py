@@ -3,14 +3,14 @@ from __future__ import annotations
 from mcp_memory.core.providers._json_cli import JSONCLIProvider
 
 
-class GeminiCLIProvider(JSONCLIProvider):
-    provider_name = "Gemini CLI"
+class OllamaCLIProvider(JSONCLIProvider):
+    provider_name = "Ollama CLI"
 
     def __init__(
         self,
         *,
-        command: str = "gemini",
-        model: str = "gemini-3-flash-preview",
+        command: str = "ollama",
+        model: str = "llama3.1:8b",
         timeout_seconds: float = 60.0,
         max_retries: int = 1,
     ) -> None:
@@ -24,9 +24,7 @@ class GeminiCLIProvider(JSONCLIProvider):
     def build_command(self, prompt: str) -> tuple[str, ...]:
         return (
             self._command,
-            "--model",
+            "run",
             self._model,
-            "ask",
-            "--json",
             prompt,
         )

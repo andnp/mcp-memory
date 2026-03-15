@@ -116,6 +116,29 @@ def create_daemon_app(
                 raise HTTPException(status_code=404, detail="memory_not_found") from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/admin/links")
+    async def create_link(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.service.create_memory_link(
+                source_id=str(arguments.get("source_id", "")).strip(),
+                target_id=str(arguments.get("target_id", "")).strip(),
+                link_type=str(arguments.get("link_type", "")).strip(),
+                context=str(arguments.get("context", "")).strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/admin/links/delete")
+    async def delete_link(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.service.delete_memory_link(
+                source_id=str(arguments.get("source_id", "")).strip(),
+                target_id=str(arguments.get("target_id", "")).strip(),
+                link_type=str(arguments.get("link_type", "")).strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/internal/health")
     async def internal_health():
         return asdict(app.state.metadata)

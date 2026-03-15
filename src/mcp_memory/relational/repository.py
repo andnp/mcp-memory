@@ -125,6 +125,20 @@ class RelationalMemoryRepository:
             context=context,
         )
 
+    def remove_link(
+        self,
+        source_id: str,
+        target_id: str,
+        link_type: str,
+    ) -> bool:
+        conn = self._db.get_connection()
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
+                (source_id, target_id, link_type),
+            )
+        return cursor.rowcount > 0
+
     def get_links(
         self,
         memory_id: str,
@@ -164,6 +178,13 @@ class RelationalMemoryRepository:
             (memory_id, link_type),
         ).fetchone()
         return row is not None
+
+    def count_incoming_links(self, memory_id: str) -> int:
+        row = self._db.get_connection().execute(
+            "SELECT COUNT(*) FROM links WHERE target_id = ?",
+            (memory_id,),
+        ).fetchone()
+        return 0 if row is None else int(row[0])
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str):
         normalized_ids = self._normalize_values(memory_ids)

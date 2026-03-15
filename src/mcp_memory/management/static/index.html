@@ -36,7 +36,7 @@
 <body>
   <main>
     <h1>MCP Memory Dashboard</h1>
-    <p class="muted">Read-only operations snapshot for the local daemon runtime.</p>
+    <p class="muted">Operations snapshot plus lightweight admin link editing for the local daemon runtime.</p>
 
     <section class="grid" id="summary-cards"></section>
 
@@ -59,9 +59,41 @@
         <tbody id="failed-tasks"></tbody>
       </table>
     </section>
+
+    <section class="panel" style="margin-top: 16px;">
+      <h2>Admin Link Editor</h2>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 16px;">
+        <label>Source ID<br /><input id="link-source" style="width: 100%; margin-top: 6px;" /></label>
+        <label>Target ID<br /><input id="link-target" style="width: 100%; margin-top: 6px;" /></label>
+        <label>Link Type<br /><input id="link-type" value="DEPENDS_ON" style="width: 100%; margin-top: 6px;" /></label>
+        <label>Context<br /><input id="link-context" style="width: 100%; margin-top: 6px;" /></label>
+      </div>
+      <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+        <button id="create-link">Create Link</button>
+        <button id="delete-link">Delete Link</button>
+      </div>
+      <pre id="link-result" class="muted">No admin action yet.</pre>
+    </section>
   </main>
 
   <script>
+    async function submitLink(path) {
+      const payload = {
+        source_id: document.getElementById('link-source').value.trim(),
+        target_id: document.getElementById('link-target').value.trim(),
+        link_type: document.getElementById('link-type').value.trim(),
+        context: document.getElementById('link-context').value.trim(),
+      };
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      document.getElementById('link-result').textContent = JSON.stringify(data, null, 2);
+      await loadOverview();
+    }
+
     async function loadOverview() {
       const response = await fetch('/api/overview');
       const payload = await response.json();
@@ -99,6 +131,18 @@
         </tr>
       `).join('') || '<tr><td colspan="4" class="muted">No failed tasks.</td></tr>';
     }
+
+    document.getElementById('create-link').addEventListener('click', () => {
+      submitLink('/api/admin/links').catch((error) => {
+        document.getElementById('link-result').textContent = String(error);
+      });
+    });
+
+    document.getElementById('delete-link').addEventListener('click', () => {
+      submitLink('/api/admin/links/delete').catch((error) => {
+        document.getElementById('link-result').textContent = String(error);
+      });
+    });
 
     loadOverview().catch((error) => {
       document.body.insertAdjacentHTML('beforeend', `<pre>${String(error)}</pre>`);

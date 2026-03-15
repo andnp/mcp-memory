@@ -30,6 +30,7 @@ class ManagementService:
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
+        self._repository = ctx.repository
         self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
 
     def get_health(self):
@@ -104,6 +105,52 @@ class ManagementService:
             },
             superseded=superseded,
         )
+
+    def create_memory_link(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        link_type: str,
+        context: str = "",
+    ) -> dict:
+        if self._memory_queries is None:
+            raise ValueError("repository_not_initialized")
+
+        source = self._memory_queries.get_memory(source_id)
+        if source is None:
+            raise ValueError("source_memory_not_found")
+        if not target_id.startswith("ext:") and self._memory_queries.get_memory(target_id) is None:
+            raise ValueError("target_memory_not_found")
+
+        assert self._repository is not None
+        link = self._repository.add_link(
+            source_id=source_id,
+            target_id=target_id,
+            link_type=link_type,
+            context=context,
+        )
+        return {"status": "created", "link": link_payload(link)}
+
+    def delete_memory_link(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        link_type: str,
+    ) -> dict:
+        if self._memory_queries is None:
+            raise ValueError("repository_not_initialized")
+
+        assert self._repository is not None
+        deleted = self._repository.remove_link(
+            source_id=source_id,
+            target_id=target_id,
+            link_type=link_type,
+        )
+        if not deleted:
+            raise ValueError("link_not_found")
+        return {"status": "deleted"}
 
     def list_tasks(
         self,

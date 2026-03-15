@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 import uvicorn
@@ -31,6 +31,17 @@ def _fetch_json(url: str) -> dict:
 def _fetch_text(url: str) -> str:
     with urlopen(url, timeout=5) as response:
         return response.read().decode("utf-8")
+
+
+def _post_json(url: str, payload: dict) -> dict:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def _start_server(app, port: int):
@@ -65,6 +76,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     try:
         assert seed_runtime.repository is not None
         assert seed_runtime.task_queue is not None
+        assert seed_runtime.workspace_id is not None
         primary = seed_runtime.repository.create_memory(
             title="Management API plan",
             content="Expose runtime health and recent memories.",
@@ -103,6 +115,23 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
+        created_link = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/links",
+            {
+                "source_id": primary.id,
+                "target_id": "ext:README.md",
+                "link_type": "REFERENCES",
+                "context": "Referenced from the dashboard admin flow.",
+            },
+        )
+        deleted_link = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/links/delete",
+            {
+                "source_id": primary.id,
+                "target_id": "ext:README.md",
+                "link_type": "REFERENCES",
+            },
+        )
         dashboard = _fetch_text(f"http://127.0.0.1:{port}/")
 
         assert health["status"] == "ready"
@@ -115,6 +144,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
         assert detail["superseded"][0]["id"] == superseded.id
+        assert created_link["status"] == "created"
+        assert deleted_link["status"] == "deleted"
         assert "MCP Memory Dashboard" in dashboard
+        assert "Admin Link Editor" in dashboard
     finally:
         _stop_server(server, thread)

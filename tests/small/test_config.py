@@ -28,3 +28,6 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert config_path.exists()
     assert loaded.ai.provider == "none"
     assert loaded.gemini_cli.command == "gemini"
+    assert loaded.copilot_cli.command == "copilot"
+    assert loaded.opencode.command == "opencode"
+    assert loaded.ollama.command == "ollama"

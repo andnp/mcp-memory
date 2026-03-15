@@ -130,3 +130,50 @@ def test_search_memories_penalizes_stale_records_and_updates_last_surfaced(db_ma
     refreshed_stale = repository.get_memory(stale.id)
     assert refreshed_active is not None and refreshed_active.last_surfaced_at is not None
     assert refreshed_stale is not None and refreshed_stale.last_surfaced_at is not None
+
+
+def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    authority = repository.create_memory(
+        title="Auth decision authority",
+        content="Authoritative auth decision.",
+        summary="Authority summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    peer = repository.create_memory(
+        title="Auth decision peer",
+        content="Peer auth decision.",
+        summary="Peer summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    supporter_one = repository.create_memory(
+        title="Auth plan one",
+        content="Depends on auth decision authority.",
+        workspace_ids=["workspace-alpha"],
+        memory_type="plan",
+    )
+    supporter_two = repository.create_memory(
+        title="Auth plan two",
+        content="Also depends on auth decision authority.",
+        workspace_ids=["workspace-alpha"],
+        memory_type="plan",
+    )
+    assert authority is not None and peer is not None and supporter_one is not None and supporter_two is not None
+
+    repository.add_link(supporter_one.id, authority.id, "DEPENDS_ON")
+    repository.add_link(supporter_two.id, authority.id, "DEPENDS_ON")
+
+    results = service.search_memories(
+        "auth decision",
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        limit=5,
+    )
+
+    assert [result.memory_id for result in results[:2]] == [authority.id, peer.id]

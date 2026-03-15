@@ -14,7 +14,7 @@ from mcp_memory.config import (
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.providers import build_ai_provider
+from mcp_memory.core.providers import build_ai_provider_from_config
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -60,7 +60,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
     repository = RelationalMemoryRepository(db_manager)
     relational_search = RelationalMemorySearchService(repository, spec.config)
     task_queue = SQLiteTaskQueue(db_manager)
-    ai_provider = build_ai_provider(spec.config.ai, spec.config.gemini_cli)
+    ai_provider = build_ai_provider_from_config(spec.config)
     return ApplicationContext(
         config=spec.config,
         workspace_id=spec.workspace_id,

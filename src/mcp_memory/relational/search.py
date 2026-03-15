@@ -71,6 +71,7 @@ class RelationalMemorySearchService:
             score = _normalize_base_score(base_score)
             score = _apply_recency_boost(score, candidate, self._config)
             score = _apply_access_boost(score, candidate)
+            score = _apply_graph_authority_boost(score, candidate, self._repository)
 
             if workspace_id and workspace_id in candidate.workspace_ids:
                 score *= WORKSPACE_BOOST
@@ -177,6 +178,18 @@ def _apply_access_boost(score: float, record: RelationalMemoryRecord):
     if decayed <= 0:
         return score
     return min(1.0, score + min(0.2, math.log1p(decayed) / 10.0))
+
+
+def _apply_graph_authority_boost(
+    score: float,
+    record: RelationalMemoryRecord,
+    repository: RelationalMemoryRepository,
+):
+    incoming_links = repository.count_incoming_links(record.id)
+    if incoming_links <= 0:
+        return score
+    multiplier = 1.0 + min(0.15, math.log1p(incoming_links) / 10.0)
+    return min(1.0, score * multiplier)
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):
