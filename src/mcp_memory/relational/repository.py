@@ -141,6 +141,20 @@ class RelationalMemoryRepository:
             )
         return cursor.rowcount > 0
 
+    def delete_memory(self, memory_id: str):
+        existing = self.get_memory(memory_id)
+        if existing is None:
+            return None
+
+        conn = self._db.get_connection()
+        with conn:
+            conn.execute(
+                "DELETE FROM links WHERE source_id = ? OR target_id = ?",
+                (memory_id, memory_id),
+            )
+            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        return existing
+
     def get_links(
         self,
         memory_id: str,

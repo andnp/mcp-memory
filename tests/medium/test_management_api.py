@@ -92,9 +92,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             ),
         )
         seed_runtime.db_manager.get_connection().execute(
-            "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 seed_runtime.workspace_id,
+                "graph-linker",
                 "gemini-cli",
                 "Gemini CLI",
                 "gemini-3-flash-preview",
@@ -203,6 +204,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["memory_metrics"]["total_memories"] == 2
         assert "agent_runs" in overview
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
+        assert overview["provider_usage"][0]["task_name"] == "graph-linker"
         assert overview["provider_usage"][0]["calls_last_day"] == 1
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
         assert overview["top_read_memories"] == []

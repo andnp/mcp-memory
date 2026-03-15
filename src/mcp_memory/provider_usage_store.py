@@ -8,6 +8,7 @@ from mcp_memory.utils.db import DatabaseManager
 
 @dataclass(frozen=True)
 class ProviderUsageSummary:
+    task_name: str | None
     provider_key: str
     provider_name: str
     model_name: str
@@ -27,6 +28,7 @@ class ProviderUsageRepository:
     def record_call(
         self,
         *,
+        task_name: str | None,
         provider_key: str,
         provider_name: str,
         model_name: str,
@@ -38,9 +40,10 @@ class ProviderUsageRepository:
         if self._db_manager is None:
             return
         self._db_manager.get_connection().execute(
-            "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._workspace_id,
+                task_name,
                 provider_key,
                 provider_name,
                 model_name,
@@ -60,7 +63,7 @@ class ProviderUsageRepository:
         last_day = current_time - 86400
         params: list[object] = [last_hour, last_day, last_hour, last_day, last_hour, last_day]
         query = (
-            "SELECT provider_key, provider_name, model_name, "
+            "SELECT task_name, provider_key, provider_name, model_name, "
             "SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS calls_last_hour, "
             "SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS calls_last_day, "
             "SUM(CASE WHEN created_at >= ? AND status != 'success' THEN 1 ELSE 0 END) AS failures_last_hour, "
@@ -72,10 +75,11 @@ class ProviderUsageRepository:
         if self._workspace_id is not None:
             query += " WHERE workspace_id = ?"
             params.append(self._workspace_id)
-        query += " GROUP BY provider_key, provider_name, model_name ORDER BY calls_last_day DESC, provider_key ASC"
+        query += " GROUP BY task_name, provider_key, provider_name, model_name ORDER BY calls_last_day DESC, task_name ASC, provider_key ASC"
         rows = self._db_manager.get_connection().execute(query, params).fetchall()
         return [
             ProviderUsageSummary(
+                task_name=row["task_name"],
                 provider_key=str(row["provider_key"]),
                 provider_name=str(row["provider_name"]),
                 model_name=str(row["model_name"]),

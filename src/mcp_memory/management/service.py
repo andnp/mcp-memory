@@ -503,6 +503,7 @@ class ManagementService:
     def _build_provider_usage(self) -> list[ProviderUsagePayload]:
         return [
             ProviderUsagePayload(
+                task_name=summary.task_name,
                 provider_key=summary.provider_key,
                 provider_name=summary.provider_name,
                 model_name=summary.model_name,

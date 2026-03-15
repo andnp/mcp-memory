@@ -77,4 +77,80 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "required": ["canonical_memory_id", "source_memory_id"],
             },
         ),
+        Tool(
+            name="internal_create_memory_record",
+            description="Create a new memory record for maintenance and cleanup workflows.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["title", "content"],
+            },
+        ),
+        Tool(
+            name="internal_update_memory_record",
+            description="Rewrite or otherwise update an existing memory record, including title, content, type, status, tags, and metadata.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="internal_delete_memory_record",
+            description="Permanently delete an archived memory record and its associated links.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "confirm": {"type": "boolean"},
+                },
+                "required": ["memory_id", "confirm"],
+            },
+        ),
+        Tool(
+            name="internal_create_memory_link",
+            description="Create a typed link between two memory records.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_id": {"type": "string"},
+                    "target_id": {"type": "string"},
+                    "link_type": {"type": "string"},
+                    "context": {"type": "string"},
+                },
+                "required": ["source_id", "target_id", "link_type"],
+            },
+        ),
+        Tool(
+            name="internal_delete_memory_link",
+            description="Delete a typed link between two memory records.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_id": {"type": "string"},
+                    "target_id": {"type": "string"},
+                    "link_type": {"type": "string"},
+                },
+                "required": ["source_id", "target_id", "link_type"],
+            },
+        ),
     ]

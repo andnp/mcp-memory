@@ -117,6 +117,7 @@ class RuntimeLogPrunePayload(BaseModel):
 
 
 class ProviderUsagePayload(BaseModel):
+    task_name: str | None = None
     provider_key: str
     provider_name: str
     model_name: str

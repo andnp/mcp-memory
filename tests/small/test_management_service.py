@@ -66,8 +66,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         )
     )
     db_manager.get_connection().execute(
-        "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("workspace-a", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
     )
     db_manager.get_connection().commit()
 
@@ -95,6 +95,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.memory_metrics.thought_buffer_entries == 0
     assert overview.agent_runs[0].task_name == "ingest-system1"
     assert overview.provider_usage[0].provider_key == "gemini-cli"
+    assert overview.provider_usage[0].task_name == "memory-curator"
     assert overview.provider_usage[0].calls_last_hour == 1
     assert overview.tasks.failed_count == 1
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"

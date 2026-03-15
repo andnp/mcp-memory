@@ -10,7 +10,6 @@ import yaml
 
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.core.storage import list_memory_files
 
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -90,7 +89,7 @@ def import_markdown_memories(
     workspace_ids: list[str] | None = None,
 ):
     imported = []
-    for file_path in list_memory_files(memory_path):
+    for file_path in _list_markdown_files(memory_path):
         imported.append(import_markdown_memory(repository, file_path, workspace_ids))
     return imported
 
@@ -185,3 +184,13 @@ def _ensure_timezone(value: datetime):
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _list_markdown_files(memory_path: Path) -> list[Path]:
+    if not memory_path.exists():
+        return []
+    return [
+        file_path
+        for file_path in memory_path.glob("*.md")
+        if file_path.is_file() and not file_path.name.startswith(".")
+    ]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -172,6 +172,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS provider_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id TEXT,
+            task_name TEXT,
             provider_key TEXT NOT NULL,
             provider_name TEXT NOT NULL,
             model_name TEXT NOT NULL,
@@ -228,6 +229,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "runtime_logs", "data_json", "TEXT NOT NULL DEFAULT '{}'"
     )
     ensure_column(conn, "provider_usage", "workspace_id", "TEXT")
+    ensure_column(conn, "provider_usage", "task_name", "TEXT")
     ensure_column(conn, "provider_usage", "provider_key", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "provider_usage", "provider_name", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "provider_usage", "model_name", "TEXT NOT NULL DEFAULT ''")

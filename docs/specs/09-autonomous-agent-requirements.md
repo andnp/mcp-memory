@@ -1,69 +1,54 @@
 # Specification: Autonomous Agent Requirements
 
-**Status:** Current runtime supports a focused subset of the full agent vision.
+**Status:** ✅ Complete Vision (Target for Implementation)
 
-## 1. Current Agent Matrix
+## 1. Overview
+The `mcp-memory` daemon runs 9 background agents to maintain the relational knowledge graph. This document defines the model strength requirements and operational logic for each.
 
-| Agent | Implemented | Needs AI? | Notes |
+## 2. Agent Roster & AI Tier Matrix
+
+| Agent | Task | AI Tier | Structured? |
 | :--- | :--- | :--- | :--- |
-| Ingestor | Yes | Optional | Uses provider when available; falls back to deterministic grouping/create behavior |
-| Summarizer | Yes | Optional | Uses provider for summaries when available |
-| Fact Checker | Yes | No | Deterministic validation of explicit `ext:` targets |
-| Project Manager | Yes | No | Deterministic plan aging |
-| Sweeper | Yes | No | Deterministic task/journal cleanup |
-| Graph Linker | No | Yes | Future work |
-| Conflict Detector | No | Yes | Future work |
-| Defragmenter | No | Yes | Future work |
-| Taxonomist | No | Yes | Future work |
+| **Ingestor** | System 1 → System 2 promotion | Medium | Yes (JSON) |
+| **Summarizer** | 2-sentence search summaries | Weak/Fast | No (Text) |
+| **Graph Linker** | Discovering `DEPENDS_ON` edges | Medium | Yes (JSON) |
+| **Conflict Detector** | Identifying `CONTRADICTS` claims | Strong | Yes (JSON) |
+| **Defragmenter** | Synthesis of Journal clusters | Strong | No (Markdown) |
+| **Taxonomist** | Canonicalizing & Deleting Tags | Weak | Yes (JSON) |
+| **Fact Checker** | Verifying `ext:` file paths | **None** | Deterministic |
+| **Project Manager** | Flagging 60-day old plans | **None** | SQL |
+| **Sweeper** | Purging old telemetry | **None** | SQL |
 
-## 2. Current Provider Support
+## 3. The Strategy Roulette (Heuristics)
+All maintenance agents (Linker, Conflict Detector, Defragmenter, Taxonomist) must rotate through these sampling heuristics to ensure total graph coverage:
 
-### Implemented
-- `none`
-- `gemini-cli`
+- **The "Semantic Cluster" Pass**: (Default) Uses FAISS to find memories with high vector similarity.
+- **The "Cold Storage" Pass**: Pulls memories based on `last_accessed_at` ascending.
+- **The "Never Surfaced" Pass**: Pulls memories based on `last_surfaced_at` ascending.
+- **The "Noise" Pass**: Injects randomness by selecting 10-20 IDs at random.
+- **The "Anomaly" Pass**: Pulls memories with extreme character counts (too large or too small).
 
-### Not Yet Implemented
-- `copilot-cli`
-- `opencode`
-- `ollama`
+## 4. Model Tiers & Providers
 
-## 3. Current AI Expectations
+### 4.1 Strong (Reasoning & Large Context)
+- **Providers**: `gemini-cli` (Pro), `copilot-cli`.
+- **Use Cases**: Conflict Detection (nuance between "A" and "Not A"), Defragmentation (reading 30 journals).
 
-### Ingestor
-- can use an AI provider to propose `create` or `ignore` actions
-- falls back to deterministic grouping when provider support is unavailable or invalid
+### 4.2 Medium (Logic & Structure)
+- **Providers**: `ollama` (Llama 3 8B), `opencode`.
+- **Use Cases**: Ingestion, Graph Linking. Must be capable of strict JSON output.
 
-### Summarizer
-- can use an AI provider to generate memory summaries
-- falls back safely when provider support is unavailable
+### 4.3 Weak/Fast (Simple NLP)
+- **Providers**: Tiny local models.
+- **Use Cases**: Summarization, Tag Normalization.
 
-### Deterministic Agents
-- Fact Checker
-- Project Manager
-- Sweeper
+## 5. Agent-Specific Logic
 
-These agents do not require AI in the current design.
+### 5.1 The Taxonomist (Empowered)
+Unlike other agents, the Taxonomist is explicitly empowered to **delete** and **modify** the global `tags` table to collapse synonyms (e.g., `testing` + `tests` → `pytest`).
 
-## 4. Future Agent Expansion
+### 5.2 The Fact Checker (Deterministic)
+Runs pure Python logic to check `os.path.exists` for external links relative to the `workspace_id`. Marks failed memories as `degraded`.
 
-Future agents should only be added when their operational behavior is clear and testable.
-
-### Candidate Future Agents
-- Graph Linker
-- Conflict Detector
-- Defragmenter
-- Taxonomist
-
-### Expected Requirements for Future AI Agents
-- explicit structured-output contracts when mutating data
-- graceful fallback behavior when the provider is unavailable
-- durable task execution through the shared SQLite task queue
-- clear management-surface visibility for failures
-
-## 5. Open Scope Decisions
-
-Before expanding the agent roster, the project should decide:
-
-- whether the current five-agent subset is the intended v1 scope
-- which providers must be supported for v1
-- whether advanced maintenance sampling is required before ship
+### 5.3 The Project Manager (Deterministic)
+Runs pure SQL to mark untouched plans as `stale`.

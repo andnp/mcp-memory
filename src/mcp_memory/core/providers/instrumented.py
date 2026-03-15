@@ -14,12 +14,24 @@ class InstrumentedAIProvider:
         provider_key: str,
         provider_name: str,
         model_name: str,
+        task_name: str | None = None,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
         self._provider_key = provider_key
         self._provider_name = provider_name
         self._model_name = model_name
+        self._task_name = task_name
+
+    def with_usage_context(self, *, task_name: str | None):
+        return InstrumentedAIProvider(
+            self._provider,
+            usage_repository=self._usage_repository,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            task_name=task_name,
+        )
 
     async def ask(self, prompt: str) -> dict:
         started_at = time.time()
@@ -27,6 +39,7 @@ class InstrumentedAIProvider:
             response = await self._provider.ask(prompt)
         except Exception as exc:
             self._usage_repository.record_call(
+                task_name=self._task_name,
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
@@ -37,6 +50,7 @@ class InstrumentedAIProvider:
             )
             raise
         self._usage_repository.record_call(
+            task_name=self._task_name,
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,

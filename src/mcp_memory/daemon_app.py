@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 
 from mcp_memory.config import resolve_daemon_metadata_path
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
+from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
 from mcp_memory.hook_reminders import HookReminderService
@@ -84,9 +85,15 @@ def create_daemon_app(
     daemon_host = host or spec.config.daemon.host
     daemon_port = port if port is not None else find_free_port()
     metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
+    runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        try:
+            runtime_lock.acquire(timeout_seconds=0.1)
+        except DaemonLockTimeoutError as exc:
+            raise RuntimeError(f"daemon_runtime_lock_unavailable:{spec.workspace_id}") from exc
+
         runtime = create_runtime_from_spec(spec)
         assert runtime.db_manager is not None
         bootstrap_background_tasks(runtime)
@@ -128,6 +135,7 @@ def create_daemon_app(
                 await worker.stop(spec.config.daemon.shutdown_grace_seconds)
             runtime.close()
             remove_metadata(metadata_path)
+            runtime_lock.release()
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)
 

@@ -30,6 +30,7 @@ The runtime is now **relational-first**.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Workspace Daemon**: One localhost daemon per workspace owns runtime state, background workers, and the management API.
 - **Local Management API**: The daemon exposes a small read-only dashboard/API for runtime health, overview, and lineage inspection.
+- **Task-Level Provider Telemetry**: AI provider usage is attributed to the background task that made the call so you can see which agents are actually consuming model time.
 
 ## 🛠 Tech Stack
 
@@ -82,6 +83,10 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
 
 When an AI provider is configured and the internal maintenance MCP surface is available, ingest can now choose to append a thought batch directly into an existing canonical memory instead of always creating a new provisional observation.
+
+Provider usage reporting in `uv run mcp-memory stats` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
+
+Markdown import keeps its tiny file-scanning logic local to the importer instead of preserving a separate file-backed helper layer in the active package structure.
 
 ## ⚙️ Configuration
 

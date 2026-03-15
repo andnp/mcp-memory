@@ -8,6 +8,8 @@ from mcp_memory.core.providers import (
     OpenCodeCLIProvider,
     build_ai_provider_from_config,
 )
+from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from tests.sdk.providers import FakeAsyncProcess
 
 
@@ -149,3 +151,30 @@ def test_build_ai_provider_from_config_supports_expanded_providers() -> None:
     assert isinstance(copilot, CopilotCLIProvider)
     assert isinstance(opencode, OpenCodeCLIProvider)
     assert isinstance(ollama, OllamaCLIProvider)
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_task_name_with_usage_context(db_manager) -> None:
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"ok": True, "prompt": prompt}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="memory-curator")
+
+    result = await provider.ask("clean things up")
+    rows = db_manager.get_connection().execute(
+        "SELECT task_name, provider_key, status FROM provider_usage ORDER BY id DESC LIMIT 1"
+    ).fetchall()
+
+    assert result["ok"] is True
+    assert len(rows) == 1
+    assert rows[0]["task_name"] == "memory-curator"
+    assert rows[0]["provider_key"] == "gemini-cli"
+    assert rows[0]["status"] == "success"

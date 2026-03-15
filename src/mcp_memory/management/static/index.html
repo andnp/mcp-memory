@@ -64,7 +64,7 @@
       <h2>AI Provider Usage</h2>
       <table>
         <thead>
-          <tr><th>Provider</th><th>Model</th><th>Calls (1h)</th><th>Calls (24h)</th><th>Failures (1h)</th><th>Failures (24h)</th><th>Avg Duration (1h)</th><th>Avg Duration (24h)</th></tr>
+          <tr><th>Task</th><th>Provider</th><th>Model</th><th>Calls (1h)</th><th>Calls (24h)</th><th>Failures (1h)</th><th>Failures (24h)</th><th>Avg Duration (1h)</th><th>Avg Duration (24h)</th></tr>
         </thead>
         <tbody id="provider-usage"></tbody>
       </table>
@@ -322,6 +322,7 @@
 
       document.getElementById('provider-usage').innerHTML = payload.provider_usage.map((usage) => `
         <tr>
+          <td>${usage.task_name ?? '-'}</td>
           <td>${usage.provider_key}</td>
           <td>${usage.model_name}</td>
           <td>${usage.calls_last_hour}</td>
@@ -331,7 +332,7 @@
           <td>${usage.avg_duration_last_hour.toFixed(2)}s</td>
           <td>${usage.avg_duration_last_day.toFixed(2)}s</td>
         </tr>
-      `).join('') || '<tr><td colspan="8" class="muted">No provider usage recorded yet.</td></tr>';
+      `).join('') || '<tr><td colspan="9" class="muted">No provider usage recorded yet.</td></tr>';
 
       document.getElementById('recent-agent-runs').innerHTML = payload.recent_agent_runs.map((run) => `
         <tr>

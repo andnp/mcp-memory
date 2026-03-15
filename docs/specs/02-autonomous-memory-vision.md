@@ -1,51 +1,35 @@
 # Vision: Autonomous Memory Consolidation
 
 ## 1. Overview
-The long-term goal is a low-friction memory system where active clients can quickly record context and the daemon gradually turns that raw input into durable, structured relational memory.
+Current memory systems place high cognitive load on the AI, requiring it to manually organize, format, and structure files. This vision introduces a **Self-Healing Knowledge Graph** for `mcp-memory`:
+- **System 1 (Thought Cache):** A fast, append-only scratchpad for raw thoughts.
+- **System 2 (Structured Memory):** The durable, relational Markdown memory graph.
 
-## 2. System Model
-- **System 1**
-  - fast raw thought capture in `system1_journal`
-- **System 2**
-  - durable relational memory records in SQLite
-  - explicit typed links between memories
-  - workspace associations for contextual relevance
+An **Autonomous Background Agent** (operating within the `mcp-memory` daemon) periodically consolidates System 1 into System 2 and "defragments" System 2 through semantic merging and obsolete fact pruning.
 
-## 3. Current Reality
-The current runtime already supports:
+## 2. System 1: The "Thought" Cache
+Active agents (and humans via CLI) can quickly stash findings using:
+- **`record_thought(text: str)`**: Appends a timestamped entry to `system1_journal`. This captures the `workspace_id` automatically.
 
-- `record_thought`
-- relational memory CRUD/search/read/import
-- daemon-owned background task execution
-- ingest and summarization workflows
-- deterministic maintenance tasks such as fact checking, plan aging, and sweeping
+## 3. The "Strategy Roulette" (Maintenance Loops)
+To keep the graph lean and connected, background agents run maintenance cycles every 6-12 hours. They do not just process the "most recent" data; they use a **Strategy Roulette** to select memory batches:
+1. **Semantic Clustering**: Merging redundant facts.
+2. **Pure Noise**: Random sampling to find lateral links.
+3. **Cold Storage**: Pruning memories that haven't been read in months.
+4. **Never Surfaced**: Investigating why certain memories never appear in search.
+5. **Anomalies**: Handling exceptionally large or fragmented memories.
 
-## 4. Future Vision
-Potential future improvements include:
+## 4. Tiered AI Provider Layer
+Maintenance is performed for free using the CLI tools already on the user's machine. The daemon selects the model "tier" based on task complexity:
+- **Strong (Reasoning)**: `gemini-cli` or `copilot-cli`. Used for **Conflict Detection** and **Defragmentation**.
+- **Medium**: Local models via `ollama` or `opencode`. Used for **Ingestion** and **Graph Linking**.
+- **Weak/Fast**: Small local models. Used for **Summarization** and **Tag Normalization**.
 
-- richer ingest merge/append behavior
-- graph linking between related memories
-- contradiction detection
-- defragmentation of older journals into reflections
-- tag normalization
-- broader provider support
-- richer human review tooling in the dashboard
+## 5. Safety & Human Observability
+Because the agent autonomously modifies the knowledge base, safety is built-in:
+- **Soft Deletes**: Files are moved to `.trash/` (or marked as `archived` in DB).
+- **The Conflict Inbox**: Direct contradictions are flagged for the user in the Web UI.
+- **Audit Logs**: Every agent action (merges, links, status changes) is logged and reversible.
 
-## 5. Provider Direction
-The provider layer should remain wrapper-based and local-developer-friendly.
-
-Candidate providers:
-- `gemini-cli`
-- `copilot-cli`
-- `opencode`
-- `ollama`
-
-The project should only ship providers that have clear operational behavior and reliable fallback handling.
-
-## 6. Safety Direction
-Autonomous mutation should remain conservative.
-
-- durable task persistence
-- visible failed-task state
-- explicit review surfaces for higher-risk automation
-- no hidden or irreversible background behavior by default
+## 6. Goal
+A memory bank that grows smarter while you sleep, staying dense, organized, and free of contradictions without requiring a single manual organization task from the user.

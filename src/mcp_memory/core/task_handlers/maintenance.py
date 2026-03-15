@@ -11,9 +11,11 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
+    CURATOR_TASK_NAME,
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
+from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -344,6 +346,73 @@ async def handle_taxonomist_task(
     return {"updated": updated}
 
 
+async def handle_memory_curator_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any = None,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"summary": None, "tool_calls_executed": 0, "mutations": 0}
+    if provider is None:
+        return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "provider_not_configured"}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    seed_records = _select_curator_seed_records(ctx, task)
+    if not seed_records:
+        return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "no_seed_records"}
+
+    seed_payload = [
+        {
+            "id": record.id,
+            "title": record.title,
+            "summary": record.summary,
+            "type": record.type,
+            "status": record.status,
+            "tags": record.tags,
+            "workspace_ids": record.workspace_ids,
+            "read_count": record.read_count,
+        }
+        for record in seed_records
+    ]
+    prompt = (
+        f"You are the {CURATOR_TASK_NAME} maintenance agent for workspace_id={workspace_id}.\n"
+        "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
+        "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
+        "Use the internal maintenance tools to inspect and mutate the store.\n"
+        "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
+        f"Seed memories:\n{seed_payload}"
+    )
+    loop_result = await run_internal_tool_loop(
+        ctx,
+        provider,
+        prompt=prompt,
+        allowed_tool_names=[
+            "internal_search_memory_records",
+            "internal_read_memory_record",
+            "internal_list_memory_records",
+            "internal_append_memory_content",
+            "internal_archive_memory_record",
+            "internal_merge_memory_into_canonical",
+            "internal_create_memory_record",
+            "internal_update_memory_record",
+            "internal_delete_memory_record",
+            "internal_create_memory_link",
+            "internal_delete_memory_link",
+        ],
+        max_rounds=6,
+    )
+    summary = loop_result.response.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        summary = None
+    return {
+        "summary": summary,
+        "tool_calls_executed": loop_result.tool_calls_executed,
+        "mutations": loop_result.successful_tool_calls,
+        "tool_names_used": loop_result.tool_names_used,
+        "seed_memory_ids": [record.id for record in seed_records],
+    }
+
+
 async def _propose_graph_links(
     candidates: list,
     provider: Any = None,
@@ -516,6 +585,27 @@ def _collect_similar_fact_groups(facts: list, embedding_by_id: dict[str, list[fl
         if len(group) >= 2:
             groups.append(group)
     return groups
+
+
+def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
+    assert ctx.repository is not None
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=_resolve_workspace_id(ctx, task),
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+    ]
+    candidates.sort(
+        key=lambda record: (
+            0 if record.type in {"journal", "observation"} else 1,
+            record.read_count,
+            len(record.content.strip()),
+            record.updated_at,
+        )
+    )
+    return candidates[:12]
 
 
 def _choose_canonical_fact(ctx: ApplicationContext, facts: list):
