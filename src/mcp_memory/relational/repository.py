@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -9,6 +10,7 @@ from mcp_memory.utils.db import DatabaseManager
 
 VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
 VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
+FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 
 @dataclass
@@ -181,8 +183,8 @@ class RelationalMemoryRepository:
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
-        tokens = [part.strip() for part in query.split() if part.strip()]
-        normalized_query = " OR ".join(tokens)
+        tokens = [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+        normalized_query = " OR ".join(f'"{token}"' for token in tokens)
         if not normalized_query:
             return []
 

@@ -150,6 +150,23 @@ def test_repository_keyword_candidates_use_fts_and_hide_superseded(db_manager) -
     assert ids == [current_plan.id]
 
 
+def test_repository_keyword_candidates_normalize_punctuation_heavy_queries(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    record = repository.create_memory(
+        title="Auth rollout plan",
+        content="Roll out auth for all services.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth", "rollout"],
+    )
+    assert record is not None
+
+    ids = repository.search_keyword_memory_ids('auth, rollout!!! "phase-1"', limit=10)
+
+    assert ids[0] == record.id
+
+
 def test_search_memories_prioritizes_workspace_and_hides_superseded(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
