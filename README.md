@@ -22,6 +22,7 @@ The runtime is now **relational-first**.
 
 ### Key Features
 
+- **Staged Search Ranking**: Search now combines weighted BM25 keyword retrieval, optional semantic candidates, RRF fusion, sigmoid calibration, recency/access boosts, workspace relevance, graph authority, and degradation penalties.
 - **Memory-Specific Recency Boost**: Automatically prioritizes recent memories (journals, plans) while preserving long-term facts.
 - **Typed Relational Links**: Memory records can carry explicit typed relationships such as `SUPERSEDES`, `EXTENDS`, and `CONTRADICTS`.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
@@ -65,7 +66,7 @@ The following tools are exposed via the MCP server:
 
 ### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the local journal.
-- `search_memory_records`: Search relational memory records with summary-first results and local semantic ranking.
+- `search_memory_records`: Search relational memory records with summary-first results and staged ranking over weighted keyword + optional semantic retrieval.
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.

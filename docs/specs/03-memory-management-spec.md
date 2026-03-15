@@ -1,6 +1,6 @@
 # Specification: Memory Management System (Relational)
 
-**Status:** ✅ Design Complete (Ready for Implementation)
+**Status:** Active runtime baseline
 
 ## 1. Relational Schema
 
@@ -14,25 +14,33 @@
 
 ## 2. Progressive Discovery Tools
 
-1. **`search_memories`**: 
-    - **Inputs**: `query`, `limit`. (`workspace_id` injected by proxy).
-    - **Outputs**: Returns metadata and a **two-sentence summary** of matches.
-    - **Telemetry**: Updates `last_surfaced_at` for all matches.
-2. **`read_memory`**: 
+1. **`search_memories`**:
+    - **Inputs**: `query`, `limit`, with optional `memory_type` / `status`. (`workspace_id` injected by proxy.)
+    - **Outputs**: Returns metadata and summary-first matches.
+    - **Telemetry**: Updates `last_surfaced_at` for all returned results in one batch write.
+2. **`read_memory`**:
     - **Inputs**: `memory_id`.
-    - **Outputs**: Returns **full content**, relationships, and a list of **superseded IDs** (breadcrumb trail).
+    - **Outputs**: Returns full content, relationships, and a superseded breadcrumb trail.
     - **Side Effect**: Decays `access_score` and adds `+1.0` (Working Memory boost).
 3. **`record_thought`**: Quickly stashes raw context into System 1.
 
 ## 3. Search Ranking & Scoring Pipeline (The 7-Stage Gauntlet)
 
-1. **RRF Fusion**: Combines Vector (FAISS) and Keyword (FTS5) rankings.
-2. **Sigmoid Calibration**: Expands scores to an absolute `0.0 - 1.0` range.
-3. **Type-Aware Recency Boost**: Exponentially decaying bonus based on `type` (Journals/Plans decay fast; Facts/Reflections stay evergreen).
-4. **Workspace Boost**: Flat `1.2x` multiplier if the memory is linked to the current `workspace_id`.
-5. **Access Score Boost**: Logarithmic bonus based on the `access_score` (favoring "Working Memory").
-6. **Graph Authority**: Slight multiplier based on "In-Degree" (how many memories link *to* this one).
-7. **Degradation Penalty**: Severe `0.3x` penalty if status is `stale` or `degraded`.
+The active runtime now uses a staged ranking pipeline:
+
+1. **RRF Fusion**: combines top keyword candidates from SQLite FTS5 / weighted BM25 with top semantic candidates when embeddings are available.
+2. **Sigmoid Calibration**: converts the fused RRF score into a bounded `0.0 - 1.0` confidence score.
+3. **Type-Aware Recency Boost**: adds an exponentially decaying freshness bonus based on the candidate's actual `type`.
+4. **Workspace Boost**: applies a `1.2x` multiplier when the memory is attached to the caller's workspace.
+5. **Access Score Boost**: adds a log-scaled working-memory bonus from the time-decayed `access_score`.
+6. **Graph Authority**: multiplies by a capped in-degree boost derived from incoming link count.
+7. **Degradation Penalty**: multiplies stale / degraded records by `0.3x` to push them toward the bottom.
+
+### 3.1 Current Search Notes
+- keyword retrieval uses weighted BM25 over `title`, `summary`, `content`, and `tags`
+- semantic retrieval is optional and only participates when the local embedder/vector store is configured
+- the explicit `memory_type` query argument no longer applies a separate compatibility boost; ranking now relies on the staged pipeline and type-aware recency only
+- the ranking weights are tunable via `[search_ranking]` in `config.toml`
 
 ## 4. Maintenance Agents (The Background Daemon)
 

@@ -11,6 +11,7 @@ The test suite uses the `small` / `medium` / `large` structure and prefers real 
   - isolated logic
   - schema/repository helpers
   - deterministic ranking math
+  - FTS candidate retrieval
   - importer normalization
 - rules
   - no network
@@ -53,6 +54,8 @@ Avoid keeping fixtures for deleted indexing-era schema.
 
 ## 4. Coverage Priorities
 - workspace-aware search ordering
+- staged ranking invariants (RRF, calibration, recency, working-memory boost, degradation)
+- ranking ladder coverage for generic mixed-memory queries
 - summary-first search/read behavior
 - daemon startup and locking
 - durable task retries and failed-task visibility
@@ -61,8 +64,8 @@ Avoid keeping fixtures for deleted indexing-era schema.
 
 ## 5. Non-Goals
 The test strategy does not assume:
-- FAISS
-- vector indices
 - ZMQ transport
 - chunking pipelines
 - indexing-era compatibility layers
+
+Vector retrieval remains optional in tests: suites should not require local embedding support unless the test is explicitly about semantic ranking.
