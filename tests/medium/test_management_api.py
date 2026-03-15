@@ -86,7 +86,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "mcp_memory.server",
                 "INFO",
                 "seeded daemon log",
-                12.0,
+                time.time(),
                 "{}",
             ),
         )
@@ -128,6 +128,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
         logs = _fetch_json(f"http://127.0.0.1:{port}/api/logs?source=daemon&q=seeded")
         log_summary = _fetch_json(f"http://127.0.0.1:{port}/api/logs/summary?source=daemon")
+        prune_logs = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/logs/prune",
+            {"max_runtime_logs": 1, "max_log_age_days": 30},
+        )
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
@@ -190,6 +194,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert logs["logs"][0]["source"] == "daemon"
         assert log_summary["total"] == 1
         assert log_summary["by_level"] == {"INFO": 1}
+        assert prune_logs["deleted"] == 0
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
         assert fact_checker["failed_runs"] == 1
         assert overview["recent_agent_runs"]

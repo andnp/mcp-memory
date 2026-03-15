@@ -133,6 +133,21 @@ class EmbeddingsConfig:
 
 
 @dataclass
+class LoggingConfig:
+    max_runtime_logs: int = 5000
+    max_log_age_days: int = 14
+    retention_check_interval_seconds: float = 60.0
+
+    def __post_init__(self) -> None:
+        if self.max_runtime_logs < 1:
+            raise ValueError("logging.max_runtime_logs must be >= 1")
+        if self.max_log_age_days < 1:
+            raise ValueError("logging.max_log_age_days must be >= 1")
+        if self.retention_check_interval_seconds <= 0:
+            raise ValueError("logging.retention_check_interval_seconds must be > 0")
+
+
+@dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
@@ -142,6 +157,7 @@ class Config:
     ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -214,6 +230,11 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "model": "sentence-transformers/all-MiniLM-L6-v2",
         "batch_size": 32,
     }
+    document["logging"] = {
+        "max_runtime_logs": 5000,
+        "max_log_age_days": 14,
+        "retention_check_interval_seconds": 60.0,
+    }
     memory_table = tomlkit.table()
     memory_table.update({
         "enabled": True,
@@ -263,6 +284,7 @@ def load_config(config_path: Path | None = None) -> Config:
         ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
+        logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
     )
 
 

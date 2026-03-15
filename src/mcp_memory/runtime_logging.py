@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from mcp_memory.mcp.runtime import resolve_runtime_spec
+from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -29,26 +29,19 @@ class SQLiteStructuredLogHandler(logging.Handler):
             raise ValueError("db_manager_or_db_path_required")
         self._db_manager = db_manager if db_manager is not None else DatabaseManager(db_path)
         self._owns_db_manager = db_manager is None
-        self._workspace_id = workspace_id
         self._source = source
-        self._exception_formatter = logging.Formatter()
+        self._repository = RuntimeLogRepository(self._db_manager, workspace_id=workspace_id)
 
     def emit(self, record: logging.LogRecord):
         try:
-            payload = json.dumps(_build_log_data(record), sort_keys=True)
-            self._db_manager.get_connection().execute(
-                "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    self._workspace_id,
-                    self._source,
-                    record.name,
-                    record.levelname,
-                    record.getMessage(),
-                    float(record.created),
-                    payload,
-                ),
+            self._repository.write_log(
+                source=self._source,
+                logger_name=record.name,
+                level=record.levelname,
+                message=record.getMessage(),
+                created_at=float(record.created),
+                data=_build_log_data(record),
             )
-            self._db_manager.get_connection().commit()
         except Exception:
             self.handleError(record)
 
@@ -58,9 +51,6 @@ class SQLiteStructuredLogHandler(logging.Handler):
                 self._db_manager.close()
         finally:
             super().close()
-
-    def format_exception(self, exc_info):
-        return self._exception_formatter.formatException(exc_info)
 
 
 def configure_cli_logging(debug: bool):

@@ -1,7 +1,72 @@
+
+
+def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
+    runner = CliRunner()
+
+    class FakeMetadata:
+        workspace_id = "workspace-a"
+        pid = 123
+        started_at = 100.0
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr(
+        "mcp_memory.cli.inspect_daemon",
+        lambda workspace_root, cwd=None: ("workspace-a", FakeMetadata(), True),
+    )
+
+    result = runner.invoke(main, ["daemon-status"])
+
+    assert result.exit_code == 0
+    assert "Status:" in result.output
+    assert "running" in result.output
+    assert "127.0.0.1:8123" in result.output
+
+
+def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
+    runner = CliRunner()
+
+    class FakeMetadata:
+        pid = 123
+        workspace_id = "workspace-a"
+
+    monkeypatch.setattr("mcp_memory.cli.stop_daemon", lambda workspace_root, cwd=None: FakeMetadata())
+
+    result = runner.invoke(main, ["daemon-stop"])
+
+    assert result.exit_code == 0
+    assert "Daemon stopped:" in result.output
+    assert "workspace-a" in result.output
+
+
+def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
+    runner = CliRunner()
+
+    class FakeMetadata:
+        pid = 456
+        base_url = "http://127.0.0.1:9000"
+
+    stop_calls: list[tuple[str | None, object | None]] = []
+    start_calls: list[tuple[str | None, object | None]] = []
+    monkeypatch.setattr(
+        "mcp_memory.cli.stop_daemon",
+        lambda workspace_root, cwd=None: stop_calls.append((workspace_root, cwd)) or None,
+    )
+    monkeypatch.setattr(
+        "mcp_memory.cli.ensure_daemon_started",
+        lambda workspace_root, cwd=None: start_calls.append((workspace_root, cwd)) or FakeMetadata(),
+    )
+
+    result = runner.invoke(main, ["daemon-restart", "--workspace-root", "demo"])
+
+    assert result.exit_code == 0
+    assert stop_calls == [("demo", None)]
+    assert start_calls == [("demo", None)]
+    assert "http://127.0.0.1:9000/" in result.output
 import json
 from click.testing import CliRunner
 from pathlib import Path
 import logging
+import time
 
 from mcp_memory.cli import main
 from mcp_memory.mcp.runtime import create_runtime
@@ -260,6 +325,40 @@ def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) 
     assert "By Level" in result.output
     assert "By Source" in result.output
     assert "daemon" in result.output
+
+
+def test_log_prune_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().executemany(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (runtime.workspace_id, "daemon", "mcp_memory.server", "INFO", "first", time.time(), "{}"),
+                (runtime.workspace_id, "daemon", "mcp_memory.server", "INFO", "second", time.time() + 1, "{}"),
+            ],
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(
+        main,
+        ["log-prune", "--workspace-root", str(workspace), "--max-runtime-logs", "1", "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["deleted"] == 1
+    assert payload["max_runtime_logs"] == 1
 
 
 def test_run_command_records_logs_without_polluting_stdio(monkeypatch, tmp_path: Path) -> None:

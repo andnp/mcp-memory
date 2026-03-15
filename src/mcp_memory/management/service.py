@@ -20,12 +20,14 @@ from mcp_memory.management.models import (
     OverviewCounts,
     OverviewPayload,
     RuntimeLogListPayload,
+    RuntimeLogPrunePayload,
     RuntimeLogPayload,
     RuntimeLogSummaryPayload,
     StorageSummary,
     TaskListPayload,
     TaskStatusSummary,
 )
+from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
@@ -44,6 +46,11 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
+        self._runtime_logs = RuntimeLogRepository(
+            ctx.db_manager,
+            workspace_id=ctx.workspace_id,
+            config=None if ctx.config is None else ctx.config.logging,
+        )
         self._embedder = ctx.embedder
         self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
 
@@ -264,52 +271,26 @@ class ManagementService:
     ) -> RuntimeLogListPayload:
         if self._db_manager is None:
             return RuntimeLogListPayload()
-
-        sql = (
-            "SELECT id, created_at, level, logger_name, source, message, data_json "
-            "FROM runtime_logs"
-        )
-        clauses: list[str] = []
-        params: list[object] = []
-        if self._workspace_id is not None:
-            clauses.append("workspace_id = ?")
-            params.append(self._workspace_id)
-        if level is not None:
-            clauses.append("level = ?")
-            params.append(level)
-        if logger_name is not None:
-            clauses.append("logger_name = ?")
-            params.append(logger_name)
-        if source is not None:
-            clauses.append("source = ?")
-            params.append(source)
-        if query is not None and query.strip():
-            clauses.append("(message LIKE ? OR logger_name LIKE ? OR source LIKE ?)")
-            needle = f"%{query.strip()}%"
-            params.extend([needle, needle, needle])
-        if after is not None:
-            clauses.append("created_at >= ?")
-            params.append(after)
-        if before is not None:
-            clauses.append("created_at <= ?")
-            params.append(before)
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
-        params.append(limit)
-        rows = self._db_manager.get_connection().execute(sql, params).fetchall()
         return RuntimeLogListPayload(
             logs=[
                 RuntimeLogPayload(
-                    id=int(row["id"]),
-                    created_at=float(row["created_at"]),
-                    level=str(row["level"]),
-                    logger_name=str(row["logger_name"]),
-                    source=str(row["source"]),
-                    message=str(row["message"]),
-                    data=_decode_log_data(row["data_json"]),
+                    id=record.id,
+                    created_at=record.created_at,
+                    level=record.level,
+                    logger_name=record.logger_name,
+                    source=record.source,
+                    message=record.message,
+                    data=record.data,
                 )
-                for row in rows
+                for record in self._runtime_logs.list_logs(
+                    level=level,
+                    logger_name=logger_name,
+                    source=source,
+                    query=query,
+                    after=after,
+                    before=before,
+                    limit=limit,
+                )
             ]
         )
 
@@ -325,9 +306,7 @@ class ManagementService:
     ) -> RuntimeLogSummaryPayload:
         if self._db_manager is None:
             return RuntimeLogSummaryPayload()
-
-        where_clause, params = _build_log_filters(
-            workspace_id=self._workspace_id,
+        summary = self._runtime_logs.summarize_logs(
             level=level,
             logger_name=logger_name,
             source=source,
@@ -335,29 +314,29 @@ class ManagementService:
             after=after,
             before=before,
         )
-        conn = self._db_manager.get_connection()
-        total_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM runtime_logs" + where_clause,
-            params,
-        ).fetchone()
-        grouped_rows = conn.execute(
-            "SELECT level, source, COUNT(*) AS count FROM runtime_logs"
-            + where_clause
-            + " GROUP BY level, source",
-            params,
-        ).fetchall()
-        by_level: dict[str, int] = {}
-        by_source: dict[str, int] = {}
-        for row in grouped_rows:
-            level_name = str(row["level"])
-            source_name = str(row["source"])
-            count = int(row["count"])
-            by_level[level_name] = by_level.get(level_name, 0) + count
-            by_source[source_name] = by_source.get(source_name, 0) + count
         return RuntimeLogSummaryPayload(
-            total=0 if total_row is None else int(total_row["count"]),
-            by_level=by_level,
-            by_source=by_source,
+            total=summary.total,
+            by_level=summary.by_level,
+            by_source=summary.by_source,
+        )
+
+    def prune_logs(
+        self,
+        *,
+        max_runtime_logs: int | None = None,
+        max_log_age_days: int | None = None,
+    ) -> RuntimeLogPrunePayload:
+        config = self._runtime_logs.retention_policy
+        deleted = self._runtime_logs.prune_logs(
+            max_runtime_logs=max_runtime_logs,
+            max_age_days=max_log_age_days,
+        )
+        resolved_max_runtime_logs = config.max_runtime_logs if max_runtime_logs is None else max_runtime_logs
+        resolved_max_log_age_days = config.max_log_age_days if max_log_age_days is None else max_log_age_days
+        return RuntimeLogPrunePayload(
+            deleted=deleted,
+            max_runtime_logs=resolved_max_runtime_logs,
+            max_log_age_days=resolved_max_log_age_days,
         )
 
     def load_dashboard_html(self):
@@ -579,50 +558,3 @@ def _decode_run_result(raw_result: object) -> dict[str, object]:
     except ValueError:
         return {}
     return decoded if isinstance(decoded, dict) else {}
-
-
-def _decode_log_data(raw_result: object) -> dict[str, object]:
-    if not isinstance(raw_result, str) or not raw_result.strip():
-        return {}
-    try:
-        decoded = json.loads(raw_result)
-    except ValueError:
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
-
-
-def _build_log_filters(
-    *,
-    workspace_id: str | None,
-    level: str | None,
-    logger_name: str | None,
-    source: str | None,
-    query: str | None,
-    after: float | None,
-    before: float | None,
-) -> tuple[str, list[object]]:
-    clauses: list[str] = []
-    params: list[object] = []
-    if workspace_id is not None:
-        clauses.append("workspace_id = ?")
-        params.append(workspace_id)
-    if level is not None:
-        clauses.append("level = ?")
-        params.append(level)
-    if logger_name is not None:
-        clauses.append("logger_name = ?")
-        params.append(logger_name)
-    if source is not None:
-        clauses.append("source = ?")
-        params.append(source)
-    if query is not None and query.strip():
-        needle = f"%{query.strip()}%"
-        clauses.append("(message LIKE ? OR logger_name LIKE ? OR source LIKE ?)")
-        params.extend([needle, needle, needle])
-    if after is not None:
-        clauses.append("created_at >= ?")
-        params.append(after)
-    if before is not None:
-        clauses.append("created_at <= ?")
-        params.append(before)
-    return ("" if not clauses else " WHERE " + " AND ".join(clauses)), params

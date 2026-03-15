@@ -213,6 +213,13 @@ def create_daemon_app(
             before=before,
         ).model_dump()
 
+    @app.post("/api/admin/logs/prune")
+    async def prune_logs(arguments: dict[str, Any]):
+        return app.state.routes.service.prune_logs(
+            max_runtime_logs=int(arguments["max_runtime_logs"]) if arguments.get("max_runtime_logs") is not None else None,
+            max_log_age_days=int(arguments["max_log_age_days"]) if arguments.get("max_log_age_days") is not None else None,
+        ).model_dump()
+
     @app.get("/api/memories/{memory_id}")
     async def memory_detail(memory_id: str):
         try:

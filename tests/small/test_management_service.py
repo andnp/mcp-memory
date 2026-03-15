@@ -77,6 +77,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     health = service.get_health()
     filtered_logs = service.list_logs(query="daemon", source="daemon")
     summary = service.summarize_logs(source="daemon")
+    prune_result = service.prune_logs(max_runtime_logs=1, max_log_age_days=30)
+    after_prune = service.list_logs(limit=10)
 
     assert overview.memories.total == 2
     assert overview.memories.by_status == {"active": 1, "stale": 1}
@@ -91,6 +93,9 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert summary.total == 1
     assert summary.by_level == {"WARNING": 1}
     assert summary.by_source == {"daemon": 1}
+    assert prune_result.deleted == 0
+    assert prune_result.max_runtime_logs == 1
+    assert len(after_prune.logs) == 1
     assert detail.record["id"] == primary.id
     assert detail.relationships["outgoing"][0]["link_type"] == "SUPERSEDES"
     assert detail.superseded[0]["id"] == secondary.id

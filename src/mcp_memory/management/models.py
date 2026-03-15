@@ -109,6 +109,12 @@ class RuntimeLogSummaryPayload(BaseModel):
     by_source: dict[str, int] = Field(default_factory=dict)
 
 
+class RuntimeLogPrunePayload(BaseModel):
+    deleted: int
+    max_runtime_logs: int
+    max_log_age_days: int
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)

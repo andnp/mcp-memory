@@ -1,3 +1,6 @@
+    assert "daemon-status" in result.output
+    assert "daemon-stop" in result.output
+    assert "daemon-restart" in result.output
 import json
 from pathlib import Path
 
@@ -150,7 +153,11 @@ def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -
     assert result.exit_code == 0
     assert "run" in result.output
     assert "daemon" in result.output
+    assert "daemon-status" in result.output
+    assert "daemon-stop" in result.output
+    assert "daemon-restart" in result.output
     assert "dashboard" in result.output
+    assert "log-prune" in result.output
     assert "log-summary" in result.output
     assert "logs" in result.output
     assert "install" in result.output

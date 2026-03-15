@@ -1,7 +1,10 @@
 import logging
+import time
 
 import pytest
 
+from mcp_memory.config import LoggingConfig
+from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 
 
@@ -36,3 +39,53 @@ def test_sqlite_structured_log_handler_writes_runtime_log(db_manager) -> None:
     assert row["logger_name"] == "mcp_memory.server"
     assert row["level"] == "INFO"
     assert row["message"] == "hello world"
+
+
+def test_runtime_log_repository_prunes_by_age_and_count(db_manager) -> None:
+    repository = RuntimeLogRepository(
+        db_manager,
+        workspace_id="workspace-a",
+        config=LoggingConfig(
+            max_runtime_logs=2,
+            max_log_age_days=1,
+            retention_check_interval_seconds=0.01,
+        ),
+    )
+
+    now = time.time()
+    repository.write_log(
+        source="daemon",
+        logger_name="mcp_memory.old",
+        level="INFO",
+        message="too old",
+        created_at=now - 172800,
+        data={},
+    )
+    repository.write_log(
+        source="daemon",
+        logger_name="mcp_memory.keep1",
+        level="INFO",
+        message="keep one",
+        created_at=now,
+        data={},
+    )
+    repository.write_log(
+        source="daemon",
+        logger_name="mcp_memory.keep2",
+        level="WARNING",
+        message="keep two",
+        created_at=now + 1,
+        data={},
+    )
+    repository.write_log(
+        source="daemon",
+        logger_name="mcp_memory.drop",
+        level="ERROR",
+        message="drop by count",
+        created_at=now + 2,
+        data={},
+    )
+
+    records = repository.list_logs(limit=10)
+
+    assert [record.message for record in records] == ["drop by count", "keep two"]

@@ -12,8 +12,9 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
+from mcp_memory.core.agent_runtime import bootstrap_background_tasks
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
-from mcp_memory.daemon import create_daemon_app, ensure_daemon_started
+from mcp_memory.daemon import create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.service import ManagementService
@@ -103,6 +104,49 @@ def daemon(ctx: click.Context, workspace_root: str | None, host: str, port: int)
             daemon_port = int(sock.getsockname()[1])
     app = create_daemon_app(workspace_root_override=workspace_root, host=host, port=daemon_port)
     uvicorn.run(app, host=host, port=daemon_port, log_level="info")
+
+
+@main.command(name="daemon-status")
+@click.option("--workspace-root", help="Override the active workspace root")
+def daemon_status(workspace_root: str | None) -> None:
+    """Print the current daemon status for the active workspace."""
+    workspace_id, metadata, healthy = inspect_daemon(workspace_root, None)
+    if metadata is None:
+        console.print(f"[yellow]Daemon not registered[/] for {workspace_id}")
+        return
+    console.print(f"[bold]Workspace:[/] {workspace_id}")
+    console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
+    console.print(f"[bold]PID:[/] {metadata.pid}")
+    console.print(f"[bold]URL:[/] {metadata.base_url}")
+    console.print(f"[bold]Started:[/] {_format_timestamp(metadata.started_at)}")
+
+
+@main.command(name="daemon-stop")
+@click.option("--workspace-root", help="Override the active workspace root")
+def daemon_stop(workspace_root: str | None) -> None:
+    """Stop the workspace daemon if it is running."""
+    try:
+        metadata = stop_daemon(workspace_root, None)
+    except Exception as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        sys.exit(1)
+    if metadata is None:
+        console.print("[yellow]No daemon metadata found.[/]")
+        return
+    console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} workspace={metadata.workspace_id}")
+
+
+@main.command(name="daemon-restart")
+@click.option("--workspace-root", help="Override the active workspace root")
+def daemon_restart(workspace_root: str | None) -> None:
+    """Restart the workspace daemon and print the fresh dashboard URL."""
+    try:
+        stop_daemon(workspace_root, None)
+        metadata = ensure_daemon_started(workspace_root, None)
+    except Exception as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        sys.exit(1)
+    console.print(f"[green]Daemon restarted:[/] {metadata.base_url}/ (pid={metadata.pid})")
 
 
 @main.command(name="dashboard")
@@ -234,6 +278,35 @@ def log_summary(
         for source_name, count in sorted(payload.by_source.items()):
             by_source.add_row(source_name, str(count))
         console.print(by_source)
+    finally:
+        runtime.close()
+
+
+@main.command(name="log-prune")
+@click.option("--workspace-root", help="Override the active workspace root")
+@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
+@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def log_prune(
+    workspace_root: str | None,
+    max_runtime_logs: int | None,
+    max_log_age_days: int | None,
+    json_output: bool,
+) -> None:
+    """Prune runtime logs using explicit or configured retention limits."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).prune_logs(
+            max_runtime_logs=max_runtime_logs,
+            max_log_age_days=max_log_age_days,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        console.print(f"[green]Pruned logs:[/] {payload.deleted}")
+        console.print(
+            f"policy max_runtime_logs={payload.max_runtime_logs} max_log_age_days={payload.max_log_age_days}"
+        )
     finally:
         runtime.close()
 
@@ -376,9 +449,11 @@ def stats(workspace_root: str | None) -> None:
     ensure_daemon_started(workspace_root, None)
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
+        bootstrap_background_tasks(runtime)
         service = _build_management_service(runtime)
         health = service.get_health()
         overview = service.get_overview()
+        journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
 
         console.print(f"[bold]Workspace:[/] {health.workspace_id}")
         console.print(f"[bold]Database:[/] {health.db_path}")
@@ -390,8 +465,10 @@ def stats(workspace_root: str | None) -> None:
         metrics.add_row("Total memory lines", str(overview.memory_metrics.total_memory_lines))
         metrics.add_row("Total summary lines", str(overview.memory_metrics.total_summary_lines))
         metrics.add_row("Total lines compressed", str(overview.memory_metrics.total_lines_compressed))
-        metrics.add_row("Thought buffer entries", str(overview.memory_metrics.thought_buffer_entries))
-        metrics.add_row("Thought buffer lines", str(overview.memory_metrics.thought_buffer_lines))
+        metrics.add_row("Pending journal entries", str(journal_counts.get("pending", 0)))
+        metrics.add_row("Processed journal entries", str(journal_counts.get("processed", 0)))
+        metrics.add_row("Archived journal entries", str(journal_counts.get("archived", 0)))
+        metrics.add_row("Pending journal lines", str(overview.memory_metrics.thought_buffer_lines))
         console.print(metrics)
 
         agent_table = Table(title="Background Agents")
