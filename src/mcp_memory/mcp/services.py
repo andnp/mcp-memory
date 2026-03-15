@@ -22,7 +22,7 @@ from mcp_memory.serialization import (
 
 
 SEARCH_READ_GUIDANCE = (
-    "Use the read_memory_record tool to read detailed memory contents for the most promising memories."
+    "Use these summary-first results to identify the most promising memories, then call read_memory_record for full context on the specific memory_id values you want to inspect."
 )
 
 
@@ -52,6 +52,7 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
     )
     return {
         "status": "ok",
+        "recommended_follow_up_tool": "read_memory_record",
         "results": [search_result_payload(result) for result in results],
         "guidance": SEARCH_READ_GUIDANCE,
     }

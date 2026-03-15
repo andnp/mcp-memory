@@ -16,7 +16,10 @@ def get_memory_tools() -> list[Tool]:
         ),
         Tool(
             name="search_memory_records",
-            description="Search relational memory records with summary-first results.",
+            description=(
+                "Search relational memory records with summary-first results. "
+                "Use the returned summaries to identify promising memories, then follow up with read_memory_record for full context."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

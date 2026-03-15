@@ -5,7 +5,10 @@ def get_internal_maintenance_tools() -> list[Tool]:
     return [
         Tool(
             name="internal_search_memory_records",
-            description="Search memory records for maintenance and organization tasks.",
+            description=(
+                "Search memory records for maintenance and organization tasks. "
+                "Use the returned summaries to identify promising memories, then follow up with internal_read_memory_record for full context."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

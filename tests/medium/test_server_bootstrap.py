@@ -30,17 +30,21 @@ async def test_call_memory_tool_returns_placeholder_payload() -> None:
 
 
 def test_get_memory_tools_returns_expected_names() -> None:
-    names = [tool.name for tool in get_memory_tools()]
+    tools = get_memory_tools()
+    names = [tool.name for tool in tools]
 
     assert names == [
         "record_thought",
         "search_memory_records",
         "read_memory_record",
     ]
+    search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
+    assert "follow up with read_memory_record" in search_tool.description
 
 
 def test_get_internal_maintenance_tools_returns_expected_names() -> None:
-    names = [tool.name for tool in get_internal_maintenance_tools()]
+    tools = get_internal_maintenance_tools()
+    names = [tool.name for tool in tools]
 
     assert names == [
         "internal_search_memory_records",
@@ -55,6 +59,8 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_create_memory_link",
         "internal_delete_memory_link",
     ]
+    search_tool = next(tool for tool in tools if tool.name == "internal_search_memory_records")
+    assert "follow up with internal_read_memory_record" in search_tool.description
 
 
 def test_mcp_server_initializes_with_workspace_root() -> None:
