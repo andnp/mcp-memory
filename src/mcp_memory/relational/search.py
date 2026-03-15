@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from collections.abc import Sequence
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
 from mcp_memory.relational.repository import MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
 
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
-MEMORY_TYPE_BOOST = 1.15
 
 
 @dataclass(slots=True)
@@ -340,77 +338,6 @@ class RelationalMemorySearchService:
                 model_name=self._embedder.model_name,
                 embedding=embedding,
             )
-
-
-def _tokenize(query: str):
-    return [token.lower() for token in TOKEN_PATTERN.findall(query)]
-
-
-def _base_match_score(record: RelationalMemoryRecord, tokens: list[str]):
-    title = record.title.lower()
-    summary = (record.summary or "").lower()
-    content = record.content.lower()
-    tags = {tag.lower() for tag in record.tags}
-
-    score = 0.0
-    for token in tokens:
-        if token in title:
-            score += 3.0
-        if token in summary:
-            score += 2.0
-        if token in content:
-            score += 1.0
-        if token in tags:
-            score += 1.5
-    return score
-
-
-def _normalize_base_score(score: float):
-    return score / (score + 3.0)
-
-
-def _apply_recency_boost(score: float, record: RelationalMemoryRecord, config: Config):
-    try:
-        created_at = datetime.fromisoformat(record.created_at)
-    except ValueError:
-        return score
-
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-
-    age_days = (datetime.now(timezone.utc) - created_at).days
-    recency = config.memory.get_recency_config(record.type)
-    if age_days > recency.boost_window_days:
-        return score
-
-    bonus = (recency.boost_decay_rate ** age_days) * recency.max_boost_amount
-    return min(1.0, score + bonus)
-
-
-def _apply_access_boost(score: float, record: RelationalMemoryRecord):
-    decayed = _decayed_access_score(record.access_score, record.last_accessed_at)
-    if decayed <= 0:
-        return score
-    return min(1.0, score + min(0.2, math.log1p(decayed) / 10.0))
-
-
-def _apply_graph_authority_boost(
-    score: float,
-    record: RelationalMemoryRecord,
-    repository: RelationalMemoryRepository,
-):
-    incoming_links = repository.count_incoming_links(record.id)
-    if incoming_links <= 0:
-        return score
-    multiplier = 1.0 + min(0.15, math.log1p(incoming_links) / 10.0)
-    return min(1.0, score * multiplier)
-
-
-def _apply_memory_type_boost(score: float, record: RelationalMemoryRecord, memory_type: str | None):
-    if memory_type is None or record.type != memory_type:
-        return score
-    return score * MEMORY_TYPE_BOOST
-
 
 def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
     tag_text = ", ".join(record.tags)
