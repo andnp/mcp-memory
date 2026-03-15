@@ -49,6 +49,11 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_append_memory_content",
         "internal_archive_memory_record",
         "internal_merge_memory_into_canonical",
+        "internal_create_memory_record",
+        "internal_update_memory_record",
+        "internal_delete_memory_record",
+        "internal_create_memory_link",
+        "internal_delete_memory_link",
     ]
 
 
@@ -108,6 +113,79 @@ async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp
         assert appended_payload["status"] == "ok"
         assert "deterministic fixtures" in appended_payload["record"]["content"]
         assert archived_payload["record"]["status"] == "archived"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_create_update_link_and_delete(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        created_result = await call_internal_memory_tool(
+            runtime,
+            "internal_create_memory_record",
+            {
+                "title": "Canonical testing preference",
+                "content": "Prefer deterministic fixtures.",
+                "memory_type": "fact",
+                "tags": ["testing"],
+            },
+        )
+        created_payload = json.loads(created_result[0].text)
+        created_id = created_payload["record"]["id"]
+
+        related = runtime.repository.create_memory(
+            title="Related testing note",
+            content="Pytest remains the standard.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+        )
+        assert related is not None
+
+        update_result = await call_internal_memory_tool(
+            runtime,
+            "internal_update_memory_record",
+            {"memory_id": created_id, "content": "Prefer deterministic pytest fixtures.", "tags": ["testing", "pytest"]},
+        )
+        create_link_result = await call_internal_memory_tool(
+            runtime,
+            "internal_create_memory_link",
+            {"source_id": created_id, "target_id": related.id, "link_type": "AMENDS", "context": "Curator linked related note."},
+        )
+        archive_result = await call_internal_memory_tool(
+            runtime,
+            "internal_archive_memory_record",
+            {"memory_id": created_id},
+        )
+        delete_link_result = await call_internal_memory_tool(
+            runtime,
+            "internal_delete_memory_link",
+            {"source_id": created_id, "target_id": related.id, "link_type": "AMENDS"},
+        )
+        delete_result = await call_internal_memory_tool(
+            runtime,
+            "internal_delete_memory_record",
+            {"memory_id": created_id, "confirm": True},
+        )
+
+        update_payload = json.loads(update_result[0].text)
+        create_link_payload = json.loads(create_link_result[0].text)
+        archive_payload = json.loads(archive_result[0].text)
+        delete_link_payload = json.loads(delete_link_result[0].text)
+        delete_payload = json.loads(delete_result[0].text)
+
+        assert created_payload["status"] == "ok"
+        assert update_payload["record"]["content"] == "Prefer deterministic pytest fixtures."
+        assert update_payload["record"]["tags"] == ["pytest", "testing"]
+        assert create_link_payload["status"] == "ok"
+        assert archive_payload["record"]["status"] == "archived"
+        assert delete_link_payload["status"] == "ok"
+        assert delete_payload["status"] == "ok"
+        assert runtime.repository.get_memory(created_id) is None
     finally:
         runtime.close()
 
@@ -187,13 +265,12 @@ def test_cli_help_lists_grouped_public_commands() -> None:
     runner = CliRunner()
 
     result = runner.invoke(main, ["--help"])
+    help_lines = result.output.splitlines()
 
     assert result.exit_code == 0
     assert "run" in result.output
     assert "daemon" in result.output
-    assert "log-prune" in result.output
-    assert "log-summary" in result.output
-    assert "logs" in result.output
+    assert "log" in result.output
     assert "install" in result.output
     assert "agents" in result.output
     assert "stats" in result.output
@@ -202,6 +279,9 @@ def test_cli_help_lists_grouped_public_commands() -> None:
     assert "daemon-stop" not in result.output
     assert "daemon-restart" not in result.output
     assert "dashboard" not in result.output
+    assert not any(line.strip().startswith("logs") for line in help_lines)
+    assert not any(line.strip().startswith("log-summary") for line in help_lines)
+    assert not any(line.strip().startswith("log-prune") for line in help_lines)
 
 
 def test_daemon_help_lists_nested_management_commands() -> None:
@@ -214,3 +294,14 @@ def test_daemon_help_lists_nested_management_commands() -> None:
     assert "stop" in result.output
     assert "restart" in result.output
     assert "dashboard" in result.output
+
+
+def test_log_help_lists_nested_log_commands() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["log", "--help"])
+
+    assert result.exit_code == 0
+    assert "show" in result.output
+    assert "summary" in result.output
+    assert "prune" in result.output

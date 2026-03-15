@@ -250,7 +250,7 @@ def test_logs_command_prints_runtime_logs(monkeypatch, tmp_path: Path) -> None:
 
     result = runner.invoke(
         main,
-        ["logs", "--workspace-root", str(workspace), "--source", "daemon", "--query", "warning"],
+        ["log", "show", "--workspace-root", str(workspace), "--source", "daemon", "--query", "warning"],
     )
 
     assert result.exit_code == 0
@@ -289,7 +289,7 @@ def test_logs_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
 
     result = runner.invoke(
         main,
-        ["logs", "--workspace-root", str(workspace), "--source", "stdio", "--json"],
+        ["log", "show", "--workspace-root", str(workspace), "--source", "stdio", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -320,7 +320,7 @@ def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) 
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["log-summary", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["log", "summary", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Matching logs:" in result.output
@@ -354,7 +354,7 @@ def test_log_prune_command_supports_json_output(monkeypatch, tmp_path: Path) -> 
 
     result = runner.invoke(
         main,
-        ["log-prune", "--workspace-root", str(workspace), "--max-runtime-logs", "1", "--json"],
+        ["log", "prune", "--workspace-root", str(workspace), "--max-runtime-logs", "1", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -552,8 +552,8 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
         assert runtime.task_queue.claim_next(now=10.0) is not None
         runtime.task_queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 3})
         runtime.db_manager.get_connection().execute(
-            "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (runtime.workspace_id, "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.5, time.time(), None),
+            "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (runtime.workspace_id, "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.5, time.time(), None),
         )
         runtime.db_manager.get_connection().commit()
     finally:
@@ -572,6 +572,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "Most read fact" in result.output
     assert "defragmenter" in result.output
     assert "gemini-cli" in result.output
+    assert "memory-curator" in result.output
     assert "lines_compressed=3" in result.output
 
 

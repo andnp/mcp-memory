@@ -170,6 +170,87 @@ def _render_log_summary(payload) -> None:
     console.print(by_source)
 
 
+def _show_logs(
+    workspace_root: str | None,
+    limit: int,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).list_logs(
+            level=None if level is None else level.upper(),
+            logger_name=logger_name,
+            source=source,
+            query=query,
+            after=after,
+            before=before,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_logs_table(payload)
+    finally:
+        runtime.close()
+
+
+def _summarize_logs(
+    workspace_root: str | None,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).summarize_logs(
+            level=None if level is None else level.upper(),
+            logger_name=logger_name,
+            source=source,
+            query=query,
+            after=after,
+            before=before,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_log_summary(payload)
+    finally:
+        runtime.close()
+
+
+def _prune_logs(
+    workspace_root: str | None,
+    max_runtime_logs: int | None,
+    max_log_age_days: int | None,
+    json_output: bool,
+) -> None:
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).prune_logs(
+            max_runtime_logs=max_runtime_logs,
+            max_log_age_days=max_log_age_days,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        console.print(f"[green]Pruned logs:[/] {payload.deleted}")
+        console.print(
+            f"policy max_runtime_logs={payload.max_runtime_logs} max_log_age_days={payload.max_log_age_days}"
+        )
+    finally:
+        runtime.close()
+
+
 def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:
     metrics = Table(title="Memory Metrics")
     metrics.add_column("Metric")
@@ -215,6 +296,7 @@ def _render_agent_table(overview) -> None:
 
 def _render_provider_usage_table(overview) -> None:
     provider_table = Table(title="AI Provider Usage")
+    provider_table.add_column("Task")
     provider_table.add_column("Provider", no_wrap=True)
     provider_table.add_column("Model")
     provider_table.add_column("Calls (1h)", justify="right")
@@ -224,9 +306,10 @@ def _render_provider_usage_table(overview) -> None:
     provider_table.add_column("Avg Duration (1h)", justify="right")
     provider_table.add_column("Avg Duration (24h)", justify="right")
     if not overview.provider_usage:
-        provider_table.add_row("-", "-", "0", "0", "0", "0", "0.00s", "0.00s")
+        provider_table.add_row("-", "-", "-", "0", "0", "0", "0", "0.00s", "0.00s")
     for usage in overview.provider_usage:
         provider_table.add_row(
+            usage.task_name or "-",
             usage.provider_key,
             usage.model_name,
             str(usage.calls_last_hour),
@@ -382,7 +465,12 @@ def dashboard_alias(workspace_root: str | None) -> None:
     _print_dashboard_url(workspace_root)
 
 
-@main.command(name="logs")
+@main.group(name="log")
+def log_group() -> None:
+    """Inspect and manage structured runtime logs."""
+
+
+@log_group.command(name="show")
 @workspace_root_option
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
 @click.option(
@@ -408,26 +496,10 @@ def logs(
     json_output: bool,
 ) -> None:
     """Print recent structured runtime logs from SQLite."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
-        payload = _build_management_service(runtime).list_logs(
-            level=None if level is None else level.upper(),
-            logger_name=logger_name,
-            source=source,
-            query=query,
-            after=after,
-            before=before,
-            limit=limit,
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_logs_table(payload)
-    finally:
-        runtime.close()
+    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
 
 
-@main.command(name="log-summary")
+@log_group.command(name="summary")
 @workspace_root_option
 @click.option(
     "--level",
@@ -451,25 +523,10 @@ def log_summary(
     json_output: bool,
 ) -> None:
     """Print aggregated runtime log counts."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
-        payload = _build_management_service(runtime).summarize_logs(
-            level=None if level is None else level.upper(),
-            logger_name=logger_name,
-            source=source,
-            query=query,
-            after=after,
-            before=before,
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_log_summary(payload)
-    finally:
-        runtime.close()
+    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
 
 
-@main.command(name="log-prune")
+@log_group.command(name="prune")
 @workspace_root_option
 @click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
 @click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
@@ -481,21 +538,75 @@ def log_prune(
     json_output: bool,
 ) -> None:
     """Prune runtime logs using explicit or configured retention limits."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
-        payload = _build_management_service(runtime).prune_logs(
-            max_runtime_logs=max_runtime_logs,
-            max_log_age_days=max_log_age_days,
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        console.print(f"[green]Pruned logs:[/] {payload.deleted}")
-        console.print(
-            f"policy max_runtime_logs={payload.max_runtime_logs} max_log_age_days={payload.max_log_age_days}"
-        )
-    finally:
-        runtime.close()
+    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
+
+
+@main.command(name="logs", hidden=True)
+@workspace_root_option
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def logs_alias(
+    workspace_root: str | None,
+    limit: int,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
+
+
+@main.command(name="log-summary", hidden=True)
+@workspace_root_option
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
+def log_summary_alias(
+    workspace_root: str | None,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
+
+
+@main.command(name="log-prune", hidden=True)
+@workspace_root_option
+@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
+@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def log_prune_alias(
+    workspace_root: str | None,
+    max_runtime_logs: int | None,
+    max_log_age_days: int | None,
+    json_output: bool,
+) -> None:
+    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
 
 
 @main.command(name="install")
