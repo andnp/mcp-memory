@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -136,6 +136,21 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON embeddings(source_kind, source_id);
         CREATE INDEX IF NOT EXISTS idx_embeddings_workspace_kind
             ON embeddings(workspace_id, source_kind);
+
+        CREATE TABLE IF NOT EXISTS hook_conversations (
+            conversation_id TEXT PRIMARY KEY,
+            workspace_id TEXT,
+            started_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            last_ping_at REAL,
+            last_reminder_at REAL,
+            last_tool_name TEXT,
+            last_payload_json TEXT NOT NULL DEFAULT '{}',
+            ended_at REAL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_hook_conversations_workspace_id
+            ON hook_conversations(workspace_id);
         """
     )
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
@@ -164,6 +179,11 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
     ensure_column(conn, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'"
     )
+    ensure_column(conn, "hook_conversations", "workspace_id", "TEXT")
+    ensure_column(conn, "hook_conversations", "last_tool_name", "TEXT")
+    ensure_column(conn, "hook_conversations", "last_payload_json", "TEXT NOT NULL DEFAULT '{}'"
+    )
+    ensure_column(conn, "hook_conversations", "ended_at", "REAL")
     conn.execute(
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),

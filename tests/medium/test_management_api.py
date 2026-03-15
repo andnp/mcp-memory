@@ -117,6 +117,22 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
         internal_tools = _fetch_json(f"http://127.0.0.1:{port}/internal/maintenance/tools")
+        hook_start = _post_json(
+            f"http://127.0.0.1:{port}/api/hooks/session-start",
+            {"sessionId": "conversation-1", "timestamp": 100.0},
+        )
+        hook_noop = _post_json(
+            f"http://127.0.0.1:{port}/api/hooks/post-tool-use",
+            {"sessionId": "conversation-1", "tool_name": "read_file", "timestamp": 200.0},
+        )
+        hook_reminder = _post_json(
+            f"http://127.0.0.1:{port}/api/hooks/post-tool-use",
+            {"sessionId": "conversation-1", "tool_name": "apply_patch", "timestamp": 401.0},
+        )
+        hook_end = _post_json(
+            f"http://127.0.0.1:{port}/api/hooks/session-end",
+            {"sessionId": "conversation-1", "timestamp": 500.0},
+        )
         run_agent = _post_json(
             f"http://127.0.0.1:{port}/api/admin/agents/run",
             {"task_name": "graph-linker", "force": True},
@@ -163,6 +179,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert detail["record"]["id"] == primary.id
         assert any(tool["name"] == "internal_merge_memory_into_canonical" for tool in internal_tools["tools"])
         assert detail["superseded"][0]["id"] == superseded.id
+        assert hook_start["status"] == "ok"
+        assert hook_noop == {}
+        assert "record_thought" in hook_reminder["systemMessage"]
+        assert hook_end["status"] == "ok"
         assert "running_count" in fact_checker
         assert "next_available_at" in fact_checker
         assert "last_result_summary" in fact_checker

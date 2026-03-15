@@ -26,6 +26,7 @@ class DaemonMetadata:
 class DaemonRoutes:
     ctx: Any
     service: ManagementService
+    hook_service: Any
     metadata_path: Path
 
 

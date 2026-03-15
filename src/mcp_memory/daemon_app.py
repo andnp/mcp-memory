@@ -17,6 +17,7 @@ from mcp_memory.config import resolve_daemon_metadata_path
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
+from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
@@ -50,6 +51,7 @@ def create_daemon_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         runtime = create_runtime_from_spec(spec)
+        assert runtime.db_manager is not None
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)
         warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
@@ -59,6 +61,7 @@ def create_daemon_app(
         routes = DaemonRoutes(
             ctx=runtime,
             service=ManagementService(runtime, controller=DaemonControllerView()),
+            hook_service=HookReminderService(runtime.db_manager, runtime.workspace_id),
             metadata_path=metadata_path,
         )
         app.state.routes = routes
@@ -118,6 +121,33 @@ def create_daemon_app(
                 force=bool(arguments.get("force", False))
             )
         }
+
+    @app.post("/api/hooks/session-start")
+    async def hook_session_start(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.hook_service.record_session_start(
+                str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
+                arguments,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/hooks/post-tool-use")
+    async def hook_post_tool_use(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.hook_service.record_post_tool_use(arguments)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/hooks/session-end")
+    async def hook_session_end(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.hook_service.record_session_end(
+                str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
+                arguments,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/tasks")
     async def tasks(
