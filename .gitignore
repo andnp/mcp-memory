@@ -20,3 +20,5 @@ docs/plans/
 .memories/
 .index_data/
 .codanna/
+.codannaignore
+.fastembed_cache
