@@ -1,4 +1,31 @@
 
+import json
+import logging
+from pathlib import Path
+import time
+
+from click.testing import CliRunner
+
+from mcp_memory.cli import main
+from mcp_memory.mcp.runtime import create_runtime
+
+
+pytest_plugins: list[str] = []
+
+
+def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None:
+    runner = CliRunner()
+
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+
+    result = runner.invoke(main, ["dashboard", "--workspace-root", "demo"])
+
+    assert result.exit_code == 0
+    assert "http://127.0.0.1:8123/" in result.output
+
 
 def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     runner = CliRunner()
@@ -62,31 +89,6 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
     assert stop_calls == [("demo", None)]
     assert start_calls == [("demo", None)]
     assert "http://127.0.0.1:9000/" in result.output
-import json
-from click.testing import CliRunner
-from pathlib import Path
-import logging
-import time
-
-from mcp_memory.cli import main
-from mcp_memory.mcp.runtime import create_runtime
-
-
-pytest_plugins: list[str] = []
-
-
-def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None:
-    runner = CliRunner()
-
-    class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
-
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
-
-    result = runner.invoke(main, ["dashboard", "--workspace-root", "demo"])
-
-    assert result.exit_code == 0
-    assert "http://127.0.0.1:8123/" in result.output
 
 
 def test_install_command_writes_workspace_hook_and_gemini_configs(monkeypatch, tmp_path: Path) -> None:
@@ -611,3 +613,45 @@ def test_stats_command_autostarts_daemon(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert calls == [(str(workspace), None)]
+
+
+def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+
+    runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)
+    try:
+        assert runtime_b.task_queue is not None
+        assert runtime_b.workspace_id is not None
+        task = runtime_b.task_queue.enqueue(
+            "defragmenter",
+            task_id="global-stats-task",
+            workspace_id=runtime_b.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime_b.task_queue.claim_next(now=10.0) is not None
+        runtime_b.task_queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 7})
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace_a)])
+
+    assert result.exit_code == 0
+    assert "Stats scope:" in result.output
+    assert "global" in result.output
+    assert "defragmenter" in result.output
+    assert "lines_compressed=7" in result.output

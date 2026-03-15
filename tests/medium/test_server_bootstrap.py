@@ -1,6 +1,3 @@
-    assert "daemon-status" in result.output
-    assert "daemon-stop" in result.output
-    assert "daemon-restart" in result.output
 import json
 from pathlib import Path
 

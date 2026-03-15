@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime
 import json
 import socket
@@ -450,12 +451,14 @@ def stats(workspace_root: str | None) -> None:
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
         bootstrap_background_tasks(runtime)
-        service = _build_management_service(runtime)
-        health = service.get_health()
-        overview = service.get_overview()
+        workspace_service = _build_management_service(runtime)
+        global_service = _build_management_service(runtime, workspace_id=None)
+        health = workspace_service.get_health()
+        overview = global_service.get_overview()
         journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
 
         console.print(f"[bold]Workspace:[/] {health.workspace_id}")
+        console.print("[bold]Stats scope:[/] global")
         console.print(f"[bold]Database:[/] {health.db_path}")
 
         metrics = Table(title="Memory Metrics")
@@ -598,8 +601,9 @@ def import_markdown(
         runtime.close()
 
 
-def _build_management_service(runtime) -> ManagementService:
-    return ManagementService(runtime, SimpleNamespace(has_runtime=True, client_count=1))
+def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:
+    ctx = runtime if workspace_id is ... else replace(runtime, workspace_id=workspace_id)
+    return ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
 
 
 def _format_timestamp(value: float | None) -> str:

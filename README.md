@@ -1,3 +1,9 @@
+   Development helpers:
+   ```bash
+   uv run mcp-memory daemon-status
+   uv run mcp-memory daemon-stop
+   uv run mcp-memory daemon-restart
+   ```
 # MCP Memory Server
 
 A standalone Model Context Protocol (MCP) server for persistent AI memory management.

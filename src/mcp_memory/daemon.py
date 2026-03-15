@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import signal
 import time
 
 from mcp_memory.config import (
@@ -13,6 +15,7 @@ from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_process import (
     find_free_port as _find_free_port,
     is_daemon_healthy as _is_daemon_healthy,
+    remove_metadata,
     read_daemon_metadata as _read_daemon_metadata,
     spawn_daemon_process as _spawn_daemon_process,
 )
@@ -50,6 +53,47 @@ def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
     return _read_daemon_metadata(metadata_path)
 
 
+
+def inspect_daemon(
+    workspace_root_override: str | None = None,
+    cwd: Path | None = None,
+) -> tuple[str, DaemonMetadata | None, bool]:
+    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    metadata = read_daemon_metadata(resolve_daemon_metadata_path(spec.workspace_id))
+    healthy = metadata is not None and _is_daemon_healthy(metadata)
+    return spec.workspace_id, metadata, healthy
+
+
+def stop_daemon(
+    workspace_root_override: str | None = None,
+    cwd: Path | None = None,
+) -> DaemonMetadata | None:
+    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
+    metadata = read_daemon_metadata(metadata_path)
+    if metadata is None:
+        return None
+
+    if not _is_daemon_healthy(metadata):
+        remove_metadata(metadata_path)
+        return metadata
+
+    try:
+        os.kill(metadata.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        remove_metadata(metadata_path)
+        return metadata
+
+    deadline = time.monotonic() + max(spec.config.daemon.shutdown_grace_seconds, 1.0)
+    while time.monotonic() < deadline:
+        if not _is_daemon_healthy(metadata):
+            remove_metadata(metadata_path)
+            return metadata
+        time.sleep(spec.config.daemon.healthcheck_interval_seconds)
+
+    raise RuntimeError(f"Timed out waiting for daemon shutdown for {spec.workspace_id}")
+
+
 def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:
     return ensure_daemon_started(workspace_root_override, cwd).base_url
 
@@ -61,4 +105,6 @@ __all__ = [
     "daemon_url",
     "ensure_daemon_started",
     "read_daemon_metadata",
+    "inspect_daemon",
+    "stop_daemon",
 ]
