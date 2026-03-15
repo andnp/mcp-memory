@@ -84,6 +84,62 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
 
 
 @pytest.mark.asyncio
+async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        runtime.journal.record("The user also prefers deterministic fixtures for pytest.")
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-append-test",
+        )
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "actions": [
+                        {
+                            "type": "append",
+                            "entry_indices": [0],
+                            "target_memory_id": target.id,
+                            "content": "Prefer deterministic fixtures for pytest.",
+                        }
+                    ]
+                }
+            ]
+        )
+        result = await handle_ingest_system1_task(runtime, task, provider)
+        updated = runtime.repository.get_memory(target.id)
+        memories = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+
+        assert result["created_memory_ids"] == [target.id]
+        assert updated is not None
+        assert "deterministic fixtures" in updated.content
+        assert len(memories) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

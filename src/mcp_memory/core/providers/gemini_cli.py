@@ -13,12 +13,14 @@ class GeminiCLIProvider(JSONCLIProvider):
         model: str = "gemini-3-flash-preview",
         timeout_seconds: float = 60.0,
         max_retries: int = 1,
+        cwd: str | None = None,
     ) -> None:
         super().__init__(
             command=command,
             model=model,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            cwd=cwd,
         )
 
     def build_command(self, prompt: str) -> tuple[str, ...]:

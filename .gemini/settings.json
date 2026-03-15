@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "allowed": ["mcp-memory-internal"]
+  },
+  "mcpServers": {
+    "mcp-memory-internal": {
+      "command": "uv",
+      "args": ["run", "mcp-memory", "internal-run"],
+      "timeout": 30000,
+      "trust": true
+    }
+  }
+}

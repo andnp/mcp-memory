@@ -56,6 +56,8 @@ The present runtime does **not** require:
 - strategy-roulette scheduling
 - always-on daemon behavior
 
+Trusted maintenance agents may use a separate internal MCP surface for read/search/archive/append/merge operations; this surface is intentionally separate from the public assistant-facing MCP tool set.
+
 ## 6. Future Work
 Potential future additions:
 - richer scheduling policies

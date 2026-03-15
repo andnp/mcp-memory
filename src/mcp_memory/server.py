@@ -21,16 +21,23 @@ logger = logging.getLogger(__name__)
 
 
 class MCPServer:
-    def __init__(self, workspace_root: str | None = None):
+    def __init__(
+        self,
+        workspace_root: str | None = None,
+        *,
+        server_name: str = "mcp-memory",
+        tool_path_prefix: str = "/internal/tools",
+    ):
         self.workspace_root = workspace_root
-        self.server = Server("mcp-memory")
+        self.server = Server(server_name)
         self._daemon = None
+        self._tool_path_prefix = tool_path_prefix
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
-            payload = await asyncio.to_thread(self._request_json, "/internal/tools", None)
+            payload = await asyncio.to_thread(self._request_json, self._tool_path_prefix, None)
             return [
                 Tool(
                     name=tool["name"],
@@ -44,7 +51,7 @@ class MCPServer:
         async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             payload = await asyncio.to_thread(
                 self._request_json,
-                f"/internal/tools/{name}",
+                f"{self._tool_path_prefix}/{name}",
                 arguments,
             )
             return [TextContent(type=item["type"], text=item["text"]) for item in payload["contents"]]

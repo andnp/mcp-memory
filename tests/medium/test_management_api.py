@@ -116,6 +116,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
+        internal_tools = _fetch_json(f"http://127.0.0.1:{port}/internal/maintenance/tools")
         created_link = _post_json(
             f"http://127.0.0.1:{port}/api/admin/links",
             {
@@ -148,6 +149,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
+        assert any(tool["name"] == "internal_merge_memory_into_canonical" for tool in internal_tools["tools"])
         assert detail["superseded"][0]["id"] == superseded.id
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"

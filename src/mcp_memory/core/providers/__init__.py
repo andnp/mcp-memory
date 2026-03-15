@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
@@ -15,7 +16,7 @@ class AIProvider(Protocol):
         ...
 
 
-def build_ai_provider(ai_config: AIConfig, gemini_cli: GeminiCLIConfig):
+def build_ai_provider(ai_config: AIConfig, gemini_cli: GeminiCLIConfig, workspace_root: Path | None = None):
     if ai_config.provider == "none":
         return None
     if ai_config.provider == "gemini-cli":
@@ -24,15 +25,16 @@ def build_ai_provider(ai_config: AIConfig, gemini_cli: GeminiCLIConfig):
             model=ai_config.model,
             timeout_seconds=ai_config.timeout_seconds,
             max_retries=ai_config.max_retries,
+            cwd=None if workspace_root is None else str(workspace_root),
         )
     raise ValueError(f"Unsupported AI provider: {ai_config.provider}")
 
 
-def build_ai_provider_from_config(config: Config):
+def build_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
     if config.ai.provider == "none":
         return None
     if config.ai.provider == "gemini-cli":
-        return build_ai_provider(config.ai, config.gemini_cli)
+        return build_ai_provider(config.ai, config.gemini_cli, workspace_root)
     if config.ai.provider == "copilot-cli":
         return CopilotCLIProvider(
             command=config.copilot_cli.command,

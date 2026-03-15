@@ -52,6 +52,24 @@ def run(workspace_root: str | None) -> None:
         sys.exit(1)
 
 
+@main.command(name="internal-run", hidden=True)
+@click.option("--workspace-root", help="Override the active workspace root")
+def internal_run(workspace_root: str | None) -> None:
+    """Run the internal maintenance MCP stdio proxy for trusted tool-using agents."""
+    server = MCPServer(
+        workspace_root=workspace_root,
+        server_name="mcp-memory-internal",
+        tool_path_prefix="/internal/maintenance/tools",
+    )
+    try:
+        asyncio.run(server.run())
+    except KeyboardInterrupt:
+        return
+    except Exception as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        sys.exit(1)
+
+
 @main.command()
 @click.option("--workspace-root", help="Override the active workspace root")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")

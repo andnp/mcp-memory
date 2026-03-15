@@ -7,8 +7,9 @@ from click.testing import CliRunner
 from mcp.types import TextContent
 
 from mcp_memory.cli import main
-from mcp_memory.mcp.handlers import call_memory_tool
+from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import get_memory_tools
 from mcp_memory.server import MCPServer
 from tests.sdk.mcp import FakeAsyncContextManager
@@ -38,6 +39,19 @@ def test_get_memory_tools_returns_expected_names() -> None:
     ]
 
 
+def test_get_internal_maintenance_tools_returns_expected_names() -> None:
+    names = [tool.name for tool in get_internal_maintenance_tools()]
+
+    assert names == [
+        "internal_search_memory_records",
+        "internal_read_memory_record",
+        "internal_list_memory_records",
+        "internal_append_memory_content",
+        "internal_archive_memory_record",
+        "internal_merge_memory_into_canonical",
+    ]
+
+
 def test_mcp_server_initializes_with_workspace_root() -> None:
     server = MCPServer(workspace_root="demo-workspace")
 
@@ -57,6 +71,43 @@ async def test_call_memory_tool_records_real_journal_entry(monkeypatch, tmp_path
         assert payload["status"] == "recorded"
         assert payload["entry"]["content"] == "wire up mcp handlers"
         assert payload["entry"]["workspace_id"] == runtime.workspace_id
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        record = runtime.repository.create_memory(
+            title="Testing preferences",
+            content="Prefer pytest.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert record is not None
+
+        append_result = await call_internal_memory_tool(
+            runtime,
+            "internal_append_memory_content",
+            {"memory_id": record.id, "content": "Prefer deterministic fixtures.", "tags": ["preferences"]},
+        )
+        archive_result = await call_internal_memory_tool(
+            runtime,
+            "internal_archive_memory_record",
+            {"memory_id": record.id},
+        )
+
+        appended_payload = json.loads(append_result[0].text)
+        archived_payload = json.loads(archive_result[0].text)
+        assert appended_payload["status"] == "ok"
+        assert "deterministic fixtures" in appended_payload["record"]["content"]
+        assert archived_payload["record"]["status"] == "archived"
     finally:
         runtime.close()
 

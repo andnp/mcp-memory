@@ -68,7 +68,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         vector_store=vector_store,
     )
     task_queue = SQLiteTaskQueue(db_manager)
-    ai_provider = build_ai_provider_from_config(spec.config)
+    ai_provider = build_ai_provider_from_config(spec.config, spec.workspace_root)
     return ApplicationContext(
         config=spec.config,
         workspace_id=spec.workspace_id,

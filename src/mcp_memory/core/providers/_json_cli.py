@@ -30,11 +30,13 @@ class JSONCLIProvider:
         model: str,
         timeout_seconds: float,
         max_retries: int,
+        cwd: str | None = None,
     ) -> None:
         self._command = command
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
+        self._cwd = cwd
 
     async def ask(self, prompt: str) -> dict:
         last_error: str | None = None
@@ -60,11 +62,19 @@ class JSONCLIProvider:
 
     async def _execute(self, prompt: str) -> AIResponse:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *self.build_command(prompt),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            if self._cwd is None:
+                proc = await asyncio.create_subprocess_exec(
+                    *self.build_command(prompt),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    *self.build_command(prompt),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=self._cwd,
+                )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(),

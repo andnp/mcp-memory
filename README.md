@@ -63,6 +63,8 @@ The following tools are exposed via the MCP server:
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.
 
+For trusted maintenance agents, the repo also now includes a workspace-local internal MCP surface exposed through `uv run mcp-memory internal-run`. The bundled `.gemini/settings.json` enables that internal tool surface only inside this workspace.
+
 ### Admin / Maintenance Commands
 - `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
@@ -72,6 +74,8 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 - `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
 Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
+
+When an AI provider is configured and the internal maintenance MCP surface is available, ingest can now choose to append a thought batch directly into an existing canonical memory instead of always creating a new provisional observation.
 
 ## ⚙️ Configuration
 

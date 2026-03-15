@@ -83,8 +83,10 @@ async def _analyze_ingest_actions(provider: Any, entries) -> list[dict[str, Any]
     entry_text = "\n".join(f"[{index}] {entry.content}" for index, entry in enumerate(entries))
     prompt = (
         "Analyze these system1 journal entries and return JSON with actions.\n"
-        'Allowed actions: {"type": "create"|"ignore", "entry_indices": [...], '
-        '"title": "...", "content": "..."}.\n\n'
+        'Allowed actions: {"type": "create"|"ignore"|"append", "entry_indices": [...], '
+        '"target_memory_id": "...", "title": "...", "content": "..."}.\n'
+        "If a thought clearly belongs in an existing canonical memory, prefer append and identify the target_memory_id. "
+        "You may use internal maintenance tools to search and read memories before choosing a target.\n\n"
         f"Entries:\n{entry_text}"
     )
     response = provider.ask(prompt)
@@ -227,6 +229,16 @@ def _execute_ingest_actions(
             processed_ids.extend(entry.id for entry in selected_entries)
             continue
 
+        if action_type == "append":
+            target_memory_id = str(action.get("target_memory_id", "")).strip()
+            target = None if not target_memory_id else ctx.repository.get_memory(target_memory_id)
+            if target is None:
+                continue
+            updated = _append_entries_to_existing_memory(ctx, target, selected_entries, task)
+            processed_ids.extend(entry.id for entry in selected_entries)
+            created_ids.append(updated.id)
+            continue
+
         if action_type != "create":
             continue
 
@@ -249,6 +261,31 @@ def _execute_ingest_actions(
         _enqueue_summary_task(ctx, workspace_id, record.id)
 
     return created_ids, processed_ids
+
+
+def _append_entries_to_existing_memory(
+    ctx: ApplicationContext,
+    target,
+    entries,
+    task: TaskRecord,
+):
+    assert ctx.repository is not None
+    addition = _format_entries(entries)
+    merged_content = target.content if addition in target.content else f"{target.content.rstrip()}\n\n{addition}".strip()
+    metadata = dict(target.metadata)
+    appended_entry_ids = metadata.get("appended_entry_ids", [])
+    if not isinstance(appended_entry_ids, list):
+        appended_entry_ids = []
+    metadata["appended_entry_ids"] = sorted({*map(int, [item for item in appended_entry_ids if isinstance(item, int)]), *[entry.id for entry in entries]})
+    metadata["ingest_task_id"] = task.id
+    updated = ctx.repository.update_memory(
+        target.id,
+        content=merged_content,
+        tags=sorted({*target.tags, "system1-appended"}),
+        metadata=metadata,
+    )
+    assert updated is not None
+    return updated
 
 
 def _fallback_ingest_entries(

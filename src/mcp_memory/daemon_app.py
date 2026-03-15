@@ -18,8 +18,9 @@ from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runt
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
 from mcp_memory.management.service import ManagementService
-from mcp_memory.mcp.handlers import call_memory_tool
+from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
+from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import get_memory_tools
 
 
@@ -175,9 +176,35 @@ def create_daemon_app(
             ]
         }
 
+    @app.get("/internal/maintenance/tools")
+    async def list_internal_tools():
+        return {
+            "tools": [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.inputSchema,
+                }
+                for tool in get_internal_maintenance_tools()
+            ]
+        }
+
     @app.post("/internal/tools/{name}")
     async def call_tool(name: str, arguments: dict[str, Any]):
         response = await call_memory_tool(app.state.routes.ctx, name, arguments)
+        return {
+            "contents": [
+                {
+                    "type": content.type,
+                    "text": content.text,
+                }
+                for content in response
+            ]
+        }
+
+    @app.post("/internal/maintenance/tools/{name}")
+    async def call_internal_tool(name: str, arguments: dict[str, Any]):
+        response = await call_internal_memory_tool(app.state.routes.ctx, name, arguments)
         return {
             "contents": [
                 {
