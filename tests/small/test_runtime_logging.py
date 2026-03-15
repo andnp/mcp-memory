@@ -4,6 +4,8 @@ import time
 import pytest
 
 from mcp_memory.config import LoggingConfig
+from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 
@@ -89,3 +91,31 @@ def test_runtime_log_repository_prunes_by_age_and_count(db_manager) -> None:
     records = repository.list_logs(limit=10)
 
     assert [record.message for record in records] == ["drop by count", "keep two"]
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_usage(db_manager) -> None:
+    class FakeProvider:
+        async def ask(self, prompt: str) -> dict:
+            assert prompt == "hello"
+            return {"answer": "world"}
+
+    provider = InstrumentedAIProvider(
+        FakeProvider(),
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    )
+
+    payload = await provider.ask("hello")
+    row = db_manager.get_connection().execute(
+        "SELECT provider_key, provider_name, model_name, status FROM provider_usage"
+    ).fetchone()
+
+    assert payload == {"answer": "world"}
+    assert row is not None
+    assert row["provider_key"] == "gemini-cli"
+    assert row["provider_name"] == "Gemini CLI"
+    assert row["model_name"] == "gemini-3-flash-preview"
+    assert row["status"] == "success"

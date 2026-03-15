@@ -115,11 +115,24 @@ class RuntimeLogPrunePayload(BaseModel):
     max_log_age_days: int
 
 
+class ProviderUsagePayload(BaseModel):
+    provider_key: str
+    provider_name: str
+    model_name: str
+    calls_last_hour: int
+    calls_last_day: int
+    failures_last_hour: int
+    failures_last_day: int
+    avg_duration_last_hour: float
+    avg_duration_last_day: float
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     memory_metrics: MemoryMetricsPayload
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
+    provider_usage: list[ProviderUsagePayload] = Field(default_factory=list)
     recent_agent_runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
     recent_logs: list[RuntimeLogPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)

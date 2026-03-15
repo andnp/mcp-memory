@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -167,6 +167,23 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON runtime_logs(workspace_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_runtime_logs_level_created_at
             ON runtime_logs(level, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS provider_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            provider_key TEXT NOT NULL,
+            provider_name TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            error_text TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_usage_workspace_created_at
+            ON provider_usage(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
+            ON provider_usage(provider_key, created_at DESC, id DESC);
         """
     )
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
@@ -208,6 +225,14 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "runtime_logs", "created_at", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "runtime_logs", "data_json", "TEXT NOT NULL DEFAULT '{}'"
     )
+    ensure_column(conn, "provider_usage", "workspace_id", "TEXT")
+    ensure_column(conn, "provider_usage", "provider_key", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "provider_usage", "provider_name", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "provider_usage", "model_name", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "provider_usage", "status", "TEXT NOT NULL DEFAULT 'success'")
+    ensure_column(conn, "provider_usage", "duration_seconds", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "provider_usage", "created_at", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "provider_usage", "error_text", "TEXT")
     conn.execute(
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),

@@ -15,7 +15,9 @@ from mcp_memory.config import (
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import SQLiteVectorStore, build_embedder
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_ai_provider_from_config
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -69,6 +71,14 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
     )
     task_queue = SQLiteTaskQueue(db_manager)
     ai_provider = build_ai_provider_from_config(spec.config, spec.workspace_root)
+    if ai_provider is not None:
+        ai_provider = InstrumentedAIProvider(
+            ai_provider,
+            usage_repository=ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id),
+            provider_key=spec.config.ai.provider,
+            provider_name=getattr(ai_provider, "provider_name", spec.config.ai.provider),
+            model_name=spec.config.ai.model,
+        )
     return ApplicationContext(
         config=spec.config,
         workspace_id=spec.workspace_id,

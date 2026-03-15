@@ -542,6 +542,11 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
         )
         assert runtime.task_queue.claim_next(now=10.0) is not None
         runtime.task_queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 3})
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (runtime.workspace_id, "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.5, time.time(), None),
+        )
+        runtime.db_manager.get_connection().commit()
     finally:
         runtime.close()
 
@@ -550,10 +555,12 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
     assert "Memory Metrics" in result.output
     assert "Background Agents" in result.output
+    assert "AI Provider Usage" in result.output
     assert "Agent Details" in result.output
     assert "Recent Agent Runs" in result.output
     assert "Total lines compressed" in result.output
     assert "defragmenter" in result.output
+    assert "gemini-cli" in result.output
     assert "lines_compressed=3" in result.output
 
 

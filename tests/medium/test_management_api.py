@@ -90,6 +90,19 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "{}",
             ),
         )
+        seed_runtime.db_manager.get_connection().execute(
+            "INSERT INTO provider_usage (workspace_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                seed_runtime.workspace_id,
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                "success",
+                0.42,
+                time.time(),
+                None,
+            ),
+        )
         seed_runtime.db_manager.get_connection().commit()
         primary = seed_runtime.repository.create_memory(
             title="Management API plan",
@@ -188,6 +201,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["embeddings"]["model_name"] is not None
         assert overview["memory_metrics"]["total_memories"] == 2
         assert "agent_runs" in overview
+        assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
+        assert overview["provider_usage"][0]["calls_last_day"] == 1
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
         assert overview["tasks"]["failed_count"] == 1
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
@@ -220,6 +235,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "Embedding Backend" in dashboard
         assert "Recent Agent Runs" in dashboard
         assert "Recent Logs" in dashboard
+        assert "AI Provider Usage" in dashboard
         assert "Refresh Logs" in dashboard
         assert "Agent Controls" in dashboard
     finally:

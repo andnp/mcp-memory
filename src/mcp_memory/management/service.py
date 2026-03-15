@@ -19,6 +19,7 @@ from mcp_memory.management.models import (
     MemoryMetricsPayload,
     OverviewCounts,
     OverviewPayload,
+    ProviderUsagePayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -27,6 +28,7 @@ from mcp_memory.management.models import (
     TaskListPayload,
     TaskStatusSummary,
 )
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.serialization import (
     compact_memory_record_payload,
@@ -46,6 +48,7 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
+        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
         self._runtime_logs = RuntimeLogRepository(
             ctx.db_manager,
             workspace_id=ctx.workspace_id,
@@ -92,6 +95,7 @@ class ManagementService:
         memory_metrics = self._build_memory_metrics()
         journal_counts = {"pending": memory_metrics.thought_buffer_entries}
         agent_runs = self._build_agent_runs()
+        provider_usage = self._build_provider_usage()
         recent_agent_runs = self._build_recent_agent_runs()
         recent_logs = self.list_logs(limit=10).logs
 
@@ -100,6 +104,7 @@ class ManagementService:
             embeddings=self._build_embedding_status(),
             memory_metrics=memory_metrics,
             agent_runs=agent_runs,
+            provider_usage=provider_usage,
             recent_agent_runs=recent_agent_runs,
             recent_logs=recent_logs,
             recent_memories=recent_records,
@@ -487,6 +492,22 @@ class ManagementService:
                 )
             )
         return payloads
+
+    def _build_provider_usage(self) -> list[ProviderUsagePayload]:
+        return [
+            ProviderUsagePayload(
+                provider_key=summary.provider_key,
+                provider_name=summary.provider_name,
+                model_name=summary.model_name,
+                calls_last_hour=summary.calls_last_hour,
+                calls_last_day=summary.calls_last_day,
+                failures_last_hour=summary.failures_last_hour,
+                failures_last_day=summary.failures_last_day,
+                avg_duration_last_hour=summary.avg_duration_last_hour,
+                avg_duration_last_day=summary.avg_duration_last_day,
+            )
+            for summary in self._provider_usage.summarize_usage()
+        ]
 
     def _build_recent_agent_runs(self, limit: int = 20) -> list[AgentRunHistoryPayload]:
         rows = [] if self._db_manager is None else self._db_manager.get_connection().execute(

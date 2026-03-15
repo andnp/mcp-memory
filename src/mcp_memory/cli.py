@@ -500,6 +500,30 @@ def stats(workspace_root: str | None) -> None:
             )
         console.print(agent_table)
 
+        provider_table = Table(title="AI Provider Usage")
+        provider_table.add_column("Provider", no_wrap=True)
+        provider_table.add_column("Model")
+        provider_table.add_column("Calls (1h)", justify="right")
+        provider_table.add_column("Calls (24h)", justify="right")
+        provider_table.add_column("Failures (1h)", justify="right")
+        provider_table.add_column("Failures (24h)", justify="right")
+        provider_table.add_column("Avg Duration (1h)", justify="right")
+        provider_table.add_column("Avg Duration (24h)", justify="right")
+        if not overview.provider_usage:
+            provider_table.add_row("-", "-", "0", "0", "0", "0", "0.00s", "0.00s")
+        for usage in overview.provider_usage:
+            provider_table.add_row(
+                usage.provider_key,
+                usage.model_name,
+                str(usage.calls_last_hour),
+                str(usage.calls_last_day),
+                str(usage.failures_last_hour),
+                str(usage.failures_last_day),
+                f"{usage.avg_duration_last_hour:.2f}s",
+                f"{usage.avg_duration_last_day:.2f}s",
+            )
+        console.print(provider_table)
+
         console.print("[bold]Agent Details[/]")
         for agent in overview.agent_runs:
             console.print(

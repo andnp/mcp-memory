@@ -60,6 +60,16 @@
       </table>
     </section>
 
+    <section class="panel" style="margin-bottom: 16px;">
+      <h2>AI Provider Usage</h2>
+      <table>
+        <thead>
+          <tr><th>Provider</th><th>Model</th><th>Calls (1h)</th><th>Calls (24h)</th><th>Failures (1h)</th><th>Failures (24h)</th><th>Avg Duration (1h)</th><th>Avg Duration (24h)</th></tr>
+        </thead>
+        <tbody id="provider-usage"></tbody>
+      </table>
+    </section>
+
     <section class="panel">
       <h2>Recent Memories</h2>
       <table>
@@ -262,6 +272,7 @@
         ['Compressed Lines', payload.memory_metrics.total_lines_compressed],
         ['Thought Buffer', payload.memory_metrics.thought_buffer_entries],
         ['Failed Tasks', payload.tasks.failed_count],
+        ['Provider Calls (24h)', payload.provider_usage.reduce((sum, usage) => sum + usage.calls_last_day, 0)],
         ['Embedding Backend', payload.embeddings.backend ?? 'none'],
         ['Embedding Cached', payload.embeddings.model_cached ? 'yes' : 'no'],
         ['SQLite Size (bytes)', payload.storage.sqlite_bytes],
@@ -308,6 +319,19 @@
           <td>${agent.last_result_summary ?? '-'}</td>
         </tr>
       `).join('') || '<tr><td colspan="11" class="muted">No agent runs recorded yet.</td></tr>';
+
+      document.getElementById('provider-usage').innerHTML = payload.provider_usage.map((usage) => `
+        <tr>
+          <td>${usage.provider_key}</td>
+          <td>${usage.model_name}</td>
+          <td>${usage.calls_last_hour}</td>
+          <td>${usage.calls_last_day}</td>
+          <td>${usage.failures_last_hour}</td>
+          <td>${usage.failures_last_day}</td>
+          <td>${usage.avg_duration_last_hour.toFixed(2)}s</td>
+          <td>${usage.avg_duration_last_day.toFixed(2)}s</td>
+        </tr>
+      `).join('') || '<tr><td colspan="8" class="muted">No provider usage recorded yet.</td></tr>';
 
       document.getElementById('recent-agent-runs').innerHTML = payload.recent_agent_runs.map((run) => `
         <tr>
