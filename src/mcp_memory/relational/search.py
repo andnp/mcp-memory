@@ -240,7 +240,9 @@ class RelationalMemorySearchService:
                 workspace_ids=list(record.workspace_ids),
                 score=round(
                     _apply_memory_type_boost(
-                        max(score, _normalize_base_score(_base_match_score(record, tokens))),
+                        max(score, _normalize_base_score(_base_match_score(record, tokens)))
+                        if memory_type is not None
+                        else score,
                         record,
                         memory_type,
                     ),

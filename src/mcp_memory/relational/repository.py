@@ -204,7 +204,7 @@ class RelationalMemoryRepository:
 
         params.append(limit)
         query_sql = (
-            "SELECT DISTINCT memories.id, bm25(memories_fts) AS rank FROM memories_fts "
+            "SELECT DISTINCT memories.id, bm25(memories_fts, 3.0, 2.0, 1.0, 1.5) AS rank FROM memories_fts "
             + " ".join(joins)
             + " WHERE "
             + " AND ".join(clauses)
