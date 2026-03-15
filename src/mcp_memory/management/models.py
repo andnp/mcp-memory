@@ -56,6 +56,7 @@ class MemoryMetricsPayload(BaseModel):
 
 class AgentRunPayload(BaseModel):
     task_name: str
+    running_count: int = 0
     total_runs: int
     completed_runs: int
     failed_runs: int

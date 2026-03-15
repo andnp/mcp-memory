@@ -140,3 +140,33 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "Background Agents" in result.output
     assert "Total lines compressed" in result.output
     assert "defragmenter" in result.output
+
+
+def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        runtime.task_queue.enqueue(
+            "graph-linker",
+            task_id="graph-linker-running",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Background Agents" in result.output
+    assert "graph-linker" in result.output
+    assert "Running" in result.output

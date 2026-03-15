@@ -315,6 +315,15 @@ class ManagementService:
 
     def _build_agent_runs(self) -> list[AgentRunPayload]:
         now = time.time()
+        running_tasks = self._task_queue.list_tasks(
+            status="running",
+            workspace_id=self._workspace_id,
+            limit=200,
+        )
+        running_by_name: dict[str, int] = {}
+        for task in running_tasks:
+            running_by_name[task.task_name] = running_by_name.get(task.task_name, 0) + 1
+
         summaries = self._task_queue.summarize_task_runs(
             list(TRIGGERABLE_BACKGROUND_TASK_NAMES),
             workspace_id=self._workspace_id,
@@ -327,6 +336,7 @@ class ManagementService:
             payloads.append(
                 AgentRunPayload(
                     task_name=summary.task_name,
+                    running_count=running_by_name.get(summary.task_name, 0),
                     total_runs=summary.total_runs,
                     completed_runs=summary.completed_runs,
                     failed_runs=summary.failed_runs,

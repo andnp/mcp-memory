@@ -150,6 +150,7 @@ def stats(workspace_root: str | None) -> None:
 
         agent_table = Table(title="Background Agents")
         agent_table.add_column("Agent", no_wrap=True)
+        agent_table.add_column("Running", justify="right")
         agent_table.add_column("Age")
         agent_table.add_column("Runs", justify="right")
         agent_table.add_column("Failures", justify="right")
@@ -158,6 +159,7 @@ def stats(workspace_root: str | None) -> None:
         for agent in overview.agent_runs:
             agent_table.add_row(
                 agent.task_name,
+            str(agent.running_count),
                 _format_age(agent.seconds_since_last_completion),
                 str(agent.total_runs),
                 str(agent.failed_runs),
