@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from mcp_memory.config import Config
+from mcp_memory.config import Config, SearchRankingConfig
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RankingEngine, RelationalMemorySearchService, ScoringWeights
@@ -36,6 +36,15 @@ def test_ranking_engine_calibrates_rrf_scores_around_threshold(db_manager) -> No
     assert engine.calibrate_score(0.035) == pytest.approx(0.5)
     assert engine.calibrate_score(0.06) > engine.calibrate_score(0.035)
     assert engine.calibrate_score(0.01) < 0.5
+
+
+def test_ranking_engine_uses_configured_search_weights(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    config = Config(search_ranking=SearchRankingConfig(rrf_k=42.0, workspace_multiplier=1.15))
+    engine = RankingEngine(repository, config)
+
+    assert engine._weights.rrf_k == 42.0
+    assert engine._weights.workspace_multiplier == 1.15
 
 
 def test_ranking_engine_applies_stage_boosts_and_penalties_in_order(db_manager) -> None:

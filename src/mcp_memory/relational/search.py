@@ -48,6 +48,21 @@ class ScoringWeights:
     authority_link_step: float = 0.02
     authority_link_cap: int = 10
 
+    @classmethod
+    def from_config(cls, config: Config):
+        ranking = config.search_ranking
+        return cls(
+            rrf_k=ranking.rrf_k,
+            calibration_threshold=ranking.calibration_threshold,
+            calibration_steepness=ranking.calibration_steepness,
+            workspace_multiplier=ranking.workspace_multiplier,
+            degradation_multiplier=ranking.degradation_multiplier,
+            access_half_life_days=ranking.access_half_life_days,
+            access_bonus_scale=ranking.access_bonus_scale,
+            authority_link_step=ranking.authority_link_step,
+            authority_link_cap=ranking.authority_link_cap,
+        )
+
 
 class RankingEngine:
     def __init__(
@@ -59,7 +74,7 @@ class RankingEngine:
     ) -> None:
         self._repository = repository
         self._config = config
-        self._weights = weights or ScoringWeights()
+        self._weights = weights or ScoringWeights.from_config(config)
 
     def fuse_reciprocal_rank(
         self,

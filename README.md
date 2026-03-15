@@ -108,7 +108,7 @@ The active workspace ID is derived from the current git root when available, wit
 [ai]
 provider = "none"
 model = "gemini-3-flash-preview"
-timeout_seconds = 60
+timeout_seconds = 900
 max_retries = 1
 
 [gemini_cli]
@@ -123,6 +123,17 @@ healthcheck_interval_seconds = 0.05
 [embeddings]
 model = "sentence-transformers/all-MiniLM-L6-v2"
 batch_size = 32
+
+[search_ranking]
+rrf_k = 60.0
+calibration_threshold = 0.035
+calibration_steepness = 150.0
+workspace_multiplier = 1.2
+degradation_multiplier = 0.3
+access_half_life_days = 7.0
+access_bonus_scale = 0.1
+authority_link_step = 0.02
+authority_link_cap = 10
 
 [memory]
 enabled = true

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.config import AIConfig, MemoryConfig, ensure_default_config_exists, load_config
+from mcp_memory.config import AIConfig, MemoryConfig, SearchRankingConfig, ensure_default_config_exists, load_config
 
 
 pytestmark = pytest.mark.small
@@ -32,3 +32,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.opencode.command == "opencode"
     assert loaded.ollama.command == "ollama"
     assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"
+    assert loaded.search_ranking.rrf_k == 60.0
+
+
+def test_search_ranking_config_rejects_invalid_rrf_k() -> None:
+    with pytest.raises(ValueError, match="search_ranking.rrf_k"):
+        SearchRankingConfig(rrf_k=0)

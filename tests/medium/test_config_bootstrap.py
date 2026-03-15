@@ -23,6 +23,36 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
 
     assert config.ai.provider == "none"
     assert config.daemon.host == "127.0.0.1"
+    assert config.search_ranking.calibration_threshold == 0.035
+
+
+def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[search_ranking]\n"
+        "rrf_k = 42.0\n"
+        "calibration_threshold = 0.05\n"
+        "calibration_steepness = 180.0\n"
+        "workspace_multiplier = 1.15\n"
+        "degradation_multiplier = 0.25\n"
+        "access_half_life_days = 5.0\n"
+        "access_bonus_scale = 0.08\n"
+        "authority_link_step = 0.03\n"
+        "authority_link_cap = 8\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.search_ranking.rrf_k == 42.0
+    assert config.search_ranking.calibration_threshold == 0.05
+    assert config.search_ranking.calibration_steepness == 180.0
+    assert config.search_ranking.workspace_multiplier == 1.15
+    assert config.search_ranking.degradation_multiplier == 0.25
+    assert config.search_ranking.access_half_life_days == 5.0
+    assert config.search_ranking.access_bonus_scale == 0.08
+    assert config.search_ranking.authority_link_step == 0.03
+    assert config.search_ranking.authority_link_cap == 8
 
 
 def test_resolve_workspace_root_prefers_git_root(tmp_path: Path) -> None:

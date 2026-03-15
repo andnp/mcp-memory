@@ -74,7 +74,7 @@ class MemoryConfig:
 class AIConfig:
     provider: str = "none"
     model: str = "gemini-3-flash-preview"
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 900.0
     max_retries: int = 1
 
     def __post_init__(self) -> None:
@@ -148,6 +148,39 @@ class LoggingConfig:
 
 
 @dataclass
+class SearchRankingConfig:
+    rrf_k: float = 60.0
+    calibration_threshold: float = 0.035
+    calibration_steepness: float = 150.0
+    workspace_multiplier: float = 1.2
+    degradation_multiplier: float = 0.3
+    access_half_life_days: float = 7.0
+    access_bonus_scale: float = 0.1
+    authority_link_step: float = 0.02
+    authority_link_cap: int = 10
+
+    def __post_init__(self) -> None:
+        if self.rrf_k <= 0:
+            raise ValueError("search_ranking.rrf_k must be > 0")
+        if not (0.0 <= self.calibration_threshold <= 1.0):
+            raise ValueError("search_ranking.calibration_threshold must be in [0.0, 1.0]")
+        if self.calibration_steepness <= 0:
+            raise ValueError("search_ranking.calibration_steepness must be > 0")
+        if self.workspace_multiplier < 1.0:
+            raise ValueError("search_ranking.workspace_multiplier must be >= 1.0")
+        if not (0.0 <= self.degradation_multiplier <= 1.0):
+            raise ValueError("search_ranking.degradation_multiplier must be in [0.0, 1.0]")
+        if self.access_half_life_days <= 0:
+            raise ValueError("search_ranking.access_half_life_days must be > 0")
+        if self.access_bonus_scale < 0:
+            raise ValueError("search_ranking.access_bonus_scale must be >= 0")
+        if self.authority_link_step < 0:
+            raise ValueError("search_ranking.authority_link_step must be >= 0")
+        if self.authority_link_cap < 0:
+            raise ValueError("search_ranking.authority_link_cap must be >= 0")
+
+
+@dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
@@ -158,6 +191,7 @@ class Config:
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -213,7 +247,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     document["ai"] = {
         "provider": "none",
         "model": "gemini-3-flash-preview",
-        "timeout_seconds": 60,
+        "timeout_seconds": 900,
         "max_retries": 1,
     }
     document["gemini_cli"] = {"command": "gemini"}
@@ -234,6 +268,17 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "max_runtime_logs": 5000,
         "max_log_age_days": 14,
         "retention_check_interval_seconds": 60.0,
+    }
+    document["search_ranking"] = {
+        "rrf_k": 60.0,
+        "calibration_threshold": 0.035,
+        "calibration_steepness": 150.0,
+        "workspace_multiplier": 1.2,
+        "degradation_multiplier": 0.3,
+        "access_half_life_days": 7.0,
+        "access_bonus_scale": 0.1,
+        "authority_link_step": 0.02,
+        "authority_link_cap": 10,
     }
     memory_table = tomlkit.table()
     memory_table.update({
@@ -285,6 +330,7 @@ def load_config(config_path: Path | None = None) -> Config:
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
+        search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
     )
 
 
