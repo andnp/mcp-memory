@@ -7,12 +7,6 @@ from mcp.types import TextContent
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.services import (
-    create_memory_record_service,
-    get_memory_record_service,
-    get_memory_stats_service,
-    get_pending_thoughts_service,
-    import_markdown_memory_file_service,
-    list_memory_records_service,
     read_memory_record_service,
     record_thought_service,
     search_memory_records_service,
@@ -42,13 +36,8 @@ def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict)
 def tool_services() -> dict[str, ToolService]:
     return {
         "record_thought": record_thought_service,
-        "get_pending_thoughts": get_pending_thoughts_service,
-        "create_memory_record": create_memory_record_service,
-        "get_memory_record": get_memory_record_service,
-        "list_memory_records": list_memory_records_service,
         "search_memory_records": search_memory_records_service,
         "read_memory_record": read_memory_record_service,
-        "import_markdown_memory_file": import_markdown_memory_file_service,
     }
 
 
@@ -65,9 +54,6 @@ async def dispatch_memory_tool(
                 "tool": name,
             }
         )
-
-    if name == "get_memory_stats":
-        return text_response(get_memory_stats_service(ctx))
 
     service = tool_services().get(name)
     if service is None:

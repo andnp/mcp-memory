@@ -36,18 +36,16 @@ This document defines the highest-value user journeys that should stay green as 
 
 ## 3. Import and Persistence Across Restart
 
-**Goal:** user imports markdown and creates records, then the daemon shuts down cleanly; a later session reopens the workspace and sees the same data.
+**Goal:** records seeded into the relational store survive runtime shutdown; a later session reopens the workspace and can still search and read them through the minimal MCP surface.
 
 **Runtime path:**
-- `import_markdown_memory_file`
-- `create_memory_record`
 - relational SQLite storage
 - daemon shutdown/reacquire
-- `list_memory_records`, `search_memory_records`, `read_memory_record`, `get_memory_stats`
+- `search_memory_records`, `read_memory_record`
 
 **Key invariants:**
-- imported and created records survive runtime shutdown
-- stats and search results remain consistent after reacquire
+- seeded records survive runtime shutdown
+- search and read results remain consistent after reacquire
 - new runtime acquisition after shutdown gets a fresh runtime object backed by the same data
 
 ## 4. Coverage Mapping

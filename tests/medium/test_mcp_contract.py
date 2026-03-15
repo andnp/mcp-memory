@@ -46,23 +46,6 @@ async def test_record_thought_requires_string_content(monkeypatch, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_create_memory_record_validates_required_fields_and_types(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    runtime = create_runtime(cwd=tmp_path / "workspace")
-    try:
-        missing_payload = json.loads((await call_memory_tool(runtime, "create_memory_record", {"content": "x", "workspace_ids": ["a"]}))[0].text)
-        type_payload = json.loads((await call_memory_tool(runtime, "create_memory_record", {"title": "ok", "content": "x", "workspace_ids": "a"}))[0].text)
-
-        assert missing_payload["error"] == "invalid_arguments"
-        assert missing_payload["detail"] == "title must be a string"
-        assert type_payload["error"] == "invalid_arguments"
-        assert type_payload["detail"] == "workspace_ids must be a list of strings"
-    finally:
-        runtime.close()
-
-
-@pytest.mark.asyncio
 async def test_search_memory_records_rejects_invalid_query_and_limit(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -80,15 +63,17 @@ async def test_search_memory_records_rejects_invalid_query_and_limit(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_import_markdown_memory_file_rejects_missing_file(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    runtime = create_runtime(cwd=tmp_path / "workspace")
-    try:
-        payload = json.loads((await call_memory_tool(runtime, "import_markdown_memory_file", {"file_path": str(tmp_path / "missing.md"), "workspace_ids": ["workspace-a"]}))[0].text)
+async def test_removed_tools_are_rejected_as_unknown_tool() -> None:
+    for tool_name in [
+        "get_pending_thoughts",
+        "get_memory_stats",
+        "create_memory_record",
+        "get_memory_record",
+        "list_memory_records",
+        "import_markdown_memory_file",
+    ]:
+        payload = json.loads((await call_memory_tool(ApplicationContext(), tool_name, {}))[0].text)
 
         assert payload["status"] == "error"
-        assert payload["error"] == "file_not_found"
-        assert "missing.md" in payload["detail"]
-    finally:
-        runtime.close()
+        assert payload["error"] == "unknown_tool"
+        assert payload["tool"] == tool_name

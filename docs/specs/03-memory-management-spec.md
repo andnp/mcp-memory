@@ -47,14 +47,16 @@ This document describes the memory system that currently backs the shipped `mcp-
 ## 3. Active MCP Tools
 
 - `record_thought`
-- `get_pending_thoughts`
-- `get_memory_stats`
-- `create_memory_record`
-- `get_memory_record`
-- `list_memory_records`
 - `search_memory_records`
 - `read_memory_record`
-- `import_markdown_memory_file`
+
+The public MCP surface is intentionally minimal:
+
+- one lightweight capture tool
+- one discovery tool
+- one detail tool
+
+Administrative inspection, migration/import, and storage-oriented CRUD are not part of the assistant-facing contract.
 
 ## 4. Search Behavior
 
@@ -122,6 +124,8 @@ The markdown importer supports:
 - assignment of imported memories to explicit workspace IDs
 
 The importer does **not** currently perform automatic relationship extraction from markdown bodies.
+
+Markdown import is a maintenance/bootstrap capability, not a public MCP tool.
 
 ## 8. Future Work
 

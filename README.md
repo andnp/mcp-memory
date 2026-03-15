@@ -54,22 +54,12 @@ mcp-memory/
 
 The following tools are exposed via the MCP server:
 
-### Journal Runtime
+### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the local journal.
-- `get_pending_thoughts`: List pending journal thoughts awaiting consolidation.
-
-### Relational Memory Records
-- `create_memory_record`: Create a UUID-backed relational memory record.
-- `get_memory_record`: Fetch a relational memory record by ID.
-- `list_memory_records`: List relational memory records with optional filters.
 - `search_memory_records`: Search relational memory records with summary-first results.
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
-- `import_markdown_memory_file`: Import a legacy markdown memory file into the relational store.
 
-### Runtime Statistics
-- `get_memory_stats`: Return basic runtime statistics for the journal, relational records, active workspace, and AI configuration.
-
-The public MCP surface is relational-first; removed file-backed tools are intentionally not part of the supported API.
+Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.
 
 ## ⚙️ Configuration
 
@@ -191,7 +181,7 @@ boost_decay_rate = 0.98
    - confirm the printed dashboard URL loads
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client
-   - verify that the journal and relational memory counts increase as expected
+   - verify that the thought becomes searchable and readable through the MCP client
 
 ## Backup
 

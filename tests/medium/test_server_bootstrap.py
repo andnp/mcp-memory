@@ -33,14 +33,8 @@ def test_get_memory_tools_returns_expected_names() -> None:
 
     assert names == [
         "record_thought",
-        "get_pending_thoughts",
-        "get_memory_stats",
-        "create_memory_record",
-        "get_memory_record",
-        "list_memory_records",
         "search_memory_records",
         "read_memory_record",
-        "import_markdown_memory_file",
     ]
 
 

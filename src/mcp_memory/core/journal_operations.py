@@ -47,14 +47,3 @@ class RecordThoughtOperation:
                 }
 
         return payload
-
-
-class GetPendingThoughtsOperation:
-    def __init__(self, journal: System1Journal) -> None:
-        self._journal = journal
-
-    def execute(self, limit: int) -> dict:
-        return {
-            "status": "ok",
-            "entries": [entry.to_dict() for entry in self._journal.get_pending(limit=limit)],
-        }

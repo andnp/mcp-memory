@@ -77,7 +77,7 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_e2e_shared_store_persists_records_across_runtime_recreation(monkeypatch, tmp_path: Path) -> None:
+async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch, tmp_path: Path) -> None:
     home_path = tmp_path / "home"
     data_home_path = tmp_path / "data"
     workspace = tmp_path / "workspace"
@@ -88,31 +88,30 @@ async def test_e2e_shared_store_persists_records_across_runtime_recreation(monke
 
     runtime_one = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
-        created_payload = _payload_text(
-            await call_memory_tool(
-                runtime_one,
-                "create_memory_record",
-                {
-                    "title": "Shared fact",
-                    "content": "Shared runtimes should see one relational store.",
-                    "workspace_ids": [runtime_one.workspace_id],
-                    "memory_type": "fact",
-                },
-            )
+        assert runtime_one.repository is not None
+        record = runtime_one.repository.create_memory(
+            title="Shared fact",
+            content="Shared runtimes should see one relational store.",
+            workspace_ids=[runtime_one.workspace_id],
+            memory_type="fact",
         )
-        created_id = created_payload["record"]["id"]
+        assert record is not None
     finally:
         runtime_one.close()
 
     runtime_two = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
-        persisted_list = _payload_text(
+        search_payload = _payload_text(
             await call_memory_tool(
                 runtime_two,
-                "list_memory_records",
-                {"workspace_id": runtime_two.workspace_id, "limit": 10},
+                "search_memory_records",
+                {"workspace_id": runtime_two.workspace_id, "query": "shared fact"},
             )
         )
-        assert {record["id"] for record in persisted_list["records"]} == {created_id}
+        read_payload = _payload_text(
+            await call_memory_tool(runtime_two, "read_memory_record", {"memory_id": record.id})
+        )
+        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
+        assert read_payload["record"]["id"] == record.id
     finally:
         runtime_two.close()

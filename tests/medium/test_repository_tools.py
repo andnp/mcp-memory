@@ -11,7 +11,7 @@ pytestmark = pytest.mark.medium
 
 
 @pytest.mark.asyncio
-async def test_repository_tools_create_get_and_list_records(
+async def test_search_and_read_tools_work_with_seeded_repository_records(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -21,46 +21,40 @@ async def test_repository_tools_create_get_and_list_records(
     runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
 
     try:
-        create_result = await call_memory_tool(
-            runtime,
-            "create_memory_record",
-            {
-                "title": "Relational bootstrap",
-                "content": "Wire repository-backed memory tools.",
-                "workspace_ids": ["workspace-a"],
-                "tags": ["testing", "sqlite"],
-                "summary": "Repository-backed tool smoke test.",
-                "memory_type": "plan",
-                "metadata": {"phase": 1},
-            },
+        assert runtime.repository is not None
+        record = runtime.repository.create_memory(
+            title="Relational bootstrap",
+            content="Wire repository-backed memory tools.",
+            workspace_ids=["workspace-a"],
+            tags=["testing", "sqlite"],
+            summary="Repository-backed tool smoke test.",
+            memory_type="plan",
+            metadata={"phase": 1},
         )
-        created_payload = json.loads(create_result[0].text)
-        memory_id = created_payload["record"]["id"]
+        assert record is not None
 
-        get_result = await call_memory_tool(
+        read_result = await call_memory_tool(
             runtime,
-            "get_memory_record",
-            {"memory_id": memory_id},
+            "read_memory_record",
+            {"memory_id": record.id},
         )
-        get_payload = json.loads(get_result[0].text)
-
-        list_result = await call_memory_tool(
+        search_result = await call_memory_tool(
             runtime,
-            "list_memory_records",
-            {"workspace_id": "workspace-a", "memory_type": "plan"},
+            "search_memory_records",
+            {"workspace_id": "workspace-a", "query": "relational bootstrap"},
         )
-        list_payload = json.loads(list_result[0].text)
+        read_payload = json.loads(read_result[0].text)
+        search_payload = json.loads(search_result[0].text)
 
-        assert created_payload["status"] == "created"
-        assert get_payload["record"]["title"] == "Relational bootstrap"
-        assert get_payload["record"]["metadata"] == {"phase": 1}
-        assert [record["id"] for record in list_payload["records"]] == [memory_id]
+        assert read_payload["record"]["title"] == "Relational bootstrap"
+        assert read_payload["record"]["metadata"] == {"phase": 1}
+        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
     finally:
         runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_repository_tools_persist_across_runtime_recreation(
+async def test_search_and_read_tools_persist_across_runtime_recreation(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -69,33 +63,34 @@ async def test_repository_tools_persist_across_runtime_recreation(
 
     first_runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
-        create_result = await call_memory_tool(
-            first_runtime,
-            "create_memory_record",
-            {
-                "title": "Persistent fact",
-                "content": "Repository records should survive runtime recreation.",
-                "memory_type": "fact",
-            },
+        assert first_runtime.repository is not None
+        record = first_runtime.repository.create_memory(
+            title="Persistent fact",
+            content="Repository records should survive runtime recreation.",
+            workspace_ids=[first_runtime.workspace_id],
+            memory_type="fact",
         )
-        memory_id = json.loads(create_result[0].text)["record"]["id"]
+        assert record is not None
     finally:
         first_runtime.close()
 
     second_runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
-        get_result = await call_memory_tool(
+        read_result = await call_memory_tool(
             second_runtime,
-            "get_memory_record",
-            {"memory_id": memory_id},
+            "read_memory_record",
+            {"memory_id": record.id},
         )
-        stats_result = await call_memory_tool(second_runtime, "get_memory_stats", {})
+        search_result = await call_memory_tool(
+            second_runtime,
+            "search_memory_records",
+            {"query": "persistent fact", "workspace_id": second_runtime.workspace_id},
+        )
 
-        get_payload = json.loads(get_result[0].text)
-        stats_payload = json.loads(stats_result[0].text)
+        read_payload = json.loads(read_result[0].text)
+        search_payload = json.loads(search_result[0].text)
 
-        assert get_payload["record"]["title"] == "Persistent fact"
-        assert stats_payload["relational_memories"] == 1
-        assert stats_payload["workspace_id"] == second_runtime.workspace_id
+        assert read_payload["record"]["title"] == "Persistent fact"
+        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
     finally:
         second_runtime.close()
