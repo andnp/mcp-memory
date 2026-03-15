@@ -172,6 +172,17 @@ def create_daemon_app(
             )
         }
 
+    @app.post("/api/admin/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str, arguments: dict[str, Any]):
+        try:
+            return app.state.routes.service.cancel_task(
+                task_id,
+                cancelled_by=str(arguments.get("cancelled_by", "cli") or "cli"),
+                reason=str(arguments.get("reason", "cancelled_by_user") or "cancelled_by_user"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/hooks/session-start")
     async def hook_session_start(arguments: dict[str, Any]):
         try:
@@ -255,6 +266,20 @@ def create_daemon_app(
             query=q,
             after=after,
             before=before,
+            limit=limit,
+        ).model_dump()
+
+    @app.get("/api/ai-conversations")
+    async def ai_conversations(
+        request_id: str | None = Query(default=None),
+        task_name: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+    ):
+        return app.state.routes.service.list_ai_conversations(
+            request_id=request_id,
+            task_name=task_name,
+            status=status,
             limit=limit,
         ).model_dump()
 

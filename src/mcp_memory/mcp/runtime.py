@@ -78,6 +78,8 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
             provider_key=spec.config.ai.provider,
             provider_name=getattr(ai_provider, "provider_name", spec.config.ai.provider),
             model_name=spec.config.ai.model,
+            workspace_id=spec.workspace_id,
+            task_queue=task_queue,
         )
     return ApplicationContext(
         config=spec.config,

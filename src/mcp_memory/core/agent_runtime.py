@@ -50,29 +50,29 @@ def build_runtime_task_worker(
 def build_default_task_handlers(
     provider: Any = None,
 ) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
-    scoped = lambda task_name: _provider_for_task(provider, task_name)
+    scoped = lambda task_name, task: _provider_for_task(provider, task_name, task)
     return {
-        SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(SYSTEM1_INGEST_TASK_NAME)),
-        SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(SUMMARIZE_MEMORY_TASK_NAME)),
-        GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(GRAPH_LINKER_TASK_NAME)),
-        CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, scoped(CONFLICT_DETECTOR_TASK_NAME)),
-        DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, scoped(DEFRAGMENTER_TASK_NAME)),
-        DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, scoped(DEDUPLICATOR_TASK_NAME)),
-        TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, scoped(TAXONOMIST_TASK_NAME)),
-        CURATOR_TASK_NAME: lambda ctx, task: handle_memory_curator_task(ctx, task, scoped(CURATOR_TASK_NAME)),
+        SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(SYSTEM1_INGEST_TASK_NAME, task)),
+        SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(SUMMARIZE_MEMORY_TASK_NAME, task)),
+        GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(GRAPH_LINKER_TASK_NAME, task)),
+        CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, scoped(CONFLICT_DETECTOR_TASK_NAME, task)),
+        DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, scoped(DEFRAGMENTER_TASK_NAME, task)),
+        DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, scoped(DEDUPLICATOR_TASK_NAME, task)),
+        TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, scoped(TAXONOMIST_TASK_NAME, task)),
+        CURATOR_TASK_NAME: lambda ctx, task: handle_memory_curator_task(ctx, task, scoped(CURATOR_TASK_NAME, task)),
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,
         SWEEPER_TASK_NAME: handle_sweeper_task,
     }
 
 
-def _provider_for_task(provider: Any, task_name: str):
+def _provider_for_task(provider: Any, task_name: str, task: TaskRecord):
     if provider is None:
         return None
     binder = getattr(provider, "with_usage_context", None)
     if not callable(binder):
         return provider
-    return binder(task_name=task_name)
+    return binder(task_name=task_name, task_id=task.id, workspace_id=task.workspace_id)
 
 
 def bootstrap_background_tasks(ctx: ApplicationContext) -> None:

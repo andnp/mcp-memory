@@ -364,6 +364,56 @@ def _print_recent_agent_runs(overview) -> None:
         )
 
 
+def _render_task_table(payload) -> None:
+    table = Table(title="Tasks")
+    table.add_column("Task ID")
+    table.add_column("Task")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Workspace")
+    table.add_column("PID", justify="right")
+    table.add_column("Request")
+    table.add_column("Updated", no_wrap=True)
+    table.add_column("Error")
+    if not payload.tasks:
+        table.add_row("-", "-", "-", "-", "-", "-", "-", "No tasks found")
+    for task in payload.tasks:
+        table.add_row(
+            task["id"],
+            task["task_name"],
+            task["status"],
+            task["workspace_id"] or "-",
+            "-" if task.get("subprocess_pid") is None else str(task["subprocess_pid"]),
+            task.get("active_request_id") or "-",
+            _format_timestamp(task.get("updated_at")),
+            task.get("last_error") or task.get("cancellation_reason") or "-",
+        )
+    console.print(table)
+
+
+def _render_ai_conversation_table(payload) -> None:
+    table = Table(title="AI Conversations")
+    table.add_column("Request")
+    table.add_column("Attempt", justify="right")
+    table.add_column("Task")
+    table.add_column("PID", justify="right")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Duration", justify="right")
+    table.add_column("Completed", no_wrap=True)
+    if not payload.conversations:
+        table.add_row("-", "-", "-", "-", "-", "-", "-")
+    for conversation in payload.conversations:
+        table.add_row(
+            conversation.request_id,
+            str(conversation.attempt),
+            conversation.task_name or "-",
+            "-" if conversation.subprocess_pid is None else str(conversation.subprocess_pid),
+            conversation.status,
+            f"{conversation.duration_seconds:.2f}s",
+            _format_timestamp(conversation.completed_at),
+        )
+    console.print(table)
+
+
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.pass_context
@@ -697,6 +747,114 @@ def prefetch_model(workspace_root: str | None) -> None:
 @main.group(name="agents")
 def agents() -> None:
     """Trigger and inspect background agents."""
+
+
+@main.group(name="task")
+def task_group() -> None:
+    """Inspect and control queued background tasks."""
+
+
+@task_group.command(name="list")
+@workspace_root_option
+@click.option("--status", help="Filter by task status")
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of task rows to print")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
+    """List queued or running tasks."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).list_tasks(
+            status=status,
+            workspace_id=runtime.workspace_id,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_task_table(payload)
+    finally:
+        runtime.close()
+
+
+@task_group.command(name="cancel")
+@workspace_root_option
+@click.argument("task_id")
+@click.option("--reason", default="cancelled_by_user", show_default=True, help="Cancellation reason")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
+    """Cancel a pending or running task."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).cancel_task(task_id, cancelled_by="cli", reason=reason)
+        if json_output:
+            click.echo(json.dumps(payload, sort_keys=True))
+            return
+        console.print(f"[green]{payload['status']}[/]: {task_id}")
+        console.print(f"signal_sent={payload['signal_sent']} status={payload['task']['status']}")
+    except Exception as exc:
+        _exit_cli_error(exc)
+    finally:
+        runtime.close()
+
+
+@main.group(name="conversation")
+def conversation_group() -> None:
+    """Inspect recorded AI provider conversations."""
+
+
+@conversation_group.command(name="list")
+@workspace_root_option
+@click.option("--task-name", help="Filter by task name")
+@click.option("--status", help="Filter by conversation status")
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of conversation rows to print")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def list_conversations_command(
+    workspace_root: str | None,
+    task_name: str | None,
+    status: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    """List recorded AI conversations."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).list_ai_conversations(
+            task_name=task_name,
+            status=status,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_ai_conversation_table(payload)
+    finally:
+        runtime.close()
+
+
+@conversation_group.command(name="show")
+@workspace_root_option
+@click.argument("request_id")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def show_conversation_command(request_id: str, workspace_root: str | None, json_output: bool) -> None:
+    """Show all recorded attempts for one AI request ID."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).list_ai_conversations(request_id=request_id, limit=200)
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_ai_conversation_table(payload)
+        for conversation in payload.conversations:
+            console.print(f"\n[bold]Request {conversation.request_id} attempt {conversation.attempt}[/]")
+            console.print(f"status={conversation.status} pid={conversation.subprocess_pid or '-'} task={conversation.task_name or '-'}")
+            console.print("[bold]Prompt[/]")
+            console.print(conversation.prompt_text or "-")
+            console.print("[bold]Response[/]")
+            console.print(conversation.response_text or "-")
+            if conversation.error_text:
+                console.print(f"[red]Error:[/] {conversation.error_text}")
+    finally:
+        runtime.close()
 
 
 @agents.command(name="run")

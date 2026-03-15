@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,12 @@ class TaskRecord:
     started_at: float | None
     completed_at: float | None
     last_error: str | None
+    subprocess_pid: int | None
+    active_request_id: str | None
+    cancellation_requested_at: float | None
+    cancelled_at: float | None
+    cancellation_reason: str | None
+    cancelled_by: str | None
 
 
 @dataclass
@@ -52,6 +59,7 @@ class TaskRunSummary:
     total_runs: int = 0
     completed_runs: int = 0
     failed_runs: int = 0
+    cancelled_runs: int = 0
     retry_runs: int = 0
     last_status: str | None = None
     last_started_at: float | None = None
@@ -222,7 +230,9 @@ class SQLiteTaskQueue:
             SET status = 'completed',
                 updated_at = ?,
                 completed_at = ?,
-                last_error = NULL
+                last_error = NULL,
+                subprocess_pid = NULL,
+                active_request_id = NULL
             WHERE id = ? AND status = 'running'
             """,
             (now, now, task_id),
@@ -274,7 +284,9 @@ class SQLiteTaskQueue:
                 available_at = ?,
                 claimed_at = NULL,
                 completed_at = ?,
-                last_error = ?
+                last_error = ?,
+                subprocess_pid = NULL,
+                active_request_id = NULL
             WHERE id = ? AND status = 'running'
             """,
             (status, next_retries, now, available_at, completed_at, error, task_id),
@@ -320,7 +332,9 @@ class SQLiteTaskQueue:
                 available_at = ?,
                 claimed_at = NULL,
                 completed_at = ?,
-                last_error = ?
+                last_error = ?,
+                subprocess_pid = NULL,
+                active_request_id = NULL
             WHERE id = ? AND status = 'running'
             """,
             (now, now, now, error, task_id),
@@ -341,6 +355,210 @@ class SQLiteTaskQueue:
         )
         conn.commit()
         return self.get_task(task_id)
+
+    def set_running_process(
+        self,
+        task_id: str,
+        *,
+        subprocess_pid: int | None,
+        request_id: str | None,
+        updated_at: float | None = None,
+    ) -> TaskRecord:
+        now = time.time() if updated_at is None else updated_at
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET subprocess_pid = ?,
+                active_request_id = ?,
+                updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (subprocess_pid, request_id, now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not running")
+        conn.commit()
+        return self.get_task(task_id)
+
+    def clear_running_process(
+        self,
+        task_id: str,
+        *,
+        updated_at: float | None = None,
+    ) -> TaskRecord:
+        return self.set_running_process(
+            task_id,
+            subprocess_pid=None,
+            request_id=None,
+            updated_at=updated_at,
+        )
+
+    def request_cancel(
+        self,
+        task_id: str,
+        *,
+        cancelled_by: str,
+        reason: str,
+        requested_at: float | None = None,
+    ) -> TaskRecord:
+        now = time.time() if requested_at is None else requested_at
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} was not found")
+
+        status = str(row["status"])
+        if status == "pending":
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'cancelled',
+                    updated_at = ?,
+                    completed_at = ?,
+                    cancelled_at = ?,
+                    cancellation_reason = ?,
+                    cancelled_by = ?,
+                    last_error = ?,
+                    subprocess_pid = NULL,
+                    active_request_id = NULL
+                WHERE id = ? AND status = 'pending'
+                """,
+                (now, now, now, reason, cancelled_by, reason, task_id),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise ValueError(f"Task {task_id} could not be cancelled")
+            self._insert_task_run(
+                conn,
+                task_id=task_id,
+                task_name=str(row["task_name"]),
+                workspace_id=row["workspace_id"],
+                status="cancelled",
+                started_at=now,
+                completed_at=now,
+                result={},
+                error_text=reason,
+            )
+            conn.commit()
+            return self.get_task(task_id)
+
+        if status != "running":
+            raise ValueError(f"Task {task_id} is not cancellable")
+
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET updated_at = ?,
+                cancellation_requested_at = COALESCE(cancellation_requested_at, ?),
+                cancellation_reason = ?,
+                cancelled_by = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (now, now, reason, cancelled_by, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} could not be marked for cancellation")
+        conn.commit()
+        return self.get_task(task_id)
+
+    def is_cancellation_requested(self, task_id: str) -> bool:
+        row = self._db.get_connection().execute(
+            "SELECT cancellation_requested_at FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        return row is not None and row["cancellation_requested_at"] is not None
+
+    def finalize_cancellation(
+        self,
+        task_id: str,
+        *,
+        cancelled_at: float | None = None,
+    ) -> TaskRecord:
+        now = time.time() if cancelled_at is None else cancelled_at
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND status = 'running'",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not running")
+        reason = str(row["cancellation_reason"] or "cancelled")
+        cancelled_by = row["cancelled_by"]
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'cancelled',
+                updated_at = ?,
+                completed_at = ?,
+                cancelled_at = ?,
+                last_error = ?,
+                subprocess_pid = NULL,
+                active_request_id = NULL
+            WHERE id = ? AND status = 'running'
+            """,
+            (now, now, now, reason, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} could not be cancelled")
+        self._insert_task_run(
+            conn,
+            task_id=task_id,
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status="cancelled",
+            started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
+            completed_at=now,
+            result={"cancelled_by": cancelled_by, "reason": reason},
+            error_text=reason,
+        )
+        conn.commit()
+        return self.get_task(task_id)
+
+    def recover_abandoned_running_tasks(
+        self,
+        *,
+        workspace_id: str | None = None,
+        stale_after_seconds: float = 300.0,
+        now: float | None = None,
+    ) -> list[TaskRecord]:
+        current_time = time.time() if now is None else now
+        recovered: list[TaskRecord] = []
+        for task in self.list_tasks(status="running", workspace_id=workspace_id, limit=200):
+            started_at = task.started_at or task.claimed_at or task.updated_at
+            is_stale = max(current_time - started_at, 0.0) >= stale_after_seconds
+            if task.subprocess_pid is not None:
+                if _is_process_alive(task.subprocess_pid):
+                    continue
+                if task.cancellation_requested_at is not None:
+                    recovered.append(self.finalize_cancellation(task.id, cancelled_at=current_time))
+                else:
+                    recovered.append(
+                        self.fail_permanently(
+                            task.id,
+                            f"Provider subprocess {task.subprocess_pid} exited unexpectedly",
+                            failed_at=current_time,
+                        )
+                    )
+                continue
+            if task.cancellation_requested_at is not None:
+                recovered.append(self.finalize_cancellation(task.id, cancelled_at=current_time))
+                continue
+            if is_stale:
+                recovered.append(
+                    self.fail_permanently(
+                        task.id,
+                        "Task was abandoned without an active provider subprocess",
+                        failed_at=current_time,
+                    )
+                )
+        return recovered
 
     def get_task(self, task_id: str) -> TaskRecord:
         row = self._db.get_connection().execute(
@@ -488,6 +706,8 @@ class SQLiteTaskQueue:
                 summary.completed_runs += 1
             elif row["status"] == "failed":
                 summary.failed_runs += 1
+            elif row["status"] == "cancelled":
+                summary.cancelled_runs += 1
             else:
                 summary.retry_runs += 1
 
@@ -530,6 +750,14 @@ class SQLiteTaskQueue:
                 None if row["completed_at"] is None else float(row["completed_at"])
             ),
             last_error=row["last_error"],
+            subprocess_pid=(None if row["subprocess_pid"] is None else int(row["subprocess_pid"])),
+            active_request_id=row["active_request_id"],
+            cancellation_requested_at=(
+                None if row["cancellation_requested_at"] is None else float(row["cancellation_requested_at"])
+            ),
+            cancelled_at=(None if row["cancelled_at"] is None else float(row["cancelled_at"])),
+            cancellation_reason=row["cancellation_reason"],
+            cancelled_by=row["cancelled_by"],
         )
 
     def _row_to_task_run(self, row) -> TaskRunRecord:
@@ -614,3 +842,15 @@ def _coerce_int(value: object, default: int = 0) -> int:
     if isinstance(value, float):
         return int(value)
     return default
+
+
+def _is_process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

@@ -143,6 +143,59 @@ def test_sqlite_task_queue_fail_transitions_to_dead_letter_at_retry_limit(db_man
     assert [task_run.status for task_run in task_runs] == ["failed", "retry"]
 
 
+def test_sqlite_task_queue_can_cancel_pending_task(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("cancel-me", task_id="cancel-me")
+
+    cancelled = queue.request_cancel(
+        task.id,
+        cancelled_by="cli",
+        reason="operator_cancelled",
+        requested_at=12.0,
+    )
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.cancelled_by == "cli"
+    assert cancelled.cancellation_reason == "operator_cancelled"
+    task_runs = queue.list_task_runs(task_name="cancel-me")
+    assert [task_run.status for task_run in task_runs] == ["cancelled"]
+
+
+def test_sqlite_task_queue_tracks_running_subprocess_and_finalizes_cancellation(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("cancel-running", task_id="cancel-running", available_at=0.0)
+
+    assert queue.claim_next(now=5.0) is not None
+    tracked = queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-1", updated_at=6.0)
+    requested = queue.request_cancel(task.id, cancelled_by="cli", reason="timeout triage", requested_at=7.0)
+    cancelled = queue.finalize_cancellation(task.id, cancelled_at=8.0)
+
+    assert tracked.subprocess_pid == 9999
+    assert tracked.active_request_id == "req-1"
+    assert requested.cancellation_requested_at == 7.0
+    assert cancelled.status == "cancelled"
+    assert cancelled.subprocess_pid is None
+    assert cancelled.active_request_id is None
+    assert cancelled.last_error == "timeout triage"
+
+
+def test_sqlite_task_queue_recovers_abandoned_running_tasks(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    stale = queue.enqueue("stale-task", task_id="stale-task", available_at=0.0)
+    pid_dead = queue.enqueue("pid-dead-task", task_id="pid-dead-task", available_at=0.0)
+
+    assert queue.claim_next(now=10.0) is not None
+    assert queue.claim_next(now=11.0) is not None
+    queue.set_running_process(pid_dead.id, subprocess_pid=9999, request_id="req-dead", updated_at=12.0)
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=300.0)
+
+    assert {task.id for task in recovered} == {stale.id, pid_dead.id}
+    assert queue.get_task(stale.id).status == "failed"
+    assert queue.get_task(pid_dead.id).status == "failed"
+
+
 def test_sqlite_task_queue_summarize_task_runs_aggregates_status_and_compression(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     task = queue.enqueue(
@@ -375,3 +428,41 @@ async def test_runtime_task_workers_only_claim_matching_workspace_tasks(db_manag
     assert queue.get_task(task_b.id).status == "completed"
     assert seen_by_a == ["task-a"]
     assert seen_by_b == ["task-b"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_recovers_abandoned_running_tasks_on_start(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "orphaned-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="orphaned-task",
+    )
+    assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"orphaned-task": lambda ctx, task: None},
+        poll_interval_seconds=0.01,
+    )
+
+    original = SQLiteTaskQueue.recover_abandoned_running_tasks
+
+    def recover(self, **kwargs):
+        return original(self, stale_after_seconds=0.0, now=2.0, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
+    try:
+        await worker.start()
+        for _ in range(20):
+            if queue.get_task(task.id).status == "failed":
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop(0.05)
+    finally:
+        monkeypatch.undo()
+
+    assert queue.get_task(task.id).status == "failed"

@@ -175,6 +175,14 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             f"http://127.0.0.1:{port}/api/admin/agents/run-all",
             {"force": False},
         )
+        running_task = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/agents/run",
+            {"task_name": "memory-curator", "force": True},
+        )
+        cancel_task = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/tasks/{running_task['task']['id']}/cancel",
+            {"cancelled_by": "api-test", "reason": "operator_cancelled"},
+        )
         created_link = _post_json(
             f"http://127.0.0.1:{port}/api/admin/links",
             {
@@ -192,6 +200,30 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "link_type": "REFERENCES",
             },
         )
+        app.state.routes.ctx.db_manager.get_connection().execute(
+            "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "req-api-1",
+                1,
+                seed_runtime.workspace_id,
+                "graph-linker",
+                run_agent["task"]["id"],
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                6543,
+                "prompt",
+                "response",
+                '{"ok": true}',
+                "success",
+                None,
+                1.0,
+                2.0,
+                1.0,
+            ),
+        )
+        app.state.routes.ctx.db_manager.get_connection().commit()
+        conversations = _fetch_json(f"http://127.0.0.1:{port}/api/ai-conversations?task_name=graph-linker")
         dashboard = _fetch_text(f"http://127.0.0.1:{port}/")
 
         assert health["status"] == "ready"
@@ -235,6 +267,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "last_result_summary" in fact_checker
         assert run_agent["status"] == "enqueued"
         assert len(run_all["results"]) >= 1
+        assert cancel_task["status"] in {"cancellation_requested", "cancelled"}
+        assert cancel_task["task"]["cancellation_reason"] == "operator_cancelled"
+        assert conversations["conversations"][0]["request_id"] == "req-api-1"
+        assert conversations["conversations"][0]["subprocess_pid"] == 6543
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"
         assert "MCP Memory Dashboard" in dashboard

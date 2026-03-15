@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import signal
 import time
 
 from mcp_memory.context import ApplicationContext
@@ -11,6 +13,8 @@ from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
     AgentRunPayload,
+    AIConversationListPayload,
+    AIConversationPayload,
     EmbeddingStatusPayload,
     HealthPayload,
     JournalSummary,
@@ -167,6 +171,66 @@ class ManagementService:
             self.enqueue_background_task(task_name, force=force)
             for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES
         ]
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        cancelled_by: str = "cli",
+        reason: str = "cancelled_by_user",
+    ) -> dict:
+        task = self._task_queue.request_cancel(
+            task_id,
+            cancelled_by=cancelled_by,
+            reason=reason,
+        )
+        signal_sent = False
+        if task.status == "running" and task.subprocess_pid is not None:
+            signal_sent = _terminate_process(task.subprocess_pid)
+        return {
+            "status": "cancelled" if task.status == "cancelled" else "cancellation_requested",
+            "signal_sent": signal_sent,
+            "task": task_payload(self._task_queue.get_task(task_id)),
+        }
+
+    def list_ai_conversations(
+        self,
+        *,
+        request_id: str | None = None,
+        task_name: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> AIConversationListPayload:
+        return AIConversationListPayload(
+            conversations=[
+                AIConversationPayload(
+                    id=record.id,
+                    request_id=record.request_id,
+                    attempt=record.attempt,
+                    workspace_id=record.workspace_id,
+                    task_name=record.task_name,
+                    task_id=record.task_id,
+                    provider_key=record.provider_key,
+                    provider_name=record.provider_name,
+                    model_name=record.model_name,
+                    subprocess_pid=record.subprocess_pid,
+                    prompt_text=record.prompt_text,
+                    response_text=record.response_text,
+                    parsed=record.parsed,
+                    status=record.status,
+                    error_text=record.error_text,
+                    started_at=record.started_at,
+                    completed_at=record.completed_at,
+                    duration_seconds=record.duration_seconds,
+                )
+                for record in self._provider_usage.list_conversations(
+                    request_id=request_id,
+                    task_name=task_name,
+                    status=status,
+                    limit=limit,
+                )
+            ]
+        )
 
     def get_memory_detail(self, memory_id: str):
         if self._memory_queries is None:
@@ -486,6 +550,7 @@ class ManagementService:
                     total_runs=summary.total_runs,
                     completed_runs=summary.completed_runs,
                     failed_runs=summary.failed_runs,
+                    cancelled_runs=summary.cancelled_runs,
                     retry_runs=summary.retry_runs,
                     avg_duration_seconds=summary.avg_duration_seconds,
                     total_lines_compressed=summary.total_lines_compressed,
@@ -587,3 +652,13 @@ def _decode_run_result(raw_result: object) -> dict[str, object]:
     except ValueError:
         return {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+def _terminate_process(pid: int) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+    return True

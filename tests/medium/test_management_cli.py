@@ -674,3 +674,108 @@ def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_pa
     assert "global" in result.output
     assert "defragmenter" in result.output
     assert "lines_compressed=7" in result.output
+
+
+def test_task_list_and_cancel_commands_show_running_task_metadata(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        task = runtime.task_queue.enqueue(
+            "memory-curator",
+            task_id="cancel-cli-task",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.set_running_process(task.id, subprocess_pid=4444, request_id="req-cli-1", updated_at=11.0)
+    finally:
+        runtime.close()
+
+    list_result = runner.invoke(
+        main,
+        ["task", "list", "--workspace-root", str(workspace), "--status", "running", "--json"],
+    )
+    cancel_result = runner.invoke(
+        main,
+        ["task", "cancel", "cancel-cli-task", "--workspace-root", str(workspace), "--reason", "manual_cancel"],
+    )
+
+    list_payload = json.loads(list_result.output)
+    assert list_result.exit_code == 0
+    assert list_payload["tasks"][0]["task_name"] == "memory-curator"
+    assert list_payload["tasks"][0]["subprocess_pid"] == 4444
+    assert list_payload["tasks"][0]["active_request_id"] == "req-cli-1"
+    assert cancel_result.exit_code == 0
+    assert "cancellation_requested" in cancel_result.output or "cancelled" in cancel_result.output
+
+
+def test_conversation_commands_render_and_return_json(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "req-cli-2",
+                1,
+                runtime.workspace_id,
+                "deduplicator",
+                "task-2",
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                5555,
+                "prompt text",
+                "response text",
+                '{"ok": true}',
+                "success",
+                None,
+                1.0,
+                2.0,
+                1.0,
+            ),
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    list_result = runner.invoke(
+        main,
+        ["conversation", "list", "--workspace-root", str(workspace), "--task-name", "deduplicator", "--json"],
+    )
+    show_result = runner.invoke(
+        main,
+        ["conversation", "show", "req-cli-2", "--workspace-root", str(workspace)],
+    )
+    json_result = runner.invoke(
+        main,
+        ["conversation", "list", "--workspace-root", str(workspace), "--json"],
+    )
+
+    list_payload = json.loads(list_result.output)
+    assert list_result.exit_code == 0
+    assert list_payload["conversations"][0]["request_id"] == "req-cli-2"
+    assert list_payload["conversations"][0]["subprocess_pid"] == 5555
+    assert show_result.exit_code == 0
+    assert "Prompt" in show_result.output
+    assert "Response" in show_result.output
+    assert "prompt text" in show_result.output
+    payload = json.loads(json_result.output)
+    assert json_result.exit_code == 0
+    assert payload["conversations"][0]["request_id"] == "req-cli-2"

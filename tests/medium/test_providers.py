@@ -9,6 +9,7 @@ from mcp_memory.core.providers import (
     build_ai_provider_from_config,
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from tests.sdk.providers import FakeAsyncProcess
 
@@ -178,3 +179,50 @@ async def test_instrumented_provider_records_task_name_with_usage_context(db_man
     assert rows[0]["task_name"] == "memory-curator"
     assert rows[0]["provider_key"] == "gemini-cli"
     assert rows[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_subprocess_and_conversation(
+    db_manager,
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(FakeAsyncProcess(pid=7777, stdout_text='{"actions": []}'))
+
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("graph-linker", workspace_id="workspace-a", available_at=0.0, task_id="graph-linker-1")
+    assert queue.claim_next(now=1.0) is not None
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        GeminiCLIProvider(command="gemini", model="gemini-3-flash-preview", max_retries=0),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        task_queue=queue,
+    ).with_usage_context(task_name="graph-linker", task_id=task.id, workspace_id="workspace-a")
+
+    result = await provider.ask("link related memories")
+
+    usage_row = db_manager.get_connection().execute(
+        "SELECT task_id, request_id, subprocess_pid, status FROM provider_usage ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conversation_row = db_manager.get_connection().execute(
+        "SELECT request_id, task_id, task_name, subprocess_pid, prompt_text, response_text, status FROM ai_conversations ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    refreshed = queue.get_task(task.id)
+
+    assert result == {"actions": []}
+    assert usage_row is not None
+    assert usage_row["task_id"] == task.id
+    assert usage_row["subprocess_pid"] == 7777
+    assert usage_row["status"] == "success"
+    assert conversation_row is not None
+    assert conversation_row["request_id"] == usage_row["request_id"]
+    assert conversation_row["task_id"] == task.id
+    assert conversation_row["task_name"] == "graph-linker"
+    assert conversation_row["subprocess_pid"] == 7777
+    assert conversation_row["prompt_text"] == "link related memories"
+    assert conversation_row["response_text"] == '{"actions": []}'
+    assert refreshed.subprocess_pid is None
+    assert refreshed.active_request_id is None

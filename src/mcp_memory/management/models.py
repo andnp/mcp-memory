@@ -68,6 +68,7 @@ class AgentRunPayload(BaseModel):
     total_runs: int
     completed_runs: int
     failed_runs: int
+    cancelled_runs: int = 0
     retry_runs: int
     avg_duration_seconds: float
     total_lines_compressed: int
@@ -127,6 +128,31 @@ class ProviderUsagePayload(BaseModel):
     failures_last_day: int
     avg_duration_last_hour: float
     avg_duration_last_day: float
+
+
+class AIConversationPayload(BaseModel):
+    id: int
+    request_id: str
+    attempt: int
+    workspace_id: str | None = None
+    task_name: str | None = None
+    task_id: str | None = None
+    provider_key: str
+    provider_name: str
+    model_name: str
+    subprocess_pid: int | None = None
+    prompt_text: str
+    response_text: str
+    parsed: dict | None = None
+    status: str
+    error_text: str | None = None
+    started_at: float
+    completed_at: float
+    duration_seconds: float
+
+
+class AIConversationListPayload(BaseModel):
+    conversations: list[AIConversationPayload] = Field(default_factory=list)
 
 
 class OverviewPayload(BaseModel):

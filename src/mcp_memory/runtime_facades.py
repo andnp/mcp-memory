@@ -142,3 +142,23 @@ class TaskQueueFacade:
             task_names,
             workspace_id=workspace_id,
         )
+
+    def request_cancel(
+        self,
+        task_id: str,
+        *,
+        cancelled_by: str,
+        reason: str,
+    ) -> TaskRecord:
+        if self.task_queue is None:
+            raise ValueError("task_queue_not_initialized")
+        return self.task_queue.request_cancel(
+            task_id,
+            cancelled_by=cancelled_by,
+            reason=reason,
+        )
+
+    def get_task(self, task_id: str) -> TaskRecord:
+        if self.task_queue is None:
+            raise ValueError("task_queue_not_initialized")
+        return self.task_queue.get_task(task_id)

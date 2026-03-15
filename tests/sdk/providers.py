@@ -60,6 +60,7 @@ class ConsolidationResponseFactory:
 
 @dataclass
 class FakeAsyncProcess:
+    pid: int = 4242
     stdout_text: str = ""
     stderr_text: str = ""
     returncode: int = 0

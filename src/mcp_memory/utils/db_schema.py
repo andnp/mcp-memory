@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -24,7 +24,13 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             claimed_at REAL,
             started_at REAL,
             completed_at REAL,
-            last_error TEXT
+            last_error TEXT,
+            subprocess_pid INTEGER,
+            active_request_id TEXT,
+            cancellation_requested_at REAL,
+            cancelled_at REAL,
+            cancellation_reason TEXT,
+            cancelled_by TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -173,6 +179,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id TEXT,
             task_name TEXT,
+            task_id TEXT,
+            request_id TEXT,
+            subprocess_pid INTEGER,
             provider_key TEXT NOT NULL,
             provider_name TEXT NOT NULL,
             model_name TEXT NOT NULL,
@@ -186,6 +195,35 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ON provider_usage(workspace_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
             ON provider_usage(provider_key, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS ai_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 1,
+            workspace_id TEXT,
+            task_name TEXT,
+            task_id TEXT,
+            provider_key TEXT NOT NULL,
+            provider_name TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            subprocess_pid INTEGER,
+            prompt_text TEXT NOT NULL,
+            response_text TEXT NOT NULL DEFAULT '',
+            parsed_json TEXT,
+            status TEXT NOT NULL,
+            error_text TEXT,
+            started_at REAL NOT NULL,
+            completed_at REAL NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            UNIQUE(request_id, attempt)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_request_id
+            ON ai_conversations(request_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_workspace_created_at
+            ON ai_conversations(workspace_id, completed_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_task_created_at
+            ON ai_conversations(task_name, completed_at DESC, id DESC);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
@@ -208,6 +246,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "tasks", "started_at", "REAL")
     ensure_column(conn, "tasks", "completed_at", "REAL")
     ensure_column(conn, "tasks", "last_error", "TEXT")
+    ensure_column(conn, "tasks", "subprocess_pid", "INTEGER")
+    ensure_column(conn, "tasks", "active_request_id", "TEXT")
+    ensure_column(conn, "tasks", "cancellation_requested_at", "REAL")
+    ensure_column(conn, "tasks", "cancelled_at", "REAL")
+    ensure_column(conn, "tasks", "cancellation_reason", "TEXT")
+    ensure_column(conn, "tasks", "cancelled_by", "TEXT")
     conn.execute(
         "UPDATE tasks SET updated_at = COALESCE(updated_at, created_at, 0) WHERE updated_at IS NULL"
     )
@@ -239,6 +283,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     )
     ensure_column(conn, "provider_usage", "workspace_id", "TEXT")
     ensure_column(conn, "provider_usage", "task_name", "TEXT")
+    ensure_column(conn, "provider_usage", "task_id", "TEXT")
+    ensure_column(conn, "provider_usage", "request_id", "TEXT")
+    ensure_column(conn, "provider_usage", "subprocess_pid", "INTEGER")
     ensure_column(conn, "provider_usage", "provider_key", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "provider_usage", "provider_name", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "provider_usage", "model_name", "TEXT NOT NULL DEFAULT ''")

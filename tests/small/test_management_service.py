@@ -116,3 +116,62 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.failed_tasks[0]["status"] == "failed"
     assert health.runtime_active is True
     assert health.workspace_id == "workspace-a"
+
+
+def test_management_service_can_cancel_running_task_and_list_conversations(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    task = task_queue.enqueue(
+        "memory-curator",
+        task_id="task-cancel-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=10.0) is not None
+    task_queue.set_running_process(task.id, subprocess_pid=4321, request_id="req-123", updated_at=11.0)
+
+    db_manager.get_connection().execute(
+        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "req-123",
+            1,
+            "workspace-a",
+            "memory-curator",
+            task.id,
+            "gemini-cli",
+            "Gemini CLI",
+            "gemini-3-flash-preview",
+            4321,
+            "prompt text",
+            '{"ok": true}',
+            '{"ok": true}',
+            "success",
+            None,
+            1.0,
+            2.0,
+            1.0,
+        ),
+    )
+    db_manager.get_connection().commit()
+
+    killed: list[int] = []
+    monkeypatch.setattr("mcp_memory.management.service._terminate_process", lambda pid: killed.append(pid) or True)
+
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        repository=repository,
+        task_queue=task_queue,
+    )
+    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+
+    cancel_payload = service.cancel_task(task.id, cancelled_by="cli", reason="manual_cancel")
+    conversations = service.list_ai_conversations(task_name="memory-curator")
+
+    assert cancel_payload["status"] == "cancellation_requested"
+    assert cancel_payload["signal_sent"] is True
+    assert killed == [4321]
+    assert cancel_payload["task"]["cancellation_reason"] == "manual_cancel"
+    assert conversations.conversations[0].request_id == "req-123"
+    assert conversations.conversations[0].subprocess_pid == 4321

@@ -78,4 +78,10 @@ def task_payload(task: TaskRecord) -> dict:
         "started_at": task.started_at,
         "completed_at": task.completed_at,
         "last_error": task.last_error,
+        "subprocess_pid": task.subprocess_pid,
+        "active_request_id": task.active_request_id,
+        "cancellation_requested_at": task.cancellation_requested_at,
+        "cancelled_at": task.cancelled_at,
+        "cancellation_reason": task.cancellation_reason,
+        "cancelled_by": task.cancelled_by,
     }

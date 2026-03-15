@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -14,6 +16,8 @@ class AIResponse:
     raw_text: str
     parsed: dict | None
     error: str | None = None
+    subprocess_pid: int | None = None
+    returncode: int | None = None
 
     @property
     def success(self) -> bool:
@@ -31,17 +35,28 @@ class JSONCLIProvider:
         timeout_seconds: float,
         max_retries: int,
         cwd: str | None = None,
+        observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._command = command
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._cwd = cwd
+        self._observer = observer
+
+    def with_observer(self, observer: Callable[[dict[str, Any]], None]):
+        clone = copy.copy(self)
+        existing = getattr(self, "_observer", None)
+        if existing is None:
+            clone._observer = observer
+        else:
+            clone._observer = _chain_observers(existing, observer)
+        return clone
 
     async def ask(self, prompt: str) -> dict:
         last_error: str | None = None
         for attempt in range(self._max_retries + 1):
-            response = await self._execute(prompt)
+            response = await self._execute(prompt, attempt=attempt + 1)
             if response.success:
                 assert response.parsed is not None
                 return response.parsed
@@ -60,7 +75,8 @@ class JSONCLIProvider:
     def build_command(self, prompt: str) -> tuple[str, ...]:
         raise NotImplementedError
 
-    async def _execute(self, prompt: str) -> AIResponse:
+    async def _execute(self, prompt: str, *, attempt: int) -> AIResponse:
+        started_at = asyncio.get_event_loop().time()
         try:
             if self._cwd is None:
                 proc = await asyncio.create_subprocess_exec(
@@ -75,6 +91,14 @@ class JSONCLIProvider:
                     stderr=asyncio.subprocess.PIPE,
                     cwd=self._cwd,
                 )
+            self._notify(
+                {
+                    "event": "started",
+                    "attempt": attempt,
+                    "prompt": prompt,
+                    "subprocess_pid": proc.pid,
+                }
+            )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(),
@@ -83,21 +107,124 @@ class JSONCLIProvider:
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-                return AIResponse(raw_text="", parsed=None, error="Command timed out")
+                completed_at = asyncio.get_event_loop().time()
+                response = AIResponse(raw_text="", parsed=None, error="Command timed out", subprocess_pid=proc.pid)
+                self._notify(
+                    {
+                        "event": "finished",
+                        "attempt": attempt,
+                        "status": "timeout",
+                        "prompt": prompt,
+                        "subprocess_pid": proc.pid,
+                        "returncode": proc.returncode,
+                        "raw_text": response.raw_text,
+                        "parsed": response.parsed,
+                        "error": response.error,
+                        "started_at": started_at,
+                        "completed_at": completed_at,
+                        "duration_seconds": max(completed_at - started_at, 0.0),
+                    }
+                )
+                return response
 
             stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
             if proc.returncode != 0:
-                return AIResponse(
+                response = AIResponse(
                     raw_text=stdout_text,
                     parsed=None,
                     error=f"Exit code {proc.returncode}: {stderr_text or stdout_text}",
+                    subprocess_pid=proc.pid,
+                    returncode=proc.returncode,
                 )
-            return self._parse_response(stdout_text)
+                completed_at = asyncio.get_event_loop().time()
+                self._notify(
+                    {
+                        "event": "finished",
+                        "attempt": attempt,
+                        "status": "error",
+                        "prompt": prompt,
+                        "subprocess_pid": proc.pid,
+                        "returncode": proc.returncode,
+                        "raw_text": response.raw_text,
+                        "parsed": response.parsed,
+                        "error": response.error,
+                        "started_at": started_at,
+                        "completed_at": completed_at,
+                        "duration_seconds": max(completed_at - started_at, 0.0),
+                    }
+                )
+                return response
+            response = self._parse_response(stdout_text)
+            response.subprocess_pid = proc.pid
+            response.returncode = proc.returncode
+            completed_at = asyncio.get_event_loop().time()
+            self._notify(
+                {
+                    "event": "finished",
+                    "attempt": attempt,
+                    "status": "success" if response.success else "parse_error",
+                    "prompt": prompt,
+                    "subprocess_pid": proc.pid,
+                    "returncode": proc.returncode,
+                    "raw_text": response.raw_text,
+                    "parsed": response.parsed,
+                    "error": response.error,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": max(completed_at - started_at, 0.0),
+                }
+            )
+            return response
         except FileNotFoundError:
-            return AIResponse(raw_text="", parsed=None, error=f"Command not found: {self._command}")
+            completed_at = asyncio.get_event_loop().time()
+            response = AIResponse(raw_text="", parsed=None, error=f"Command not found: {self._command}")
+            self._notify(
+                {
+                    "event": "finished",
+                    "attempt": attempt,
+                    "status": "error",
+                    "prompt": prompt,
+                    "subprocess_pid": None,
+                    "returncode": None,
+                    "raw_text": response.raw_text,
+                    "parsed": response.parsed,
+                    "error": response.error,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": max(completed_at - started_at, 0.0),
+                }
+            )
+            return response
         except OSError as exc:
-            return AIResponse(raw_text="", parsed=None, error=f"OS error: {exc}")
+            completed_at = asyncio.get_event_loop().time()
+            response = AIResponse(raw_text="", parsed=None, error=f"OS error: {exc}")
+            self._notify(
+                {
+                    "event": "finished",
+                    "attempt": attempt,
+                    "status": "error",
+                    "prompt": prompt,
+                    "subprocess_pid": None,
+                    "returncode": None,
+                    "raw_text": response.raw_text,
+                    "parsed": response.parsed,
+                    "error": response.error,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": max(completed_at - started_at, 0.0),
+                }
+            )
+            return response
+
+    def _notify(self, payload: dict[str, Any]) -> None:
+        observer = getattr(self, "_observer", None)
+        if observer is None:
+            return
+        try:
+            observer(payload)
+        except Exception:
+            logger.exception("Provider observer failed")
 
     def _parse_response(self, text: str) -> AIResponse:
         if not text:
@@ -122,3 +249,11 @@ class JSONCLIProvider:
                 error=f"Expected JSON object, got {type(parsed).__name__}",
             )
         return AIResponse(raw_text=text, parsed=parsed)
+
+
+def _chain_observers(*observers: Callable[[dict[str, Any]], None]):
+    def _notify(payload: dict[str, Any]) -> None:
+        for observer in observers:
+            observer(payload)
+
+    return _notify

@@ -52,6 +52,11 @@ class RuntimeTaskWorker:
         if task_queue is None:
             return
 
+        await asyncio.to_thread(
+            task_queue.recover_abandoned_running_tasks,
+            workspace_id=getattr(self._ctx, "workspace_id", None),
+        )
+
         while not self._stop_event.is_set():
             task = await asyncio.to_thread(
                 task_queue.claim_next,
@@ -82,6 +87,9 @@ class RuntimeTaskWorker:
             if isawaitable(result):
                 result = await result
         except Exception as exc:
+            if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
+                await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                return
             failed_task = await asyncio.to_thread(
                 task_queue.fail,
                 task.id,
@@ -92,6 +100,10 @@ class RuntimeTaskWorker:
             return
 
         normalized_result = result if isinstance(result, dict) else {}
+        if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
+            cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+            await self._schedule_follow_up(task, cancelled_task)
+            return
         completed_task = await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
         await self._schedule_follow_up(task, completed_task)
 
