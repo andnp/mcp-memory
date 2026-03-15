@@ -117,6 +117,14 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
         detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
         internal_tools = _fetch_json(f"http://127.0.0.1:{port}/internal/maintenance/tools")
+        run_agent = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/agents/run",
+            {"task_name": "graph-linker", "force": True},
+        )
+        run_all = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/agents/run-all",
+            {"force": False},
+        )
         created_link = _post_json(
             f"http://127.0.0.1:{port}/api/admin/links",
             {
@@ -149,6 +157,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
         assert fact_checker["failed_runs"] == 1
+        assert overview["recent_agent_runs"]
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
@@ -157,12 +166,16 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "running_count" in fact_checker
         assert "next_available_at" in fact_checker
         assert "last_result_summary" in fact_checker
+        assert run_agent["status"] == "enqueued"
+        assert len(run_all["results"]) >= 1
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"
         assert "MCP Memory Dashboard" in dashboard
         assert "Background Agents" in dashboard
         assert "Memory Metrics" in dashboard
         assert "Embedding Backend" in dashboard
+        assert "Recent Agent Runs" in dashboard
+        assert "Agent Controls" in dashboard
     finally:
         _stop_server(server, thread)
 

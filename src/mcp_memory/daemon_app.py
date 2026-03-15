@@ -101,6 +101,24 @@ def create_daemon_app(
     async def overview():
         return app.state.routes.service.get_overview().model_dump()
 
+    @app.post("/api/admin/agents/run")
+    async def run_agent(arguments: dict[str, Any]):
+        try:
+            return app.state.routes.service.enqueue_background_task(
+                str(arguments.get("task_name", "")).strip(),
+                force=bool(arguments.get("force", False)),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/admin/agents/run-all")
+    async def run_all_agents(arguments: dict[str, Any]):
+        return {
+            "results": app.state.routes.service.enqueue_all_background_tasks(
+                force=bool(arguments.get("force", False))
+            )
+        }
+
     @app.get("/api/tasks")
     async def tasks(
         status: str | None = Query(default=None),

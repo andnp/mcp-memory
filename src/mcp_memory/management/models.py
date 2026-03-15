@@ -79,11 +79,22 @@ class AgentRunPayload(BaseModel):
     seconds_until_next_run: float | None = None
 
 
+class AgentRunHistoryPayload(BaseModel):
+    task_name: str
+    status: str
+    started_at: float
+    completed_at: float
+    duration_seconds: float
+    error_text: str | None = None
+    result_summary: str | None = None
+
+
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     memory_metrics: MemoryMetricsPayload
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
+    recent_agent_runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
     tasks: TaskStatusSummary
     failed_tasks: list[dict] = Field(default_factory=list)

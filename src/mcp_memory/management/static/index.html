@@ -81,6 +81,29 @@
     </section>
 
     <section class="panel" style="margin-top: 16px;">
+      <h2>Agent Controls</h2>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; align-items: end;">
+        <label>Agent<br />
+          <select id="agent-select" style="min-width: 220px; margin-top: 6px;"></select>
+        </label>
+        <label><input id="agent-force" type="checkbox" /> Force enqueue</label>
+        <button id="run-agent">Run Agent</button>
+        <button id="run-all-agents">Run All Agents</button>
+      </div>
+      <pre id="agent-action-result" class="muted">No agent action yet.</pre>
+    </section>
+
+    <section class="panel" style="margin-top: 16px;">
+      <h2>Recent Agent Runs</h2>
+      <table>
+        <thead>
+          <tr><th>Agent</th><th>Status</th><th>Completed</th><th>Duration</th><th>Result</th><th>Error</th></tr>
+        </thead>
+        <tbody id="recent-agent-runs"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top: 16px;">
       <h2>Admin Link Editor</h2>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 16px;">
         <label>Source ID<br /><input id="link-source" style="width: 100%; margin-top: 6px;" /></label>
@@ -134,6 +157,17 @@
       });
       const data = await response.json();
       document.getElementById('link-result').textContent = JSON.stringify(data, null, 2);
+      await loadOverview();
+    }
+
+    async function submitAgentAction(path, payload) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      document.getElementById('agent-action-result').textContent = JSON.stringify(data, null, 2);
       await loadOverview();
     }
 
@@ -194,6 +228,21 @@
         </tr>
       `).join('') || '<tr><td colspan="11" class="muted">No agent runs recorded yet.</td></tr>';
 
+      document.getElementById('recent-agent-runs').innerHTML = payload.recent_agent_runs.map((run) => `
+        <tr>
+          <td>${run.task_name}</td>
+          <td>${run.status}</td>
+          <td>${formatTimestamp(run.completed_at)}</td>
+          <td>${run.duration_seconds.toFixed(2)}s</td>
+          <td>${run.result_summary ?? '-'}</td>
+          <td>${run.error_text ?? '-'}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="6" class="muted">No recent agent runs.</td></tr>';
+
+      document.getElementById('agent-select').innerHTML = payload.agent_runs.map((agent) => `
+        <option value="${agent.task_name}">${agent.task_name}</option>
+      `).join('');
+
       const metricRows = [
         ['Total memories', payload.memory_metrics.total_memories],
         ['Total memory lines', payload.memory_metrics.total_memory_lines],
@@ -219,6 +268,23 @@
     document.getElementById('delete-link').addEventListener('click', () => {
       submitLink('/api/admin/links/delete').catch((error) => {
         document.getElementById('link-result').textContent = String(error);
+      });
+    });
+
+    document.getElementById('run-agent').addEventListener('click', () => {
+      submitAgentAction('/api/admin/agents/run', {
+        task_name: document.getElementById('agent-select').value,
+        force: document.getElementById('agent-force').checked,
+      }).catch((error) => {
+        document.getElementById('agent-action-result').textContent = String(error);
+      });
+    });
+
+    document.getElementById('run-all-agents').addEventListener('click', () => {
+      submitAgentAction('/api/admin/agents/run-all', {
+        force: document.getElementById('agent-force').checked,
+      }).catch((error) => {
+        document.getElementById('agent-action-result').textContent = String(error);
       });
     });
 

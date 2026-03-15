@@ -15,6 +15,7 @@ import uvicorn
 
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import create_daemon_app, ensure_daemon_started
+from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.relational.importer import (
@@ -95,6 +96,32 @@ def dashboard(workspace_root: str | None) -> None:
         console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)
     console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+
+
+@main.command(name="prefetch-model")
+@click.option("--workspace-root", help="Override the active workspace root")
+def prefetch_model(workspace_root: str | None) -> None:
+    """Download and cache the configured local embedding model in the foreground."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        embedder = runtime.embedder
+        if embedder is None:
+            raise RuntimeError("embedder_not_initialized")
+        cache_model = getattr(embedder, "cache_model", None)
+        if not callable(cache_model):
+            raise RuntimeError("embedder_cache_not_supported")
+        cached = bool(cache_model())
+        status = describe_embedder(embedder)
+        if not cached:
+            raise RuntimeError("embedding_model_cache_failed")
+        console.print(f"[green]Embedding model cached:[/] {status.model_name if status is not None else 'unknown'}")
+        if status is not None:
+            console.print(f"backend={status.backend} cached={status.model_cached}")
+    except Exception as exc:
+        console.print(f"[red]Error:[/] {exc}")
+        sys.exit(1)
+    finally:
+        runtime.close()
 
 
 @main.group(name="agents")
@@ -202,6 +229,17 @@ def stats(workspace_root: str | None) -> None:
                 f"next={_format_age(agent.seconds_until_next_run)} "
                 f"last_status={agent.last_status or 'never'} "
                 f"last_result={agent.last_result_summary or '-'}"
+            )
+
+        console.print("[bold]Recent Agent Runs[/]")
+        for run in overview.recent_agent_runs:
+            console.print(
+                "- "
+                f"{run.task_name}: "
+                f"status={run.status} "
+                f"duration={run.duration_seconds:.2f}s "
+                f"result={run.result_summary or '-'} "
+                f"error={run.error_text or '-'}"
             )
     except Exception as exc:
         console.print(f"[red]Error:[/] {exc}")

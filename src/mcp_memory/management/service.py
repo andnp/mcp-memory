@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import time
 
@@ -8,6 +9,7 @@ from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
+    AgentRunHistoryPayload,
     AgentRunPayload,
     EmbeddingStatusPayload,
     HealthPayload,
@@ -80,12 +82,14 @@ class ManagementService:
         memory_metrics = self._build_memory_metrics()
         journal_counts = {"pending": memory_metrics.thought_buffer_entries}
         agent_runs = self._build_agent_runs()
+        recent_agent_runs = self._build_recent_agent_runs()
 
         return OverviewPayload(
             memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
             embeddings=self._build_embedding_status(),
             memory_metrics=memory_metrics,
             agent_runs=agent_runs,
+            recent_agent_runs=recent_agent_runs,
             recent_memories=recent_records,
             tasks=TaskStatusSummary(
                 by_status=task_counts,
@@ -133,6 +137,12 @@ class ManagementService:
             "created": created,
             "task": task_payload(task),
         }
+
+    def enqueue_all_background_tasks(self, *, force: bool = False) -> list[dict]:
+        return [
+            self.enqueue_background_task(task_name, force=force)
+            for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES
+        ]
 
     def get_memory_detail(self, memory_id: str):
         if self._memory_queries is None:
@@ -385,6 +395,30 @@ class ManagementService:
             )
         return payloads
 
+    def _build_recent_agent_runs(self, limit: int = 20) -> list[AgentRunHistoryPayload]:
+        rows = [] if self._db_manager is None else self._db_manager.get_connection().execute(
+            f"SELECT * FROM task_runs WHERE task_name IN ({','.join('?' for _ in TRIGGERABLE_BACKGROUND_TASK_NAMES)})"
+            + (" AND workspace_id = ?" if self._workspace_id is not None else "")
+            + " ORDER BY completed_at DESC, started_at DESC LIMIT ?",
+            [
+                *TRIGGERABLE_BACKGROUND_TASK_NAMES,
+                *([self._workspace_id] if self._workspace_id is not None else []),
+                limit,
+            ],
+        ).fetchall()
+        return [
+            AgentRunHistoryPayload(
+                task_name=str(row["task_name"]),
+                status=str(row["status"]),
+                started_at=float(row["started_at"]),
+                completed_at=float(row["completed_at"]),
+                duration_seconds=float(row["duration_seconds"] or 0.0),
+                error_text=row["error_text"],
+                result_summary=_format_result_summary(_decode_run_result(row["result_json"])),
+            )
+            for row in rows
+        ]
+
 
 def _format_result_summary(result: dict[str, object]) -> str | None:
     if not result:
@@ -421,3 +455,13 @@ def _format_result_summary(result: dict[str, object]) -> str | None:
         if isinstance(value, (str, int, float, bool)):
             formatted_parts.append(f"{key}={value}")
     return ", ".join(formatted_parts) if formatted_parts else None
+
+
+def _decode_run_result(raw_result: object) -> dict[str, object]:
+    if not isinstance(raw_result, str) or not raw_result.strip():
+        return {}
+    try:
+        decoded = json.loads(raw_result)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}

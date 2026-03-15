@@ -22,6 +22,41 @@ def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None
     assert "http://127.0.0.1:8123/" in result.output
 
 
+def test_prefetch_model_command_caches_embedding_model(monkeypatch) -> None:
+    runner = CliRunner()
+    closed: list[bool] = []
+
+    class FakeEmbedder:
+        model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+        def cache_model(self) -> bool:
+            return True
+
+        def status(self):
+            from mcp_memory.embeddings import EmbedderStatus
+
+            return EmbedderStatus(
+                model_name=self.model_name,
+                backend="sentence-transformer",
+                model_cached=True,
+            )
+
+    class FakeRuntime:
+        embedder = FakeEmbedder()
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr("mcp_memory.cli.create_runtime", lambda workspace_root_override=None: FakeRuntime())
+
+    result = runner.invoke(main, ["prefetch-model"])
+
+    assert result.exit_code == 0
+    assert "Embedding model cached:" in result.output
+    assert "cached=True" in result.output
+    assert closed == [True]
+
+
 def test_import_markdown_command_imports_record(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -144,6 +179,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "Memory Metrics" in result.output
     assert "Background Agents" in result.output
     assert "Agent Details" in result.output
+    assert "Recent Agent Runs" in result.output
     assert "Total lines compressed" in result.output
     assert "defragmenter" in result.output
     assert "lines_compressed=3" in result.output
