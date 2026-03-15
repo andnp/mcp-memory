@@ -183,7 +183,7 @@ async def test_mcp_server_run_still_sends_session_end_hook_on_failure(monkeypatc
     assert hook_calls[0][1]["session_id"] == hook_calls[1][1]["session_id"]
 
 
-def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -> None:
+def test_cli_help_lists_grouped_public_commands() -> None:
     runner = CliRunner()
 
     result = runner.invoke(main, ["--help"])
@@ -191,10 +191,6 @@ def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -
     assert result.exit_code == 0
     assert "run" in result.output
     assert "daemon" in result.output
-    assert "daemon-status" in result.output
-    assert "daemon-stop" in result.output
-    assert "daemon-restart" in result.output
-    assert "dashboard" in result.output
     assert "log-prune" in result.output
     assert "log-summary" in result.output
     assert "logs" in result.output
@@ -202,3 +198,19 @@ def test_cli_help_lists_run_daemon_dashboard_agent_stats_and_import_commands() -
     assert "agents" in result.output
     assert "stats" in result.output
     assert "import-markdown" in result.output
+    assert "daemon-status" not in result.output
+    assert "daemon-stop" not in result.output
+    assert "daemon-restart" not in result.output
+    assert "dashboard" not in result.output
+
+
+def test_daemon_help_lists_nested_management_commands() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["daemon", "--help"])
+
+    assert result.exit_code == 0
+    assert "status" in result.output
+    assert "stop" in result.output
+    assert "restart" in result.output
+    assert "dashboard" in result.output

@@ -41,7 +41,7 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
         lambda workspace_root, cwd=None: ("workspace-a", FakeMetadata(), True),
     )
 
-    result = runner.invoke(main, ["daemon-status"])
+    result = runner.invoke(main, ["daemon", "status"])
 
     assert result.exit_code == 0
     assert "Status:" in result.output
@@ -58,7 +58,7 @@ def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
 
     monkeypatch.setattr("mcp_memory.cli.stop_daemon", lambda workspace_root, cwd=None: FakeMetadata())
 
-    result = runner.invoke(main, ["daemon-stop"])
+    result = runner.invoke(main, ["daemon", "stop"])
 
     assert result.exit_code == 0
     assert "Daemon stopped:" in result.output
@@ -83,7 +83,7 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
         lambda workspace_root, cwd=None: start_calls.append((workspace_root, cwd)) or FakeMetadata(),
     )
 
-    result = runner.invoke(main, ["daemon-restart", "--workspace-root", "demo"])
+    result = runner.invoke(main, ["daemon", "restart", "--workspace-root", "demo"])
 
     assert result.exit_code == 0
     assert stop_calls == [("demo", None)]
