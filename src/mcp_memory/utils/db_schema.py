@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -121,6 +121,21 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_id);
         CREATE INDEX IF NOT EXISTS idx_links_target_id ON links(target_id);
         CREATE INDEX IF NOT EXISTS idx_links_type ON links(type);
+
+        CREATE TABLE IF NOT EXISTS embeddings (
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            workspace_id TEXT,
+            model_name TEXT NOT NULL,
+            embedding_json TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (source_kind, source_id, model_name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_embeddings_source_kind_id
+            ON embeddings(source_kind, source_id);
+        CREATE INDEX IF NOT EXISTS idx_embeddings_workspace_kind
+            ON embeddings(workspace_id, source_kind);
         """
     )
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")

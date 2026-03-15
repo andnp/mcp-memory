@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from mcp_memory.config import Config
+from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 
@@ -177,3 +178,52 @@ def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
     )
 
     assert [result.memory_id for result in results[:2]] == [authority.id, peer.id]
+
+
+class _FakeEmbedder:
+    model_name = "fake-mini"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            lowered = text.lower()
+            if any(token in lowered for token in ["auth", "permission", "token", "security", "identity"]):
+                vectors.append([1.0, 0.0])
+            elif any(token in lowered for token in ["sqlite", "database", "wal"]):
+                vectors.append([0.0, 1.0])
+            else:
+                vectors.append([0.2, 0.2])
+        return vectors
+
+
+def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=SQLiteVectorStore(db_manager),
+    )
+
+    auth_record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    database_record = repository.create_memory(
+        title="Storage settings",
+        content="SQLite WAL tuning guidance.",
+        summary="Database tuning.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["database"],
+    )
+    assert auth_record is not None and database_record is not None
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == auth_record.id

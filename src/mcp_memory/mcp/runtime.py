@@ -13,6 +13,7 @@ from mcp_memory.config import (
     resolve_workspace_root,
 )
 from mcp_memory.context import ApplicationContext
+from mcp_memory.embeddings import SQLiteVectorStore, build_embedder
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.providers import build_ai_provider_from_config
 from mcp_memory.core.tasks import SQLiteTaskQueue
@@ -58,7 +59,14 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
     db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
     journal = System1Journal(db_manager)
     repository = RelationalMemoryRepository(db_manager)
-    relational_search = RelationalMemorySearchService(repository, spec.config)
+    embedder = build_embedder(spec.config.embeddings)
+    vector_store = SQLiteVectorStore(db_manager)
+    relational_search = RelationalMemorySearchService(
+        repository,
+        spec.config,
+        embedder=embedder,
+        vector_store=vector_store,
+    )
     task_queue = SQLiteTaskQueue(db_manager)
     ai_provider = build_ai_provider_from_config(spec.config)
     return ApplicationContext(
@@ -72,6 +80,8 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         relational_search=relational_search,
         task_queue=task_queue,
         ai_provider=ai_provider,
+        embedder=embedder,
+        vector_store=vector_store,
     )
 
 

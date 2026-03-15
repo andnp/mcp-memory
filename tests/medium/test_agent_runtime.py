@@ -26,6 +26,7 @@ from mcp_memory.core.agent_runtime import (
     handle_sweeper_task,
     handle_taxonomist_task,
 )
+from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
@@ -521,5 +522,68 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
         await worker.stop(0.1)
 
         assert runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+    finally:
+        runtime.close()
+
+
+class _SemanticFakeEmbedder:
+    model_name = "semantic-fake"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            lowered = text.lower()
+            if any(token in lowered for token in ["jwt", "session", "auth", "cookie"]):
+                vectors.append([1.0, 0.0])
+            elif any(token in lowered for token in ["sqlite", "wal", "database"]):
+                vectors.append([0.0, 1.0])
+            else:
+                vectors.append([0.2, 0.2])
+        return vectors
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_clusters_semantically_related_thoughts(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    runtime.embedder = _SemanticFakeEmbedder()
+    runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+    if runtime.relational_search is not None:
+        runtime.relational_search._embedder = runtime.embedder  # noqa: SLF001
+        runtime.relational_search._vector_store = runtime.vector_store  # noqa: SLF001
+
+    try:
+        first = runtime.journal.record("jwt refresh rollout")
+        second = runtime.journal.record("session cookie migration")
+        third = runtime.journal.record("sqlite wal tuning")
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="semantic-ingest-test",
+        )
+
+        result = await handle_ingest_system1_task(runtime, task)
+        records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+
+        assert len(result["created_memory_ids"]) == 2
+        assert len(records) == 2
+        source_sets = []
+        for record in records:
+            source_entry_ids = record.metadata["source_entry_ids"]
+            assert isinstance(source_entry_ids, list)
+            source_sets.append(set(source_entry_ids))
+        assert {first.id, second.id} in source_sets
+        assert {third.id} in source_sets
     finally:
         runtime.close()

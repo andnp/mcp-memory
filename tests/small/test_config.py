@@ -31,3 +31,5 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.copilot_cli.command == "copilot"
     assert loaded.opencode.command == "opencode"
     assert loaded.ollama.command == "ollama"
+    assert loaded.embeddings.enabled is False
+    assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"

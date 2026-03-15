@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
+from mcp_memory.embeddings import Embedder, SQLiteVectorStore
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord, RelationalMemoryRepository
 
 
@@ -39,9 +40,14 @@ class RelationalMemorySearchService:
         self,
         repository: RelationalMemoryRepository,
         config: Config,
+        *,
+        embedder: Embedder | None = None,
+        vector_store: SQLiteVectorStore | None = None,
     ) -> None:
         self._repository = repository
         self._config = config
+        self._embedder = embedder
+        self._vector_store = vector_store
 
     def search_memories(
         self,
@@ -52,11 +58,13 @@ class RelationalMemorySearchService:
         status: str | None = None,
         include_superseded: bool = False,
     ):
-        tokens = _tokenize(query)
-        if not tokens:
+        if not query.strip():
             return []
 
+        tokens = _tokenize(query)
+
         candidates = self._repository.list_memories(memory_type=memory_type, status=status, limit=500)
+        semantic_scores = self._semantic_scores(query, candidates, workspace_id, limit=max(limit * 5, 20))
         ranked: list[RelationalSearchResult] = []
         surfaced_ids: list[str] = []
 
@@ -65,10 +73,11 @@ class RelationalMemorySearchService:
                 continue
 
             base_score = _base_match_score(candidate, tokens)
-            if base_score <= 0:
+            semantic_score = semantic_scores.get(candidate.id, 0.0)
+            if base_score <= 0 and semantic_score <= 0:
                 continue
 
-            score = _normalize_base_score(base_score)
+            score = max(_normalize_base_score(base_score), semantic_score)
             score = _apply_recency_boost(score, candidate, self._config)
             score = _apply_access_boost(score, candidate)
             score = _apply_graph_authority_boost(score, candidate, self._repository)
@@ -126,6 +135,60 @@ class RelationalMemorySearchService:
             },
             superseded=superseded,
         )
+
+    def _semantic_scores(
+        self,
+        query: str,
+        candidates: list[RelationalMemoryRecord],
+        workspace_id: str | None,
+        *,
+        limit: int,
+    ) -> dict[str, float]:
+        if self._embedder is None or self._vector_store is None or not candidates:
+            return {}
+
+        self._ensure_memory_embeddings(candidates)
+        query_embedding = self._embedder.embed([query])[0]
+        matches = self._vector_store.search(
+            source_kind="memory",
+            model_name=self._embedder.model_name,
+            query_embedding=query_embedding,
+            workspace_id=workspace_id,
+            limit=limit,
+        )
+        return {
+            memory_id: max(min((score + 1.0) / 2.0, 1.0), 0.0)
+            for memory_id, score in matches
+            if score > 0
+        }
+
+    def _ensure_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
+        assert self._embedder is not None
+        assert self._vector_store is not None
+
+        missing: list[RelationalMemoryRecord] = []
+        for candidate in candidates:
+            existing = self._vector_store.get(
+                source_kind="memory",
+                source_id=candidate.id,
+                model_name=self._embedder.model_name,
+            )
+            if existing is None:
+                missing.append(candidate)
+
+        if not missing:
+            return
+
+        payloads = [_memory_embedding_text(candidate) for candidate in missing]
+        embeddings = self._embedder.embed(payloads)
+        for candidate, embedding in zip(missing, embeddings, strict=False):
+            self._vector_store.upsert(
+                source_kind="memory",
+                source_id=candidate.id,
+                workspace_id=candidate.workspace_ids[0] if candidate.workspace_ids else None,
+                model_name=self._embedder.model_name,
+                embedding=embedding,
+            )
 
 
 def _tokenize(query: str):
@@ -190,6 +253,21 @@ def _apply_graph_authority_boost(
         return score
     multiplier = 1.0 + min(0.15, math.log1p(incoming_links) / 10.0)
     return min(1.0, score * multiplier)
+
+
+def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
+    tag_text = ", ".join(record.tags)
+    return "\n".join(
+        part
+        for part in [
+            record.title,
+            record.summary or "",
+            record.content,
+            f"tags: {tag_text}" if tag_text else "",
+            f"type: {record.type}",
+        ]
+        if part
+    )
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):

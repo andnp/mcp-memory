@@ -20,6 +20,7 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - `record_thought` writes to `system1_journal`
 - threshold logic enqueues ingest work
 - runtime bootstrap ensures recurring maintenance tasks exist
+- when local embeddings are enabled, ingest still runs as a durable task but may cluster pending thoughts into smaller semantic mini-batches before consolidation
 
 ### 3.2 Execute
 - the daemon starts a runtime worker
@@ -60,3 +61,5 @@ Potential future additions:
 - broader maintenance agent roster
 - more explicit per-task observability in the dashboard
 - lifecycle changes if the daemon transport model evolves
+
+The current runtime may also evolve from the SQLite-backed embedding table to a more specialized local vector engine later, but the initial semantic layer intentionally stays embedded and local-first.

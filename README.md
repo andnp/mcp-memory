@@ -20,6 +20,7 @@ The runtime is now **relational-first**.
 - **Typed Relational Links**: Memory records can carry explicit typed relationships such as `SUPERSEDES`, `EXTENDS`, and `CONTRADICTS`.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
+- **Optional Local Semantic Search**: Fully local embeddings via `sentence-transformers` can enrich search and ingest without any external AI provider.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Workspace Daemon**: One localhost daemon per workspace owns runtime state, background workers, and the management API.
 - **Local Management API**: The daemon exposes a small read-only dashboard/API for runtime health, overview, and lineage inspection.
@@ -29,6 +30,7 @@ The runtime is now **relational-first**.
 - **Python 3.13+**
 - **MCP (Model Context Protocol)**: Standard interface for AI tool integration.
 - **SQLite (FTS5)**: Robust keyword search and relational storage.
+- **Sentence Transformers (optional)**: Local embeddings for semantic retrieval and thought clustering.
 - **FastAPI + Uvicorn**: Local daemon and management API.
 
 ## 📂 Project Structure
@@ -56,7 +58,7 @@ The following tools are exposed via the MCP server:
 
 ### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the local journal.
-- `search_memory_records`: Search relational memory records with summary-first results.
+- `search_memory_records`: Search relational memory records with summary-first results and optional local semantic ranking.
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.
@@ -100,6 +102,11 @@ host = "127.0.0.1"
 auto_start_timeout_seconds = 10.0
 shutdown_grace_seconds = 5.0
 healthcheck_interval_seconds = 0.05
+
+[embeddings]
+enabled = false
+model = "sentence-transformers/all-MiniLM-L6-v2"
+batch_size = 32
 
 [memory]
 enabled = true
@@ -153,7 +160,10 @@ boost_decay_rate = 0.98
 4. **Authenticate your AI provider**:
   If you set `ai.provider = "gemini-cli"`, make sure the Gemini CLI is installed and authenticated before relying on AI-assisted background tasks.
 
-5. **Run the MCP proxy**:
+5. **Optional: enable fully local semantic search**:
+   Set `embeddings.enabled = true` to enable local sentence-transformer embeddings for semantic search and semantic thought mini-batching.
+
+6. **Run the MCP proxy**:
    ```bash
    uv run mcp-memory run
    ```

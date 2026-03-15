@@ -22,6 +22,8 @@ class ApplicationContext:
     relational_search: Any = None
     task_queue: Any = None
     ai_provider: Any = None
+    embedder: Any = None
+    vector_store: Any = None
 
     def close(self) -> None:
         if self.db_manager is not None:

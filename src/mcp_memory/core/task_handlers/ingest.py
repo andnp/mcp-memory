@@ -6,11 +6,16 @@ from inspect import isawaitable
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
 )
 from mcp_memory.core.tasks import TaskRecord
+
+
+SEMANTIC_CLUSTER_SIZE = 5
+SEMANTIC_SIMILARITY_THRESHOLD = 0.55
 
 
 async def handle_ingest_system1_task(
@@ -30,33 +35,41 @@ async def handle_ingest_system1_task(
     workspace_id = _resolve_workspace_id(ctx, task)
     created_ids: list[str] = []
     processed_ids: list[int] = []
+    grouped_entries = _build_ingest_groups(ctx, entries, workspace_id)
 
-    actions = None
-    if provider is not None:
-        try:
-            actions = await _analyze_ingest_actions(provider, entries)
-        except Exception:
-            actions = None
+    for group in grouped_entries:
+        actions = None
+        if provider is not None:
+            try:
+                actions = await _analyze_ingest_actions(provider, group)
+            except Exception:
+                actions = None
 
-    if actions:
-        created_ids, processed_ids = _execute_ingest_actions(
-            ctx,
-            task,
-            workspace_id,
-            entries,
-            actions,
-        )
+        group_created_ids: list[str] = []
+        group_processed_ids: list[int] = []
+        if actions:
+            group_created_ids, group_processed_ids = _execute_ingest_actions(
+                ctx,
+                task,
+                workspace_id,
+                group,
+                actions,
+            )
 
-    if not processed_ids:
-        created_ids, processed_ids = _fallback_ingest_entries(
-            ctx,
-            task,
-            workspace_id,
-            entries,
-        )
+        if not group_processed_ids:
+            group_created_ids, group_processed_ids = _fallback_ingest_entries(
+                ctx,
+                task,
+                workspace_id,
+                group,
+            )
+
+        created_ids.extend(group_created_ids)
+        processed_ids.extend(group_processed_ids)
 
     if processed_ids:
         ctx.journal.mark_processed(processed_ids)
+        _cleanup_processed_thought_embeddings(ctx, processed_ids)
 
     return {
         "created_memory_ids": created_ids,
@@ -107,6 +120,68 @@ def _group_related_entries(entries, threshold: float = 0.3):
         groups.append(group)
 
     return groups
+
+
+def _build_ingest_groups(
+    ctx: ApplicationContext,
+    entries,
+    workspace_id: str,
+):
+    embedder = getattr(ctx, "embedder", None)
+    vector_store = getattr(ctx, "vector_store", None)
+    if embedder is None or vector_store is None:
+        return _group_related_entries(entries)
+
+    entry_map = {entry.id: entry for entry in entries}
+    embeddings = embedder.embed([entry.content for entry in entries])
+    by_id = {}
+    for entry, embedding in zip(entries, embeddings, strict=False):
+        by_id[entry.id] = embedding
+        vector_store.upsert(
+            source_kind="thought",
+            source_id=str(entry.id),
+            workspace_id=workspace_id,
+            model_name=embedder.model_name,
+            embedding=embedding,
+        )
+
+    pending_ids = [entry.id for entry in entries]
+    remaining = set(pending_ids)
+    groups = []
+    for entry in entries:
+        if entry.id not in remaining:
+            continue
+        seed_embedding = by_id[entry.id]
+        scored = [
+            (candidate_id, cosine_similarity(seed_embedding, by_id[candidate_id]))
+            for candidate_id in pending_ids
+            if candidate_id in remaining
+        ]
+        scored.sort(key=lambda item: item[1], reverse=True)
+        group_ids = [
+            candidate_id
+            for candidate_id, score in scored
+            if candidate_id == entry.id or score >= SEMANTIC_SIMILARITY_THRESHOLD
+        ][:SEMANTIC_CLUSTER_SIZE]
+        for group_id in group_ids:
+            remaining.discard(group_id)
+        groups.append([entry_map[group_id] for group_id in group_ids])
+
+    return groups or _group_related_entries(entries)
+
+
+def _cleanup_processed_thought_embeddings(ctx: ApplicationContext, processed_ids: list[int]) -> None:
+    vector_store = getattr(ctx, "vector_store", None)
+    embedder = getattr(ctx, "embedder", None)
+    if vector_store is None:
+        return
+    model_name = None if embedder is None else embedder.model_name
+    for entry_id in processed_ids:
+        vector_store.delete(
+            source_kind="thought",
+            source_id=str(entry_id),
+            model_name=model_name,
+        )
 
 
 def _execute_ingest_actions(
@@ -165,25 +240,20 @@ def _fallback_ingest_entries(
     entries,
 ) -> tuple[list[str], list[int]]:
     assert ctx.repository is not None
-    created_ids: list[str] = []
-    processed_ids: list[int] = []
-    for group in _group_related_entries(entries):
-        record = ctx.repository.create_memory(
-            title=_build_title(group),
-            content=_format_entries(group),
-            workspace_ids=[workspace_id],
-            tags=["auto-ingested", "system1"],
-            memory_type="observation",
-            metadata={
-                "source_entry_ids": [entry.id for entry in group],
-                "ingest_task_id": task.id,
-            },
-        )
-        assert record is not None
-        created_ids.append(record.id)
-        processed_ids.extend(entry.id for entry in group)
-        _enqueue_summary_task(ctx, workspace_id, record.id)
-    return created_ids, processed_ids
+    record = ctx.repository.create_memory(
+        title=_build_title(entries),
+        content=_format_entries(entries),
+        workspace_ids=[workspace_id],
+        tags=["auto-ingested", "system1"],
+        memory_type="observation",
+        metadata={
+            "source_entry_ids": [entry.id for entry in entries],
+            "ingest_task_id": task.id,
+        },
+    )
+    assert record is not None
+    _enqueue_summary_task(ctx, workspace_id, record.id)
+    return [record.id], [entry.id for entry in entries]
 
 
 def _enqueue_summary_task(

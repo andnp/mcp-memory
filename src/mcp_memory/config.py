@@ -123,6 +123,17 @@ class DaemonConfig:
 
 
 @dataclass
+class EmbeddingsConfig:
+    enabled: bool = False
+    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    batch_size: int = 32
+
+    def __post_init__(self) -> None:
+        if self.batch_size < 1:
+            raise ValueError("embeddings.batch_size must be >= 1")
+
+
+@dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
@@ -131,6 +142,7 @@ class Config:
     opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
     ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
+    embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -199,6 +211,11 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "shutdown_grace_seconds": 5.0,
         "healthcheck_interval_seconds": 0.05,
     }
+    document["embeddings"] = {
+        "enabled": False,
+        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "batch_size": 32,
+    }
     memory_table = tomlkit.table()
     memory_table.update({
         "enabled": True,
@@ -247,6 +264,7 @@ def load_config(config_path: Path | None = None) -> Config:
         opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),
         ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
+        embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
     )
 
 
