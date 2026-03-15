@@ -36,6 +36,113 @@ class RelationalReadResult:
     superseded: list[RelationalMemoryRecord]
 
 
+@dataclass(slots=True)
+class ScoringWeights:
+    rrf_k: float = 60.0
+    calibration_threshold: float = 0.035
+    calibration_steepness: float = 150.0
+    workspace_multiplier: float = WORKSPACE_BOOST
+    degradation_multiplier: float = DEGRADATION_PENALTY
+    access_half_life_days: float = ACCESS_HALF_LIFE_DAYS
+    access_bonus_scale: float = 0.1
+    authority_link_step: float = 0.02
+    authority_link_cap: int = 10
+
+
+class RankingEngine:
+    def __init__(
+        self,
+        repository: RelationalMemoryRepository,
+        config: Config,
+        *,
+        weights: ScoringWeights | None = None,
+    ) -> None:
+        self._repository = repository
+        self._config = config
+        self._weights = weights or ScoringWeights()
+
+    def fuse_reciprocal_rank(
+        self,
+        vector_ranked_ids: list[str],
+        keyword_ranked_ids: list[str],
+    ) -> dict[str, float]:
+        fused: dict[str, float] = {}
+        for ranked_ids in (vector_ranked_ids, keyword_ranked_ids):
+            for rank, memory_id in enumerate(ranked_ids, start=1):
+                fused[memory_id] = fused.get(memory_id, 0.0) + (1.0 / (self._weights.rrf_k + rank))
+        return fused
+
+    def calibrate_score(self, rrf_score: float) -> float:
+        exponent = -self._weights.calibration_steepness * (rrf_score - self._weights.calibration_threshold)
+        return 1.0 / (1.0 + math.exp(exponent))
+
+    def type_aware_recency_bonus(self, record: RelationalMemoryRecord) -> float:
+        try:
+            created_at = datetime.fromisoformat(record.created_at)
+        except ValueError:
+            return 0.0
+
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        age_days = max((datetime.now(timezone.utc) - created_at).days, 0)
+        recency = self._config.memory.get_recency_config(record.type)
+        return recency.max_boost_amount * (recency.boost_decay_rate ** age_days)
+
+    def workspace_multiplier(self, record: RelationalMemoryRecord, workspace_id: str | None) -> float:
+        if workspace_id is None or workspace_id not in record.workspace_ids:
+            return 1.0
+        return self._weights.workspace_multiplier
+
+    def access_bonus(self, record: RelationalMemoryRecord) -> float:
+        current_access_score = _decayed_access_score_for_half_life(
+            record.access_score,
+            record.last_accessed_at,
+            half_life_days=self._weights.access_half_life_days,
+        )
+        if current_access_score <= 0:
+            return 0.0
+        return self._weights.access_bonus_scale * math.log10(current_access_score + 1.0)
+
+    def authority_multiplier(self, record: RelationalMemoryRecord) -> float:
+        incoming_links_count = self._repository.count_incoming_links(record.id)
+        capped_links = min(incoming_links_count, self._weights.authority_link_cap)
+        return 1.0 + (capped_links * self._weights.authority_link_step)
+
+    def degradation_multiplier(self, record: RelationalMemoryRecord) -> float:
+        if record.status not in {"stale", "degraded"}:
+            return 1.0
+        return self._weights.degradation_multiplier
+
+    def score_from_rrf(
+        self,
+        record: RelationalMemoryRecord,
+        rrf_score: float,
+        workspace_id: str | None = None,
+    ) -> float:
+        score = self.calibrate_score(rrf_score)
+        score = min(score + self.type_aware_recency_bonus(record), 1.0)
+        score *= self.workspace_multiplier(record, workspace_id)
+        score += self.access_bonus(record)
+        score *= self.authority_multiplier(record)
+        score *= self.degradation_multiplier(record)
+        return min(max(score, 0.0), 1.0)
+
+    def rank_records(
+        self,
+        records: list[RelationalMemoryRecord],
+        rrf_scores: dict[str, float],
+        workspace_id: str | None = None,
+    ) -> list[tuple[RelationalMemoryRecord, float]]:
+        ranked: list[tuple[RelationalMemoryRecord, float]] = []
+        for record in records:
+            if record.id not in rrf_scores:
+                continue
+            ranked.append((record, self.score_from_rrf(record, rrf_scores[record.id], workspace_id)))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked
+
+
 class RelationalMemorySearchService:
     def __init__(
         self,
@@ -285,6 +392,14 @@ def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):
+    return _decayed_access_score_for_half_life(
+        access_score,
+        last_accessed_at,
+        half_life_days=ACCESS_HALF_LIFE_DAYS,
+    )
+
+
+def _decayed_access_score_for_half_life(access_score: float, last_accessed_at: str | None, *, half_life_days: float):
     if access_score <= 0 or not last_accessed_at:
         return max(access_score, 0.0)
 
@@ -298,7 +413,7 @@ def _decayed_access_score(access_score: float, last_accessed_at: str | None):
 
     elapsed = datetime.now(timezone.utc) - accessed_at
     elapsed_days = max(elapsed / timedelta(days=1), 0.0)
-    return access_score * (0.5 ** (elapsed_days / ACCESS_HALF_LIFE_DAYS))
+    return access_score * (0.5 ** (elapsed_days / half_life_days))
 
 
 def _utc_now():

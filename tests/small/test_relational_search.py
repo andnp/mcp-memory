@@ -5,10 +5,103 @@ import pytest
 from mcp_memory.config import Config
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.relational.search import RelationalMemorySearchService
+from mcp_memory.relational.search import RankingEngine, RelationalMemorySearchService, ScoringWeights
 
 
 pytestmark = pytest.mark.small
+
+
+def test_ranking_engine_fuses_rrf_across_vector_and_keyword_lists(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    engine = RankingEngine(repository, Config(), weights=ScoringWeights(rrf_k=60.0))
+
+    fused = engine.fuse_reciprocal_rank(
+        ["memory-a", "memory-b"],
+        ["memory-b", "memory-c"],
+    )
+
+    assert fused["memory-b"] > fused["memory-a"]
+    assert fused["memory-b"] > fused["memory-c"]
+    assert fused["memory-a"] == pytest.approx(1.0 / 61.0)
+
+
+def test_ranking_engine_calibrates_rrf_scores_around_threshold(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    engine = RankingEngine(
+        repository,
+        Config(),
+        weights=ScoringWeights(calibration_threshold=0.035, calibration_steepness=150.0),
+    )
+
+    assert engine.calibrate_score(0.035) == pytest.approx(0.5)
+    assert engine.calibrate_score(0.06) > engine.calibrate_score(0.035)
+    assert engine.calibrate_score(0.01) < 0.5
+
+
+def test_ranking_engine_applies_stage_boosts_and_penalties_in_order(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    engine = RankingEngine(repository, Config())
+
+    evergreen = repository.create_memory(
+        title="Evergreen fact",
+        content="Evergreen memory content.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        created_at="2025-01-01T00:00:00+00:00",
+        updated_at="2025-01-01T00:00:00+00:00",
+    )
+    fresh = repository.create_memory(
+        title="Fresh journal",
+        content="Fresh journal content.",
+        memory_type="journal",
+        workspace_ids=["workspace-alpha"],
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    stale = repository.create_memory(
+        title="Stale plan",
+        content="Stale plan content.",
+        memory_type="plan",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    working = repository.create_memory(
+        title="Working memory",
+        content="Working memory content.",
+        memory_type="observation",
+        workspace_ids=["workspace-alpha"],
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    assert evergreen is not None and fresh is not None and stale is not None and working is not None
+
+    repository.record_access(
+        working.id,
+        access_score=25.0,
+        accessed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    repository.add_link(fresh.id, evergreen.id, "DEPENDS_ON")
+    repository.add_link(working.id, evergreen.id, "DEPENDS_ON")
+
+    scores = {
+        record.id: score
+        for record, score in engine.rank_records(
+            [evergreen, fresh, stale, working],
+            {
+                evergreen.id: 0.04,
+                fresh.id: 0.04,
+                stale.id: 0.04,
+                working.id: 0.04,
+            },
+            workspace_id="workspace-alpha",
+        )
+    }
+
+    assert scores[working.id] > scores[stale.id]
+    assert scores[fresh.id] > scores[stale.id]
+    assert scores[evergreen.id] > scores[stale.id]
 
 
 def test_search_memories_prioritizes_workspace_and_hides_superseded(db_manager) -> None:
