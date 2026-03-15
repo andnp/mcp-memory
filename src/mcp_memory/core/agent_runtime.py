@@ -7,6 +7,7 @@ from typing import Any
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
@@ -18,6 +19,7 @@ from mcp_memory.core.task_handlers import (
     TAXONOMIST_TASK_NAME,
     handle_defragmenter_task,
     handle_conflict_detector_task,
+    handle_deduplicator_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
@@ -51,6 +53,7 @@ def build_default_task_handlers(
         GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, provider),
         CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, provider),
         DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, provider),
+        DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, provider),
         TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, provider),
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,

@@ -6,6 +6,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_SWEEP_RETENTION_DAYS,
     MAINTENANCE_TASK_NAMES,
     CONFLICT_DETECTOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
@@ -21,6 +22,7 @@ from mcp_memory.core.task_handlers.constants import (
 from mcp_memory.core.task_handlers.ingest import handle_ingest_system1_task
 from mcp_memory.core.task_handlers.maintenance import (
     handle_conflict_detector_task,
+    handle_deduplicator_task,
     handle_defragmenter_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
@@ -38,6 +40,7 @@ __all__ = [
     "DEFAULT_SWEEP_RETENTION_DAYS",
     "MAINTENANCE_TASK_NAMES",
     "CONFLICT_DETECTOR_TASK_NAME",
+    "DEDUPLICATOR_TASK_NAME",
     "DEFRAGMENTER_TASK_NAME",
     "FACT_CHECKER_TASK_NAME",
     "GRAPH_LINKER_TASK_NAME",
@@ -50,6 +53,7 @@ __all__ = [
     "TAXONOMIST_TASK_NAME",
     "TRIGGERABLE_BACKGROUND_TASK_NAMES",
     "handle_conflict_detector_task",
+    "handle_deduplicator_task",
     "handle_defragmenter_task",
     "handle_fact_checker_task",
     "handle_graph_linker_task",

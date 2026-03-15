@@ -71,6 +71,8 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 - `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
+Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
+
 ## ⚙️ Configuration
 
 Preferred config location:

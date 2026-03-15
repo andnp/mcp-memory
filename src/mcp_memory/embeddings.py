@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass
 from hashlib import blake2b
+from pathlib import Path
 from typing import Any, Protocol
 
 from mcp_memory.config import EmbeddingsConfig
@@ -44,12 +46,11 @@ class SentenceTransformerEmbedder:
         if not texts:
             return []
         if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-
-                self._model = SentenceTransformer(self.model_name, local_files_only=True)
-            except Exception:
+            model = _load_sentence_transformer(self.model_name, local_files_only=True)
+            if model is None:
                 self._use_fallback = True
+            else:
+                self._model = model
         if self._use_fallback:
             return self._fallback.embed(texts)
         assert self._model is not None
@@ -64,15 +65,12 @@ class SentenceTransformerEmbedder:
     def cache_model(self) -> bool:
         if self._model is not None and not self._use_fallback:
             return True
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            self._model = SentenceTransformer(self.model_name, local_files_only=False)
-            self._use_fallback = False
-            return True
-        except Exception as exc:
-            logger.warning("Failed to cache embedding model %s: %s", self.model_name, exc)
+        model = _load_sentence_transformer(self.model_name, local_files_only=False)
+        if model is None:
             return False
+        self._model = model
+        self._use_fallback = False
+        return True
 
 
 class HashingEmbedder:
@@ -192,6 +190,35 @@ class SQLiteVectorStore:
 
 def build_embedder(config: EmbeddingsConfig) -> Embedder | None:
     return SentenceTransformerEmbedder(config)
+
+
+def _load_sentence_transformer(model_name: str, *, local_files_only: bool) -> Any | None:
+    if local_files_only and not _is_model_cached_locally(model_name):
+        return None
+    try:
+        from huggingface_hub import snapshot_download
+        from sentence_transformers import SentenceTransformer
+
+        model_path = snapshot_download(repo_id=model_name, local_files_only=local_files_only)
+        return SentenceTransformer(model_path, local_files_only=True)
+    except Exception as exc:
+        mode = "cached" if local_files_only else "download"
+        logger.warning("Failed to load %s embedding model %s: %s", mode, model_name, exc)
+        return None
+
+
+def _is_model_cached_locally(model_name: str) -> bool:
+    hub_cache = os.getenv("HUGGINGFACE_HUB_CACHE")
+    if hub_cache:
+        cache_root = Path(hub_cache)
+    else:
+        hf_home = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        cache_root = hf_home / "hub"
+
+    repo_dir = cache_root / f"models--{model_name.replace('/', '--')}"
+    snapshots_dir = repo_dir / "snapshots"
+    refs_dir = repo_dir / "refs"
+    return snapshots_dir.exists() and any(snapshots_dir.iterdir()) or refs_dir.exists()
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:

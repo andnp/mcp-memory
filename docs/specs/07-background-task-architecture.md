@@ -43,6 +43,7 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - graph linker
 - conflict detector
 - defragmenter
+- deduplicator
 - taxonomist
 - fact checker
 - project manager

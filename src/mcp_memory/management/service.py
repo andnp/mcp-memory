@@ -375,8 +375,10 @@ def _format_result_summary(result: dict[str, object]) -> str | None:
         return None
     preferred_keys = (
         "created",
+        "merged",
         "updated",
         "archived",
+        "absorbed_observations",
         "degraded",
         "restored",
         "deleted_tasks",

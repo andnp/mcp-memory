@@ -6,6 +6,7 @@ import pytest
 
 from mcp_memory.core.agent_runtime import (
     CONFLICT_DETECTOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
@@ -19,6 +20,7 @@ from mcp_memory.core.agent_runtime import (
     build_runtime_task_worker,
     handle_defragmenter_task,
     handle_conflict_detector_task,
+    handle_deduplicator_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
@@ -130,12 +132,13 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 7}
+    assert queue.count_by_status() == {"pending": 8}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
 
@@ -512,6 +515,92 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
         assert updated_second is not None and updated_second.status == "archived"
         assert tax_result["updated"] >= 1
         assert updated_stable is not None and updated_stable.tags == ["auth"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    runtime.embedder = _SemanticFakeEmbedder()
+    runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+
+    try:
+        canonical_fact = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="The user prefers pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing", "preferences"],
+        )
+        duplicate_fact = runtime.repository.create_memory(
+            title="Testing preferences",
+            content="Use pytest for integration tests and avoid brittle mocks.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        new_observation = runtime.repository.create_memory(
+            title="Fresh testing preference",
+            content="The user likes deterministic pytest fixtures for test coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["testing", "preference"],
+        )
+        assert canonical_fact is not None and duplicate_fact is not None and new_observation is not None
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        active_facts = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="fact",
+            status="active",
+            limit=10,
+        )
+        refreshed_canonical = runtime.repository.get_memory(canonical_fact.id)
+        refreshed_duplicate = runtime.repository.get_memory(duplicate_fact.id)
+        refreshed_observation = runtime.repository.get_memory(new_observation.id)
+        fact_links = runtime.repository.get_links(active_facts[0].id, direction="outgoing") if active_facts else []
+
+        assert result["merged"] >= 1
+        assert result["absorbed_observations"] == 1
+        assert len(active_facts) == 1
+        assert refreshed_canonical is not None
+        assert refreshed_duplicate is not None
+        assert {refreshed_canonical.status, refreshed_duplicate.status} == {"active", "archived"}
+        assert refreshed_observation is not None and refreshed_observation.status == "archived"
+        assert any(
+            link.target_id in {canonical_fact.id, duplicate_fact.id} and link.target_id != active_facts[0].id and link.link_type == "SUPERSEDES"
+            for link in fact_links
+        )
+        assert any(link.target_id == new_observation.id and link.link_type == "SUPERSEDES" for link in fact_links)
     finally:
         runtime.close()
 
