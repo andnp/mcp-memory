@@ -460,3 +460,59 @@ def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db
 
     assert results
     assert results[0].memory_id == auth_record.id
+
+
+def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+        created_at="2026-03-15T18:00:00+00:00",
+        updated_at="2026-03-15T18:00:00+00:00",
+    )
+    assert record is not None
+
+    vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id="workspace-alpha",
+        model_name=_FakeEmbedder.model_name,
+        embedding=[0.0, 1.0],
+    )
+    stale_record = vector_store.get(
+        source_kind="memory",
+        source_id=record.id,
+        model_name=_FakeEmbedder.model_name,
+    )
+    assert stale_record is not None
+
+    refreshed = repository.update_memory(
+        record.id,
+        content="Authentication token rotation and credential policy with permissions hardening.",
+    )
+    assert refreshed is not None
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+    updated_record = vector_store.get(
+        source_kind="memory",
+        source_id=record.id,
+        model_name=_FakeEmbedder.model_name,
+    )
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert updated_record is not None
+    assert updated_record.updated_at > stale_record.updated_at
+    assert updated_record.embedding == [1.0, 0.0]

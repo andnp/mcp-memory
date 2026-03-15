@@ -366,22 +366,22 @@ class RelationalMemorySearchService:
         assert self._embedder is not None
         assert self._vector_store is not None
 
-        missing: list[RelationalMemoryRecord] = []
+        stale_or_missing: list[RelationalMemoryRecord] = []
         for candidate in candidates:
             existing = self._vector_store.get(
                 source_kind="memory",
                 source_id=candidate.id,
                 model_name=self._embedder.model_name,
             )
-            if existing is None:
-                missing.append(candidate)
+            if existing is None or _embedding_is_stale(existing.updated_at, candidate.updated_at):
+                stale_or_missing.append(candidate)
 
-        if not missing:
+        if not stale_or_missing:
             return
 
-        payloads = [_memory_embedding_text(candidate) for candidate in missing]
+        payloads = [_memory_embedding_text(candidate) for candidate in stale_or_missing]
         embeddings = self._embedder.embed(payloads)
-        for candidate, embedding in zip(missing, embeddings, strict=False):
+        for candidate, embedding in zip(stale_or_missing, embeddings, strict=False):
             self._vector_store.upsert(
                 source_kind="memory",
                 source_id=candidate.id,
@@ -428,6 +428,18 @@ def _decayed_access_score_for_half_life(access_score: float, last_accessed_at: s
     elapsed = datetime.now(timezone.utc) - accessed_at
     elapsed_days = max(elapsed / timedelta(days=1), 0.0)
     return access_score * (0.5 ** (elapsed_days / half_life_days))
+
+
+def _embedding_is_stale(embedding_updated_at: float, memory_updated_at: str | None) -> bool:
+    if not memory_updated_at:
+        return False
+    try:
+        updated_at = datetime.fromisoformat(memory_updated_at)
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return embedding_updated_at + 1e-6 < updated_at.timestamp()
 
 
 def _utc_now():

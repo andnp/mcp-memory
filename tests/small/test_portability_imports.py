@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib
 
 import pytest
 
@@ -32,3 +33,9 @@ def test_file_backed_markdown_helpers_are_quarantined_out_of_core() -> None:
     assert "list_memory_files" not in storage_source
     assert "compute_memory_id" not in storage_source
     assert "def _list_markdown_files" in importer_source
+
+
+def test_runtime_module_imports_without_core_package_cycle() -> None:
+    runtime_module = importlib.import_module("mcp_memory.mcp.runtime")
+
+    assert hasattr(runtime_module, "create_runtime")

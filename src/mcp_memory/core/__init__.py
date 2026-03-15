@@ -5,6 +5,17 @@ incrementally stabilized. Higher-level system wiring can be reintroduced once
 the runtime imports are cleaned up.
 """
 
-from mcp_memory.core.pipeline import MemoryPipeline
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+	from mcp_memory.core.pipeline import MemoryPipeline
 
 __all__ = ["MemoryPipeline"]
+
+
+def __getattr__(name: str):
+	if name == "MemoryPipeline":
+		from mcp_memory.core.pipeline import MemoryPipeline
+
+		return MemoryPipeline
+	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
