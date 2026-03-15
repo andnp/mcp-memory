@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.relational.importer import import_markdown_memory, parse_markdown_memory
+from mcp_memory.relational.importer import (
+    import_markdown_memory,
+    import_markdown_memory_paths,
+    parse_markdown_memory,
+    resolve_markdown_import_paths,
+)
 from mcp_memory.relational.repository import RelationalMemoryRepository
 
 
@@ -57,3 +62,26 @@ def test_import_markdown_memory_creates_relational_record(db_manager, tmp_path: 
     assert imported.created_at == "2026-03-02T09:00:00+00:00"
     assert imported.metadata["imported_source_name"] == "search-ranking"
     assert imported.content.strip() == "Search should become summary-first."
+
+
+def test_resolve_markdown_import_paths_supports_lists_and_globs(tmp_path: Path) -> None:
+    first = tmp_path / "alpha.md"
+    second = tmp_path / "beta.md"
+    first.write_text("# alpha\n", encoding="utf-8")
+    second.write_text("# beta\n", encoding="utf-8")
+
+    resolved = resolve_markdown_import_paths([str(first), str(tmp_path / "*.md")])
+
+    assert resolved == [first.resolve(), second.resolve()]
+
+
+def test_import_markdown_memory_paths_imports_multiple_files(db_manager, tmp_path: Path) -> None:
+    first = tmp_path / "alpha.md"
+    second = tmp_path / "beta.md"
+    first.write_text("---\ntype: fact\n---\n\nAlpha memory\n", encoding="utf-8")
+    second.write_text("---\ntype: plan\n---\n\nBeta memory\n", encoding="utf-8")
+
+    repository = RelationalMemoryRepository(db_manager)
+    imported = import_markdown_memory_paths(repository, [str(tmp_path / "*.md")], ["workspace-a"])
+
+    assert [record.title for record in imported] == ["Alpha", "Beta"]

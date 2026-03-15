@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -89,6 +90,47 @@ def import_markdown_memories(
 ):
     imported = []
     for file_path in list_memory_files(memory_path):
+        imported.append(import_markdown_memory(repository, file_path, workspace_ids))
+    return imported
+
+
+def resolve_markdown_import_paths(paths_or_globs: list[str | Path]) -> list[Path]:
+    resolved_paths: list[Path] = []
+    seen: set[Path] = set()
+
+    for raw_path in paths_or_globs:
+        pattern = str(raw_path)
+        direct_path = Path(pattern).expanduser()
+        matches: list[Path] = []
+
+        if direct_path.exists() and direct_path.is_file():
+            matches = [direct_path.resolve()]
+        else:
+            matches = sorted(
+                (Path(match).expanduser().resolve() for match in glob.glob(pattern, recursive=True)),
+                key=lambda path: str(path),
+            )
+            matches = [match for match in matches if match.is_file()]
+
+        if not matches:
+            raise FileNotFoundError(f"No files matched import path: {pattern}")
+
+        for match in matches:
+            if match in seen:
+                continue
+            seen.add(match)
+            resolved_paths.append(match)
+
+    return resolved_paths
+
+
+def import_markdown_memory_paths(
+    repository: RelationalMemoryRepository,
+    paths_or_globs: list[str | Path],
+    workspace_ids: list[str] | None = None,
+):
+    imported = []
+    for file_path in resolve_markdown_import_paths(paths_or_globs):
         imported.append(import_markdown_memory(repository, file_path, workspace_ids))
     return imported
 

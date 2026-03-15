@@ -200,6 +200,77 @@ async def handle_conflict_detector_task(
     return {"created": created}
 
 
+async def handle_defragmenter_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any = None,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"created": 0, "archived": 0}
+
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=_resolve_workspace_id(ctx, task),
+            status="active",
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if record.type in {"journal", "observation"}
+        and not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+    ]
+    groups = _collect_defragment_groups(candidates)
+    if not groups:
+        return {"created": 0, "archived": 0}
+
+    created = 0
+    archived = 0
+    workspace_id = _resolve_workspace_id(ctx, task) or "workspace-unknown"
+    for group in groups:
+        title, content = await _build_defragmented_memory(group, provider)
+        record = ctx.repository.create_memory(
+            title=title,
+            content=content,
+            workspace_ids=[workspace_id],
+            tags=_normalize_tag_values([tag for item in group for tag in item.tags] + ["auto-defragmented"]),
+            memory_type="reflection",
+            metadata={"source_memory_ids": [item.id for item in group], "defragmenter_task_id": task.id},
+        )
+        assert record is not None
+        created += 1
+        for item in group:
+            ctx.repository.add_link(record.id, item.id, "SUPERSEDES", "Auto-defragmented into a reflection.")
+            updated = ctx.repository.update_memory(item.id, status="archived")
+            if updated is not None:
+                archived += 1
+
+    return {"created": created, "archived": archived}
+
+
+async def handle_taxonomist_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any = None,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"updated": 0}
+
+    candidates = ctx.repository.list_memories(
+        workspace_id=_resolve_workspace_id(ctx, task),
+        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+    )
+    updated = 0
+    for record in candidates:
+        normalized_tags = _normalize_tag_values(record.tags)
+        if provider is not None:
+            normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
+        if normalized_tags == record.tags:
+            continue
+        refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
+        if refreshed is not None:
+            updated += 1
+    return {"updated": updated}
+
+
 async def _propose_graph_links(
     candidates: list,
     provider: Any = None,
@@ -286,6 +357,63 @@ def _fallback_conflicts(candidates: list) -> list[tuple[str, str, str]]:
     return proposals[:10]
 
 
+def _collect_defragment_groups(candidates: list) -> list[list]:
+    groups: list[list] = []
+    used: set[str] = set()
+    for record in candidates:
+        if record.id in used:
+            continue
+        related = [record]
+        used.add(record.id)
+        for other in candidates:
+            if other.id in used or other.id == record.id:
+                continue
+            shared_tags = set(record.tags) & set(other.tags)
+            similarity = _token_overlap(record.title + " " + record.content, other.title + " " + other.content)
+            if shared_tags or similarity >= 0.3:
+                related.append(other)
+                used.add(other.id)
+        if len(related) >= 2:
+            groups.append(related[:5])
+    return groups[:3]
+
+
+async def _build_defragmented_memory(group: list, provider: Any = None) -> tuple[str, str]:
+    if provider is not None:
+        prompt = (
+            "Summarize these memories into one reflection. Return JSON with title and content.\n\n"
+            + "\n".join(f"- {item.title}: {item.content}" for item in group)
+        )
+        response = provider.ask(prompt)
+        if isawaitable(response):
+            response = await response
+        title = str(response.get("title", "")).strip()
+        content = str(response.get("content", "")).strip()
+        if title and content:
+            return title, content
+
+    title = f"Reflection: {group[0].title}"
+    content_lines = ["Consolidated observations:"]
+    for item in group:
+        snippet = item.summary or item.content.strip().splitlines()[0]
+        content_lines.append(f"- {item.title}: {snippet}")
+    return title, "\n".join(content_lines)
+
+
+async def _provider_normalize_tags(provider: Any, record, normalized_tags: list[str]) -> list[str]:
+    prompt = (
+        "Normalize these tags to a concise canonical set. Return JSON with {\"tags\": [...]} only.\n"
+        f"Title: {record.title}\nTags: {normalized_tags}"
+    )
+    response = provider.ask(prompt)
+    if isawaitable(response):
+        response = await response
+    provider_tags = response.get("tags", [])
+    if not isinstance(provider_tags, list):
+        return normalized_tags
+    return _normalize_tag_values([str(tag) for tag in provider_tags]) or normalized_tags
+
+
 def _iter_candidate_pairs(candidates: Iterable) -> Iterable[tuple[Any, Any]]:
     candidate_list = list(candidates)
     for index, left in enumerate(candidate_list):
@@ -303,6 +431,27 @@ def _token_overlap(left: str, right: str) -> float:
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _normalize_tag_values(tags: list[str]) -> list[str]:
+    aliases = {
+        "unit-test": "testing",
+        "unit_tests": "testing",
+        "tests": "testing",
+        "test": "testing",
+        "authn": "auth",
+        "authz": "auth",
+    }
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        normalized_tag = tag.strip().lower().replace("_", "-")
+        normalized_tag = aliases.get(normalized_tag, normalized_tag)
+        if not normalized_tag or normalized_tag in seen:
+            continue
+        seen.add(normalized_tag)
+        normalized.append(normalized_tag)
+    return sorted(normalized)
 
 
 def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type: str) -> bool:

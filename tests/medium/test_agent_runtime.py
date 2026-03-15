@@ -6,14 +6,17 @@ import pytest
 
 from mcp_memory.core.agent_runtime import (
     CONFLICT_DETECTOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
+    TAXONOMIST_TASK_NAME,
     bootstrap_background_tasks,
     build_runtime_task_worker,
+    handle_defragmenter_task,
     handle_conflict_detector_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
@@ -21,6 +24,7 @@ from mcp_memory.core.agent_runtime import (
     handle_project_manager_task,
     handle_summarize_memory_task,
     handle_sweeper_task,
+    handle_taxonomist_task,
 )
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
@@ -122,11 +126,13 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 5}
+    assert queue.count_by_status() == {"pending": 7}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(TAXONOMIST_TASK_NAME, "workspace-a") is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
 
 
@@ -354,6 +360,104 @@ async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_
         assert conflict_result["created"] == 2
         assert any(link.link_type == "CONTRADICTS" for link in outgoing_from_fact)
         assert any(link.link_type == "CONTRADICTS" for link in incoming_to_fact)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="Auth journal 1",
+            content="Captured auth rollout note.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["unit_test", "auth"],
+        )
+        second = runtime.repository.create_memory(
+            title="Auth journal 2",
+            content="Captured auth rollout follow-up.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["tests", "auth"],
+        )
+        stable = runtime.repository.create_memory(
+            title="Stable fact",
+            content="Keep this as-is.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["Auth"],
+        )
+        assert first is not None and second is not None and stable is not None
+
+        defrag_result = await handle_defragmenter_task(
+            runtime,
+            TaskRecord(
+                id="defragmenter-task",
+                task_name=DEFRAGMENTER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+        tax_result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        reflections = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="reflection",
+            limit=10,
+        )
+        updated_first = runtime.repository.get_memory(first.id)
+        updated_second = runtime.repository.get_memory(second.id)
+        updated_stable = runtime.repository.get_memory(stable.id)
+
+        assert defrag_result["created"] == 1
+        assert defrag_result["archived"] == 2
+        assert reflections
+        source_memory_ids = reflections[0].metadata["source_memory_ids"]
+        assert isinstance(source_memory_ids, list)
+        assert set(source_memory_ids) == {first.id, second.id}
+        assert updated_first is not None and updated_first.status == "archived"
+        assert updated_second is not None and updated_second.status == "archived"
+        assert tax_result["updated"] >= 1
+        assert updated_stable is not None and updated_stable.tags == ["auth"]
     finally:
         runtime.close()
 

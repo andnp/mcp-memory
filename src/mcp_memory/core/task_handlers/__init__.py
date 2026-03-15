@@ -4,6 +4,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
     CONFLICT_DETECTOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
@@ -11,14 +12,17 @@ from mcp_memory.core.task_handlers.constants import (
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     SYSTEM1_INGEST_THRESHOLD,
+    TAXONOMIST_TASK_NAME,
 )
 from mcp_memory.core.task_handlers.ingest import handle_ingest_system1_task
 from mcp_memory.core.task_handlers.maintenance import (
     handle_conflict_detector_task,
+    handle_defragmenter_task,
     handle_fact_checker_task,
     handle_graph_linker_task,
     handle_project_manager_task,
     handle_sweeper_task,
+    handle_taxonomist_task,
 )
 from mcp_memory.core.task_handlers.summarize import handle_summarize_memory_task
 
@@ -28,6 +32,7 @@ __all__ = [
     "DEFAULT_STALE_PLAN_DAYS",
     "DEFAULT_SWEEP_RETENTION_DAYS",
     "CONFLICT_DETECTOR_TASK_NAME",
+    "DEFRAGMENTER_TASK_NAME",
     "FACT_CHECKER_TASK_NAME",
     "GRAPH_LINKER_TASK_NAME",
     "PROJECT_MANAGER_TASK_NAME",
@@ -35,11 +40,14 @@ __all__ = [
     "SWEEPER_TASK_NAME",
     "SYSTEM1_INGEST_TASK_NAME",
     "SYSTEM1_INGEST_THRESHOLD",
+    "TAXONOMIST_TASK_NAME",
     "handle_conflict_detector_task",
+    "handle_defragmenter_task",
     "handle_fact_checker_task",
     "handle_graph_linker_task",
     "handle_ingest_system1_task",
     "handle_project_manager_task",
     "handle_summarize_memory_task",
     "handle_sweeper_task",
+    "handle_taxonomist_task",
 ]

@@ -48,3 +48,32 @@ def test_import_markdown_command_imports_record(monkeypatch, tmp_path: Path) -> 
 
     assert result.exit_code == 0
     assert "Imported memory:" in result.output
+
+
+def test_import_markdown_command_supports_multiple_paths_and_globs(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    first = workspace / "alpha.md"
+    second = workspace / "beta.md"
+    first.write_text("---\ntype: fact\n---\n\nAlpha memory\n", encoding="utf-8")
+    second.write_text("---\ntype: plan\n---\n\nBeta memory\n", encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "import-markdown",
+            str(first),
+            str(workspace / "*.md"),
+            "--workspace-root",
+            str(workspace),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.output.count("Imported memory:") == 2
+    assert "Imported total: 2" in result.output

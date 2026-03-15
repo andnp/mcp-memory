@@ -64,6 +64,7 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 ### Admin / Maintenance Commands
 - `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
 - `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
+- `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
 ## ⚙️ Configuration
 

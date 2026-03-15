@@ -13,7 +13,7 @@ import uvicorn
 
 from mcp_memory.daemon import create_daemon_app, ensure_daemon_started
 from mcp_memory.mcp.runtime import create_runtime
-from mcp_memory.relational.importer import import_markdown_memory
+from mcp_memory.relational.importer import import_markdown_memory_paths
 from mcp_memory.server import MCPServer
 
 
@@ -74,7 +74,7 @@ def dashboard(workspace_root: str | None) -> None:
 
 
 @main.command(name="import-markdown")
-@click.argument("file_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("file_paths", nargs=-1, type=str)
 @click.option("--workspace-root", help="Override the active workspace root")
 @click.option(
     "--workspace-id",
@@ -82,8 +82,11 @@ def dashboard(workspace_root: str | None) -> None:
     multiple=True,
     help="Attach the imported memory to explicit workspace IDs (defaults to the active workspace)",
 )
-def import_markdown(file_path: str, workspace_root: str | None, workspace_ids: tuple[str, ...]) -> None:
+def import_markdown(file_paths: tuple[str, ...], workspace_root: str | None, workspace_ids: tuple[str, ...]) -> None:
     """Import one markdown memory file into the relational store."""
+    if not file_paths:
+        raise click.UsageError("Provide at least one markdown file path or glob pattern.")
+
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
         if runtime.repository is None:
@@ -93,8 +96,14 @@ def import_markdown(file_path: str, workspace_root: str | None, workspace_ids: t
         if not resolved_workspace_ids and runtime.workspace_id is not None:
             resolved_workspace_ids = [runtime.workspace_id]
 
-        imported = import_markdown_memory(runtime.repository, Path(file_path), resolved_workspace_ids)
-        console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
+        imported_records = import_markdown_memory_paths(
+            runtime.repository,
+            list(file_paths),
+            resolved_workspace_ids,
+        )
+        for imported in imported_records:
+            console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
+        console.print(f"[green]Imported total:[/] {len(imported_records)}")
     except Exception as exc:
         console.print(f"[red]Error:[/] {exc}")
         sys.exit(1)
