@@ -31,11 +31,13 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     runner = CliRunner()
 
     class FakeMetadata:
-        workspace_id = "global"
         pid = 123
         started_at = 100.0
         base_url = "http://127.0.0.1:8123"
         daemon_scope = "global"
+        transport = "http"
+        version = "0.1.0"
+        binary_path = "/tmp/mcp-memory-python"
 
     monkeypatch.setattr(
         "mcp_memory.cli.inspect_daemon",

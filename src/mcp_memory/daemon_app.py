@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import logging
 import os
 import signal
+import sys
 import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
@@ -114,14 +116,15 @@ def create_daemon_app(
         app.state.idle_shutdown_task = None
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.metadata = DaemonMetadata(
-            workspace_id=GLOBAL_DAEMON_IDENTITY,
-            workspace_root=str(spec.workspace_root),
             host=daemon_host,
             port=daemon_port,
             pid=os.getpid(),
             started_at=time.time(),
             status="ready",
             daemon_scope=GLOBAL_DAEMON_IDENTITY,
+            binary_path=sys.executable,
+            version=_resolve_runtime_version(),
+            transport="http",
         )
         write_metadata(metadata_path, app.state.metadata)
         try:
@@ -149,6 +152,10 @@ def create_daemon_app(
         payload = app.state.routes.service.get_health().model_dump()
         payload["pid"] = app.state.metadata.pid
         payload["status"] = app.state.metadata.status
+        payload["daemon_scope"] = app.state.metadata.daemon_scope
+        payload["binary_path"] = app.state.metadata.binary_path
+        payload["version"] = app.state.metadata.version
+        payload["transport"] = app.state.metadata.transport
         return payload
 
     @app.get("/api/overview")
@@ -398,3 +405,10 @@ def create_daemon_app(
         }
 
     return app
+
+
+def _resolve_runtime_version() -> str | None:
+    try:
+        return importlib.metadata.version("mcp-memory")
+    except importlib.metadata.PackageNotFoundError:
+        return None

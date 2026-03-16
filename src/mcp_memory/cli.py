@@ -97,7 +97,12 @@ def _print_daemon_status(workspace_root: str | None) -> None:
     console.print(f"[bold]Workspace context:[/] {workspace_id}")
     console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
     console.print(f"[bold]PID:[/] {metadata.pid}")
+    console.print(f"[bold]Transport:[/] {metadata.transport}")
     console.print(f"[bold]URL:[/] {metadata.base_url}")
+    if metadata.version is not None:
+        console.print(f"[bold]Version:[/] {metadata.version}")
+    if metadata.binary_path is not None:
+        console.print(f"[bold]Binary:[/] {metadata.binary_path}")
     console.print(f"[bold]Started:[/] {_format_timestamp(metadata.started_at)}")
 
 

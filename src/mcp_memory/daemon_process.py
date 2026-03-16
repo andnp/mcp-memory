@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 from dataclasses import asdict
+from dataclasses import fields
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -20,7 +21,7 @@ def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
     except (OSError, json.JSONDecodeError):
         return None
     try:
-        return DaemonMetadata(**payload)
+        return DaemonMetadata(**_normalize_metadata_payload(payload))
     except TypeError:
         return None
 
@@ -73,3 +74,13 @@ def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
         return payload.get("daemon_scope", "global") == metadata.daemon_scope and payload.get("status") == "ready"
     except (URLError, OSError, TimeoutError, json.JSONDecodeError):
         return False
+
+
+def _normalize_metadata_payload(payload: dict[str, object]) -> dict[str, object]:
+    allowed_fields = {field.name for field in fields(DaemonMetadata)}
+    normalized = {key: value for key, value in payload.items() if key in allowed_fields}
+    normalized.setdefault("daemon_scope", "global")
+    normalized.setdefault("transport", "http")
+    normalized.setdefault("binary_path", None)
+    normalized.setdefault("version", None)
+    return normalized

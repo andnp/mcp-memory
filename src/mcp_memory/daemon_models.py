@@ -9,14 +9,15 @@ from mcp_memory.management.service import ManagementService
 
 @dataclass
 class DaemonMetadata:
-    workspace_id: str
-    workspace_root: str
     host: str
     port: int
     pid: int
     started_at: float
     status: str
     daemon_scope: str = "global"
+    binary_path: str | None = None
+    version: str | None = None
+    transport: str = "http"
 
     @property
     def base_url(self) -> str:

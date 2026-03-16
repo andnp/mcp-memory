@@ -31,8 +31,6 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
         lock_path=tmp_path / "workspace.lock",
     )
     metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8123,
         pid=123,
@@ -50,7 +48,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
     current = ensure_daemon_started()
 
     assert current.port == 8123
-    assert current.workspace_id == "global"
+    assert current.daemon_scope == "global"
 
 
 def test_read_daemon_metadata_returns_none_for_missing_file(tmp_path: Path) -> None:
@@ -67,8 +65,6 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
         lock_path=tmp_path / "workspace.lock",
     )
     metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8124,
         pid=1234,
@@ -109,8 +105,6 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
         lock_path=tmp_path / "workspace.lock",
     )
     metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8125,
         pid=5678,
@@ -138,7 +132,7 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
 
     current = ensure_daemon_started()
 
-    assert current.workspace_id == "global"
+    assert current.daemon_scope == "global"
     assert sent_signals == [15]
     assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9001)]
 
@@ -153,8 +147,6 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
         lock_path=tmp_path / "workspace.lock",
     )
     metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8126,
         pid=7777,
@@ -203,8 +195,6 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
         lock_path=tmp_path / "workspace.lock",
     )
     stale_metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8127,
         pid=1111,
@@ -212,8 +202,6 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
         status="ready",
     )
     fresh_metadata = DaemonMetadata(
-        workspace_id="global",
-        workspace_root=str(spec.workspace_root),
         host="127.0.0.1",
         port=8128,
         pid=2222,
