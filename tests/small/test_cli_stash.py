@@ -80,3 +80,23 @@ def test_stash_reads_multiline_content_from_stdin(monkeypatch, tmp_path: Path) -
     assert len(recent) == 1
     assert recent[0].content == "first line\nsecond line"
     assert recent[0].workspace_id == resolved_workspace_id
+
+
+def test_stash_rejects_empty_input(monkeypatch, tmp_path: Path) -> None:
+    """
+    Verify stash fails fast when neither arguments nor stdin provide content.
+
+    This keeps the CLI contract explicit instead of silently recording nothing.
+    """
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    result = runner.invoke(main, ["stash", "--workspace-root", str(workspace)], input="   ")
+
+    assert result.exit_code == 1
+    assert "Provide stash text as arguments or via stdin." in result.output
