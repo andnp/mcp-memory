@@ -457,6 +457,50 @@ async def test_runtime_task_worker_recovers_abandoned_running_tasks_on_start(db_
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_releases_orphaned_journal_claims_on_start(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, journal=journal, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "orphaned-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="orphaned-task",
+    )
+    assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+
+    entry = journal.record("orphaned claimed thought", workspace_id="workspace-a")
+    claimed = journal.claim_pending(task_id=task.id, limit=1, workspace_id="workspace-a", claimed_at=2.0)
+    assert [item.id for item in claimed] == [entry.id]
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"orphaned-task": lambda ctx, task: None},
+        poll_interval_seconds=0.01,
+    )
+
+    original = SQLiteTaskQueue.recover_abandoned_running_tasks
+
+    def recover(self, **kwargs):
+        return original(self, stale_after_seconds=0.0, now=3.0, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
+    try:
+        await worker.start()
+        for _ in range(20):
+            if queue.get_task(task.id).status == "failed":
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop(0.05)
+    finally:
+        monkeypatch.undo()
+
+    assert queue.get_task(task.id).status == "failed"
+    assert [pending.id for pending in journal.get_pending(workspace_id="workspace-a")] == [entry.id]
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled_error(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")

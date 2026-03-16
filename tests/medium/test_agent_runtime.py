@@ -32,6 +32,7 @@ from mcp_memory.core.agent_runtime import (
     handle_sweeper_task,
     handle_taxonomist_task,
 )
+from mcp_memory.core.task_handlers.maintenance import CURATOR_MAX_MEMORY_CHARS, _select_curator_seed_records
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
@@ -72,7 +73,11 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
 
         assert len(result["created_memory_ids"]) == 1
-        assert len(result["processed_entry_ids"]) == 2
+        assert len(result["claimed_entry_ids"]) == 2
+        assert len(result["deleted_entry_ids"]) == 2
+        assert result["released_entry_ids"] == []
+        assert result["meaningful_actions"] == 1
+        assert runtime.journal.count_by_status() == {}
         assert len(records) == 1
         assert records[0].type == "observation"
         assert records[0].metadata["ingest_task_id"] == "ingest-test"
@@ -135,6 +140,8 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
         memories = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
 
         assert result["created_memory_ids"] == [target.id]
+        assert len(result["deleted_entry_ids"]) == 1
+        assert result["released_entry_ids"] == []
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert len(memories) == 1
@@ -268,10 +275,58 @@ async def test_ingest_handler_can_use_internal_tools_before_appending(monkeypatc
         updated = runtime.repository.get_memory(target.id)
 
         assert result["created_memory_ids"] == [target.id]
+        assert len(result["deleted_entry_ids"]) == 1
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert provider.call_count == 2
         assert "internal_search_memory_records" in provider.prompts[1]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_releases_claimed_entries_when_actions_are_ignore_only(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        entry = runtime.journal.record("ignore-only thought", workspace_id=runtime.workspace_id)
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-ignore-only",
+        )
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "actions": [
+                        {
+                            "type": "ignore",
+                            "entry_indices": [0],
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_ingest_system1_task(runtime, task, provider)
+
+        assert result["created_memory_ids"] == []
+        assert result["deleted_entry_ids"] == []
+        assert result["released_entry_ids"] == [entry.id]
+        assert result["meaningful_actions"] == 0
+        assert [pending.id for pending in runtime.journal.get_pending(workspace_id=runtime.workspace_id)] == [entry.id]
+        assert runtime.repository.list_memories(workspace_id=runtime.workspace_id) == []
     finally:
         runtime.close()
 
@@ -1435,6 +1490,91 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_memory_curator_can_use_internal_tools_to_split_oversized_memory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        oversized = runtime.repository.create_memory(
+            title="Oversized rollout memory",
+            content="Oversized rollout detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "rollout"],
+        )
+        assert oversized is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "tool_calls": [
+                        {
+                            "name": "internal_split_memory_record",
+                            "arguments": {
+                                "memory_id": oversized.id,
+                                "archive_original": True,
+                                "parts": [
+                                    {
+                                        "title": "Rollout prerequisites",
+                                        "content": "Step one and step two.",
+                                        "tags": ["prereq"],
+                                    },
+                                    {
+                                        "title": "Rollout execution",
+                                        "content": "Step three and step four.",
+                                        "tags": ["execution"],
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                },
+                {"summary": "Split oversized rollout memory into two focused facts.", "actions_taken": 1},
+            ]
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-split-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        split_children = runtime.repository.list_memories(workspace_id=runtime.workspace_id, limit=10)
+        refreshed_original = runtime.repository.get_memory(oversized.id)
+
+        assert result["summary"] == "Split oversized rollout memory into two focused facts."
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
+        assert "internal_split_memory_record" in result["tool_names_used"]
+        assert refreshed_original is not None and refreshed_original.status == "archived"
+        assert any(record.title == "Rollout prerequisites" for record in split_children)
+        assert any(record.title == "Rollout execution" for record in split_children)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -1487,6 +1627,67 @@ async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch,
         assert "Very long architecture reflection title that should be shortened before being sent to Gemini for curator work" not in prompt
         assert "…" in prompt
         assert len(prompt) < 5000
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        oversized_content = "Oversized architecture detail. " * 220
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content=oversized_content,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+        assert len(record.content.strip()) > CURATOR_MAX_MEMORY_CHARS
+
+        provider = FakeAIProvider(responses=[{"summary": "No-op", "actions_taken": 0}])
+
+        await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-oversized-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        prompt = provider.prompts[0]
+        marker = "Seed memories (compact view):\n"
+        suffix = "\n\nAvailable internal tools:"
+        start = prompt.index(marker) + len(marker)
+        end = prompt.index(suffix, start)
+        seed_payload = json.loads(prompt[start:end])
+
+        assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized." in prompt
+        assert seed_payload[0]["id"] == record.id
+        assert seed_payload[0]["oversized_for_curator"] is True
+        assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
     finally:
         runtime.close()
 
@@ -1547,6 +1748,63 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert seed_payload
         assert seed_payload[0]["id"] == record.id
         assert seed_payload[0]["title"] == "Auth rollout note"
+        assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
+        assert seed_payload[0]["oversized_for_curator"] is False
+    finally:
+        runtime.close()
+
+
+def test_memory_curator_size_anomaly_pass_can_surface_largest_memory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        largest = runtime.repository.create_memory(
+            title="Largest fact",
+            content="L" * (CURATOR_MAX_MEMORY_CHARS - 100),
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["largest"],
+        )
+        assert largest is not None
+        for index in range(9):
+            created = runtime.repository.create_memory(
+                title=f"Observation {index}",
+                content="short observation",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["routine"],
+            )
+            assert created is not None
+
+        seed_records = _select_curator_seed_records(
+            runtime,
+            TaskRecord(
+                id="aaa",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        assert len(seed_records) == 8
+        assert largest.id in {record.id for record in seed_records}
     finally:
         runtime.close()
 
@@ -1676,7 +1934,8 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
 
         pending_counts = runtime.journal.count_by_status()
         assert pending_counts.get("pending", 0) == 5
-        assert pending_counts.get("processed", 0) == 40
+        assert pending_counts.get("claimed", 0) == 0
+        assert pending_counts.get("processed", 0) == 0
         delayed_tasks = runtime.task_queue.list_tasks(
             status="pending",
             workspace_id=runtime.workspace_id,

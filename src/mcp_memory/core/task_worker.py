@@ -69,6 +69,9 @@ class RuntimeTaskWorker:
         await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
         )
+        journal = getattr(self._ctx, "journal", None)
+        if journal is not None:
+            await asyncio.to_thread(journal.release_orphaned_claims)
 
         while not self._stop_event.is_set():
             task = await asyncio.to_thread(

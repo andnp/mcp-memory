@@ -27,7 +27,7 @@ async def handle_ingest_system1_task(
     provider: Any = None,
 ) -> dict[str, Any]:
     if ctx.journal is None or ctx.repository is None:
-        return {"created_memory_ids": [], "processed_entry_ids": []}
+        return _build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0)
 
     journal_workspace_id = resolve_pending_workspace_id(
         ctx.journal,
@@ -35,55 +35,75 @@ async def handle_ingest_system1_task(
     )
     workspace_id = _resolve_workspace_id(ctx, task)
 
-    entries = ctx.journal.get_pending(
+    entries = ctx.journal.claim_pending(
+        task_id=task.id,
         limit=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
         workspace_id=journal_workspace_id,
     )
     if not entries:
-        return {"created_memory_ids": [], "processed_entry_ids": []}
+        return _build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0)
 
+    claimed_ids = [entry.id for entry in entries]
     created_ids: list[str] = []
-    processed_ids: list[int] = []
+    meaningful_actions = 0
     grouped_entries = _build_ingest_groups(ctx, entries, workspace_id)
 
-    for group in grouped_entries:
-        actions = None
-        if provider is not None:
-            try:
-                actions = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
-            except Exception:
-                actions = None
+    try:
+        for group in grouped_entries:
+            actions = None
+            if provider is not None:
+                try:
+                    actions = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
+                except Exception:
+                    actions = None
 
-        group_created_ids: list[str] = []
-        group_processed_ids: list[int] = []
-        if actions:
-            group_created_ids, group_processed_ids = _execute_ingest_actions(
-                ctx,
-                task,
-                workspace_id,
-                group,
-                actions,
+            group_created_ids: list[str] = []
+            group_handled_ids: list[int] = []
+            group_meaningful_actions = 0
+            if actions:
+                group_created_ids, group_handled_ids, group_meaningful_actions = _execute_ingest_actions(
+                    ctx,
+                    task,
+                    workspace_id,
+                    group,
+                    actions,
+                )
+
+            if not group_handled_ids:
+                group_created_ids, group_handled_ids, group_meaningful_actions = _fallback_ingest_entries(
+                    ctx,
+                    task,
+                    workspace_id,
+                    group,
+                )
+
+            created_ids.extend(group_created_ids)
+            meaningful_actions += group_meaningful_actions
+
+        if meaningful_actions <= 0:
+            released_ids = ctx.journal.release_claims(task.id)
+            return _build_ingest_result(
+                created_ids=created_ids,
+                claimed_ids=claimed_ids,
+                deleted_ids=[],
+                released_ids=released_ids,
+                meaningful_actions=meaningful_actions,
             )
 
-        if not group_processed_ids:
-            group_created_ids, group_processed_ids = _fallback_ingest_entries(
-                ctx,
-                task,
-                workspace_id,
-                group,
-            )
+        deleted_ids = ctx.journal.delete_claims(task.id)
+        if deleted_ids:
+            _cleanup_deleted_thought_embeddings(ctx, deleted_ids)
 
-        created_ids.extend(group_created_ids)
-        processed_ids.extend(group_processed_ids)
-
-    if processed_ids:
-        ctx.journal.mark_processed(processed_ids)
-        _cleanup_processed_thought_embeddings(ctx, processed_ids)
-
-    return {
-        "created_memory_ids": created_ids,
-        "processed_entry_ids": processed_ids,
-    }
+        return _build_ingest_result(
+            created_ids=created_ids,
+            claimed_ids=claimed_ids,
+            deleted_ids=deleted_ids,
+            released_ids=[],
+            meaningful_actions=meaningful_actions,
+        )
+    except BaseException:
+        ctx.journal.release_claims(task.id)
+        raise
 
 
 async def _analyze_ingest_actions(
@@ -210,13 +230,13 @@ def _entry_similarity(left: str, right: str, semantic_similarity: float) -> floa
     return max(semantic_similarity, lexical_similarity)
 
 
-def _cleanup_processed_thought_embeddings(ctx: ApplicationContext, processed_ids: list[int]) -> None:
+def _cleanup_deleted_thought_embeddings(ctx: ApplicationContext, deleted_ids: list[int]) -> None:
     vector_store = getattr(ctx, "vector_store", None)
     embedder = getattr(ctx, "embedder", None)
     if vector_store is None:
         return
     model_name = None if embedder is None else embedder.model_name
-    for entry_id in processed_ids:
+    for entry_id in deleted_ids:
         vector_store.delete(
             source_kind="thought",
             source_id=str(entry_id),
@@ -230,10 +250,11 @@ def _execute_ingest_actions(
     workspace_id: str,
     entries,
     actions: list[dict[str, Any]],
-) -> tuple[list[str], list[int]]:
+) -> tuple[list[str], list[int], int]:
     assert ctx.repository is not None
     created_ids: list[str] = []
-    processed_ids: list[int] = []
+    handled_ids: list[int] = []
+    meaningful_actions = 0
     for action in actions:
         entry_indices = action.get("entry_indices", [])
         selected_entries = [
@@ -246,7 +267,7 @@ def _execute_ingest_actions(
 
         action_type = str(action.get("type", "")).strip()
         if action_type == "ignore":
-            processed_ids.extend(entry.id for entry in selected_entries)
+            handled_ids.extend(entry.id for entry in selected_entries)
             continue
 
         if action_type == "append":
@@ -261,8 +282,9 @@ def _execute_ingest_actions(
                 refreshed = ctx.repository.append_workspace_ids(updated.id, missing_workspace_ids)
                 if refreshed is not None:
                     updated = refreshed
-            processed_ids.extend(entry.id for entry in selected_entries)
+            handled_ids.extend(entry.id for entry in selected_entries)
             created_ids.append(updated.id)
+            meaningful_actions += 1
             continue
 
         if action_type != "create":
@@ -283,10 +305,11 @@ def _execute_ingest_actions(
         )
         assert record is not None
         created_ids.append(record.id)
-        processed_ids.extend(entry.id for entry in selected_entries)
+        handled_ids.extend(entry.id for entry in selected_entries)
+        meaningful_actions += 1
         _enqueue_summary_task(ctx, _primary_workspace_id(record.workspace_ids), record.id)
 
-    return created_ids, processed_ids
+    return created_ids, handled_ids, meaningful_actions
 
 
 def _append_entries_to_existing_memory(
@@ -319,7 +342,7 @@ def _fallback_ingest_entries(
     task: TaskRecord,
     workspace_id: str,
     entries,
-) -> tuple[list[str], list[int]]:
+) -> tuple[list[str], list[int], int]:
     assert ctx.repository is not None
     workspace_ids = _resolve_entry_workspace_ids(entries, workspace_id)
     record = ctx.repository.create_memory(
@@ -335,7 +358,25 @@ def _fallback_ingest_entries(
     )
     assert record is not None
     _enqueue_summary_task(ctx, _primary_workspace_id(workspace_ids), record.id)
-    return [record.id], [entry.id for entry in entries]
+    return [record.id], [entry.id for entry in entries], 1
+
+
+def _build_ingest_result(
+    *,
+    created_ids: list[str],
+    claimed_ids: list[int],
+    deleted_ids: list[int],
+    released_ids: list[int],
+    meaningful_actions: int,
+) -> dict[str, Any]:
+    return {
+        "created_memory_ids": created_ids,
+        "claimed_entry_ids": claimed_ids,
+        "deleted_entry_ids": deleted_ids,
+        "released_entry_ids": released_ids,
+        "meaningful_actions": meaningful_actions,
+        "processed_entry_ids": deleted_ids,
+    }
 
 
 def _enqueue_summary_task(
