@@ -81,6 +81,38 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_split_memory_record",
+            description="Split one oversized memory into multiple focused child memories, link them back to the original, and optionally archive the original once the split succeeds.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "parts": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "content": {"type": "string"},
+                                "summary": {"type": "string"},
+                                "memory_type": {"type": "string"},
+                                "status": {"type": "string"},
+                                "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "metadata": {"type": "object"},
+                            },
+                            "required": ["title", "content"],
+                        },
+                    },
+                    "link_type": {"type": "string"},
+                    "link_context": {"type": "string"},
+                    "archive_original": {"type": "boolean"},
+                },
+                "required": ["memory_id", "parts"],
+            },
+        ),
+        Tool(
             name="internal_create_memory_record",
             description="Create a new memory record for maintenance and cleanup workflows.",
             inputSchema={

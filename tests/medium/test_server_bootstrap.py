@@ -39,6 +39,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
         "read_memory_record",
     ]
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
+    assert search_tool.description is not None
     assert "follow up with read_memory_record" in search_tool.description
 
 
@@ -53,6 +54,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_append_memory_content",
         "internal_archive_memory_record",
         "internal_merge_memory_into_canonical",
+        "internal_split_memory_record",
         "internal_create_memory_record",
         "internal_update_memory_record",
         "internal_delete_memory_record",
@@ -60,6 +62,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_delete_memory_link",
     ]
     search_tool = next(tool for tool in tools if tool.name == "internal_search_memory_records")
+    assert search_tool.description is not None
     assert "follow up with internal_read_memory_record" in search_tool.description
 
 
@@ -192,6 +195,53 @@ async def test_call_internal_memory_tool_can_create_update_link_and_delete(monke
         assert delete_link_payload["status"] == "ok"
         assert delete_payload["status"] == "ok"
         assert runtime.repository.get_memory(created_id) is None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_split_memory_record(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        original = runtime.repository.create_memory(
+            title="Oversized auth rollout",
+            content="Part one. Part two. Part three.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "rollout"],
+        )
+        assert original is not None
+
+        split_result = await call_internal_memory_tool(
+            runtime,
+            "internal_split_memory_record",
+            {
+                "memory_id": original.id,
+                "archive_original": True,
+                "parts": [
+                    {"title": "Auth rollout prerequisites", "content": "Part one.", "tags": ["prereq"]},
+                    {"title": "Auth rollout execution", "content": "Part two. Part three.", "tags": ["execution"]},
+                ],
+            },
+        )
+
+        payload = json.loads(split_result[0].text)
+        first_child_id = payload["created"][0]["id"]
+        second_child_id = payload["created"][1]["id"]
+        first_links = runtime.repository.get_links(first_child_id)
+        second_links = runtime.repository.get_links(second_child_id)
+        archived_original = runtime.repository.get_memory(original.id)
+
+        assert payload["status"] == "ok"
+        assert len(payload["created"]) == 2
+        assert payload["archived"]["status"] == "archived"
+        assert archived_original is not None and archived_original.status == "archived"
+        assert any(link.target_id == original.id and link.link_type == "DEPENDS_ON" for link in first_links)
+        assert any(link.target_id == original.id and link.link_type == "DEPENDS_ON" for link in second_links)
     finally:
         runtime.close()
 

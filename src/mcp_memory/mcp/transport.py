@@ -17,6 +17,7 @@ from mcp_memory.mcp.internal_services import (
     internal_merge_memory_into_canonical_service,
     internal_read_memory_record_service,
     internal_search_memory_records_service,
+    internal_split_memory_record_service,
     internal_update_memory_record_service,
 )
 from mcp_memory.mcp.services import (
@@ -62,6 +63,7 @@ def internal_tool_services() -> dict[str, ToolService]:
         "internal_append_memory_content": internal_append_memory_content_service,
         "internal_archive_memory_record": internal_archive_memory_record_service,
         "internal_merge_memory_into_canonical": internal_merge_memory_into_canonical_service,
+        "internal_split_memory_record": internal_split_memory_record_service,
         "internal_create_memory_record": internal_create_memory_record_service,
         "internal_update_memory_record": internal_update_memory_record_service,
         "internal_delete_memory_record": internal_delete_memory_record_service,

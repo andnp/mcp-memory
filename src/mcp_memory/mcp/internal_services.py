@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
@@ -82,6 +84,82 @@ def internal_merge_memory_into_canonical_service(ctx: ApplicationContext, argume
     return {
         "status": "ok",
         "canonical": memory_record_payload(updated),
+        "archived": None if archived is None else memory_record_payload(archived),
+    }
+
+
+def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    memory_id = require_string(arguments, "memory_id")
+    original = ctx.repository.get_memory(memory_id)
+    if original is None:
+        return {"status": "error", "error": "memory_not_found"}
+
+    raw_parts = arguments.get("parts")
+    if not isinstance(raw_parts, list) or len(raw_parts) < 2:
+        return {"status": "error", "error": "split_parts_required"}
+
+    link_type = optional_string(arguments, "link_type") or "DEPENDS_ON"
+    link_context = optional_string(arguments, "link_context") or "Derived from an oversized memory split by internal maintenance tools."
+    archive_original = optional_bool(arguments, "archive_original")
+
+    normalized_parts: list[dict[str, Any]] = []
+    for raw_part in raw_parts:
+        if not isinstance(raw_part, dict):
+            return {"status": "error", "error": "split_part_invalid"}
+        try:
+            title = require_string(raw_part, "title")
+            content = require_string(raw_part, "content")
+        except ValueError:
+            return {"status": "error", "error": "split_part_invalid"}
+        normalized_parts.append(
+            {
+                "title": title,
+                "content": content,
+                "summary": optional_string(raw_part, "summary"),
+                "memory_type": optional_string(raw_part, "memory_type") or original.type,
+                "status": optional_string(raw_part, "status") or "active",
+                "workspace_ids": string_list(raw_part, "workspace_ids") or list(original.workspace_ids),
+                "tags": _normalize_tags([*original.tags, *string_list(raw_part, "tags")]),
+                "metadata": {
+                    "split_from_memory_id": original.id,
+                    "split_from_memory_title": original.title,
+                    **(optional_object(raw_part, "metadata") or {}),
+                },
+            }
+        )
+
+    created_records = []
+    try:
+        for part in normalized_parts:
+            created = ctx.repository.create_memory(
+                title=str(part["title"]),
+                content=str(part["content"]),
+                summary=part["summary"] if isinstance(part["summary"], str) else None,
+                memory_type=str(part["memory_type"]),
+                status=str(part["status"]),
+                workspace_ids=list(part["workspace_ids"]),
+                tags=list(part["tags"]),
+                metadata=optional_object(part, "metadata") or {},
+            )
+            assert created is not None
+            created_records.append(created)
+            ctx.repository.add_link(created.id, original.id, link_type, link_context)
+    except Exception:
+        for created in created_records:
+            ctx.repository.delete_memory(created.id)
+        raise
+
+    archived = None
+    if archive_original:
+        archived = ctx.repository.update_memory(original.id, status="archived")
+
+    return {
+        "status": "ok",
+        "original": memory_record_payload(original),
+        "created": [memory_record_payload(record) for record in created_records],
         "archived": None if archived is None else memory_record_payload(archived),
     }
 

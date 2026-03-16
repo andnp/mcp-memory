@@ -31,6 +31,9 @@ DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
 DEDUPLICATOR_AI_MIN_COMBINED_LINES = 20
 DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
 CURATOR_MAX_SEED_RECORDS = 8
+CURATOR_SIZE_ANOMALY_SEED_RECORDS = 2
+CURATOR_MAX_MEMORY_CHARS = 4000
+CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
 CURATOR_MAX_TAGS = 6
@@ -387,6 +390,8 @@ async def handle_memory_curator_task(
         f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
         "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
+        f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting oversized memories into smaller focused records with links such as DEPENDS_ON or AMENDS instead of continuing to append or merge them into one blob.\n"
+        f"Avoid creating or growing memories past {CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
@@ -402,6 +407,7 @@ async def handle_memory_curator_task(
             "internal_append_memory_content",
             "internal_archive_memory_record",
             "internal_merge_memory_into_canonical",
+            "internal_split_memory_record",
             "internal_create_memory_record",
             "internal_update_memory_record",
             "internal_delete_memory_record",
@@ -634,7 +640,8 @@ def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> l
         )
         if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
-    candidates.sort(
+    prioritized_candidates = sorted(
+        candidates,
         key=lambda record: (
             0 if record.type in {"journal", "observation"} else 1,
             record.read_count,
@@ -642,7 +649,24 @@ def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> l
             record.updated_at,
         )
     )
-    return candidates[:CURATOR_MAX_SEED_RECORDS]
+    largest_candidates = sorted(
+        candidates,
+        key=lambda record: (
+            -len(record.content.strip()),
+            record.read_count,
+            record.updated_at,
+        ),
+    )
+
+    seed_records: list[Any] = []
+    oversized_candidates = [record for record in largest_candidates if _is_oversized_curator_memory(record)]
+    anomaly_candidates = oversized_candidates
+    if not anomaly_candidates and len(candidates) > CURATOR_MAX_SEED_RECORDS and _should_run_curator_largest_memory_pass(task):
+        anomaly_candidates = largest_candidates
+
+    _extend_unique_seed_records(seed_records, anomaly_candidates, CURATOR_SIZE_ANOMALY_SEED_RECORDS)
+    _extend_unique_seed_records(seed_records, prioritized_candidates, CURATOR_MAX_SEED_RECORDS)
+    return seed_records[:CURATOR_MAX_SEED_RECORDS]
 
 
 def _curator_seed_payload_item(record) -> dict[str, Any]:
@@ -651,10 +675,31 @@ def _curator_seed_payload_item(record) -> dict[str, Any]:
         "id": record.id,
         "type": record.type,
         "status": record.status,
+        "content_size_chars": len(record.content.strip()),
+        "oversized_for_curator": _is_oversized_curator_memory(record),
         "title": _truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
         "summary": _truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
     }
+
+
+def _extend_unique_seed_records(seed_records: list[Any], candidates: list[Any], limit: int) -> None:
+    seen_ids = {record.id for record in seed_records}
+    for record in candidates:
+        if record.id in seen_ids:
+            continue
+        seed_records.append(record)
+        seen_ids.add(record.id)
+        if len(seed_records) >= limit:
+            return
+
+
+def _is_oversized_curator_memory(record) -> bool:
+    return len(record.content.strip()) > CURATOR_MAX_MEMORY_CHARS
+
+
+def _should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
+    return sum(task.id.encode("utf-8")) % CURATOR_LARGEST_MEMORY_PASS_INTERVAL == 0
 
 
 def _truncate_text(value: str | None, limit: int) -> str:
