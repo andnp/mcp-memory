@@ -9,6 +9,19 @@ class EmbeddingStatusPayload(BaseModel):
     model_cached: bool = False
 
 
+class SearchHealthPayload(BaseModel):
+    semantic_enabled: bool = False
+    available: bool = False
+    degraded: bool = False
+    fallback_count: int = 0
+    rebuild_count: int = 0
+    last_error: str | None = None
+    last_failure_at: str | None = None
+    last_recovery_at: str | None = None
+    last_integrity_check_at: str | None = None
+    integrity_check_error: str | None = None
+
+
 class HealthPayload(BaseModel):
     status: str
     workspace_id: str | None = None
@@ -19,6 +32,7 @@ class HealthPayload(BaseModel):
     client_count: int
     task_queue_enabled: bool
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
+    search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
 
 
 class OverviewCounts(BaseModel):
@@ -158,6 +172,7 @@ class AIConversationListPayload(BaseModel):
 class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
+    search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
     memory_metrics: MemoryMetricsPayload
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     provider_usage: list[ProviderUsagePayload] = Field(default_factory=list)

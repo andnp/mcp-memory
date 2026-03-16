@@ -302,6 +302,22 @@ def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> No
     console.print(metrics)
 
 
+def _render_search_health_table(search_health) -> None:
+    table = Table(title="Search Health")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Semantic enabled", str(search_health.semantic_enabled))
+    table.add_row("Available", str(search_health.available))
+    table.add_row("Degraded", str(search_health.degraded))
+    table.add_row("Fallback count", str(search_health.fallback_count))
+    table.add_row("Rebuild count", str(search_health.rebuild_count))
+    table.add_row("Last integrity check", search_health.last_integrity_check_at or "-")
+    table.add_row("Last failure", search_health.last_failure_at or "-")
+    table.add_row("Last recovery", search_health.last_recovery_at or "-")
+    table.add_row("Last error", search_health.last_error or search_health.integrity_check_error or "-")
+    console.print(table)
+
+
 def _render_agent_table(overview) -> None:
     agent_table = Table(title="Background Agents")
     agent_table.add_column("Agent", no_wrap=True)
@@ -849,6 +865,11 @@ def conversation_group() -> None:
     """Inspect recorded AI provider conversations."""
 
 
+@main.group(name="search")
+def search_group() -> None:
+    """Inspect and repair semantic search health."""
+
+
 @conversation_group.command(name="list")
 @workspace_root_option
 @click.option("--task-name", help="Filter by task name")
@@ -900,6 +921,43 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
             console.print(conversation.response_text or "-")
             if conversation.error_text:
                 console.print(f"[red]Error:[/] {conversation.error_text}")
+    finally:
+        runtime.close()
+
+
+@search_group.command(name="health")
+@workspace_root_option
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def search_health_command(workspace_root: str | None, json_output: bool) -> None:
+    """Show semantic search health for the current runtime context."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).get_health()
+        if json_output:
+            click.echo(json.dumps(payload.search.model_dump(), sort_keys=True))
+            return
+        _render_search_health_table(payload.search)
+    finally:
+        runtime.close()
+
+
+@search_group.command(name="repair")
+@workspace_root_option
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
+    """Rebuild semantic search embeddings for the current model."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime).repair_search_index()
+        if json_output:
+            click.echo(json.dumps(payload, sort_keys=True))
+            return
+        if not payload["rebuilt"]:
+            console.print(f"[yellow]Search repair skipped:[/] {payload['reason']}")
+            return
+        console.print(f"[green]Search index rebuilt:[/] {payload['records_indexed']} records")
+    except Exception as exc:
+        _exit_cli_error(exc)
     finally:
         runtime.close()
 
@@ -958,6 +1016,7 @@ def stats(workspace_root: str | None) -> None:
         console.print("[bold]Stats scope:[/] global")
         console.print(f"[bold]Database:[/] {health.db_path}")
 
+        _render_search_health_table(health.search)
         _render_memory_metrics_table(overview, journal_counts)
         _render_agent_table(overview)
         _render_provider_usage_table(overview)

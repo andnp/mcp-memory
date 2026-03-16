@@ -79,6 +79,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert seed_runtime.repository is not None
         assert seed_runtime.task_queue is not None
         assert seed_runtime.workspace_id is not None
+        assert seed_runtime.db_manager is not None
         seed_runtime.db_manager.get_connection().execute(
             "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -146,6 +147,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         prune_logs = _post_json(
             f"http://127.0.0.1:{port}/api/admin/logs/prune",
             {"max_runtime_logs": 1, "max_log_age_days": 30},
+        )
+        repair_search = _post_json(
+            f"http://127.0.0.1:{port}/api/admin/search/repair",
+            {},
         )
         tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
         memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
@@ -231,8 +236,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert health["workspace_root"] == str(workspace)
         assert "embeddings" in health
         assert "backend" in health["embeddings"]
+        assert health["search"]["semantic_enabled"] is True
         assert overview["memories"]["total"] == 2
         assert overview["embeddings"]["model_name"] is not None
+        assert overview["search"]["semantic_enabled"] is True
         assert overview["memory_metrics"]["total_memories"] == 2
         assert "agent_runs" in overview
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
@@ -246,6 +253,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert log_summary["total"] == 1
         assert log_summary["by_level"] == {"INFO": 1}
         assert prune_logs["deleted"] == 0
+        assert repair_search["rebuilt"] is True
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
         assert fact_checker["failed_runs"] == 1
         assert overview["recent_agent_runs"]

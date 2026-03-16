@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import logging
 import math
-import re
+import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
 from mcp_memory.relational.repository import MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.utils.db import DatabaseManager
 
 
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -34,6 +39,20 @@ class RelationalReadResult:
     record: RelationalMemoryRecord
     relationships: dict[str, list[MemoryLink]]
     superseded: list[RelationalMemoryRecord]
+
+
+@dataclass(slots=True)
+class SearchHealthStatus:
+    semantic_enabled: bool
+    available: bool
+    degraded: bool = False
+    fallback_count: int = 0
+    rebuild_count: int = 0
+    last_error: str | None = None
+    last_failure_at: str | None = None
+    last_recovery_at: str | None = None
+    last_integrity_check_at: str | None = None
+    integrity_check_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -215,11 +234,87 @@ class RelationalMemorySearchService:
         *,
         embedder: Embedder | None = None,
         vector_store: SQLiteVectorStore | None = None,
+        db_manager: DatabaseManager | None = None,
     ) -> None:
         self._repository = repository
         self._config = config
         self._embedder = embedder
         self._vector_store = vector_store
+        self._db_manager = db_manager
+        semantic_enabled = embedder is not None and vector_store is not None
+        self._health = SearchHealthStatus(
+            semantic_enabled=semantic_enabled,
+            available=semantic_enabled,
+        )
+
+    def get_health(self) -> SearchHealthStatus:
+        return replace(self._health)
+
+    def run_startup_health_check(self) -> SearchHealthStatus:
+        check_timestamp = _utc_now()
+        self._health.last_integrity_check_at = check_timestamp
+        self._health.integrity_check_error = None
+        if not self._health.semantic_enabled:
+            self._health.available = False
+            self._health.degraded = False
+            return self.get_health()
+
+        try:
+            self._run_integrity_check_once()
+            self._mark_semantic_recovered()
+            self._health.last_recovery_at = check_timestamp
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            recovered = self._retry_after_reopen(
+                "startup health check",
+                lambda: self._run_integrity_check_once() or True,
+            )
+            if not recovered:
+                self._mark_semantic_failure(exc, fallback=False)
+                self._health.integrity_check_error = str(exc)
+        return self.get_health()
+
+    def rebuild_semantic_index(self, *, limit: int = 10_000) -> dict[str, int | bool | str | None]:
+        if not self._health.semantic_enabled or self._embedder is None or self._vector_store is None:
+            return {
+                "semantic_enabled": False,
+                "rebuilt": False,
+                "records_indexed": 0,
+                "reason": "semantic_search_disabled",
+            }
+
+        candidates = [
+            record
+            for record in self._repository.list_memories(limit=limit)
+            if record.status != "archived"
+        ]
+        if self._db_manager is None:
+            return {
+                "semantic_enabled": True,
+                "rebuilt": False,
+                "records_indexed": 0,
+                "reason": "db_manager_unavailable",
+            }
+
+        conn = self._db_manager.get_connection()
+        with conn:
+            conn.execute(
+                "DELETE FROM embeddings WHERE source_kind = ? AND model_name = ?",
+                ("memory", self._embedder.model_name),
+            )
+        self._ensure_memory_embeddings(candidates)
+        self._health.rebuild_count += 1
+        self._health.last_recovery_at = _utc_now()
+        self._health.last_error = None
+        self._health.last_failure_at = None
+        self._health.available = True
+        self._health.degraded = False
+        self._health.integrity_check_error = None
+        return {
+            "semantic_enabled": True,
+            "rebuilt": True,
+            "records_indexed": len(candidates),
+            "reason": None,
+        }
 
     def search_memories(
         self,
@@ -334,21 +429,93 @@ class RelationalMemorySearchService:
     ) -> dict[str, float]:
         if self._embedder is None or self._vector_store is None or not candidates:
             return {}
+        try:
+            matches = self._compute_semantic_matches(query, candidates, workspace_id, limit=limit)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            recovered_matches = self._retry_after_reopen(
+                "semantic search",
+                lambda: self._compute_semantic_matches(query, candidates, workspace_id, limit=limit),
+            )
+            if recovered_matches is not None:
+                return {
+                    memory_id: max(min((score + 1.0) / 2.0, 1.0), 0.0)
+                    for memory_id, score in recovered_matches
+                    if score > 0
+                }
+            self._mark_semantic_failure(exc, fallback=True)
+            logger.warning(
+                "Semantic search unavailable; falling back to keyword-only ranking: %s",
+                exc,
+            )
+            return {}
+        return {
+            memory_id: max(min((score + 1.0) / 2.0, 1.0), 0.0)
+            for memory_id, score in matches
+            if score > 0
+        }
 
+    def _compute_semantic_matches(
+        self,
+        query: str,
+        candidates: list[RelationalMemoryRecord],
+        workspace_id: str | None,
+        *,
+        limit: int,
+    ) -> list[tuple[str, float]]:
+        assert self._embedder is not None
+        assert self._vector_store is not None
         self._ensure_memory_embeddings(candidates)
         query_embedding = self._embedder.embed([query])[0]
-        matches = self._vector_store.search(
+        return self._vector_store.search(
             source_kind="memory",
             model_name=self._embedder.model_name,
             query_embedding=query_embedding,
             workspace_id=workspace_id,
             limit=limit,
         )
-        return {
-            memory_id: max(min((score + 1.0) / 2.0, 1.0), 0.0)
-            for memory_id, score in matches
-            if score > 0
-        }
+
+    def _run_integrity_check_once(self) -> None:
+        if self._db_manager is None or self._embedder is None or self._vector_store is None:
+            return
+        connection = self._db_manager.get_connection()
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        if quick_check is not None and str(quick_check[0]).lower() != "ok":
+            raise sqlite3.DatabaseError(f"quick_check_failed:{quick_check[0]}")
+        self._vector_store.search(
+            source_kind="memory",
+            model_name=self._embedder.model_name,
+            query_embedding=[0.0],
+            limit=1,
+        )
+
+    def _retry_after_reopen(self, reason: str, operation):
+        if self._db_manager is None:
+            return None
+        try:
+            self._db_manager.close()
+            result = operation()
+        except (OSError, sqlite3.Error, ValueError) as retry_exc:
+            logger.warning("Semantic search recovery after %s failed: %s", reason, retry_exc)
+            return None
+        self._mark_semantic_recovered()
+        logger.info("Semantic search recovered after %s by reopening the SQLite connection", reason)
+        return result
+
+    def _mark_semantic_failure(self, exc: Exception, *, fallback: bool) -> None:
+        self._health.available = False
+        self._health.degraded = fallback or self._health.degraded
+        self._health.last_error = str(exc)
+        self._health.last_failure_at = _utc_now()
+        if fallback:
+            self._health.fallback_count += 1
+
+    def _mark_semantic_recovered(self) -> None:
+        self._health.available = self._health.semantic_enabled
+        self._health.degraded = False
+        self._health.last_error = None
+        self._health.last_failure_at = None
+        self._health.last_recovery_at = _utc_now()
+        self._health.integrity_check_error = None
 
     def _semantic_candidate_ids(
         self,

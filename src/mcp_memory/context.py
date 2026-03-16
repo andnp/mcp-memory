@@ -24,6 +24,7 @@ class ApplicationContext:
     ai_provider: Any = None
     embedder: Any = None
     vector_store: Any = None
+    search_health: Any = None
 
     def close(self) -> None:
         if self.db_manager is not None:

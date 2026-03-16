@@ -69,7 +69,9 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
+        db_manager=db_manager,
     )
+    relational_search.run_startup_health_check()
     task_queue = SQLiteTaskQueue(db_manager)
     ai_provider = build_ai_provider_from_config(spec.config, spec.workspace_root)
     if ai_provider is not None:
@@ -95,6 +97,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         ai_provider=ai_provider,
         embedder=embedder,
         vector_store=vector_store,
+        search_health=relational_search.get_health(),
     )
 
 

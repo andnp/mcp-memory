@@ -388,6 +388,7 @@ def test_run_command_records_logs_without_polluting_stdio(monkeypatch, tmp_path:
 
     runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     try:
+        assert runtime.db_manager is not None
         payload = runtime.db_manager.get_connection().execute(
             "SELECT source, message FROM runtime_logs ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -563,6 +564,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
+    assert "Search Health" in result.output
     assert "Memory Metrics" in result.output
     assert "Background Agents" in result.output
     assert "AI Provider Usage" in result.output
@@ -575,6 +577,37 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "gemini-cli" in result.output
     assert "memory-curator" in result.output
     assert "lines_compressed=3" in result.output
+
+
+def test_search_health_and_repair_commands_surface_resilience_state(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.workspace_id is not None
+        runtime.repository.create_memory(
+            title="Search repair fact",
+            content="This record should be embedded during repair.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+    finally:
+        runtime.close()
+
+    health_result = runner.invoke(main, ["search", "health", "--workspace-root", str(workspace)])
+    repair_result = runner.invoke(main, ["search", "repair", "--workspace-root", str(workspace)])
+
+    assert health_result.exit_code == 0
+    assert "Search Health" in health_result.output
+    assert "Semantic enabled" in health_result.output
+    assert repair_result.exit_code == 0
+    assert "Search index rebuilt:" in repair_result.output
 
 
 def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Path) -> None:

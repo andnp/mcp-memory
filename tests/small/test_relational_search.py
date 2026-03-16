@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -570,3 +571,178 @@ def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager
     assert updated_record is not None
     assert updated_record.updated_at > stale_record.updated_at
     assert updated_record.embedding == [1.0, 0.0]
+
+
+def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    record = repository.create_memory(
+        title="Auth rollout note",
+        content="Auth rollout note with lexical search terms.",
+        summary="Auth rollout summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert record is not None
+
+    original_search = vector_store.search
+
+    def _failing_search(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(vector_store, "search", _failing_search)
+
+    with caplog.at_level("WARNING"):
+        results = service.search_memories("auth rollout", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert any("Semantic search unavailable; falling back to keyword-only ranking" in message for message in caplog.messages)
+
+    monkeypatch.setattr(vector_store, "search", original_search)
+
+
+def test_search_memories_falls_back_to_keyword_results_when_embedding_refresh_fails(db_manager, monkeypatch, caplog) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    record = repository.create_memory(
+        title="Permission rollout note",
+        content="Permission rollout note with lexical search terms.",
+        summary="Permission rollout summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert record is not None
+
+    def _failing_upsert(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(vector_store, "upsert", _failing_upsert)
+
+    with caplog.at_level("WARNING"):
+        results = service.search_memories("permission rollout", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert any("Semantic search unavailable; falling back to keyword-only ranking" in message for message in caplog.messages)
+
+
+def test_search_startup_health_check_marks_semantic_path_unavailable_on_io_error(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+        db_manager=db_manager,
+    )
+
+    def _failing_search(*args, **kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(vector_store, "search", _failing_search)
+
+    health = service.run_startup_health_check()
+
+    assert health.semantic_enabled is True
+    assert health.available is False
+    assert health.integrity_check_error == "disk I/O error"
+    assert health.last_integrity_check_at is not None
+
+
+def test_search_memories_retries_after_reopening_db_connection(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+        db_manager=db_manager,
+    )
+
+    record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert record is not None
+
+    original_search = vector_store.search
+    call_count = 0
+
+    def _flaky_search(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(vector_store, "search", _flaky_search)
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+    health = service.get_health()
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert call_count == 2
+    assert health.available is True
+    assert health.degraded is False
+    assert health.last_recovery_at is not None
+
+
+def test_rebuild_semantic_index_recreates_embeddings_for_current_model(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+        db_manager=db_manager,
+    )
+
+    record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert record is not None
+
+    result = service.rebuild_semantic_index()
+    stored = vector_store.get(
+        source_kind="memory",
+        source_id=record.id,
+        model_name=_FakeEmbedder.model_name,
+    )
+    health = service.get_health()
+
+    assert result["rebuilt"] is True
+    assert isinstance(result["records_indexed"], int)
+    assert result["records_indexed"] >= 1
+    assert stored is not None
+    assert health.rebuild_count == 1
+    assert health.available is True

@@ -28,6 +28,7 @@ from mcp_memory.management.models import (
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
     RuntimeLogSummaryPayload,
+    SearchHealthPayload,
     StorageSummary,
     TaskListPayload,
     TaskStatusSummary,
@@ -60,6 +61,7 @@ class ManagementService:
             config=None if ctx.config is None else ctx.config.logging,
         )
         self._embedder = ctx.embedder
+        self._relational_search = ctx.relational_search
         self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
 
     def get_health(self):
@@ -74,6 +76,7 @@ class ManagementService:
             client_count=int(getattr(self._controller, "client_count", self._runtime_info.client_count)),
             task_queue_enabled=self._runtime_info.task_queue_enabled,
             embeddings=embedder_status,
+            search=self._build_search_health(),
         )
 
     def get_overview(self, recent_limit: int = 10, failed_limit: int = 10):
@@ -112,6 +115,7 @@ class ManagementService:
         return OverviewPayload(
             memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
             embeddings=self._build_embedding_status(),
+            search=self._build_search_health(),
             memory_metrics=memory_metrics,
             agent_runs=agent_runs,
             provider_usage=provider_usage,
@@ -140,6 +144,28 @@ class ManagementService:
             backend=status.backend,
             model_cached=status.model_cached,
         )
+
+    def _build_search_health(self) -> SearchHealthPayload:
+        if self._relational_search is None:
+            return SearchHealthPayload()
+        health = self._relational_search.get_health()
+        return SearchHealthPayload(
+            semantic_enabled=health.semantic_enabled,
+            available=health.available,
+            degraded=health.degraded,
+            fallback_count=health.fallback_count,
+            rebuild_count=health.rebuild_count,
+            last_error=health.last_error,
+            last_failure_at=health.last_failure_at,
+            last_recovery_at=health.last_recovery_at,
+            last_integrity_check_at=health.last_integrity_check_at,
+            integrity_check_error=health.integrity_check_error,
+        )
+
+    def repair_search_index(self) -> dict[str, int | bool | str | None]:
+        if self._relational_search is None:
+            raise ValueError("search_not_initialized")
+        return self._relational_search.rebuild_semantic_index()
 
     def enqueue_background_task(
         self,
