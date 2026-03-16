@@ -1,71 +1,45 @@
-# Specification: Management Dashboard (Web UI)
+# Specification: Memory Command Center (UI Overhaul)
 
-**Status:** Current runtime exposes a minimal read-only dashboard.
+**Status:** Draft - High Priority
 
-## 1. Current Product Shape
+## 1. Vision: The "Memory Pulse"
+Transition from a static "monitoring dashboard" to an interactive **Memory Command Center**. The UI should feel "alive," reflecting the autonomous nature of the background agents and providing a low-friction interface for human thought stashing and memory exploration.
 
-The active dashboard is a localhost operations view for the daemon.
+## 2. Core Functional Pillars
 
-### 1.1 Current Capabilities
-- dark, monospace presentation
-- daemon-backed overview cards
-- background-agent run history and recency summaries
-- memory metrics such as total lines, compressed lines, and thought-buffer size
-- recent memories table
-- failed tasks table
-- memory detail endpoints through the management API
-- read-only runtime health and overview endpoints
+### 2.1 The Global Command Bar (P0)
+- **Concept:** A prominent, persistent search and input bar (Ctrl+K style).
+- **Functionality:**
+    - **Search:** Real-time, fuzzy/semantic search through the memory bank.
+    - **Stash:** Instantly record a new "thought" into System 1.
+    - **Command:** Quickly trigger background agents or administrative actions.
 
-### 1.2 Current Non-Goals
-The current dashboard does **not** yet provide:
+### 2.2 The Agent Audit Stream (P1)
+- **Concept:** A live, terminal-like feed of agent reasoning.
+- **Content:** Show what each agent is doing in real-time (e.g., "Taxonomist is merging duplicate tags: `testing`, `tests` -> `pytest`").
+- **Transparency:** Every agent mutation should be visible and, where possible, show the "Before/After" diff.
 
-- memory editing
-- relationship editing
-- tag management
-- graph visualization
-- temporal filtering UI
-- conflict resolution UI
-- audit log streaming
-- broad analytics suite
+### 2.3 Graph Visualization (P1)
+- **Concept:** A force-directed graph of the memory base.
+- **Visuals:** Nodes are memories, edges are links (`SUPERSEDES`, `DEPENDS_ON`, `CONTRADICTS`).
+- **Interactivity:** Click a node to view its full content, lineage, and related memories.
 
-## 2. Current API Surface
+### 2.4 The Conflict Inbox (P2)
+- **Concept:** A dedicated area for resolving contradictions.
+- **Functionality:** Surfaces memories linked by `CONTRADICTS`. Allows the user to manually merge, archive, or ignore the conflict.
 
-The dashboard consumes the daemon’s localhost API.
+## 3. Tech Stack Overhaul
+- **Frontend:** React + Vite (for fast iteration and modern component support).
+- **Styling:** Tailwind CSS (for consistent, modern aesthetics).
+- **Visuals:** D3.js or `react-force-graph` for the knowledge map.
+- **State:** React Query for real-time synchronization with the daemon API.
 
-### 2.1 Active Endpoints
-- `/`
-- `/api/health`
-- `/api/overview`
-- `/api/memories/{memory_id}`
+## 4. User Experience Goals
+- **Monospace Aesthetic:** Retain the professional, senior-engineer feel (JetBrains Mono, dark mode).
+- **Immediate Feedback:** Stashing a thought should provide instant visual confirmation.
+- **Deep Traceability:** Users should be able to trace a memory from its raw System 1 origin to its current System 2 canonical form.
 
-## 3. Current UX Goals
-
-- low-friction daemon observability
-- visibility into background-agent freshness by type
-- visibility into SQLite-backed maintenance outcomes
-- visibility into recent memories via overview
-- visibility into failed tasks via overview
-- safe read-only access during early iterations
-
-## 4. Import and Maintenance Boundary
-
-Markdown import is not part of the dashboard API.
-
-- import stays in explicit CLI/admin flows
-- dashboard stays read-only and operational
-
-## 5. Future Expansion Options
-
-If the dashboard grows beyond read-only, the next most plausible additions are:
-
-- memory editor
-- explicit relationship authoring
-- tag management
-- conflict inbox
-- agent audit visibility
-- richer search and filtering controls
-
-## 6. Deliberate Open Decision
-
-The dashboard is currently a read-only operational tool.
-A future product decision is required before building the larger command-center UI described in earlier drafts.
+## 5. Implementation Phases
+1.  **Phase 1 (Foundation):** Setup Vite + React + Tailwind. Implement the Global Command Bar (Search/Stash).
+2.  **Phase 2 (Agentic Visibility):** Build the Agent Audit Stream and the real-time "Pulse" indicators.
+3.  **Phase 3 (Exploration):** Integrate the Graph Visualization and the Conflict Inbox.
