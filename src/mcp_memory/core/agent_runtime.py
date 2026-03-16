@@ -110,21 +110,20 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
     if task_queue is None:
         return
 
-    workspace_id = getattr(ctx, "workspace_id", None)
     journal = getattr(ctx, "journal", None)
 
     if journal is not None:
         schedule_system1_ingest(
             task_queue,
             journal,
-            workspace_id,
+            None,
         )
 
     for task_name, interval_seconds in RECURRING_TASK_INTERVAL_SECONDS.items():
         _ensure_recurring_task_scheduled(
             task_queue,
             task_name=task_name,
-            workspace_id=workspace_id,
+            workspace_id=None,
             interval_seconds=interval_seconds,
         )
 

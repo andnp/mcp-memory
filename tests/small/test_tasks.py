@@ -380,16 +380,12 @@ async def test_runtime_task_worker_dead_letters_unknown_tasks(db_manager) -> Non
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_workers_only_claim_matching_workspace_tasks(db_manager) -> None:
+async def test_runtime_task_worker_claims_tasks_across_workspace_ids(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
-    seen_by_a: list[str] = []
-    seen_by_b: list[str] = []
+    seen: list[tuple[str, str | None]] = []
 
-    def handle_for_a(ctx: ApplicationContext, task) -> None:
-        seen_by_a.append(task.id)
-
-    def handle_for_b(ctx: ApplicationContext, task) -> None:
-        seen_by_b.append(task.id)
+    def handle_shared(ctx: ApplicationContext, task) -> None:
+        seen.append((task.id, task.workspace_id))
 
     task_a = queue.enqueue(
         "shared-task",
@@ -404,30 +400,22 @@ async def test_runtime_task_workers_only_claim_matching_workspace_tasks(db_manag
         task_id="task-b",
     )
 
-    worker_a = RuntimeTaskWorker(
+    worker = RuntimeTaskWorker(
         ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a"),
-        handlers={"shared-task": handle_for_a},
-        poll_interval_seconds=0.01,
-    )
-    worker_b = RuntimeTaskWorker(
-        ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-b"),
-        handlers={"shared-task": handle_for_b},
+        handlers={"shared-task": handle_shared},
         poll_interval_seconds=0.01,
     )
 
-    await worker_a.start()
-    await worker_b.start()
+    await worker.start()
     for _ in range(50):
         if queue.get_task(task_a.id).status == "completed" and queue.get_task(task_b.id).status == "completed":
             break
         await asyncio.sleep(0.01)
-    await worker_a.stop(0.05)
-    await worker_b.stop(0.05)
+    await worker.stop(0.05)
 
     assert queue.get_task(task_a.id).status == "completed"
     assert queue.get_task(task_b.id).status == "completed"
-    assert seen_by_a == ["task-a"]
-    assert seen_by_b == ["task-b"]
+    assert seen == [("task-a", "workspace-a"), ("task-b", "workspace-b")]
 
 
 @pytest.mark.asyncio

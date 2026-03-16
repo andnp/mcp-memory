@@ -6,12 +6,13 @@ The runtime source of truth is SQLite.
 - memories, links, tags, workspaces, journal entries, and tasks all persist relationally
 - new runtime features should extend the relational model rather than reintroducing file-backed state management
 
-## 2. Workspace Context Without Hard Silos
-Workspace context should guide relevance without fragmenting the store.
+## 2. Global Runtime, Workspace Metadata
+Workspace context guides relevance and analytics without fragmenting runtime ownership.
 
-- each runtime resolves an active `workspace_id`
-- thoughts, tasks, and memories carry workspace association
-- search applies workspace-aware boosting rather than hard partitioning
+- daemon identity is global
+- the store is global
+- workspace association is metadata, not a tenancy boundary
+- search may apply workspace-aware boosting rather than hard partitioning
 
 ## 3. Progressive Discovery
 The public API should prefer search-first, read-second workflows.
@@ -24,7 +25,7 @@ The public API should prefer search-first, read-second workflows.
 The MCP-facing process should stay thin.
 
 - `mcp-memory run` is a proxy
-- the workspace daemon owns runtime state
+- the global daemon owns runtime state
 - daemon responsibilities include background work, management API, and persistence coordination
 
 ## 5. Explicit Provider Boundaries

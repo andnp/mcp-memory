@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mcp_memory.config import (
+    GLOBAL_DAEMON_IDENTITY,
     Config,
     ensure_default_config_exists,
     load_config,
@@ -53,7 +54,7 @@ def resolve_runtime_spec(
         workspace_id=workspace_id,
         workspace_root=workspace_root,
         memory_path=memory_path,
-        lock_path=resolve_daemon_lock_path(workspace_id),
+        lock_path=resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY),
     )
 
 

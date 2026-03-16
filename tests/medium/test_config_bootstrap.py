@@ -91,4 +91,4 @@ def test_resolve_daemon_metadata_path_uses_state_dir(tmp_path: Path, monkeypatch
 
     metadata_path = resolve_daemon_metadata_path("workspace-123")
 
-    assert metadata_path == state_home / "mcp-memory" / "daemons" / "workspace-123.json"
+    assert metadata_path == state_home / "mcp-memory" / "daemons" / "daemon.json"

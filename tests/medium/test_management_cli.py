@@ -31,10 +31,11 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     runner = CliRunner()
 
     class FakeMetadata:
-        workspace_id = "workspace-a"
+        workspace_id = "global"
         pid = 123
         started_at = 100.0
         base_url = "http://127.0.0.1:8123"
+        daemon_scope = "global"
 
     monkeypatch.setattr(
         "mcp_memory.cli.inspect_daemon",
@@ -47,6 +48,8 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     assert "Status:" in result.output
     assert "running" in result.output
     assert "127.0.0.1:8123" in result.output
+    assert "Daemon scope:" in result.output
+    assert "global" in result.output
 
 
 def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
@@ -54,7 +57,7 @@ def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
 
     class FakeMetadata:
         pid = 123
-        workspace_id = "workspace-a"
+        workspace_id = "global"
 
     monkeypatch.setattr("mcp_memory.cli.stop_daemon", lambda workspace_root, cwd=None: FakeMetadata())
 
@@ -62,7 +65,7 @@ def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "Daemon stopped:" in result.output
-    assert "workspace-a" in result.output
+    assert "scope=global" in result.output
 
 
 def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:

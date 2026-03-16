@@ -6,6 +6,7 @@ import signal
 import time
 
 from mcp_memory.config import (
+    GLOBAL_DAEMON_IDENTITY,
     resolve_daemon_lock_path,
     resolve_daemon_metadata_path,
 )
@@ -27,8 +28,8 @@ def ensure_daemon_started(
     cwd: Path | None = None,
 ) -> DaemonMetadata:
     spec = resolve_runtime_spec(workspace_root_override, cwd)
-    metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
-    lock = FilesystemLock(resolve_daemon_lock_path(spec.workspace_id))
+    metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
+    lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
@@ -54,7 +55,7 @@ def ensure_daemon_started(
             if current is not None and _is_daemon_healthy(current):
                 return current
             time.sleep(spec.config.daemon.healthcheck_interval_seconds)
-        raise RuntimeError(f"Timed out waiting for daemon startup for {spec.workspace_id}")
+        raise RuntimeError("Timed out waiting for global daemon startup")
     finally:
         lock.release()
 
@@ -69,7 +70,7 @@ def inspect_daemon(
     cwd: Path | None = None,
 ) -> tuple[str, DaemonMetadata | None, bool]:
     spec = resolve_runtime_spec(workspace_root_override, cwd)
-    metadata = read_daemon_metadata(resolve_daemon_metadata_path(spec.workspace_id))
+    metadata = read_daemon_metadata(resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY))
     healthy = metadata is not None and _is_daemon_healthy(metadata)
     return spec.workspace_id, metadata, healthy
 
@@ -79,7 +80,7 @@ def stop_daemon(
     cwd: Path | None = None,
 ) -> DaemonMetadata | None:
     spec = resolve_runtime_spec(workspace_root_override, cwd)
-    metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
+    metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     metadata = read_daemon_metadata(metadata_path)
     if metadata is None:
         return None
@@ -103,7 +104,7 @@ def stop_daemon(
             return metadata
         time.sleep(spec.config.daemon.healthcheck_interval_seconds)
 
-    raise RuntimeError(f"Timed out waiting for daemon shutdown for {spec.workspace_id}")
+    raise RuntimeError("Timed out waiting for global daemon shutdown")
 
 
 def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:

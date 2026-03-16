@@ -91,9 +91,10 @@ def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, po
 def _print_daemon_status(workspace_root: str | None) -> None:
     workspace_id, metadata, healthy = inspect_daemon(workspace_root, None)
     if metadata is None:
-        console.print(f"[yellow]Daemon not registered[/] for {workspace_id}")
+        console.print("[yellow]Global daemon not registered[/]")
         return
-    console.print(f"[bold]Workspace:[/] {workspace_id}")
+    console.print("[bold]Daemon scope:[/] global")
+    console.print(f"[bold]Workspace context:[/] {workspace_id}")
     console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
     console.print(f"[bold]PID:[/] {metadata.pid}")
     console.print(f"[bold]URL:[/] {metadata.base_url}")
@@ -108,7 +109,7 @@ def _stop_daemon_command(workspace_root: str | None) -> None:
     if metadata is None:
         console.print("[yellow]No daemon metadata found.[/]")
         return
-    console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} workspace={metadata.workspace_id}")
+    console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} scope=global")
 
 
 def _restart_daemon_command(workspace_root: str | None) -> None:
@@ -427,7 +428,7 @@ def main(ctx: click.Context, debug: bool) -> None:
 @workspace_root_option
 @click.pass_context
 def run(ctx: click.Context, workspace_root: str | None) -> None:
-    """Run the MCP stdio proxy, auto-starting the workspace daemon when needed."""
+    """Run the MCP stdio proxy, auto-starting the global daemon when needed."""
     _run_stdio_proxy(
         bool(ctx.obj.get("debug", False)),
         workspace_root,
@@ -457,7 +458,7 @@ def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
 @click.option("--port", default=0, show_default=True, type=int, help="Daemon bind port")
 @click.pass_context
 def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int) -> None:
-    """Run and manage the workspace daemon."""
+    """Run and manage the global daemon."""
     if ctx.invoked_subcommand is not None:
         return
     _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
@@ -466,14 +467,14 @@ def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port
 @daemon_group.command(name="status")
 @workspace_root_option
 def daemon_status(workspace_root: str | None) -> None:
-    """Print the current daemon status for the active workspace."""
+    """Print the current global daemon status."""
     _print_daemon_status(workspace_root)
 
 
 @daemon_group.command(name="stop")
 @workspace_root_option
 def daemon_stop(workspace_root: str | None) -> None:
-    """Stop the workspace daemon if it is running."""
+    """Stop the global daemon if it is running."""
     _stop_daemon_command(workspace_root)
 
 
@@ -705,7 +706,7 @@ def install(tools: tuple[str, ...], components: tuple[str, ...], scope: str, wor
 @main.command(name="hook-runner", hidden=True)
 @click.option("--workspace-root", help="Override the target workspace root")
 def hook_runner(workspace_root: str | None) -> None:
-    """Forward VS Code hook payloads into the workspace daemon."""
+    """Forward VS Code hook payloads into the global daemon."""
     try:
         payload = load_hook_payload(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:

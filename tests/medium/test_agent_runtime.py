@@ -325,15 +325,15 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
 
     assert queue.count_by_status() == {"pending": 9}
-    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(FACT_CHECKER_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(TAXONOMIST_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(SWEEPER_TASK_NAME, "workspace-a") is not None
-    assert queue.find_open_task(CURATOR_TASK_NAME, "workspace-a") is not None
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
+    assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
+    assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
+    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
+    assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
+    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
+    assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
+    assert queue.find_open_task(SWEEPER_TASK_NAME, None) is not None
+    assert queue.find_open_task(CURATOR_TASK_NAME, None) is not None
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -351,7 +351,7 @@ def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(
 
     bootstrap_background_tasks(ctx)
 
-    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
+    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, None)
     assert ingest_task is not None
     assert ingest_task.data["trigger"] == "system1_debounce"
     assert ingest_task.available_at > ingest_task.created_at
@@ -373,7 +373,7 @@ def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager
 
     bootstrap_background_tasks(ctx)
 
-    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, "workspace-a")
+    ingest_task = queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, None)
     assert ingest_task is not None
     assert ingest_task.data["trigger"] == "system1_threshold"
     assert ingest_task.available_at <= ingest_task.updated_at
@@ -398,7 +398,7 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
     bootstrap_background_tasks(ctx)
 
-    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, "workspace-a")
+    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
     assert scheduled is not None
     assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
 

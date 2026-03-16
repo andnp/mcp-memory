@@ -16,6 +16,7 @@ class DaemonMetadata:
     pid: int
     started_at: float
     status: str
+    daemon_scope: str = "global"
 
     @property
     def base_url(self) -> str:

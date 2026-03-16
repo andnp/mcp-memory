@@ -241,7 +241,6 @@ async def handle_defragmenter_task(
     created = 0
     archived = 0
     lines_compressed = 0
-    workspace_id = _resolve_workspace_id(ctx, task) or "workspace-unknown"
     for group in groups:
         source_lines = sum(_count_text_lines(item.content) for item in group)
         title, content = await _build_defragmented_memory(
@@ -252,7 +251,7 @@ async def handle_defragmenter_task(
         record = ctx.repository.create_memory(
             title=title,
             content=content,
-            workspace_ids=[workspace_id],
+            workspace_ids=_resolve_group_workspace_ids(group, _resolve_workspace_id(ctx, task)),
             tags=_normalize_tag_values([tag for item in group for tag in item.tags] + ["auto-defragmented"]),
             memory_type="reflection",
             metadata={"source_memory_ids": [item.id for item in group], "defragmenter_task_id": task.id},
@@ -857,7 +856,23 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | No
     task_workspace = task.data.get("workspace_id")
     if isinstance(task_workspace, str) and task_workspace.strip():
         return task_workspace.strip()
-    return ctx.workspace_id
+    return None
+
+
+def _resolve_group_workspace_ids(group: list, fallback_workspace_id: str | None) -> list[str]:
+    workspace_ids = sorted(
+        {
+            workspace_id.strip()
+            for item in group
+            for workspace_id in getattr(item, "workspace_ids", [])
+            if isinstance(workspace_id, str) and workspace_id.strip()
+        }
+    )
+    if workspace_ids:
+        return workspace_ids
+    if isinstance(fallback_workspace_id, str) and fallback_workspace_id.strip():
+        return [fallback_workspace_id.strip()]
+    return ["workspace-unknown"]
 
 
 def _resolve_workspace_root(

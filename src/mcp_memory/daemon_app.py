@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-from mcp_memory.config import resolve_daemon_metadata_path
+from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
@@ -84,7 +84,7 @@ def create_daemon_app(
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     daemon_host = host or spec.config.daemon.host
     daemon_port = port if port is not None else find_free_port()
-    metadata_path = resolve_daemon_metadata_path(spec.workspace_id)
+    metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
 
     @asynccontextmanager
@@ -92,7 +92,7 @@ def create_daemon_app(
         try:
             runtime_lock.acquire(timeout_seconds=0.1)
         except DaemonLockTimeoutError as exc:
-            raise RuntimeError(f"daemon_runtime_lock_unavailable:{spec.workspace_id}") from exc
+            raise RuntimeError("daemon_runtime_lock_unavailable:global") from exc
 
         runtime = create_runtime_from_spec(spec)
         assert runtime.db_manager is not None
@@ -114,13 +114,14 @@ def create_daemon_app(
         app.state.idle_shutdown_task = None
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.metadata = DaemonMetadata(
-            workspace_id=spec.workspace_id,
+            workspace_id=GLOBAL_DAEMON_IDENTITY,
             workspace_root=str(spec.workspace_root),
             host=daemon_host,
             port=daemon_port,
             pid=os.getpid(),
             started_at=time.time(),
             status="ready",
+            daemon_scope=GLOBAL_DAEMON_IDENTITY,
         )
         write_metadata(metadata_path, app.state.metadata)
         try:

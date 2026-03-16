@@ -32,7 +32,7 @@ async def handle_ingest_system1_task(
 
     journal_workspace_id = resolve_pending_workspace_id(
         ctx.journal,
-        task.workspace_id if task.workspace_id is not None else ctx.workspace_id,
+        task.data.get("journal_workspace_id", task.workspace_id),
     )
     workspace_id = _resolve_workspace_id(ctx, task)
 
@@ -256,8 +256,10 @@ def _execute_ingest_actions(
             if target is None:
                 continue
             updated = _append_entries_to_existing_memory(ctx, target, selected_entries, task)
-            if workspace_id not in updated.workspace_ids:
-                refreshed = ctx.repository.append_workspace_ids(updated.id, [workspace_id])
+            append_workspace_ids = _resolve_entry_workspace_ids(selected_entries, workspace_id)
+            missing_workspace_ids = [item for item in append_workspace_ids if item not in updated.workspace_ids]
+            if missing_workspace_ids:
+                refreshed = ctx.repository.append_workspace_ids(updated.id, missing_workspace_ids)
                 if refreshed is not None:
                     updated = refreshed
             processed_ids.extend(entry.id for entry in selected_entries)
@@ -272,7 +274,7 @@ def _execute_ingest_actions(
         record = ctx.repository.create_memory(
             title=title,
             content=content,
-            workspace_ids=[workspace_id],
+            workspace_ids=_resolve_entry_workspace_ids(selected_entries, workspace_id),
             tags=["auto-ingested", "system1"],
             memory_type="observation",
             metadata={
@@ -283,7 +285,7 @@ def _execute_ingest_actions(
         assert record is not None
         created_ids.append(record.id)
         processed_ids.extend(entry.id for entry in selected_entries)
-        _enqueue_summary_task(ctx, workspace_id, record.id)
+        _enqueue_summary_task(ctx, _primary_workspace_id(record.workspace_ids), record.id)
 
     return created_ids, processed_ids
 
@@ -320,10 +322,11 @@ def _fallback_ingest_entries(
     entries,
 ) -> tuple[list[str], list[int]]:
     assert ctx.repository is not None
+    workspace_ids = _resolve_entry_workspace_ids(entries, workspace_id)
     record = ctx.repository.create_memory(
         title=_build_title(entries),
         content=_format_entries(entries),
-        workspace_ids=[workspace_id],
+        workspace_ids=workspace_ids,
         tags=["auto-ingested", "system1"],
         memory_type="observation",
         metadata={
@@ -332,7 +335,7 @@ def _fallback_ingest_entries(
         },
     )
     assert record is not None
-    _enqueue_summary_task(ctx, workspace_id, record.id)
+    _enqueue_summary_task(ctx, _primary_workspace_id(workspace_ids), record.id)
     return [record.id], [entry.id for entry in entries]
 
 
@@ -358,9 +361,26 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str:
     task_workspace = task.data.get("workspace_id")
     if isinstance(task_workspace, str) and task_workspace.strip():
         return task_workspace.strip()
-    if ctx.workspace_id:
-        return ctx.workspace_id
     return "workspace-unknown"
+
+
+def _resolve_entry_workspace_ids(entries, fallback_workspace_id: str) -> list[str]:
+    workspace_ids = sorted(
+        {
+            entry.workspace_id.strip()
+            for entry in entries
+            if isinstance(entry.workspace_id, str) and entry.workspace_id.strip()
+        }
+    )
+    if workspace_ids:
+        return workspace_ids
+    return [fallback_workspace_id]
+
+
+def _primary_workspace_id(workspace_ids: list[str]) -> str | None:
+    if not workspace_ids:
+        return None
+    return workspace_ids[0]
 
 
 def _build_title(entries) -> str:

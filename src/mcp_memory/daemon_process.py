@@ -70,6 +70,6 @@ def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
         request = Request(f"{metadata.base_url}/internal/health", method="GET")
         with urlopen(request, timeout=1) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return payload.get("workspace_id") == metadata.workspace_id and payload.get("status") == "ready"
+        return payload.get("daemon_scope", "global") == metadata.daemon_scope and payload.get("status") == "ready"
     except (URLError, OSError, TimeoutError, json.JSONDecodeError):
         return False

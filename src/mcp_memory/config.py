@@ -16,6 +16,7 @@ import tomlkit
 logger = logging.getLogger(__name__)
 
 DEFAULT_APP_NAME = "mcp-memory"
+GLOBAL_DAEMON_IDENTITY = "global"
 
 
 @dataclass
@@ -359,16 +360,18 @@ def resolve_memory_path(config: Config) -> Path:
     return resolve_global_data_dir() / DEFAULT_APP_NAME / "memories"
 
 
-def resolve_daemon_metadata_path(workspace_id: str) -> Path:
+def resolve_daemon_metadata_path(workspace_id: str | None = None) -> Path:
+    del workspace_id
     metadata_dir = resolve_state_dir() / "daemons"
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    return metadata_dir / f"{workspace_id}.json"
+    return metadata_dir / "daemon.json"
 
 
-def resolve_daemon_lock_path(workspace_id: str) -> Path:
+def resolve_daemon_lock_path(workspace_id: str | None = None) -> Path:
+    del workspace_id
     lock_dir = resolve_state_dir() / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    return lock_dir / f"{workspace_id}.lock"
+    return lock_dir / "daemon.lock"
 
 
 def _find_git_root(start_path: Path) -> Path | None:

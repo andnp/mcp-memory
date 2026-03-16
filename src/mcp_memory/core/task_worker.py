@@ -68,13 +68,11 @@ class RuntimeTaskWorker:
 
         await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
-            workspace_id=getattr(self._ctx, "workspace_id", None),
         )
 
         while not self._stop_event.is_set():
             task = await asyncio.to_thread(
                 task_queue.claim_next,
-                workspace_id=getattr(self._ctx, "workspace_id", None),
             )
             if task is None:
                 await asyncio.sleep(self._poll_interval_seconds)
@@ -169,11 +167,11 @@ class RuntimeTaskWorker:
             task_queue.enqueue_unique,
             task.task_name,
             {
-                "workspace_id": task.workspace_id,
+                "workspace_id": None,
                 "trigger": "recurring_follow_up",
                 "interval_seconds": interval_seconds,
             },
-            task.workspace_id,
+            None,
             100,
             3,
             next_available_at,
