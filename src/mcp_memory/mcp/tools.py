@@ -24,7 +24,6 @@ def get_memory_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "workspace_id": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1},
                     "memory_type": {"type": "string"},
                     "status": {"type": "string"},

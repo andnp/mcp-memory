@@ -15,7 +15,8 @@
 ## 2. Progressive Discovery Tools
 
 1. **`search_memories`**:
-    - **Inputs**: `query`, `limit`, with optional `memory_type` / `status`. (`workspace_id` injected by proxy.)
+    - **Inputs**: `query`, `limit`, with optional `memory_type` / `status`.
+    - **Workspace Context**: caller workspace is runtime context supplied by the client/proxy layer, not an agent-controlled search argument.
     - **Outputs**: Returns metadata and summary-first matches.
     - **Telemetry**: Updates `last_surfaced_at` for all returned results in one batch write.
 2. **`read_memory`**:
@@ -36,6 +37,11 @@ The active runtime now uses a staged ranking pipeline:
 6. **Graph Authority**: multiplies by a capped in-degree boost derived from incoming link count.
 7. **Degradation Penalty**: multiplies stale / degraded records by `0.3x` to push them toward the bottom.
 
+### 3.2 Workspace Semantics Guardrail
+- search remains global-first even when workspace context is present
+- workspace context is used for ranking bias only, not silent result filtering
+- explicit workspace filtering belongs to dashboards and analytics, not normal memory retrieval
+
 ### 3.1 Current Search Notes
 - keyword retrieval uses weighted BM25 over `title`, `summary`, `content`, and `tags`
 - semantic retrieval is optional and only participates when the local embedder/vector store is configured
@@ -53,7 +59,7 @@ When an agent wakes up, it selects a batch of memories using one of these heuris
 - **Anomalies**: Absolute largest or smallest memories (for splitting/merging).
 
 ### 4.2 The Agent Roster
-1. **The Ingestor**: Flushes System 1 → System 2. Cross-pollinates `memory_workspaces` if a thought is appended to a memory from a different project.
+1. **The Ingestor**: Flushes System 1 → System 2. Preserves and accumulates memory workspace associations as relevance metadata when thoughts from additional workspaces are incorporated.
 2. **The Summarizer**: Maintains the 2-sentence `summary` field for all memories.
 3. **The Graph Linker**: Discovers new semantic relationships between silos using the Strategy Roulette.
 4. **The Conflict Detector**: Identifies contradictions and flags them in the Web UI inbox.

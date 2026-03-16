@@ -8,9 +8,9 @@
 Use strict filesystem locking around daemon startup.
 
 ### Current Behavior
-- the thin proxy resolves workspace identity
-- the proxy attempts to acquire a workspace-specific lock
-- if a healthy daemon already exists, the proxy reuses it
+- the thin proxy resolves runtime context, including optional workspace metadata for search ranking
+- the proxy attempts to acquire a global daemon lock
+- if a healthy global daemon already exists, the proxy reuses it
 - otherwise the proxy spawns the daemon and waits for readiness metadata
 
 ## 2. Proxy-Daemon Communication
@@ -22,7 +22,7 @@ Use localhost HTTP between the MCP thin proxy and the daemon.
 - simple framing
 - easy local debugging
 - easy dashboard/API reuse
-- enough for current single-user localhost scope
+- enough for current single-user localhost scope with one global runtime authority
 
 ### Explicit Non-Goal
 ZeroMQ is **not** part of the current implementation.

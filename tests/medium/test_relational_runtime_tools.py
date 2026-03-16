@@ -58,7 +58,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
         search_result = await call_memory_tool(
             runtime,
             "search_memory_records",
-            {"query": "auth search", "workspace_id": "workspace-a", "limit": 5},
+            {"query": "auth search", "limit": 5},
         )
         search_payload = json.loads(search_result[0].text)
 
@@ -84,7 +84,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_search_memory_tool_defaults_to_active_workspace(monkeypatch, tmp_path: Path) -> None:
+async def test_search_memory_tool_uses_active_workspace_context(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -114,18 +114,9 @@ async def test_search_memory_tool_defaults_to_active_workspace(monkeypatch, tmp_
             "search_memory_records",
             {"query": "auth note", "limit": 5},
         )
-        explicit_result = await call_memory_tool(
-            runtime,
-            "search_memory_records",
-            {"query": "auth note", "workspace_id": runtime.workspace_id, "limit": 5},
-        )
 
         implicit_payload = json.loads(implicit_result[0].text)
-        explicit_payload = json.loads(explicit_result[0].text)
 
-        assert [result["memory_id"] for result in implicit_payload["results"]] == [
-            result["memory_id"] for result in explicit_payload["results"]
-        ]
         assert implicit_payload["results"][0]["memory_id"] == local.id
     finally:
         runtime.close()
@@ -169,7 +160,7 @@ async def test_relational_runtime_search_combines_keyword_and_semantic_candidate
                 await call_memory_tool(
                     runtime,
                     "search_memory_records",
-                    {"query": "permissions security", "workspace_id": runtime.workspace_id, "limit": 5},
+                    {"query": "permissions security", "limit": 5},
                 )
             )[0].text
         )
@@ -224,7 +215,6 @@ async def test_relational_runtime_search_debug_explains_workspace_and_degradatio
                     "search_memory_records",
                     {
                         "query": "search quality summary",
-                        "workspace_id": runtime.workspace_id,
                         "limit": 5,
                         "debug": True,
                     },

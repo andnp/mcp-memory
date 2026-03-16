@@ -37,9 +37,9 @@ This document defines the highest-value user journeys that should stay green as 
 - invalid source or target references fail safely
 - explicit `ext:` targets remain supported
 
-## 3. Shared Runtime Across Clients
+## 3. Shared Global Runtime Across Clients
 
-**Goal:** multiple clients attached to the same workspace share one runtime and see the same state immediately.
+**Goal:** multiple clients share one global runtime and see the same state immediately, while workspace context only affects retrieval relevance and analytics.
 
 **Runtime path:**
 - daemon startup/bootstrap
@@ -48,7 +48,8 @@ This document defines the highest-value user journeys that should stay green as 
 
 **Key invariants:**
 - writes from one client are visible to the other without restart
-- the shared store stays coherent across clients for the same workspace
+- the shared store stays coherent across clients regardless of workspace context
+- workspace context does not create a separate daemon, queue, or storage partition
 
 ## 4. Import and Persistence Across Restart
 
