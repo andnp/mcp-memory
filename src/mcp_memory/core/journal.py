@@ -86,6 +86,135 @@ class System1Journal:
             for r in rows
         ]
 
+    def claim_pending(
+        self,
+        *,
+        task_id: str,
+        limit: int = 50,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
+        claimed_at: float | None = None,
+    ) -> list[JournalEntry]:
+        """Claim pending entries for one task, oldest first, atomically."""
+        if not task_id or not task_id.strip():
+            raise ValueError("task_id is required")
+
+        now = time.time() if claimed_at is None else claimed_at
+        conn = self._db.get_connection()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            clauses = ["status = 'pending'"]
+            params: list[object] = []
+            if workspace_id is None:
+                clauses.append("workspace_id IS NULL")
+            elif workspace_id is not _ALL_WORKSPACES:
+                clauses.append("workspace_id = ?")
+                params.append(workspace_id)
+
+            rows = conn.execute(
+                "SELECT id, content, workspace_id, timestamp, status FROM system1_journal WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY timestamp ASC LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+            if not rows:
+                conn.commit()
+                return []
+
+            entry_ids = [int(row[0]) for row in rows]
+            placeholders = ",".join("?" for _ in entry_ids)
+            cursor = conn.execute(
+                f"UPDATE system1_journal SET status = 'claimed', claim_task_id = ?, claimed_at = ? "
+                f"WHERE id IN ({placeholders}) AND status = 'pending'",
+                [task_id.strip(), now, *entry_ids],
+            )
+            if cursor.rowcount != len(entry_ids):
+                conn.rollback()
+                raise RuntimeError("failed to claim journal entries atomically")
+
+            conn.commit()
+            return [
+                JournalEntry(id=int(row[0]), content=row[1], workspace_id=row[2], timestamp=row[3], status="claimed")
+                for row in rows
+            ]
+        except Exception:
+            conn.rollback()
+            raise
+
+    def release_claims(self, task_id: str) -> list[int]:
+        """Release claimed entries back to pending for one task."""
+        if not task_id or not task_id.strip():
+            return []
+
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = ? ORDER BY timestamp ASC",
+            (task_id.strip(),),
+        ).fetchall()
+        entry_ids = [int(row[0]) for row in rows]
+        if not entry_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in entry_ids)
+        conn.execute(
+            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL "
+            f"WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
+            [*entry_ids, task_id.strip()],
+        )
+        conn.commit()
+        return entry_ids
+
+    def delete_claims(self, task_id: str) -> list[int]:
+        """Delete claimed entries owned by one task and return their ids."""
+        if not task_id or not task_id.strip():
+            return []
+
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = ? ORDER BY timestamp ASC",
+            (task_id.strip(),),
+        ).fetchall()
+        entry_ids = [int(row[0]) for row in rows]
+        if not entry_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in entry_ids)
+        conn.execute(
+            f"DELETE FROM system1_journal WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
+            [*entry_ids, task_id.strip()],
+        )
+        conn.commit()
+        return entry_ids
+
+    def release_orphaned_claims(self) -> list[int]:
+        """Release claimed thoughts whose owning task is no longer running."""
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM system1_journal
+            WHERE status = 'claimed'
+              AND (
+                claim_task_id IS NULL
+                OR claim_task_id NOT IN (
+                    SELECT id FROM tasks WHERE status = 'running'
+                )
+              )
+            ORDER BY timestamp ASC
+            """
+        ).fetchall()
+        entry_ids = [int(row[0]) for row in rows]
+        if not entry_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in entry_ids)
+        conn.execute(
+            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL "
+            f"WHERE id IN ({placeholders}) AND status = 'claimed'",
+            entry_ids,
+        )
+        conn.commit()
+        return entry_ids
+
     def mark_processed(self, entry_ids: list[int]) -> int:
         """Mark entries as processed. Returns count updated."""
         if not entry_ids:
@@ -93,7 +222,7 @@ class System1Journal:
         conn = self._db.get_connection()
         placeholders = ",".join("?" for _ in entry_ids)
         cursor = conn.execute(
-            f"UPDATE system1_journal SET status = 'processed' "
+            f"UPDATE system1_journal SET status = 'processed', claim_task_id = NULL, claimed_at = NULL "
             f"WHERE id IN ({placeholders}) AND status = 'pending'",
             entry_ids,
         )
@@ -107,7 +236,7 @@ class System1Journal:
         conn = self._db.get_connection()
         placeholders = ",".join("?" for _ in entry_ids)
         cursor = conn.execute(
-            f"UPDATE system1_journal SET status = 'archived' "
+            f"UPDATE system1_journal SET status = 'archived', claim_task_id = NULL, claimed_at = NULL "
             f"WHERE id IN ({placeholders}) AND status = 'processed'",
             entry_ids,
         )
