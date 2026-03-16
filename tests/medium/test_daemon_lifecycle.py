@@ -138,3 +138,52 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
     assert current.workspace_id == "global"
     assert sent_signals == [15]
     assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9001)]
+
+
+def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadata_missing(monkeypatch, tmp_path: Path) -> None:
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=Config(),
+        workspace_id="workspace-start",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        workspace_id="global",
+        workspace_root=str(spec.workspace_root),
+        host="127.0.0.1",
+        port=8126,
+        pid=7777,
+        started_at=1.0,
+        status="ready",
+    )
+    spawned: list[tuple[Path, str, int]] = []
+    killed: list[int] = []
+    process_states = iter([False, False, False])
+    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: None if not spawned else metadata)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._list_daemon_processes",
+        lambda current_pid: [
+            __import__("mcp_memory.daemon").daemon._DaemonProcess(
+                pid=4321,
+                executable="/old/tool/python",
+                command=("python", "-m", "mcp_memory.cli", "daemon"),
+            )
+        ],
+    )
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
+    monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9002)
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+    monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
+
+    current = ensure_daemon_started()
+
+    assert current.port == 8126
+    assert killed == [4321]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9002)]

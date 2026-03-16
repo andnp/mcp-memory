@@ -37,7 +37,7 @@ def test_session_end_marks_conversation_ended(db_manager) -> None:
     assert record.ended_at == 75.0
 
 
-def test_active_client_count_is_workspace_scoped(db_manager) -> None:
+def test_active_client_count_is_global(db_manager) -> None:
     workspace_a = HookReminderService(db_manager, workspace_id="workspace-a")
     workspace_b = HookReminderService(db_manager, workspace_id="workspace-b")
 
@@ -46,5 +46,5 @@ def test_active_client_count_is_workspace_scoped(db_manager) -> None:
     workspace_b.record_session_start("conv-b-1", {"timestamp": 12.0})
     workspace_a.record_session_end("conv-a-1", {"timestamp": 13.0})
 
-    assert workspace_a.get_active_client_count() == 1
-    assert workspace_b.get_active_client_count() == 1
+    assert workspace_a.get_active_client_count() == 2
+    assert workspace_b.get_active_client_count() == 2

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import signal
 import time
+from dataclasses import dataclass
 
 from mcp_memory.config import (
     GLOBAL_DAEMON_IDENTITY,
@@ -23,6 +24,13 @@ from mcp_memory.daemon_process import (
 from mcp_memory.mcp.runtime import resolve_runtime_spec
 
 
+@dataclass(frozen=True)
+class _DaemonProcess:
+    pid: int
+    executable: str | None
+    command: tuple[str, ...]
+
+
 def ensure_daemon_started(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -36,6 +44,12 @@ def ensure_daemon_started(
         existing = _read_daemon_metadata(metadata_path)
         if existing is not None and _is_daemon_healthy(existing):
             return existing
+        if existing is None:
+            _terminate_orphaned_daemon_processes(
+                current_pid=os.getpid(),
+                deadline=time.monotonic() + timeout_seconds,
+                poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
+            )
         if existing is not None and _is_process_running(existing.pid):
             try:
                 os.kill(existing.pid, signal.SIGTERM)
@@ -146,3 +160,67 @@ def _wait_for_process_exit(
             return
         time.sleep(poll_interval_seconds)
     raise RuntimeError(f"Timed out waiting for daemon process exit: pid={pid}")
+
+
+def _terminate_orphaned_daemon_processes(
+    *,
+    current_pid: int,
+    deadline: float,
+    poll_interval_seconds: float,
+) -> None:
+    for process in _list_daemon_processes(current_pid=current_pid):
+        try:
+            os.kill(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        _wait_for_process_exit(
+            process.pid,
+            deadline=deadline,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+
+def _list_daemon_processes(*, current_pid: int) -> list[_DaemonProcess]:
+    processes: list[_DaemonProcess] = []
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return processes
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == current_pid:
+            continue
+        command = _read_process_command(entry)
+        if not _is_daemon_command(command):
+            continue
+        processes.append(
+            _DaemonProcess(
+                pid=pid,
+                executable=_read_process_executable(entry),
+                command=command,
+            )
+        )
+    return processes
+
+
+def _read_process_command(proc_entry: Path) -> tuple[str, ...]:
+    try:
+        raw = (proc_entry / "cmdline").read_bytes()
+    except OSError:
+        return ()
+    parts = [part.decode("utf-8", errors="ignore") for part in raw.split(b"\0") if part]
+    return tuple(parts)
+
+
+def _read_process_executable(proc_entry: Path) -> str | None:
+    try:
+        return str((proc_entry / "exe").resolve())
+    except OSError:
+        return None
+
+
+def _is_daemon_command(command: tuple[str, ...]) -> bool:
+    if not command:
+        return False
+    return len(command) >= 4 and command[1:4] == ("-m", "mcp_memory.cli", "daemon")

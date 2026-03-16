@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
-from mcp_memory.core.agent_runtime import bootstrap_background_tasks
+from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
 from mcp_memory.embeddings import describe_embedder
@@ -102,6 +102,7 @@ def _print_daemon_status(workspace_root: str | None) -> None:
 
 
 def _stop_daemon_command(workspace_root: str | None) -> None:
+    metadata = None
     try:
         metadata = stop_daemon(workspace_root, None)
     except Exception as exc:
@@ -113,20 +114,49 @@ def _stop_daemon_command(workspace_root: str | None) -> None:
 
 
 def _restart_daemon_command(workspace_root: str | None) -> None:
+    metadata = None
     try:
         stop_daemon(workspace_root, None)
         metadata = ensure_daemon_started(workspace_root, None)
     except Exception as exc:
         _exit_cli_error(exc)
+    if metadata is None:
+        return
     console.print(f"[green]Daemon restarted:[/] {metadata.base_url}/ (pid={metadata.pid})")
 
 
 def _print_dashboard_url(workspace_root: str | None) -> None:
+    metadata = None
     try:
         metadata = ensure_daemon_started(workspace_root, None)
     except Exception as exc:
         _exit_cli_error(exc)
+    if metadata is None:
+        return
     console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+
+
+def _resolve_stash_content(text_parts: tuple[str, ...]) -> str:
+    inline_text = " ".join(part for part in text_parts if part.strip()).strip()
+    if inline_text:
+        return inline_text
+
+    stdin_text = click.get_text_stream("stdin").read().strip()
+    if stdin_text:
+        return stdin_text
+
+    raise click.UsageError("Provide stash text as arguments or via stdin.")
+
+
+def _stash_thought(workspace_root: str | None, content: str) -> None:
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        if runtime.journal is None:
+            raise RuntimeError("journal_not_initialized")
+        payload = RecordThoughtOperation(runtime.journal, runtime.task_queue, runtime.workspace_id).execute(content)
+        click.echo(f"Thought stashed successfully (ID: {payload['entry']['id']})")
+    finally:
+        runtime.close()
 
 
 def _render_logs_table(payload) -> None:
@@ -516,6 +546,17 @@ def dashboard_alias(workspace_root: str | None) -> None:
     _print_dashboard_url(workspace_root)
 
 
+@main.command(name="stash")
+@workspace_root_option
+@click.argument("text", nargs=-1)
+def stash(workspace_root: str | None, text: tuple[str, ...]) -> None:
+    """Record one raw thought into the System 1 journal."""
+    try:
+        _stash_thought(workspace_root, _resolve_stash_content(text))
+    except Exception as exc:
+        _exit_cli_error(exc)
+
+
 @main.group(name="log")
 def log_group() -> None:
     """Inspect and manage structured runtime logs."""
@@ -900,10 +941,8 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 @workspace_root_option
 def stats(workspace_root: str | None) -> None:
     """Print background task and memory statistics."""
-    ensure_daemon_started(workspace_root, None)
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        bootstrap_background_tasks(runtime)
         workspace_service = _build_management_service(runtime)
         global_service = _build_management_service(runtime, workspace_id=None)
         health = workspace_service.get_health()

@@ -521,13 +521,9 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
-
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
-
     runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     try:
+        assert runtime.db_manager is not None
         assert runtime.repository is not None
         assert runtime.task_queue is not None
         assert runtime.workspace_id is not None
@@ -587,11 +583,6 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
-
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
-
     runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
     try:
         assert runtime.task_queue is not None
@@ -615,26 +606,21 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     assert "next=" in result.output
 
 
-def test_stats_command_autostarts_daemon(monkeypatch, tmp_path: Path) -> None:
+def test_stats_command_does_not_require_daemon_start(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
-    calls: list[tuple[str | None, object | None]] = []
-
-    class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr(
         "mcp_memory.cli.ensure_daemon_started",
-        lambda workspace_root, cwd=None: calls.append((workspace_root, cwd)) or FakeMetadata(),
+        lambda workspace_root, cwd=None: (_ for _ in ()).throw(AssertionError("stats should not start daemon")),
     )
 
     result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
-    assert calls == [(str(workspace), None)]
 
 
 def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_path: Path) -> None:
@@ -647,11 +633,6 @@ def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_pa
     workspace_b = tmp_path / "workspace-b"
     workspace_a.mkdir(parents=True)
     workspace_b.mkdir(parents=True)
-
-    class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
-
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
 
     runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
     runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)

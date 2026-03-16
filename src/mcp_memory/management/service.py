@@ -47,16 +47,16 @@ class ManagementService:
         pipeline = MemoryPipeline.from_context(ctx, controller)
         self._controller = controller
         self._db_manager = ctx.db_manager
-        self._workspace_id = ctx.workspace_id
+        self._workspace_id = None
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
-        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
         self._runtime_logs = RuntimeLogRepository(
             ctx.db_manager,
-            workspace_id=ctx.workspace_id,
+            workspace_id=None,
             config=None if ctx.config is None else ctx.config.logging,
         )
         self._embedder = ctx.embedder
@@ -150,14 +150,14 @@ class ManagementService:
         if task_name not in TRIGGERABLE_BACKGROUND_TASK_NAMES:
             raise ValueError(f"unknown_background_task:{task_name}")
 
-        payload = {"workspace_id": self._workspace_id}
+        payload = {"workspace_id": None}
         if force:
-            task = self._task_queue.enqueue(task_name=task_name, workspace_id=self._workspace_id, data=payload)
+            task = self._task_queue.enqueue(task_name=task_name, workspace_id=None, data=payload)
             return {"status": "enqueued", "created": True, "task": task_payload(task)}
 
         task, created = self._task_queue.enqueue_unique(
             task_name=task_name,
-            workspace_id=self._workspace_id,
+            workspace_id=None,
             data=payload,
         )
         return {
