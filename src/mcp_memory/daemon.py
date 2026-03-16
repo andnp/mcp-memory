@@ -44,13 +44,15 @@ def ensure_daemon_started(
         existing = _read_daemon_metadata(metadata_path)
         if existing is not None and _is_daemon_healthy(existing):
             return existing
-        if existing is None:
+        if existing is None or not _is_process_running(existing.pid):
+            if existing is not None:
+                remove_metadata(metadata_path)
             _terminate_orphaned_daemon_processes(
                 current_pid=os.getpid(),
                 deadline=time.monotonic() + timeout_seconds,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
-        if existing is not None and _is_process_running(existing.pid):
+        elif existing is not None:
             try:
                 os.kill(existing.pid, signal.SIGTERM)
             except ProcessLookupError:

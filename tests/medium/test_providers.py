@@ -296,3 +296,43 @@ async def test_instrumented_provider_persists_running_conversation_before_finish
     assert result == {"ok": True}
     assert len(finished_rows) == 1
     assert finished_rows[0].response_text == '{"ok": true}'
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_queries_are_global_by_default(db_manager) -> None:
+    repository_a = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    repository_b = ProviderUsageRepository(db_manager, workspace_id="workspace-b")
+
+    repository_a.record_call(
+        task_name="memory-curator",
+        task_id="task-a",
+        request_id="req-a",
+        subprocess_pid=None,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        status="success",
+        duration_seconds=0.1,
+        created_at=10.0,
+        error_text=None,
+    )
+    repository_b.record_call(
+        task_name="graph-linker",
+        task_id="task-b",
+        request_id="req-b",
+        subprocess_pid=None,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        status="success",
+        duration_seconds=0.2,
+        created_at=11.0,
+        error_text=None,
+    )
+
+    summary = repository_a.summarize_usage(now=12.0)
+
+    assert {(item.task_name, item.calls_last_day) for item in summary} == {
+        ("graph-linker", 1),
+        ("memory-curator", 1),
+    }

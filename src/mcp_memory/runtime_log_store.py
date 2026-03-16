@@ -8,6 +8,9 @@ from mcp_memory.config import LoggingConfig
 from mcp_memory.utils.db import DatabaseManager
 
 
+_ALL_WORKSPACES = object()
+
+
 @dataclass(frozen=True)
 class RuntimeLogRecord:
     id: int
@@ -74,6 +77,7 @@ class RuntimeLogRepository:
     def list_logs(
         self,
         *,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -85,7 +89,7 @@ class RuntimeLogRepository:
         if self._db_manager is None:
             return []
         where_clause, params = _build_log_filters(
-            workspace_id=self._workspace_id,
+            workspace_id=None if workspace_id is _ALL_WORKSPACES else workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
@@ -115,6 +119,7 @@ class RuntimeLogRepository:
     def summarize_logs(
         self,
         *,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -125,7 +130,7 @@ class RuntimeLogRepository:
         if self._db_manager is None:
             return RuntimeLogSummary(total=0)
         where_clause, params = _build_log_filters(
-            workspace_id=self._workspace_id,
+            workspace_id=None if workspace_id is _ALL_WORKSPACES else workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
@@ -172,6 +177,7 @@ class RuntimeLogRepository:
     def prune_logs(
         self,
         *,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
         max_runtime_logs: int | None = None,
         max_age_days: int | None = None,
         now: float | None = None,
@@ -183,7 +189,9 @@ class RuntimeLogRepository:
         effective_max_age_days = self._config.max_log_age_days if max_age_days is None else max_age_days
         deleted = 0
         conn = self._db_manager.get_connection()
-        workspace_clause, workspace_params = _workspace_scope_clause(self._workspace_id)
+        workspace_clause, workspace_params = _workspace_scope_clause(
+            None if workspace_id is _ALL_WORKSPACES else workspace_id
+        )
 
         if effective_max_age_days > 0:
             cutoff = (time.time() if now is None else now) - (effective_max_age_days * 86400)

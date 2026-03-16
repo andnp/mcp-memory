@@ -93,6 +93,32 @@ def test_runtime_log_repository_prunes_by_age_and_count(db_manager) -> None:
     assert [record.message for record in records] == ["drop by count", "keep two"]
 
 
+def test_runtime_log_repository_queries_are_global_by_default(db_manager) -> None:
+    repository_a = RuntimeLogRepository(db_manager, workspace_id="workspace-a")
+    repository_b = RuntimeLogRepository(db_manager, workspace_id="workspace-b")
+
+    repository_a.write_log(
+        source="daemon",
+        logger_name="mcp_memory.a",
+        level="INFO",
+        message="workspace a",
+        created_at=10.0,
+        data={},
+    )
+    repository_b.write_log(
+        source="daemon",
+        logger_name="mcp_memory.b",
+        level="INFO",
+        message="workspace b",
+        created_at=11.0,
+        data={},
+    )
+
+    records = repository_a.list_logs(limit=10)
+
+    assert [record.message for record in records] == ["workspace b", "workspace a"]
+
+
 @pytest.mark.asyncio
 async def test_instrumented_provider_records_usage(db_manager) -> None:
     class FakeProvider:

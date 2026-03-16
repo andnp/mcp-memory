@@ -7,6 +7,9 @@ import time
 from mcp_memory.utils.db import DatabaseManager
 
 
+_ALL_WORKSPACES = object()
+
+
 @dataclass(frozen=True)
 class ProviderUsageSummary:
     task_name: str | None
@@ -132,6 +135,7 @@ class ProviderUsageRepository:
     def list_conversations(
         self,
         *,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
         request_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
@@ -142,9 +146,10 @@ class ProviderUsageRepository:
         clauses: list[str] = []
         params: list[object] = []
         query = "SELECT * FROM ai_conversations"
-        if self._workspace_id is not None:
+        active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
+        if active_workspace_id is not None:
             clauses.append("workspace_id = ?")
-            params.append(self._workspace_id)
+            params.append(active_workspace_id)
         if request_id is not None:
             clauses.append("request_id = ?")
             params.append(request_id)
@@ -191,7 +196,7 @@ class ProviderUsageRepository:
             duration_seconds=float(row["duration_seconds"] or 0.0),
         )
 
-    def summarize_usage(self, *, now: float | None = None):
+    def summarize_usage(self, *, workspace_id: str | None | object = _ALL_WORKSPACES, now: float | None = None):
         if self._db_manager is None:
             return []
         current_time = time.time() if now is None else now
@@ -208,9 +213,10 @@ class ProviderUsageRepository:
             "AVG(CASE WHEN created_at >= ? THEN duration_seconds END) AS avg_duration_last_day "
             "FROM provider_usage"
         )
-        if self._workspace_id is not None:
+        active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
+        if active_workspace_id is not None:
             query += " WHERE workspace_id = ?"
-            params.append(self._workspace_id)
+            params.append(active_workspace_id)
         query += " GROUP BY task_name, provider_key, provider_name, model_name ORDER BY calls_last_day DESC, task_name ASC, provider_key ASC"
         rows = self._db_manager.get_connection().execute(query, params).fetchall()
         return [

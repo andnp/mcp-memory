@@ -374,7 +374,6 @@ async def handle_memory_curator_task(
     if provider is None:
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "provider_not_configured"}
 
-    workspace_id = _resolve_workspace_id(ctx, task)
     seed_records = _select_curator_seed_records(ctx, task)
     if not seed_records:
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "no_seed_records"}
@@ -384,7 +383,7 @@ async def handle_memory_curator_task(
         for record in seed_records
     ]
     prompt = (
-        f"You are the {CURATOR_TASK_NAME} maintenance agent for workspace_id={workspace_id}.\n"
+        f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
         "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
