@@ -23,20 +23,20 @@ async def test_record_thought_enqueues_single_ingest_task_at_threshold(
 
     try:
         payloads = []
-        for index in range(10):
+        for index in range(20):
             response = await call_memory_tool(runtime, "record_thought", {"content": f"note {index}"})
             payloads.append(json.loads(response[0].text))
 
-        eleventh = await call_memory_tool(runtime, "record_thought", {"content": "note 10"})
-        eleventh_payload = json.loads(eleventh[0].text)
+        twenty_first = await call_memory_tool(runtime, "record_thought", {"content": "note 20"})
+        twenty_first_payload = json.loads(twenty_first[0].text)
 
-        for payload in payloads[:9]:
+        for payload in payloads[:19]:
             assert "ingest_task" not in payload
-        tenth_payload = payloads[9]
-        assert tenth_payload["ingest_task"]["task_name"] == "ingest-system1"
-        assert tenth_payload["ingest_task"]["created"] is False
-        assert eleventh_payload["ingest_task"]["id"] == tenth_payload["ingest_task"]["id"]
-        assert eleventh_payload["ingest_task"]["created"] is False
+        twentieth_payload = payloads[19]
+        assert twentieth_payload["ingest_task"]["task_name"] == "ingest-system1"
+        assert twentieth_payload["ingest_task"]["created"] is False
+        assert twenty_first_payload["ingest_task"]["id"] == twentieth_payload["ingest_task"]["id"]
+        assert twenty_first_payload["ingest_task"]["created"] is False
 
         assert runtime.task_queue is not None
         counts = runtime.task_queue.count_by_status()
