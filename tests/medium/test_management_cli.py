@@ -17,14 +17,15 @@ def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None
     runner = CliRunner()
 
     class FakeMetadata:
-        base_url = "http://127.0.0.1:8123"
+        transport_endpoint = "ipc:///tmp/mcp-memory.sock"
 
     monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
 
     result = runner.invoke(main, ["dashboard", "--workspace-root", "demo"])
 
     assert result.exit_code == 0
-    assert "http://127.0.0.1:8123/" in result.output
+    assert "Daemon transport ready:" in result.output
+    assert "ipc:///tmp/mcp-memory.sock" in result.output
 
 
 def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
@@ -33,9 +34,9 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     class FakeMetadata:
         pid = 123
         started_at = 100.0
-        base_url = "http://127.0.0.1:8123"
+        transport_endpoint = "ipc:///tmp/mcp-memory.sock"
         daemon_scope = "global"
-        transport = "http"
+        transport = "zmq"
         version = "0.1.0"
         binary_path = "/tmp/mcp-memory-python"
 
@@ -49,7 +50,7 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Status:" in result.output
     assert "running" in result.output
-    assert "127.0.0.1:8123" in result.output
+    assert "ipc:///tmp/mcp-memory.sock" in result.output
     assert "Daemon scope:" in result.output
     assert "global" in result.output
 
@@ -75,7 +76,7 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
 
     class FakeMetadata:
         pid = 456
-        base_url = "http://127.0.0.1:9000"
+        transport_endpoint = "ipc:///tmp/mcp-memory.sock"
 
     stop_calls: list[tuple[str | None, object | None]] = []
     start_calls: list[tuple[str | None, object | None]] = []
@@ -93,7 +94,7 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
     assert result.exit_code == 0
     assert stop_calls == [("demo", None)]
     assert start_calls == [("demo", None)]
-    assert "http://127.0.0.1:9000/" in result.output
+    assert "ipc:///tmp/mcp-memory.sock" in result.output
 
 
 def test_install_command_writes_workspace_hook_and_gemini_configs(monkeypatch, tmp_path: Path) -> None:
@@ -561,7 +562,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace), "--verbose"])
 
     assert result.exit_code == 0
     assert "Search Health" in result.output
@@ -577,6 +578,26 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "gemini-cli" in result.output
     assert "memory-curator" in result.output
     assert "lines_compressed=3" in result.output
+
+
+def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Search Health" in result.output
+    assert "Memory Metrics" in result.output
+    assert "Background Agents" in result.output
+    assert "AI Provider Usage" in result.output
+    assert "Top Read Memories" in result.output
+    assert "Agent Details" not in result.output
+    assert "Recent Agent Runs" not in result.output
 
 
 def test_search_health_and_repair_commands_surface_resilience_state(monkeypatch, tmp_path: Path) -> None:
@@ -632,7 +653,7 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace), "--verbose"])
 
     assert result.exit_code == 0
     assert "Background Agents" in result.output
@@ -686,13 +707,61 @@ def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_pa
         runtime_a.close()
         runtime_b.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace_a)])
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace_a), "--verbose"])
 
     assert result.exit_code == 0
     assert "Stats scope:" in result.output
     assert "global" in result.output
     assert "defragmenter" in result.output
     assert "lines_compressed=7" in result.output
+
+
+def test_stats_command_watch_mode_refreshes_without_daemon_start(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(
+        "mcp_memory.cli.ensure_daemon_started",
+        lambda workspace_root, cwd=None: (_ for _ in ()).throw(AssertionError("stats watch should not start daemon")),
+    )
+
+    sleep_calls: list[float] = []
+
+    def stop_after_first_refresh(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("mcp_memory.cli.time.sleep", stop_after_first_refresh)
+
+    result = runner.invoke(
+        main,
+        ["stats", "--workspace-root", str(workspace), "--watch", "--interval", "2"],
+    )
+
+    assert result.exit_code == 0
+    assert sleep_calls == [2.0]
+    assert "Watching every 2.0s" in result.output
+    assert "Stopped stats watch." in result.output
+
+
+def test_monitor_command_runs_tui(monkeypatch) -> None:
+    runner = CliRunner()
+    called: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "mcp_memory.cli.run_monitor_tui",
+        lambda workspace_root, interval_seconds: called.update(
+            {"workspace_root": workspace_root, "interval_seconds": interval_seconds}
+        ),
+    )
+
+    result = runner.invoke(main, ["monitor", "--workspace-root", "demo", "--interval", "1.5"])
+
+    assert result.exit_code == 0
+    assert called == {"workspace_root": "demo", "interval_seconds": 1.5}
 
 
 def test_task_list_and_cancel_commands_show_running_task_metadata(monkeypatch, tmp_path: Path) -> None:

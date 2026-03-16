@@ -4,18 +4,20 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime
 import json
-import socket
+import signal
 import sys
-from types import SimpleNamespace
+import time
+from types import FrameType, SimpleNamespace
+from typing import Any
 
 import click
 from rich.console import Console
 from rich.table import Table
-import uvicorn
 
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
+from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.service import ManagementService
@@ -63,14 +65,6 @@ def _run_stdio_proxy(
         sys.exit(1)
 
 
-def _resolve_daemon_port(host: str, port: int) -> int:
-    if port != 0:
-        return port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
-
-
 def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int) -> None:
     configure_workspace_logging(
         debug_enabled,
@@ -78,14 +72,32 @@ def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, po
         console_output=True,
         source="daemon",
     )
-    daemon_port = _resolve_daemon_port(host, port)
     app = create_daemon_app(
         workspace_root_override=workspace_root,
         host=host,
-        port=daemon_port,
+        port=port,
         enable_idle_shutdown=True,
     )
-    uvicorn.run(app, host=host, port=daemon_port, log_level="info")
+    asyncio.run(_serve_daemon_app(app))
+
+
+async def _serve_daemon_app(app) -> None:
+    stop_event = asyncio.Event()
+    previous_handlers: dict[int, Any] = {}
+
+    def _request_shutdown(_signum: int, _frame: FrameType | None) -> None:
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        previous_handlers[sig] = signal.getsignal(sig)
+        signal.signal(sig, _request_shutdown)
+
+    try:
+        async with app.router.lifespan_context(app):
+            await stop_event.wait()
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 def _print_daemon_status(workspace_root: str | None) -> None:
@@ -98,7 +110,7 @@ def _print_daemon_status(workspace_root: str | None) -> None:
     console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
     console.print(f"[bold]PID:[/] {metadata.pid}")
     console.print(f"[bold]Transport:[/] {metadata.transport}")
-    console.print(f"[bold]URL:[/] {metadata.base_url}")
+    console.print(f"[bold]Endpoint:[/] {metadata.transport_endpoint}")
     if metadata.version is not None:
         console.print(f"[bold]Version:[/] {metadata.version}")
     if metadata.binary_path is not None:
@@ -127,7 +139,7 @@ def _restart_daemon_command(workspace_root: str | None) -> None:
         _exit_cli_error(exc)
     if metadata is None:
         return
-    console.print(f"[green]Daemon restarted:[/] {metadata.base_url}/ (pid={metadata.pid})")
+    console.print(f"[green]Daemon restarted:[/] {metadata.transport_endpoint} (pid={metadata.pid})")
 
 
 def _print_dashboard_url(workspace_root: str | None) -> None:
@@ -138,7 +150,7 @@ def _print_dashboard_url(workspace_root: str | None) -> None:
         _exit_cli_error(exc)
     if metadata is None:
         return
-    console.print(f"[green]Dashboard ready:[/] {metadata.base_url}/")
+    console.print(f"[green]Daemon transport ready:[/] {metadata.transport_endpoint}")
 
 
 def _resolve_stash_content(text_parts: tuple[str, ...]) -> str:
@@ -416,6 +428,67 @@ def _print_recent_agent_runs(overview) -> None:
         )
 
 
+def _render_stats_snapshot(
+    health,
+    overview,
+    journal_counts: dict[str, int],
+    *,
+    verbose: bool,
+    watch: bool,
+    interval_seconds: float,
+) -> None:
+    console.print(f"[bold]Workspace:[/] {health.workspace_id}")
+    console.print("[bold]Stats scope:[/] global")
+    console.print(f"[bold]Database:[/] {health.db_path}")
+    if watch:
+        console.print(f"[dim]Watching every {interval_seconds:.1f}s — press Ctrl+C to stop[/]")
+        console.print(f"[dim]Refreshed:[/] {_format_timestamp(time.time())}")
+
+    _render_search_health_table(health.search)
+    _render_memory_metrics_table(overview, journal_counts)
+    _render_agent_table(overview)
+    _render_provider_usage_table(overview)
+    _render_top_reads_table(overview)
+    if verbose:
+        _print_agent_details(overview)
+        _print_recent_agent_runs(overview)
+
+
+def _show_stats(
+    runtime,
+    *,
+    watch: bool,
+    interval_seconds: float,
+    verbose: bool,
+) -> None:
+    workspace_service = _build_management_service(runtime)
+    global_service = _build_management_service(runtime, workspace_id=None)
+
+    try:
+        while True:
+            health = workspace_service.get_health()
+            overview = global_service.get_overview()
+            journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
+
+            if watch and console.is_terminal:
+                console.clear()
+            _render_stats_snapshot(
+                health,
+                overview,
+                journal_counts,
+                verbose=verbose,
+                watch=watch,
+                interval_seconds=interval_seconds,
+            )
+
+            if not watch:
+                return
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        if watch:
+            console.print("\n[dim]Stopped stats watch.[/]")
+
+
 def _render_task_table(payload) -> None:
     table = Table(title="Tasks")
     table.add_column("Task ID")
@@ -532,14 +605,14 @@ def daemon_stop(workspace_root: str | None) -> None:
 @daemon_group.command(name="restart")
 @workspace_root_option
 def daemon_restart(workspace_root: str | None) -> None:
-    """Restart the workspace daemon and print the fresh dashboard URL."""
+    """Restart the global daemon and print the active transport endpoint."""
     _restart_daemon_command(workspace_root)
 
 
 @daemon_group.command(name="dashboard")
 @workspace_root_option
 def dashboard(workspace_root: str | None) -> None:
-    """Ensure the daemon is running and print the dashboard URL."""
+    """Ensure the daemon is running and print the active transport endpoint."""
     _print_dashboard_url(workspace_root)
 
 
@@ -1002,31 +1075,41 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 
 @main.command(name="stats")
 @workspace_root_option
-def stats(workspace_root: str | None) -> None:
+@click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
+@click.option(
+    "--interval",
+    default=2.0,
+    show_default=True,
+    type=click.FloatRange(min=0.1),
+    help="Seconds between watch refreshes",
+)
+@click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
+def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
     """Print background task and memory statistics."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        workspace_service = _build_management_service(runtime)
-        global_service = _build_management_service(runtime, workspace_id=None)
-        health = workspace_service.get_health()
-        overview = global_service.get_overview()
-        journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
-
-        console.print(f"[bold]Workspace:[/] {health.workspace_id}")
-        console.print("[bold]Stats scope:[/] global")
-        console.print(f"[bold]Database:[/] {health.db_path}")
-
-        _render_search_health_table(health.search)
-        _render_memory_metrics_table(overview, journal_counts)
-        _render_agent_table(overview)
-        _render_provider_usage_table(overview)
-        _render_top_reads_table(overview)
-        _print_agent_details(overview)
-        _print_recent_agent_runs(overview)
+        _show_stats(runtime, watch=watch, interval_seconds=interval, verbose=verbose)
     except Exception as exc:
         _exit_cli_error(exc)
     finally:
         runtime.close()
+
+
+@main.command(name="monitor")
+@workspace_root_option
+@click.option(
+    "--interval",
+    default=2.0,
+    show_default=True,
+    type=click.FloatRange(min=0.1),
+    help="Seconds between automatic refreshes",
+)
+def monitor(workspace_root: str | None, interval: float) -> None:
+    """Open the live operations TUI."""
+    try:
+        run_monitor_tui(workspace_root, interval)
+    except Exception as exc:
+        _exit_cli_error(exc)
 
 
 @main.command(name="import-markdown")
