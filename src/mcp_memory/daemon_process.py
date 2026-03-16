@@ -7,9 +7,8 @@ import sys
 from dataclasses import asdict
 from dataclasses import fields
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
+from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.daemon_models import DaemonMetadata
 
 
@@ -68,11 +67,9 @@ def remove_metadata(metadata_path: Path) -> None:
 
 def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
     try:
-        request = Request(f"{metadata.base_url}/internal/health", method="GET")
-        with urlopen(request, timeout=1) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=1)
         return payload.get("daemon_scope", "global") == metadata.daemon_scope and payload.get("status") == "ready"
-    except (URLError, OSError, TimeoutError, json.JSONDecodeError):
+    except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
         return False
 
 
@@ -83,4 +80,5 @@ def _normalize_metadata_payload(payload: dict[str, object]) -> dict[str, object]
     normalized.setdefault("transport", "http")
     normalized.setdefault("binary_path", None)
     normalized.setdefault("version", None)
+    normalized.setdefault("socket_path", None)
     return normalized

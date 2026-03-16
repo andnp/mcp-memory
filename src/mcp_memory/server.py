@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from mcp.server import Server
@@ -13,6 +10,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from mcp_memory.daemon import ensure_daemon_started
+from mcp_memory.daemon_transport import request_daemon_json
 
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -20,6 +18,7 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("TQDM_DISABLE", "1")
 
 logger = logging.getLogger(__name__)
+_REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 
 
 class MCPServer:
@@ -77,16 +76,10 @@ class MCPServer:
     def _request_json(self, path: str, payload: dict | None):
         if self._daemon is None:
             raise RuntimeError("daemon_not_started")
-        body = None if payload is None else json.dumps(payload).encode("utf-8")
-        method = "GET" if body is None else "POST"
-        request = Request(
-            f"{self._daemon.base_url}{path}",
-            data=body,
-            method=method,
-            headers={"Content-Type": "application/json"},
-        )
-        with urlopen(request, timeout=5) as response:
-            return json.loads(response.read().decode("utf-8"))
+        request_payload = None if payload is None else dict(payload)
+        if request_payload is not None and self.workspace_root is not None:
+            request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
+        return request_daemon_json(self._daemon, path, request_payload, timeout_seconds=5)
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:
@@ -100,5 +93,5 @@ class MCPServer:
                     "workspace_root": self.workspace_root,
                 },
             )
-        except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+        except (OSError, TimeoutError, ValueError) as exc:
             logger.warning("Failed to send %s hook for session %s: %s", event_name, self._session_id, exc)

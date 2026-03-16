@@ -374,6 +374,16 @@ def resolve_daemon_lock_path(workspace_id: str | None = None) -> Path:
     return lock_dir / "daemon.lock"
 
 
+def resolve_daemon_socket_path() -> Path:
+    socket_dir = resolve_state_dir() / "sockets"
+    socket_dir.mkdir(parents=True, exist_ok=True)
+    preferred = socket_dir / "daemon.sock"
+    if len(str(preferred)) <= 80:
+        return preferred
+    digest = sha1(str(resolve_state_dir()).encode("utf-8")).hexdigest()[:12]
+    return Path("/tmp") / f"mcp-memory-{digest}.sock"
+
+
 def _find_git_root(start_path: Path) -> Path | None:
     current = start_path if start_path.is_dir() else start_path.parent
     while True:

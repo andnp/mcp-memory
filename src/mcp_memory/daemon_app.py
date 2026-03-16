@@ -9,6 +9,7 @@ import sys
 import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
-from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path
+from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
+from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
@@ -31,6 +33,7 @@ from mcp_memory.mcp.tools import get_memory_tools
 
 logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
+_REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 
 
 async def _warm_embedding_model(embedder: Any) -> bool:
@@ -87,6 +90,7 @@ def create_daemon_app(
     daemon_host = host or spec.config.daemon.host
     daemon_port = port if port is not None else find_free_port()
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
+    socket_path = resolve_daemon_socket_path()
     runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
 
     @asynccontextmanager
@@ -106,6 +110,18 @@ def create_daemon_app(
 
         hook_service = HookReminderService(runtime.db_manager, runtime.workspace_id)
 
+        zmq_server = DaemonZmqServer(
+            context_factory=lambda arguments: _context_for_request(runtime, arguments),
+            hook_handlers={
+                "/api/hooks/session-start": lambda arguments: _handle_session_start(app, runtime, hook_service, arguments),
+                "/api/hooks/post-tool-use": lambda arguments: _handle_post_tool_use(runtime, arguments),
+                "/api/hooks/session-end": lambda arguments: _handle_session_end(app, runtime, hook_service, arguments),
+            },
+            socket_path=socket_path,
+            metadata_provider=lambda: app.state.metadata,
+        )
+        await zmq_server.start()
+
         routes = DaemonRoutes(
             ctx=runtime,
             service=ManagementService(runtime, controller=DaemonControllerView(hook_service=hook_service)),
@@ -124,13 +140,15 @@ def create_daemon_app(
             daemon_scope=GLOBAL_DAEMON_IDENTITY,
             binary_path=sys.executable,
             version=_resolve_runtime_version(),
-            transport="http",
+            transport="hybrid",
+            socket_path=str(socket_path),
         )
         write_metadata(metadata_path, app.state.metadata)
         try:
             yield
         finally:
             await _cancel_idle_shutdown_task(app)
+            await zmq_server.stop()
             if not warmup_task.done():
                 warmup_task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -194,40 +212,21 @@ def create_daemon_app(
     @app.post("/api/hooks/session-start")
     async def hook_session_start(arguments: dict[str, Any]):
         try:
-            await _cancel_idle_shutdown_task(app)
-            response = app.state.routes.hook_service.record_session_start(
-                str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
-                arguments,
-            )
-            response["active_client_count"] = app.state.routes.hook_service.get_active_client_count()
-            response["shutdown_scheduled"] = False
-            return response
+            return await _handle_session_start(app, app.state.routes.ctx, app.state.routes.hook_service, arguments)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/hooks/post-tool-use")
     async def hook_post_tool_use(arguments: dict[str, Any]):
         try:
-            return app.state.routes.hook_service.record_post_tool_use(arguments)
+            return await _handle_post_tool_use(app.state.routes.ctx, arguments)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/hooks/session-end")
     async def hook_session_end(arguments: dict[str, Any]):
         try:
-            response = app.state.routes.hook_service.record_session_end(
-                str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
-                arguments,
-            )
-            active_client_count = app.state.routes.hook_service.get_active_client_count()
-            should_schedule_shutdown = bool(app.state.enable_idle_shutdown) and active_client_count == 0
-            if should_schedule_shutdown:
-                _schedule_idle_shutdown_if_needed(app)
-            else:
-                await _cancel_idle_shutdown_task(app)
-            response["active_client_count"] = active_client_count
-            response["shutdown_scheduled"] = should_schedule_shutdown
-            return response
+            return await _handle_session_end(app, app.state.routes.ctx, app.state.routes.hook_service, arguments)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -316,6 +315,13 @@ def create_daemon_app(
             max_log_age_days=int(arguments["max_log_age_days"]) if arguments.get("max_log_age_days") is not None else None,
         ).model_dump()
 
+    @app.post("/api/admin/search/repair")
+    async def repair_search_index():
+        try:
+            return app.state.routes.service.repair_search_index()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/memories/{memory_id}")
     async def memory_detail(memory_id: str):
         try:
@@ -380,7 +386,7 @@ def create_daemon_app(
 
     @app.post("/internal/tools/{name}")
     async def call_tool(name: str, arguments: dict[str, Any]):
-        response = await call_memory_tool(app.state.routes.ctx, name, arguments)
+        response = await call_memory_tool(_context_for_request(app.state.routes.ctx, arguments), name, arguments)
         return {
             "contents": [
                 {
@@ -393,7 +399,7 @@ def create_daemon_app(
 
     @app.post("/internal/maintenance/tools/{name}")
     async def call_internal_tool(name: str, arguments: dict[str, Any]):
-        response = await call_internal_memory_tool(app.state.routes.ctx, name, arguments)
+        response = await call_internal_memory_tool(_context_for_request(app.state.routes.ctx, arguments), name, arguments)
         return {
             "contents": [
                 {
@@ -412,3 +418,55 @@ def _resolve_runtime_version() -> str | None:
         return importlib.metadata.version("mcp-memory")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _context_for_request(ctx, arguments: dict[str, Any] | None):
+    if arguments is None:
+        return ctx
+    workspace_root_value = arguments.get(_REQUEST_WORKSPACE_ROOT_KEY) or arguments.get("workspace_root")
+    if not isinstance(workspace_root_value, str) or not workspace_root_value.strip():
+        return ctx
+    workspace_root = resolve_workspace_root(workspace_root=workspace_root_value)
+    workspace_id = resolve_workspace_id(workspace_root=workspace_root_value)
+    return replace(ctx, workspace_root=workspace_root, workspace_id=workspace_id)
+
+
+async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
+    request_ctx = _context_for_request(ctx, arguments)
+    assert request_ctx.db_manager is not None
+    await _cancel_idle_shutdown_task(app)
+    response: dict[str, Any] = dict(
+        HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_start(
+            str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
+            arguments,
+        )
+    )
+    response["active_client_count"] = hook_service.get_active_client_count()
+    response["shutdown_scheduled"] = False
+    return response
+
+
+async def _handle_post_tool_use(ctx, arguments: dict[str, Any]) -> dict[str, Any]:
+    request_ctx = _context_for_request(ctx, arguments)
+    assert request_ctx.db_manager is not None
+    return HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_post_tool_use(arguments)
+
+
+async def _handle_session_end(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
+    request_ctx = _context_for_request(ctx, arguments)
+    assert request_ctx.db_manager is not None
+    response: dict[str, Any] = dict(
+        HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_end(
+            str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
+            arguments,
+        )
+    )
+    active_client_count = hook_service.get_active_client_count()
+    should_schedule_shutdown = bool(app.state.enable_idle_shutdown) and active_client_count == 0
+    if should_schedule_shutdown:
+        _schedule_idle_shutdown_if_needed(app)
+    else:
+        await _cancel_idle_shutdown_task(app)
+    response["active_client_count"] = active_client_count
+    response["shutdown_scheduled"] = should_schedule_shutdown
+    return response

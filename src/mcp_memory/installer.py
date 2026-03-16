@@ -6,10 +6,10 @@ from pathlib import Path
 import shlex
 from typing import Any, TextIO
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from mcp_memory.config import resolve_workspace_root
 from mcp_memory.daemon import ensure_daemon_started
+from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.utils.atomic_io import atomic_write_json
 
 
@@ -86,14 +86,10 @@ def forward_hook_event(payload: dict[str, Any], workspace_root: str | None = Non
         return {}
 
     metadata = ensure_daemon_started(workspace_root, None)
-    request = Request(
-        f"{metadata.base_url}{endpoint}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request, timeout=5) as response:
-        decoded = json.loads(response.read().decode("utf-8"))
+    request_payload = dict(payload)
+    if workspace_root is not None:
+        request_payload.setdefault("workspace_root", workspace_root)
+    decoded = request_daemon_json(metadata, endpoint, request_payload, timeout_seconds=5)
     if not isinstance(decoded, dict):
         raise ValueError("hook_response_must_be_object")
     return decoded
@@ -102,7 +98,7 @@ def forward_hook_event(payload: dict[str, Any], workspace_root: str | None = Non
 def safe_forward_hook_event(payload: dict[str, Any], workspace_root: str | None = None) -> tuple[dict[str, Any], str | None]:
     try:
         response = forward_hook_event(payload, workspace_root=workspace_root)
-    except (ValueError, HTTPError, URLError, OSError) as exc:
+    except (ValueError, HTTPError, URLError, OSError, TimeoutError) as exc:
         return {}, str(exc)
     return response, None
 

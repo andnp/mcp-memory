@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import time
 
 import pytest
 
@@ -45,6 +46,9 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
         first = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite journal progress"}))
         second = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite worker retries"}))
         third = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite search flow"}))
+        ingest_task = runtime.task_queue.find_open_task("ingest-system1", runtime.workspace_id)
+        assert ingest_task is not None
+        runtime.task_queue.update_pending_task(ingest_task.id, available_at=time.time())
 
         worker = build_runtime_task_worker(runtime)
         await worker.start()
@@ -53,13 +57,13 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
                 assert runtime.repository is not None
                 return bool(runtime.repository.list_memories(workspace_id=runtime.workspace_id))
 
-            await _wait_until(memory_created)
+            await _wait_until(memory_created, timeout_seconds=5.0)
         finally:
             await worker.stop(0.1)
 
         assert "ingest_task" not in first
         assert "ingest_task" not in second
-        assert third["ingest_task"]["task_name"] == "ingest-system1"
+        assert ingest_task.task_name == "ingest-system1"
 
         records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
         assert len(records) == 1
@@ -70,7 +74,7 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
             await call_memory_tool(
                 runtime,
                 "search_memory_records",
-                {"query": "sqlite worker search", "workspace_id": runtime.workspace_id},
+                {"query": "sqlite worker search"},
             )
         )
         assert [result["memory_id"] for result in search_payload["results"]] == [created_record.id]
@@ -109,7 +113,7 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
             await call_memory_tool(
                 runtime_two,
                 "search_memory_records",
-                {"workspace_id": runtime_two.workspace_id, "query": "shared fact"},
+                {"query": "shared fact"},
             )
         )
         read_payload = _payload_text(

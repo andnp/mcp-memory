@@ -17,7 +17,8 @@ class DaemonMetadata:
     daemon_scope: str = "global"
     binary_path: str | None = None
     version: str | None = None
-    transport: str = "http"
+    transport: str = "hybrid"
+    socket_path: str | None = None
 
     @property
     def base_url(self) -> str:
