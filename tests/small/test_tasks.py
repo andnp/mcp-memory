@@ -497,3 +497,34 @@ async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled
     cancelled = queue.get_task(task.id)
     assert cancelled.status == "cancelled"
     assert cancelled.cancellation_reason == "operator_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_refreshes_missing_handler_on_demand(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    seen: list[str] = []
+
+    def recovered_handler(ctx: ApplicationContext, task) -> None:
+        seen.append(task.id)
+
+    task = queue.enqueue(
+        "memory-curator",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="refresh-handler-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    worker = RuntimeTaskWorker(
+        ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a"),
+        handlers={},
+        handler_factory=lambda: {"memory-curator": recovered_handler},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert seen == ["refresh-handler-task"]

@@ -31,12 +31,12 @@ class TaskRecord:
     started_at: float | None
     completed_at: float | None
     last_error: str | None
-    subprocess_pid: int | None
-    active_request_id: str | None
-    cancellation_requested_at: float | None
-    cancelled_at: float | None
-    cancellation_reason: str | None
-    cancelled_by: str | None
+    subprocess_pid: int | None = None
+    active_request_id: str | None = None
+    cancellation_requested_at: float | None = None
+    cancelled_at: float | None = None
+    cancellation_reason: str | None = None
+    cancelled_by: str | None = None
 
 
 @dataclass

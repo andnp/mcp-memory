@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 import time
 from typing import Any
 
@@ -35,14 +36,43 @@ from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import TaskRecord
 
 
+logger = logging.getLogger(__name__)
+
+
 def build_runtime_task_worker(
     ctx: ApplicationContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
     active_provider = provider if provider is not None else getattr(ctx, "ai_provider", None)
+    handlers = build_default_task_handlers(active_provider)
+    expected_handlers = {
+        SYSTEM1_INGEST_TASK_NAME,
+        SUMMARIZE_MEMORY_TASK_NAME,
+        GRAPH_LINKER_TASK_NAME,
+        CONFLICT_DETECTOR_TASK_NAME,
+        DEFRAGMENTER_TASK_NAME,
+        DEDUPLICATOR_TASK_NAME,
+        TAXONOMIST_TASK_NAME,
+        CURATOR_TASK_NAME,
+        PROJECT_MANAGER_TASK_NAME,
+        FACT_CHECKER_TASK_NAME,
+        SWEEPER_TASK_NAME,
+    }
+    missing_handlers = sorted(expected_handlers - set(handlers))
+    if missing_handlers:
+        logger.error(
+            "Runtime task worker initialized with incomplete handler registry",
+            extra={"missing_handlers": missing_handlers, "handler_names": sorted(handlers)},
+        )
+    else:
+        logger.info(
+            "Runtime task worker handler registry ready",
+            extra={"handler_names": sorted(handlers), "handler_count": len(handlers)},
+        )
     return RuntimeTaskWorker(
         ctx,
-        handlers=build_default_task_handlers(active_provider),
+        handlers=handlers,
+        handler_factory=lambda: build_default_task_handlers(active_provider),
         poll_interval_seconds=0.05,
     )
 

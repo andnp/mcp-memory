@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from inspect import isawaitable
+import logging
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
@@ -11,16 +12,21 @@ from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTE
 from mcp_memory.core.tasks import TaskRecord
 
 
+logger = logging.getLogger(__name__)
+
+
 class RuntimeTaskWorker:
     def __init__(
         self,
         ctx: ApplicationContext,
         handlers: dict[str, Callable[[ApplicationContext, TaskRecord], Any]] | None = None,
+        handler_factory: Callable[[], dict[str, Callable[[ApplicationContext, TaskRecord], Any]]] | None = None,
         poll_interval_seconds: float = 0.1,
         retry_delay_seconds: float = 0.0,
     ) -> None:
         self._ctx = ctx
         self._handlers = handlers or {}
+        self._handler_factory = handler_factory
         self._poll_interval_seconds = poll_interval_seconds
         self._retry_delay_seconds = retry_delay_seconds
         self._stop_event = asyncio.Event()
@@ -31,6 +37,14 @@ class RuntimeTaskWorker:
             return
 
         self._stop_event = asyncio.Event()
+        logger.info(
+            "Starting runtime task worker",
+            extra={
+                "workspace_id": getattr(self._ctx, "workspace_id", None),
+                "handler_names": sorted(self._handlers),
+                "handler_count": len(self._handlers),
+            },
+        )
         self._runner = asyncio.create_task(self._run_loop())
 
     async def stop(self, grace_period_seconds: float) -> None:
@@ -74,6 +88,18 @@ class RuntimeTaskWorker:
             return
 
         handler = self._handlers.get(task.task_name)
+        if handler is None:
+            logger.error(
+                "Task handler missing; attempting refresh",
+                extra={
+                    "task_id": task.id,
+                    "task_name": task.task_name,
+                    "workspace_id": task.workspace_id,
+                    "handler_names": sorted(self._handlers),
+                    "handler_count": len(self._handlers),
+                },
+            )
+            handler = self._refresh_handler(task.task_name)
         if handler is None:
             await asyncio.to_thread(
                 task_queue.fail_permanently,
@@ -152,3 +178,21 @@ class RuntimeTaskWorker:
             3,
             next_available_at,
         )
+
+    def _refresh_handler(self, task_name: str):
+        if self._handler_factory is None:
+            return None
+        refreshed = self._handler_factory()
+        if not refreshed:
+            logger.error("Task handler refresh returned no handlers", extra={"task_name": task_name})
+            return None
+        self._handlers = refreshed
+        logger.warning(
+            "Refreshed runtime task handlers",
+            extra={
+                "task_name": task_name,
+                "handler_names": sorted(self._handlers),
+                "handler_count": len(self._handlers),
+            },
+        )
+        return self._handlers.get(task_name)
