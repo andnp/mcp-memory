@@ -22,6 +22,12 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - runtime bootstrap ensures recurring maintenance tasks exist
 - when local embeddings are enabled, ingest still runs as a durable task but may cluster pending thoughts into smaller semantic mini-batches before consolidation
 
+### 3.1.1 Ingest Claim Semantics
+- the ingest handler atomically claims a batch of pending `system1_journal` rows for one task before analysis
+- if ingest performs meaningful memory mutation, the handler deletes all rows claimed by that task on success
+- if ingest performs no meaningful mutation, or fails before completion, the handler releases claimed rows back to `pending`
+- worker startup releases orphaned claimed rows after recovering abandoned running tasks so thought batches do not strand permanently
+
 ### 3.2 Execute
 - the daemon starts a runtime worker
 - the worker claims ready tasks from SQLite

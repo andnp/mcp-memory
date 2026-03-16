@@ -15,6 +15,7 @@ class InternalToolLoopResult:
     response: dict[str, Any]
     tool_calls_executed: int = 0
     successful_tool_calls: int = 0
+    mutating_tool_calls: int = 0
     tool_names_used: list[str] = field(default_factory=list)
 
 
@@ -36,6 +37,7 @@ async def run_internal_tool_loop(
     transcript: list[dict[str, Any]] = []
     executed_calls = 0
     successful_calls = 0
+    mutating_calls = 0
     tool_names_used: list[str] = []
 
     for _ in range(max_rounds):
@@ -51,6 +53,7 @@ async def run_internal_tool_loop(
                 response=response,
                 tool_calls_executed=executed_calls,
                 successful_tool_calls=successful_calls,
+                mutating_tool_calls=mutating_calls,
                 tool_names_used=tool_names_used,
             )
 
@@ -74,6 +77,8 @@ async def run_internal_tool_loop(
             tool_names_used.append(name)
             if result.get("status") == "ok":
                 successful_calls += 1
+                if _is_mutating_tool_name(name):
+                    mutating_calls += 1
             round_results.append({"name": name, "arguments": arguments, "result": result})
 
         transcript.append({"tool_calls": round_calls, "tool_results": round_results})
@@ -86,6 +91,7 @@ async def run_internal_tool_loop(
         },
         tool_calls_executed=executed_calls,
         successful_tool_calls=successful_calls,
+        mutating_tool_calls=mutating_calls,
         tool_names_used=tool_names_used,
     )
 
@@ -146,3 +152,16 @@ def _compact_tool_spec(tool: Any) -> dict[str, Any]:
         "required_fields": required_names,
         "optional_fields": optional_names,
     }
+
+
+def _is_mutating_tool_name(name: str) -> bool:
+    return name.startswith(
+        (
+            "internal_append_",
+            "internal_archive_",
+            "internal_create_",
+            "internal_delete_",
+            "internal_merge_",
+            "internal_update_",
+        )
+    )

@@ -51,11 +51,13 @@ async def handle_ingest_system1_task(
     try:
         for group in grouped_entries:
             actions = None
+            tool_mutations = 0
             if provider is not None:
                 try:
-                    actions = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
+                    actions, tool_mutations = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
                 except Exception:
                     actions = None
+                    tool_mutations = 0
 
             group_created_ids: list[str] = []
             group_handled_ids: list[int] = []
@@ -78,7 +80,7 @@ async def handle_ingest_system1_task(
                 )
 
             created_ids.extend(group_created_ids)
-            meaningful_actions += group_meaningful_actions
+            meaningful_actions += group_meaningful_actions + tool_mutations
 
         if meaningful_actions <= 0:
             released_ids = ctx.journal.release_claims(task.id)
@@ -111,7 +113,7 @@ async def _analyze_ingest_actions(
     provider: Any,
     workspace_id: str,
     entries,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int]:
     entry_text = "\n".join(f"[{index}] {entry.content}" for index, entry in enumerate(entries))
     prompt = (
         "Analyze these system1 journal entries and return JSON with actions.\n"
@@ -135,7 +137,7 @@ async def _analyze_ingest_actions(
     actions = response.response.get("actions", [])
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
-    return actions
+    return actions, response.mutating_tool_calls
 
 
 def _group_related_entries(entries, threshold: float = 0.3):
@@ -381,7 +383,7 @@ def _build_ingest_result(
 
 def _enqueue_summary_task(
     ctx: ApplicationContext,
-    workspace_id: str,
+    workspace_id: str | None,
     memory_id: str,
 ) -> None:
     if ctx.task_queue is None:
