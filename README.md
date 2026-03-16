@@ -74,6 +74,7 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 For trusted maintenance agents, the repo also now includes a workspace-local internal MCP surface exposed through `uv run mcp-memory internal-run`. The bundled `.gemini/settings.json` enables that internal tool surface only inside this workspace.
 
 ### Admin / Maintenance Commands
+- `uv run mcp-memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
 - `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
@@ -211,19 +212,24 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    uv run mcp-memory daemon
    ```
 
-8. **Import legacy markdown** (optional admin flow):
+8. **Stash one thought quickly** (optional admin flow):
+   ```bash
+   uv run mcp-memory stash "I prefer snake_case JSON keys."
+   ```
+
+9. **Import legacy markdown** (optional admin flow):
    ```bash
    uv run mcp-memory import-markdown /path/to/memory.md
    ```
 
-9. **Trigger or inspect background agents** (optional admin flow):
+10. **Trigger or inspect background agents** (optional admin flow):
    ```bash
    uv run mcp-memory agents run sweeper
    uv run mcp-memory agents run-all
    uv run mcp-memory stats
    ```
 
-10. **Install local tool integrations** (optional admin flow):
+11. **Install local tool integrations** (optional admin flow):
    ```bash
    uv run mcp-memory install
    uv run mcp-memory install --tool copilot --component hooks
@@ -238,7 +244,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
    The installed hook commands forward `SessionStart`, `PostToolUse`, and `Stop` payloads into the workspace daemon through the hidden `hook-runner` command.
 
-11. **Configure with your AI Assistant**:
+12. **Configure with your AI Assistant**:
    Add the following to your MCP configuration (e.g., Claude Desktop):
    ```json
    {
@@ -251,7 +257,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    }
    ```
 
-12. **Smoke test the system**:
+13. **Smoke test the system**:
    - confirm the printed dashboard URL loads
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client
