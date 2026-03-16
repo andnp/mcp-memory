@@ -17,6 +17,17 @@ That makes this repository a dogfooding environment: use the memory system heavi
 - Treat docs, specs, memory records, and code as complementary sources of truth.
 - When touching behavior, prefer understanding the product intent first, then changing code.
 
+## Version control in this repo
+
+This repository does **not** use GitButler.
+Agents may use plain `git` here.
+
+Keep the same behavioral standard either way:
+
+- make small, atomic commits
+- commit only the files relevant to the current change
+- avoid mixing unrelated workspace changes into one commit
+
 ## Standard QA checks
 
 These are the default quality gates for this repo:
