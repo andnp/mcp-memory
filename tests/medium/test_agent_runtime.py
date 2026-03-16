@@ -1,3 +1,4 @@
+import json
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -362,7 +363,7 @@ def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager
     from mcp_memory.context import ApplicationContext
 
     journal = System1Journal(db_manager)
-    for index in range(10):
+    for index in range(20):
         journal.record(f"capture pending context {index}", workspace_id="workspace-a")
     ctx = ApplicationContext(
         workspace_id="workspace-a",
@@ -715,6 +716,77 @@ async def test_graph_linker_skips_provider_when_fallback_is_sufficient(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_graph_linker_escalates_to_provider_with_internal_tool_prompt(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        records = []
+        for index in range(13):
+            record = runtime.repository.create_memory(
+                title=f"topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+            records.append(record)
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "links": [
+                        {
+                            "source_id": records[0].id,
+                            "target_id": records[1].id,
+                            "link_type": "DEPENDS_ON",
+                            "context": "provider detected dependency",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-ai-tool-loop-task",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["created"] == 1
+        assert provider.call_count == 1
+        assert provider.prompts
+        assert "Available internal tools:" in provider.prompts[0]
+        assert "internal_search_memory_records" in provider.prompts[0]
+        assert "required_fields" in provider.prompts[0]
+        assert "Use DEPENDS_ON when one memory relies on" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -775,6 +847,11 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
 
         assert result["created"] == 2
         assert provider.call_count == 1
+        assert provider.prompts
+        assert "Available internal tools:" in provider.prompts[0]
+        assert "internal_search_memory_records" in provider.prompts[0]
+        assert "required_fields" in provider.prompts[0]
+        assert "materially incompatible claims" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -1128,6 +1205,77 @@ async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkey
 
 
 @pytest.mark.asyncio
+async def test_deduplicator_skips_provider_for_short_non_subset_merges(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    runtime.embedder = _SemanticFakeEmbedder()
+    runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="JWT auth note",
+            content="JWT required. Rotate keys daily.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="JWT auth policy",
+            content="Bearer auth required. Log token use.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = FakeAIProvider(
+            responses=[{"title": "Provider merged title", "content": "Provider merged content"}]
+        )
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-short-merge-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        active_facts = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="fact",
+            status="active",
+            limit=10,
+        )
+
+        assert result["merged"] >= 1
+        assert provider.call_count == 0
+        assert len(active_facts) == 1
+        assert active_facts[0].title != "Provider merged title"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_deduplicator_skips_provider_for_subset_merge(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -1339,6 +1487,66 @@ async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch,
         assert "Very long architecture reflection title that should be shortened before being sent to Gemini for curator work" not in prompt
         assert "…" in prompt
         assert len(prompt) < 5000
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Auth rollout note",
+            content="JWT rollout needs client coordination.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth", "rollout"],
+        )
+        assert record is not None
+
+        provider = FakeAIProvider(responses=[{"summary": "No-op", "actions_taken": 0}])
+
+        await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-json-prompt-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        prompt = provider.prompts[0]
+        marker = "Seed memories (compact view):\n"
+        suffix = "\n\nAvailable internal tools:"
+        start = prompt.index(marker) + len(marker)
+        end = prompt.index(suffix, start)
+        seed_json = prompt[start:end]
+        seed_payload = json.loads(seed_json)
+
+        assert isinstance(seed_payload, list)
+        assert seed_payload
+        assert seed_payload[0]["id"] == record.id
+        assert seed_payload[0]["title"] == "Auth rollout note"
     finally:
         runtime.close()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -27,7 +28,7 @@ GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
 CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
 DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
 DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
-DEDUPLICATOR_AI_MIN_COMBINED_LINES = 8
+DEDUPLICATOR_AI_MIN_COMBINED_LINES = 20
 DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
 CURATOR_MAX_SEED_RECORDS = 8
 CURATOR_MAX_TITLE_CHARS = 80
@@ -170,7 +171,7 @@ async def handle_graph_linker_task(
     if len(candidates) < 2:
         return {"created": 0}
 
-    proposed_pairs = await _propose_graph_links(candidates, provider)
+    proposed_pairs = await _propose_graph_links(ctx, candidates, provider)
     created = 0
     for source_id, target_id, link_type, context in proposed_pairs:
         if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
@@ -201,7 +202,7 @@ async def handle_conflict_detector_task(
     if len(candidates) < 2:
         return {"created": 0}
 
-    proposed_pairs = await _propose_conflicts(candidates, provider)
+    proposed_pairs = await _propose_conflicts(ctx, candidates, provider)
     created = 0
     for left_id, right_id, context in proposed_pairs:
         if left_id == right_id:
@@ -388,7 +389,7 @@ async def handle_memory_curator_task(
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
-        f"Seed memories (compact view):\n{seed_payload}"
+        f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
     )
     loop_result = await run_internal_tool_loop(
         ctx,
@@ -422,6 +423,7 @@ async def handle_memory_curator_task(
 
 
 async def _propose_graph_links(
+    ctx: ApplicationContext,
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str, str]]:
@@ -434,11 +436,18 @@ async def _propose_graph_links(
         return fallback
 
     if provider is not None:
-        prompt = _build_linker_prompt(candidates)
-        response = provider.ask(prompt)
-        if isawaitable(response):
-            response = await response
-        proposals = response.get("links", [])
+        response = await run_internal_tool_loop(
+            ctx,
+            provider=provider,
+            prompt=_build_linker_prompt(candidates),
+            allowed_tool_names=[
+                "internal_search_memory_records",
+                "internal_read_memory_record",
+                "internal_list_memory_records",
+            ],
+            max_rounds=3,
+        )
+        proposals = response.response.get("links", [])
         if isinstance(proposals, list):
             normalized: list[tuple[str, str, str, str]] = []
             for item in proposals:
@@ -457,6 +466,7 @@ async def _propose_graph_links(
 
 
 async def _propose_conflicts(
+    ctx: ApplicationContext,
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str]]:
@@ -465,11 +475,18 @@ async def _propose_conflicts(
         return fallback
 
     if provider is not None:
-        prompt = _build_conflict_prompt(candidates)
-        response = provider.ask(prompt)
-        if isawaitable(response):
-            response = await response
-        proposals = response.get("conflicts", [])
+        response = await run_internal_tool_loop(
+            ctx,
+            provider=provider,
+            prompt=_build_conflict_prompt(candidates),
+            allowed_tool_names=[
+                "internal_search_memory_records",
+                "internal_read_memory_record",
+                "internal_list_memory_records",
+            ],
+            max_rounds=3,
+        )
+        proposals = response.response.get("conflicts", [])
         if isinstance(proposals, list):
             normalized: list[tuple[str, str, str]] = []
             for item in proposals:
@@ -828,24 +845,53 @@ def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type
 
 
 def _build_linker_prompt(candidates: list) -> str:
-    entries = "\n".join(
-        f"- id={record.id} type={record.type} title={record.title!r} tags={record.tags}"
-        for record in candidates[:20]
+    entries = json.dumps(
+        [
+            {
+                "id": record.id,
+                "type": record.type,
+                "status": record.status,
+                "title": record.title,
+                "summary": _truncate_text(record.summary or record.content, 180),
+                "tags": record.tags,
+            }
+            for record in candidates[:20]
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
     )
     return (
-        "Review these memories and propose useful typed links.\n"
+        "Review these active memories and propose only high-confidence typed links.\n"
+        "Use DEPENDS_ON when one memory relies on, implements, or is downstream of another.\n"
+        "Use AMENDS when a newer memory updates, refines, or corrects an older memory on the same topic.\n"
+        "Do not propose weak title-only links, duplicate existing relationships, or symmetric duplicates.\n"
+        "If the local candidate list is insufficient, use the internal tools to search and read for better context before proposing links.\n"
         'Return JSON: {"links": [{"source_id": "...", "target_id": "...", "link_type": "DEPENDS_ON|AMENDS", "context": "..."}]}\n\n'
         f"Memories:\n{entries}"
     )
 
 
 def _build_conflict_prompt(candidates: list) -> str:
-    entries = "\n".join(
-        f"- id={record.id} type={record.type} title={record.title!r} tags={record.tags} content={record.content[:120]!r}"
-        for record in candidates[:20]
+    entries = json.dumps(
+        [
+            {
+                "id": record.id,
+                "type": record.type,
+                "status": record.status,
+                "title": record.title,
+                "summary": _truncate_text(record.summary or record.content, 180),
+                "tags": record.tags,
+            }
+            for record in candidates[:20]
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
     )
     return (
-        "Review these memories and propose contradictions when two active records appear to disagree.\n"
+        "Review these active memories and propose contradictions only when two records make materially incompatible claims.\n"
+        "Do not flag mere topic overlap, phrasing differences, or newer refinements of older memories as contradictions.\n"
+        "Prefer concrete evidence in the titles, summaries, and any extra context you retrieve with the internal tools.\n"
+        "If you need broader context, use the internal tools to search and read before proposing a contradiction.\n"
         'Return JSON: {"conflicts": [{"left_id": "...", "right_id": "...", "context": "..."}]}\n\n'
         f"Memories:\n{entries}"
     )

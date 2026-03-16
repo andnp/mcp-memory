@@ -26,7 +26,7 @@ async def handle_summarize_memory_task(
     if provider is not None:
         try:
             summary_response = await provider.ask(
-                "Write a concise 2-sentence summary as JSON: "
+                "Write a concise 1-2 sentence summary as JSON: "
                 '{"summary": "..."}\n\n'
                 f"Title: {record.title}\nContent: {record.content}"
             )
