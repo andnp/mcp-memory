@@ -216,6 +216,60 @@ def test_search_memories_prioritizes_workspace_and_hides_superseded(db_manager) 
     assert results[0].workspace_ids == ["workspace-alpha"]
 
 
+def test_search_memories_falls_back_to_truncated_content_summary(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    content = (
+        "This memory does not have a formal summary. "
+        "It should fall back to the content and stop at the last complete sentence before the cutoff. "
+        "The remaining text is intentionally long so that the helper must truncate rather than return the full body unchanged. "
+        "Additional trailing details should not appear in the summary output."
+    )
+    record = repository.create_memory(
+        title="Fallback summary memory",
+        content=content,
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["summary"],
+    )
+    assert record is not None
+    cleared = repository.update_memory(record.id, summary="")
+    assert cleared is not None
+
+    results = service.search_memories("formal summary", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert results[0].summary == (
+        "This memory does not have a formal summary. "
+        "It should fall back to the content and stop at the last complete sentence before the cutoff."
+    )
+
+
+def test_search_memories_falls_back_to_ellipsis_when_no_sentence_boundary_exists(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    content = "x" * 240
+    record = repository.create_memory(
+        title="No punctuation summary memory",
+        content=content,
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["summary"],
+    )
+    assert record is not None
+    cleared = repository.update_memory(record.id, summary="")
+    assert cleared is not None
+
+    results = service.search_memories("No punctuation summary memory", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == record.id
+    assert results[0].summary == ("x" * 200) + "…"
+
+
 def test_read_memory_returns_superseded_breadcrumbs_and_updates_access_score(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())

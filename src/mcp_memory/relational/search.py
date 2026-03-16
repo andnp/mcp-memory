@@ -265,7 +265,7 @@ class RelationalMemorySearchService:
             RelationalSearchResult(
                 memory_id=record.id,
                 title=record.title,
-                summary=record.summary or "",
+                summary=_search_result_summary(record),
                 memory_type=record.type,
                 status=record.status,
                 tags=list(record.tags),
@@ -403,6 +403,26 @@ def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
         ]
         if part
     )
+
+
+def _search_result_summary(record: RelationalMemoryRecord):
+    if record.summary:
+        return record.summary
+    return _smart_truncate(record.content)
+
+
+def _smart_truncate(text: str, *, max_chars: int = 200):
+    normalized = text.strip()
+    if len(normalized) <= max_chars:
+        return normalized
+
+    truncated = normalized[:max_chars].rstrip()
+    sentence_end = max(truncated.rfind("."), truncated.rfind("?"), truncated.rfind("!"))
+    if sentence_end >= 0:
+        candidate = truncated[: sentence_end + 1].rstrip()
+        if candidate:
+            return candidate
+    return f"{truncated}…"
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):
