@@ -58,14 +58,17 @@ Avoid keeping fixtures for deleted indexing-era schema.
 - ranking ladder coverage for generic mixed-memory queries
 - summary-first search/read behavior
 - daemon startup and locking
+- daemon provenance, stale-metadata recovery, and duplicate-owner cleanup
 - durable task retries and failed-task visibility
 - provider fallback behavior
 - relational import and typed-link behavior
+- ZMQ transport concurrency and stale-socket recovery once the transport migration begins
 
 ## 5. Non-Goals
 The test strategy does not assume:
-- ZMQ transport
 - chunking pipelines
 - indexing-era compatibility layers
 
 Vector retrieval remains optional in tests: suites should not require local embedding support unless the test is explicitly about semantic ranking.
+
+Current tests do not require ZMQ transport because HTTP remains the active implementation. When the proxy/daemon boundary migrates, add focused large tests for ROUTER/DEALER concurrency, heartbeat loss, and stale-socket recovery rather than treating transport migration as invisible infrastructure churn.
