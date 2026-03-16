@@ -7,6 +7,7 @@ import sys
 from dataclasses import asdict
 from dataclasses import fields
 from pathlib import Path
+from typing import Any, cast
 
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.daemon_models import DaemonMetadata
@@ -20,7 +21,7 @@ def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
     except (OSError, json.JSONDecodeError):
         return None
     try:
-        return DaemonMetadata(**_normalize_metadata_payload(payload))
+        return DaemonMetadata(**cast(Any, _normalize_metadata_payload(payload)))
     except TypeError:
         return None
 
@@ -66,9 +67,22 @@ def remove_metadata(metadata_path: Path) -> None:
 
 
 def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
+    expected_socket_path = metadata.socket_path.strip() if isinstance(metadata.socket_path, str) else None
+    if metadata.transport in {"zmq", "hybrid"} and not expected_socket_path:
+        return False
     try:
         payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=1)
-        return payload.get("daemon_scope", "global") == metadata.daemon_scope and payload.get("status") == "ready"
+        if payload.get("daemon_scope", "global") != metadata.daemon_scope:
+            return False
+        if payload.get("status") != "ready":
+            return False
+        if metadata.transport in {"zmq", "hybrid"}:
+            live_socket_path = payload.get("socket_path")
+            if not isinstance(live_socket_path, str) or not live_socket_path.strip():
+                return False
+            if live_socket_path != expected_socket_path:
+                return False
+        return True
     except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
         return False
 

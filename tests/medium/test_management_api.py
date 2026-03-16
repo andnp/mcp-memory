@@ -1,69 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import socket
-import threading
 import time
 from pathlib import Path
-from urllib.request import Request, urlopen
 
-from fastapi.testclient import TestClient
 import pytest
-import uvicorn
 
 from mcp_memory.daemon import create_daemon_app
+from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.mcp.runtime import create_runtime
 
 
 pytestmark = pytest.mark.medium
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _fetch_json(url: str) -> dict:
-    with urlopen(url, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _fetch_text(url: str) -> str:
-    with urlopen(url, timeout=5) as response:
-        return response.read().decode("utf-8")
-
-
-def _post_json(url: str, payload: dict) -> dict:
-    request = Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+async def _request_json(metadata, path: str, payload: dict | None = None) -> dict:
+    return await asyncio.to_thread(
+        request_daemon_json,
+        metadata,
+        path,
+        payload,
+        timeout_seconds=5,
     )
-    with urlopen(request, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _start_server(app, port: int):
-    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        try:
-            _fetch_json(f"http://127.0.0.1:{port}/api/health")
-            return server, thread
-        except Exception:
-            time.sleep(0.05)
-    raise RuntimeError("daemon app failed to start")
-
-
-def _stop_server(server: uvicorn.Server, thread: threading.Thread) -> None:
-    server.should_exit = True
-    thread.join(timeout=10)
 
 
 @pytest.mark.asyncio
@@ -136,60 +94,69 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     finally:
         seed_runtime.close()
 
-    port = _free_port()
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace, host="127.0.0.1", port=port)
-    server, thread = _start_server(app, port)
-    try:
-        health = _fetch_json(f"http://127.0.0.1:{port}/api/health")
-        overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
-        logs = _fetch_json(f"http://127.0.0.1:{port}/api/logs?source=daemon&q=seeded")
-        log_summary = _fetch_json(f"http://127.0.0.1:{port}/api/logs/summary?source=daemon")
-        prune_logs = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/logs/prune",
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    async with app.router.lifespan_context(app):
+        metadata = app.state.metadata
+
+        health = await _request_json(metadata, "/api/health")
+        overview = await _request_json(metadata, "/api/overview")
+        logs = await _request_json(metadata, "/api/logs", {"source": "daemon", "q": "seeded"})
+        log_summary = await _request_json(metadata, "/api/logs/summary", {"source": "daemon"})
+        prune_logs = await _request_json(
+            metadata,
+            "/api/admin/logs/prune",
             {"max_runtime_logs": 1, "max_log_age_days": 30},
         )
-        repair_search = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/search/repair",
-            {},
-        )
-        tasks = _fetch_json(f"http://127.0.0.1:{port}/api/tasks?status=failed")
-        memories = _fetch_json(f"http://127.0.0.1:{port}/api/memories?workspace_id={seed_runtime.workspace_id}")
-        detail = _fetch_json(f"http://127.0.0.1:{port}/api/memories/{primary.id}")
-        internal_tools = _fetch_json(f"http://127.0.0.1:{port}/internal/maintenance/tools")
-        hook_start = _post_json(
-            f"http://127.0.0.1:{port}/api/hooks/session-start",
+        repair_search = await _request_json(metadata, "/api/admin/search/repair", {})
+        tasks = await _request_json(metadata, "/api/tasks", {"status": "failed"})
+        memories = await _request_json(metadata, "/api/memories", {"workspace_id": seed_runtime.workspace_id})
+        detail = await _request_json(metadata, f"/api/memories/{primary.id}")
+        missing_detail = await _request_json(metadata, "/api/memories/missing-memory-id")
+        invalid_limit = await _request_json(metadata, "/api/tasks", {"limit": 0})
+        internal_tools = await _request_json(metadata, "/internal/maintenance/tools")
+        hook_start = await _request_json(
+            metadata,
+            "/api/hooks/session-start",
             {"sessionId": "conversation-1", "timestamp": 100.0},
         )
-        hook_noop = _post_json(
-            f"http://127.0.0.1:{port}/api/hooks/post-tool-use",
+        hook_noop = await _request_json(
+            metadata,
+            "/api/hooks/post-tool-use",
             {"sessionId": "conversation-1", "tool_name": "read_file", "timestamp": 200.0},
         )
-        hook_reminder = _post_json(
-            f"http://127.0.0.1:{port}/api/hooks/post-tool-use",
+        hook_reminder = await _request_json(
+            metadata,
+            "/api/hooks/post-tool-use",
             {"sessionId": "conversation-1", "tool_name": "apply_patch", "timestamp": 401.0},
         )
-        hook_end = _post_json(
-            f"http://127.0.0.1:{port}/api/hooks/session-end",
+        hook_end = await _request_json(
+            metadata,
+            "/api/hooks/session-end",
             {"sessionId": "conversation-1", "timestamp": 500.0},
         )
-        run_agent = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/agents/run",
+        run_agent = await _request_json(
+            metadata,
+            "/api/admin/agents/run",
             {"task_name": "graph-linker", "force": True},
         )
-        run_all = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/agents/run-all",
+        run_all = await _request_json(
+            metadata,
+            "/api/admin/agents/run-all",
             {"force": False},
         )
-        running_task = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/agents/run",
+        running_task = await _request_json(
+            metadata,
+            "/api/admin/agents/run",
             {"task_name": "memory-curator", "force": True},
         )
-        cancel_task = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/tasks/{running_task['task']['id']}/cancel",
+        cancel_task = await _request_json(
+            metadata,
+            f"/api/admin/tasks/{running_task['task']['id']}/cancel",
             {"cancelled_by": "api-test", "reason": "operator_cancelled"},
         )
-        created_link = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/links",
+        created_link = await _request_json(
+            metadata,
+            "/api/admin/links",
             {
                 "source_id": primary.id,
                 "target_id": "ext:README.md",
@@ -197,8 +164,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "context": "Referenced from the dashboard admin flow.",
             },
         )
-        deleted_link = _post_json(
-            f"http://127.0.0.1:{port}/api/admin/links/delete",
+        deleted_link = await _request_json(
+            metadata,
+            "/api/admin/links/delete",
             {
                 "source_id": primary.id,
                 "target_id": "ext:README.md",
@@ -228,8 +196,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             ),
         )
         app.state.routes.ctx.db_manager.get_connection().commit()
-        conversations = _fetch_json(f"http://127.0.0.1:{port}/api/ai-conversations?task_name=graph-linker")
-        dashboard = _fetch_text(f"http://127.0.0.1:{port}/")
+        conversations = await _request_json(metadata, "/api/ai-conversations", {"task_name": "graph-linker"})
+        dashboard = app.state.routes.service.load_dashboard_html()
 
         assert health["status"] == "ready"
         assert health["workspace_id"] == seed_runtime.workspace_id
@@ -260,6 +228,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id
+        assert missing_detail == {"status": "error", "error": "memory_not_found"}
+        assert invalid_limit == {"status": "error", "error": "limit_out_of_range"}
         assert any(tool["name"] == "internal_merge_memory_into_canonical" for tool in internal_tools["tools"])
         assert detail["superseded"][0]["id"] == superseded.id
         assert hook_start["status"] == "ok"
@@ -290,8 +260,6 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "AI Provider Usage" in dashboard
         assert "Refresh Logs" in dashboard
         assert "Agent Controls" in dashboard
-    finally:
-        _stop_server(server, thread)
 
 
 @pytest.mark.asyncio
@@ -324,7 +292,8 @@ async def test_daemon_lifespan_attempts_embedding_model_cache(monkeypatch, tmp_p
         runtime.close()
 
 
-def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconnect(
+@pytest.mark.asyncio
+async def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconnect(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -343,17 +312,18 @@ def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconnect(
     app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
 
     try:
-        with TestClient(app) as client:
-            start = client.post("/api/hooks/session-start", json={"sessionId": "conv-1", "timestamp": 100.0}).json()
-            health = client.get("/api/health").json()
-            end = client.post("/api/hooks/session-end", json={"sessionId": "conv-1", "timestamp": 101.0}).json()
+        async with app.router.lifespan_context(app):
+            metadata = app.state.metadata
+            start = await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-1", "timestamp": 100.0})
+            health = await _request_json(metadata, "/api/health")
+            end = await _request_json(metadata, "/api/hooks/session-end", {"sessionId": "conv-1", "timestamp": 101.0})
 
             assert start["active_client_count"] == 1
             assert health["client_count"] == 1
             assert end["active_client_count"] == 0
             assert end["shutdown_scheduled"] is True
 
-            time.sleep(0.35)
+            await asyncio.sleep(0.35)
             assert len(shutdown_calls) == 1
     finally:
         runtime.close()
@@ -366,17 +336,18 @@ def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconnect(
     app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
 
     try:
-        with TestClient(app) as client:
-            client.post("/api/hooks/session-start", json={"sessionId": "conv-2", "timestamp": 200.0})
-            end = client.post("/api/hooks/session-end", json={"sessionId": "conv-2", "timestamp": 201.0}).json()
-            reconnect = client.post("/api/hooks/session-start", json={"sessionId": "conv-3", "timestamp": 202.0}).json()
+        async with app.router.lifespan_context(app):
+            metadata = app.state.metadata
+            await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-2", "timestamp": 200.0})
+            end = await _request_json(metadata, "/api/hooks/session-end", {"sessionId": "conv-2", "timestamp": 201.0})
+            reconnect = await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-3", "timestamp": 202.0})
 
             assert end["shutdown_scheduled"] is True
             assert reconnect["active_client_count"] == 1
 
-            time.sleep(0.35)
+            await asyncio.sleep(0.35)
             assert shutdown_calls == []
-            assert client.get("/api/health").json()["client_count"] == 1
+            assert (await _request_json(metadata, "/api/health"))["client_count"] == 1
     finally:
         runtime.close()
 
@@ -412,16 +383,12 @@ async def test_management_api_overview_includes_top_read_memories(monkeypatch, t
     finally:
         runtime.close()
 
-    port = _free_port()
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace, host="127.0.0.1", port=port)
-    server, thread = _start_server(app, port)
-    try:
-        overview = _fetch_json(f"http://127.0.0.1:{port}/api/overview")
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    async with app.router.lifespan_context(app):
+        overview = await _request_json(app.state.metadata, "/api/overview")
 
         assert [record["title"] for record in overview["top_read_memories"]] == [
             "Alpha read memory",
             "Beta read memory",
         ]
         assert [record["read_count"] for record in overview["top_read_memories"]] == [2, 1]
-    finally:
-        _stop_server(server, thread)

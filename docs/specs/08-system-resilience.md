@@ -16,20 +16,20 @@ Use strict filesystem locking around daemon startup.
 ## 2. Proxy-Daemon Communication
 
 ### Current Decision
-Use localhost HTTP between the MCP thin proxy and the daemon.
+Use ZeroMQ over a stable local IPC socket between the MCP thin proxy and the daemon.
 
-**Status:** Transitional. HTTP remains the current transport, but it is no longer the intended long-term boundary.
+**Status:** Active. The daemon/proxy runtime boundary is now ZMQ-first. Any remaining HTTP-facing management routes are compatibility or test scaffolding, not the authoritative transport.
 
 ### Current Rationale
-- simple framing
-- easy local debugging
-- easy dashboard/API reuse
-- enough for current single-user localhost scope with one global runtime authority
+- stable global endpoint simplifies duplicate-owner detection and operator inspection
+- ROUTER/DEALER fits many thin proxies talking to one daemon runtime
+- IPC keeps the transport local, explicit, and independent of dynamic port selection
+- transport metadata can expose stronger provenance than ad hoc localhost probing
 
-### Known Limits
-- dynamic port discovery is weaker than a stable IPC endpoint for duplicate-owner detection
-- HTTP health checks do not provide a strong daemon hello/provenance contract
-- the current transport leaves stale-port and mixed-binary recovery less explicit than desired
+### Remaining Limits
+- stale-socket and mixed-binary recovery still need stronger migration coverage
+- the daemon hello contract still needs richer runtime-state reporting beyond basic ready health
+- some operator-facing naming still reflects older dashboard/HTTP language and should keep being cleaned up
 
 ### Authoritative Direction
 Move to ZeroMQ over a stable Unix domain socket for the daemon/proxy boundary.
@@ -59,8 +59,8 @@ The transport layer should make duplicate-daemon detection explicit:
 - if metadata exists but the live owner disagrees on provenance, surface a loud recovery signal instead of silently continuing
 
 ### Explicit Non-Goal
-ZeroMQ is **not** part of the current implementation yet.
-It is the planned transport direction, but not a present runtime dependency.
+Reintroducing dynamic localhost HTTP as the authoritative proxy-daemon boundary is **not** a goal.
+ZeroMQ over the stable IPC socket is the current runtime authority; any remaining HTTP-facing management pieces are compatibility or operator-facing scaffolding.
 
 ## 3. Durable Task Safety
 
@@ -99,7 +99,6 @@ The Sweeper task deletes old completed-task and old processed-journal telemetry 
 
 The following are still product decisions, not current guarantees:
 
-- the exact migration sequence from HTTP to ZMQ
 - the final socket location and retention policy for stale-socket cleanup
 - whether to add reference counting and daemon autoshutdown
-- whether to add richer recovery/repair flows beyond current startup locking and durable tasks
+- whether to add richer recovery/repair flows beyond current startup locking, stale-socket cleanup, and durable tasks

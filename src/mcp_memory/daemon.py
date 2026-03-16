@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 import signal
@@ -10,6 +11,7 @@ from mcp_memory.config import (
     GLOBAL_DAEMON_IDENTITY,
     resolve_daemon_lock_path,
     resolve_daemon_metadata_path,
+    resolve_daemon_socket_path,
 )
 from mcp_memory.daemon_app import create_daemon_app
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
@@ -21,7 +23,12 @@ from mcp_memory.daemon_process import (
     read_daemon_metadata as _read_daemon_metadata,
     spawn_daemon_process as _spawn_daemon_process,
 )
+from mcp_memory.daemon_transport import probe_daemon_socket as _probe_daemon_socket
+from mcp_memory.daemon_transport import remove_daemon_socket as _remove_daemon_socket
 from mcp_memory.mcp.runtime import resolve_runtime_spec
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,16 +50,26 @@ def ensure_daemon_started(
     try:
         existing = _read_daemon_metadata(metadata_path)
         if existing is not None and _is_daemon_healthy(existing):
+            logger.info("Reusing healthy global daemon: pid=%s endpoint=%s", existing.pid, existing.transport_endpoint)
             return existing
+
+        probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
         if existing is None or not _is_process_running(existing.pid):
             if existing is not None:
+                logger.warning("Removing stale global daemon metadata: pid=%s", existing.pid)
                 remove_metadata(metadata_path)
             _terminate_orphaned_daemon_processes(
                 current_pid=os.getpid(),
                 deadline=time.monotonic() + timeout_seconds,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
+            _cleanup_stale_daemon_socket(
+                Path(existing.socket_path) if existing is not None and existing.socket_path else resolve_daemon_socket_path(),
+                probe_timeout_seconds=probe_timeout_seconds,
+                reason="owner_missing_before_spawn",
+            )
         elif existing is not None:
+            logger.warning("Stopping unhealthy global daemon before recovery: pid=%s", existing.pid)
             try:
                 os.kill(existing.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -61,6 +78,11 @@ def ensure_daemon_started(
                 existing.pid,
                 deadline=time.monotonic() + timeout_seconds,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
+            )
+            _cleanup_stale_daemon_socket(
+                Path(existing.socket_path) if existing.socket_path else resolve_daemon_socket_path(),
+                probe_timeout_seconds=probe_timeout_seconds,
+                reason="owner_stopped_for_recovery",
             )
 
         daemon_port = _find_free_port()
@@ -162,6 +184,28 @@ def _wait_for_process_exit(
             return
         time.sleep(poll_interval_seconds)
     raise RuntimeError(f"Timed out waiting for daemon process exit: pid={pid}")
+
+
+def _cleanup_stale_daemon_socket(
+    socket_path: Path,
+    *,
+    probe_timeout_seconds: float,
+    reason: str,
+) -> None:
+    if not _socket_path_exists(socket_path):
+        return
+    if _probe_daemon_socket(socket_path, timeout_seconds=probe_timeout_seconds):
+        logger.warning("Daemon socket still responded during %s; leaving it in place: %s", reason, socket_path)
+        return
+    logger.warning("Cleaning stale daemon socket during %s: %s", reason, socket_path)
+    _remove_daemon_socket(socket_path)
+
+
+def _socket_path_exists(socket_path: Path) -> bool:
+    try:
+        return socket_path.exists() or socket_path.is_socket()
+    except OSError:
+        return socket_path.exists()
 
 
 def _terminate_orphaned_daemon_processes(

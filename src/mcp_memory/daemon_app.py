@@ -10,12 +10,10 @@ import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
@@ -25,10 +23,7 @@ from mcp_memory.daemon_process import find_free_port, remove_metadata, write_met
 from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
-from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
-from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
-from mcp_memory.mcp.tools import get_memory_tools
 
 
 logger = logging.getLogger(__name__)
@@ -117,6 +112,7 @@ def create_daemon_app(
                 "/api/hooks/post-tool-use": lambda arguments: _handle_post_tool_use(runtime, arguments),
                 "/api/hooks/session-end": lambda arguments: _handle_session_end(app, runtime, hook_service, arguments),
             },
+            routes_provider=lambda: app.state.routes,
             socket_path=socket_path,
             metadata_provider=lambda: app.state.metadata,
         )
@@ -140,7 +136,7 @@ def create_daemon_app(
             daemon_scope=GLOBAL_DAEMON_IDENTITY,
             binary_path=sys.executable,
             version=_resolve_runtime_version(),
-            transport="hybrid",
+            transport="zmq",
             socket_path=str(socket_path),
         )
         write_metadata(metadata_path, app.state.metadata)
@@ -160,256 +156,6 @@ def create_daemon_app(
             runtime_lock.release()
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)
-
-    @app.get("/", response_class=HTMLResponse)
-    async def dashboard():
-        return HTMLResponse(app.state.routes.service.load_dashboard_html())
-
-    @app.get("/api/health")
-    async def health():
-        payload = app.state.routes.service.get_health().model_dump()
-        payload["pid"] = app.state.metadata.pid
-        payload["status"] = app.state.metadata.status
-        payload["daemon_scope"] = app.state.metadata.daemon_scope
-        payload["binary_path"] = app.state.metadata.binary_path
-        payload["version"] = app.state.metadata.version
-        payload["transport"] = app.state.metadata.transport
-        return payload
-
-    @app.get("/api/overview")
-    async def overview():
-        return app.state.routes.service.get_overview().model_dump()
-
-    @app.post("/api/admin/agents/run")
-    async def run_agent(arguments: dict[str, Any]):
-        try:
-            return app.state.routes.service.enqueue_background_task(
-                str(arguments.get("task_name", "")).strip(),
-                force=bool(arguments.get("force", False)),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/admin/agents/run-all")
-    async def run_all_agents(arguments: dict[str, Any]):
-        return {
-            "results": app.state.routes.service.enqueue_all_background_tasks(
-                force=bool(arguments.get("force", False))
-            )
-        }
-
-    @app.post("/api/admin/tasks/{task_id}/cancel")
-    async def cancel_task(task_id: str, arguments: dict[str, Any]):
-        try:
-            return app.state.routes.service.cancel_task(
-                task_id,
-                cancelled_by=str(arguments.get("cancelled_by", "cli") or "cli"),
-                reason=str(arguments.get("reason", "cancelled_by_user") or "cancelled_by_user"),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/hooks/session-start")
-    async def hook_session_start(arguments: dict[str, Any]):
-        try:
-            return await _handle_session_start(app, app.state.routes.ctx, app.state.routes.hook_service, arguments)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/hooks/post-tool-use")
-    async def hook_post_tool_use(arguments: dict[str, Any]):
-        try:
-            return await _handle_post_tool_use(app.state.routes.ctx, arguments)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/hooks/session-end")
-    async def hook_session_end(arguments: dict[str, Any]):
-        try:
-            return await _handle_session_end(app, app.state.routes.ctx, app.state.routes.hook_service, arguments)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/tasks")
-    async def tasks(
-        status: str | None = Query(default=None),
-        workspace_id: str | None = Query(default=None),
-        limit: int = Query(default=20, ge=1, le=200),
-    ):
-        return app.state.routes.service.list_tasks(
-            status=status,
-            workspace_id=workspace_id,
-            limit=limit,
-        ).model_dump()
-
-    @app.get("/api/memories")
-    async def memories(
-        workspace_id: str | None = Query(default=None),
-        memory_type: str | None = Query(default=None),
-        status: str | None = Query(default=None),
-        limit: int = Query(default=20, ge=1, le=200),
-    ):
-        return app.state.routes.service.list_memories(
-            workspace_id=workspace_id,
-            memory_type=memory_type,
-            status=status,
-            limit=limit,
-        ).model_dump()
-
-    @app.get("/api/logs")
-    async def logs(
-        level: str | None = Query(default=None),
-        logger_name: str | None = Query(default=None),
-        source: str | None = Query(default=None),
-        q: str | None = Query(default=None),
-        after: float | None = Query(default=None),
-        before: float | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=200),
-    ):
-        return app.state.routes.service.list_logs(
-            level=level,
-            logger_name=logger_name,
-            source=source,
-            query=q,
-            after=after,
-            before=before,
-            limit=limit,
-        ).model_dump()
-
-    @app.get("/api/ai-conversations")
-    async def ai_conversations(
-        request_id: str | None = Query(default=None),
-        task_name: str | None = Query(default=None),
-        status: str | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=200),
-    ):
-        return app.state.routes.service.list_ai_conversations(
-            request_id=request_id,
-            task_name=task_name,
-            status=status,
-            limit=limit,
-        ).model_dump()
-
-    @app.get("/api/logs/summary")
-    async def logs_summary(
-        level: str | None = Query(default=None),
-        logger_name: str | None = Query(default=None),
-        source: str | None = Query(default=None),
-        q: str | None = Query(default=None),
-        after: float | None = Query(default=None),
-        before: float | None = Query(default=None),
-    ):
-        return app.state.routes.service.summarize_logs(
-            level=level,
-            logger_name=logger_name,
-            source=source,
-            query=q,
-            after=after,
-            before=before,
-        ).model_dump()
-
-    @app.post("/api/admin/logs/prune")
-    async def prune_logs(arguments: dict[str, Any]):
-        return app.state.routes.service.prune_logs(
-            max_runtime_logs=int(arguments["max_runtime_logs"]) if arguments.get("max_runtime_logs") is not None else None,
-            max_log_age_days=int(arguments["max_log_age_days"]) if arguments.get("max_log_age_days") is not None else None,
-        ).model_dump()
-
-    @app.post("/api/admin/search/repair")
-    async def repair_search_index():
-        try:
-            return app.state.routes.service.repair_search_index()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/memories/{memory_id}")
-    async def memory_detail(memory_id: str):
-        try:
-            return app.state.routes.service.get_memory_detail(memory_id).model_dump()
-        except ValueError as exc:
-            if str(exc) == "memory_not_found":
-                raise HTTPException(status_code=404, detail="memory_not_found") from exc
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/admin/links")
-    async def create_link(arguments: dict[str, Any]):
-        try:
-            return app.state.routes.service.create_memory_link(
-                source_id=str(arguments.get("source_id", "")).strip(),
-                target_id=str(arguments.get("target_id", "")).strip(),
-                link_type=str(arguments.get("link_type", "")).strip(),
-                context=str(arguments.get("context", "")).strip(),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/admin/links/delete")
-    async def delete_link(arguments: dict[str, Any]):
-        try:
-            return app.state.routes.service.delete_memory_link(
-                source_id=str(arguments.get("source_id", "")).strip(),
-                target_id=str(arguments.get("target_id", "")).strip(),
-                link_type=str(arguments.get("link_type", "")).strip(),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/health")
-    async def internal_health():
-        return asdict(app.state.metadata)
-
-    @app.get("/internal/tools")
-    async def list_tools():
-        return {
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema,
-                }
-                for tool in get_memory_tools()
-            ]
-        }
-
-    @app.get("/internal/maintenance/tools")
-    async def list_internal_tools():
-        return {
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema,
-                }
-                for tool in get_internal_maintenance_tools()
-            ]
-        }
-
-    @app.post("/internal/tools/{name}")
-    async def call_tool(name: str, arguments: dict[str, Any]):
-        response = await call_memory_tool(_context_for_request(app.state.routes.ctx, arguments), name, arguments)
-        return {
-            "contents": [
-                {
-                    "type": content.type,
-                    "text": content.text,
-                }
-                for content in response
-            ]
-        }
-
-    @app.post("/internal/maintenance/tools/{name}")
-    async def call_internal_tool(name: str, arguments: dict[str, Any]):
-        response = await call_internal_memory_tool(_context_for_request(app.state.routes.ctx, arguments), name, arguments)
-        return {
-            "contents": [
-                {
-                    "type": content.type,
-                    "text": content.text,
-                }
-                for content in response
-            ]
-        }
-
     return app
 
 

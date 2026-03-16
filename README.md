@@ -10,7 +10,7 @@ A standalone Model Context Protocol (MCP) server for persistent AI memory manage
 
 ## 🚀 Overview
 
-The MCP Memory Server provides a persistent memory bank for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. The current runtime is relational, workspace-aware, and backed by one shared global SQLite store.
+The MCP Memory Server provides a persistent memory bank for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. The current runtime is relational, ZMQ-backed, and centered on one shared global SQLite store.
 
 ## 🚧 Current status
 
@@ -29,8 +29,9 @@ The runtime is now **relational-first**.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
 - **Local Semantic Search**: Fully local embeddings via `sentence-transformers` enrich search and ingest without any external AI provider.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
-- **Workspace Daemon**: One localhost daemon per workspace owns runtime state, background workers, and the management API.
-- **Local Management API**: The daemon exposes a small read-only dashboard/API for runtime health, overview, and lineage inspection.
+- **Global Daemon**: One global daemon per user environment owns runtime state, background workers, and transport coordination.
+- **Stable IPC Transport**: The thin MCP proxy talks to the daemon over a stable ZeroMQ ROUTER/DEALER transport on a Unix socket.
+- **Operational Views**: Health, overview, and lineage inspection remain available through the daemon management surface and CLI.
 - **Task-Level Provider Telemetry**: AI provider usage is attributed to the background task that made the call so you can see which agents are actually consuming model time.
 
 ## 🛠 Tech Stack
@@ -39,7 +40,8 @@ The runtime is now **relational-first**.
 - **MCP (Model Context Protocol)**: Standard interface for AI tool integration.
 - **SQLite (FTS5)**: Robust keyword search and relational storage.
 - **Sentence Transformers (optional)**: Local embeddings for semantic retrieval and thought clustering.
-- **FastAPI + Uvicorn**: Local daemon and management API.
+- **ZeroMQ (`pyzmq`)**: Local daemon/proxy IPC transport over Unix domain sockets.
+- **FastAPI**: In-process compatibility and test harness for management routes.
 
 ## 📂 Project Structure
 
@@ -69,13 +71,13 @@ The following tools are exposed via the MCP server:
 - `search_memory_records`: Search relational memory records with summary-first results and staged ranking over weighted keyword + optional semantic retrieval.
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
 
-Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the dashboard/API or CLI, not in the assistant-facing protocol.
+Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the daemon management surface or CLI, not in the assistant-facing protocol.
 
 For trusted maintenance agents, the repo also now includes a workspace-local internal MCP surface exposed through `uv run mcp-memory internal-run`. The bundled `.gemini/settings.json` enables that internal tool surface only inside this workspace.
 
 ### Admin / Maintenance Commands
 - `uv run mcp-memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
-- `uv run mcp-memory dashboard`: ensure the daemon is running and print the dashboard URL.
+- `uv run mcp-memory dashboard`: ensure the daemon is running and print the active transport endpoint.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
 - `uv run mcp-memory stats`: print background task and memory statistics from SQLite.
@@ -198,14 +200,14 @@ Local semantic embeddings are now part of the default runtime behavior. The runt
 
 On daemon startup, the runtime also makes a best-effort background attempt to download and cache the configured embedding model locally.
 
-   This command auto-starts the workspace daemon if it is not already running.
+   This command auto-starts the global daemon if it is not already running.
 
-6. **Get the dashboard URL**:
+6. **Inspect the active daemon transport**:
    ```bash
    uv run mcp-memory dashboard
    ```
 
-   This command ensures the daemon is running and prints the dashboard URL.
+   This command ensures the daemon is running and prints the active `ipc://...` transport endpoint.
 
 7. **Run the daemon manually** (optional):
    ```bash
@@ -258,7 +260,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    ```
 
 13. **Smoke test the system**:
-   - confirm the printed dashboard URL loads
+   - confirm the daemon command prints a stable `ipc://...` endpoint
    - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - record a thought through your MCP client
    - verify that the thought becomes searchable and readable through the MCP client

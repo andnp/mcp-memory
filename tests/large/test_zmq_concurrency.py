@@ -42,12 +42,13 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
         pid=os.getpid(),
         started_at=time.time(),
         status="ready",
-        transport="hybrid",
+        transport="zmq",
         socket_path=str(socket_path),
     )
     server = DaemonZmqServer(
         context_factory=lambda arguments: _context_for_request(runtime, arguments),
         hook_handlers={},
+        routes_provider=lambda: None,
         socket_path=socket_path,
         metadata_provider=lambda: metadata,
     )
@@ -85,6 +86,7 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
         assert first_result["entry"]["workspace_id"] == workspace_a_id
         assert second_result["entry"]["workspace_id"] == workspace_b_id
 
+        assert runtime.journal is not None
         pending_entries = runtime.journal.get_pending(limit=10)
         assert {entry.workspace_id for entry in pending_entries} == {workspace_a_id, workspace_b_id}
     finally:

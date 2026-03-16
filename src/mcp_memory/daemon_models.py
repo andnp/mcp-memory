@@ -17,12 +17,18 @@ class DaemonMetadata:
     daemon_scope: str = "global"
     binary_path: str | None = None
     version: str | None = None
-    transport: str = "hybrid"
+    transport: str = "zmq"
     socket_path: str | None = None
 
     @property
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+    @property
+    def transport_endpoint(self) -> str:
+        if self.socket_path:
+            return f"ipc://{self.socket_path}"
+        return self.base_url
 
 
 @dataclass
