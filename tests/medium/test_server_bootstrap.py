@@ -280,6 +280,7 @@ def test_cli_help_lists_grouped_public_commands() -> None:
     assert "install" in result.output
     assert "agents" in result.output
     assert "stats" in result.output
+    assert "stash" in result.output
     assert "import-markdown" in result.output
     assert "daemon-status" not in result.output
     assert "daemon-stop" not in result.output
