@@ -111,11 +111,7 @@ def _build_prompt(
     transcript: list[dict[str, Any]],
 ) -> str:
     tool_specs = [
-        {
-            "name": tool.name,
-            "description": tool.description,
-            "inputSchema": tool.inputSchema,
-        }
+        _compact_tool_spec(tool)
         for tool in allowed_tools.values()
     ]
     parts = [
@@ -135,3 +131,18 @@ def _build_prompt(
             ]
         )
     return "\n\n".join(parts)
+
+
+def _compact_tool_spec(tool: Any) -> dict[str, Any]:
+    schema = tool.inputSchema if isinstance(tool.inputSchema, dict) else {}
+    properties = schema.get("properties", {}) if isinstance(schema.get("properties", {}), dict) else {}
+    required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
+    property_names = [str(name) for name in properties]
+    required_names = [name for name in property_names if name in {str(item) for item in required}]
+    optional_names = [name for name in property_names if name not in set(required_names)]
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "required_fields": required_names,
+        "optional_fields": optional_names,
+    }

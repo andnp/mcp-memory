@@ -35,6 +35,16 @@ def ensure_daemon_started(
         existing = _read_daemon_metadata(metadata_path)
         if existing is not None and _is_daemon_healthy(existing):
             return existing
+        if existing is not None and _is_process_running(existing.pid):
+            try:
+                os.kill(existing.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            _wait_for_process_exit(
+                existing.pid,
+                deadline=time.monotonic() + timeout_seconds,
+                poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
+            )
 
         daemon_port = _find_free_port()
         _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
@@ -86,7 +96,9 @@ def stop_daemon(
 
     deadline = time.monotonic() + max(spec.config.daemon.shutdown_grace_seconds, 1.0)
     while time.monotonic() < deadline:
-        if not _is_daemon_healthy(metadata):
+        healthy = _is_daemon_healthy(metadata)
+        running = _is_process_running(metadata.pid)
+        if not healthy and not running:
             remove_metadata(metadata_path)
             return metadata
         time.sleep(spec.config.daemon.healthcheck_interval_seconds)
@@ -108,3 +120,28 @@ __all__ = [
     "inspect_daemon",
     "stop_daemon",
 ]
+
+
+def _is_process_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_process_exit(
+    pid: int,
+    *,
+    deadline: float,
+    poll_interval_seconds: float,
+) -> None:
+    while time.monotonic() < deadline:
+        if not _is_process_running(pid):
+            return
+        time.sleep(poll_interval_seconds)
+    raise RuntimeError(f"Timed out waiting for daemon process exit: pid={pid}")

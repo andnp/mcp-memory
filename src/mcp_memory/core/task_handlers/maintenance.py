@@ -29,6 +29,10 @@ DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
 DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
 DEDUPLICATOR_AI_MIN_COMBINED_LINES = 8
 DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
+CURATOR_MAX_SEED_RECORDS = 8
+CURATOR_MAX_TITLE_CHARS = 80
+CURATOR_MAX_SUMMARY_CHARS = 220
+CURATOR_MAX_TAGS = 6
 
 
 def handle_project_manager_task(
@@ -377,16 +381,7 @@ async def handle_memory_curator_task(
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "no_seed_records"}
 
     seed_payload = [
-        {
-            "id": record.id,
-            "title": record.title,
-            "summary": record.summary,
-            "type": record.type,
-            "status": record.status,
-            "tags": record.tags,
-            "workspace_ids": record.workspace_ids,
-            "read_count": record.read_count,
-        }
+        _curator_seed_payload_item(record)
         for record in seed_records
     ]
     prompt = (
@@ -395,7 +390,7 @@ async def handle_memory_curator_task(
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
-        f"Seed memories:\n{seed_payload}"
+        f"Seed memories (compact view):\n{seed_payload}"
     )
     loop_result = await run_internal_tool_loop(
         ctx,
@@ -632,7 +627,26 @@ def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> l
             record.updated_at,
         )
     )
-    return candidates[:12]
+    return candidates[:CURATOR_MAX_SEED_RECORDS]
+
+
+def _curator_seed_payload_item(record) -> dict[str, Any]:
+    summary_source = record.summary or record.content
+    return {
+        "id": record.id,
+        "type": record.type,
+        "status": record.status,
+        "title": _truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
+        "summary": _truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
+        "tags": list(record.tags[:CURATOR_MAX_TAGS]),
+    }
+
+
+def _truncate_text(value: str | None, limit: int) -> str:
+    text = "" if value is None else " ".join(value.strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "…"
 
 
 def _should_use_provider_for_defragment_group(group: list, source_lines: int) -> bool:
