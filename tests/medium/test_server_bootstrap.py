@@ -51,6 +51,8 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_search_memory_records",
         "internal_read_memory_record",
         "internal_list_memory_records",
+        "internal_get_next_dedup_batch",
+        "internal_get_next_ingest_batch",
         "internal_append_memory_content",
         "internal_archive_memory_record",
         "internal_merge_memory_into_canonical",
@@ -122,6 +124,62 @@ async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp
         assert appended_payload["status"] == "ok"
         assert "deterministic fixtures" in appended_payload["record"]["content"]
         assert archived_payload["record"]["status"] == "archived"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        assert runtime.journal is not None
+        fact = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        observation = runtime.repository.create_memory(
+            title="Auth observation",
+            content="Observed another note about JWT enforcement.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth"],
+        )
+        runtime.journal.record("JWT rollout note one", workspace_id=runtime.workspace_id)
+        runtime.journal.record("JWT rollout note two", workspace_id=runtime.workspace_id)
+        assert fact is not None and observation is not None
+
+        dedup_result = await call_internal_memory_tool(
+            runtime,
+            "internal_get_next_dedup_batch",
+            {"limit": 20},
+        )
+        ingest_result = await call_internal_memory_tool(
+            runtime,
+            "internal_get_next_ingest_batch",
+            {"task_id": "agentic-ingest-batch", "batch_size": 10},
+        )
+
+        dedup_payload = json.loads(dedup_result[0].text)
+        ingest_payload = json.loads(ingest_result[0].text)
+
+        assert dedup_payload["status"] == "ok"
+        assert dedup_payload["records"]
+        assert {record["id"] for record in dedup_payload["records"]} >= {fact.id, observation.id}
+        assert dedup_payload["strategy"] == "deduplicator_seed_records"
+
+        assert ingest_payload["status"] == "ok"
+        assert ingest_payload["task_id"] == "agentic-ingest-batch"
+        assert len(ingest_payload["claimed_entry_ids"]) == 2
+        assert ingest_payload["groups"]
+        assert ingest_payload["groups"][0]["entries"]
+        assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"
     finally:
         runtime.close()
 

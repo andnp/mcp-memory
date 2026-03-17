@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
@@ -27,7 +28,71 @@ def internal_list_memory_records_service(ctx: ApplicationContext, arguments: dic
     )
     return {
         "status": "ok",
-        "records": [compact_memory_record_payload(record) for record in records],
+        "records": [compact_memory_record_payload(record).model_dump() for record in records],
+    }
+
+
+def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    from mcp_memory.core.task_handlers.maintenance import _select_deduplicator_seed_records
+
+    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    limit = optional_positive_int(arguments, "limit", 100)
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=workspace_id,
+            status="active",
+            limit=limit,
+        )
+        if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+    ]
+    seed_records = _select_deduplicator_seed_records(candidates)
+    return {
+        "status": "ok",
+        "strategy": "deduplicator_seed_records",
+        "candidate_count": len(candidates),
+        "has_more": len(candidates) > len(seed_records),
+        "records": [compact_memory_record_payload(record).model_dump() for record in seed_records],
+    }
+
+
+def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.journal is None:
+        return {"status": "error", "error": "journal_not_initialized"}
+
+    from mcp_memory.core.task_handlers.ingest import _build_ingest_groups
+
+    task_id = require_string(arguments, "task_id")
+    journal_workspace_id = resolve_pending_workspace_id(
+        ctx.journal,
+        optional_string(arguments, "workspace_id") or ctx.workspace_id,
+    )
+    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id or "workspace-unknown"
+    batch_size = optional_positive_int(arguments, "batch_size", 20)
+
+    entries = ctx.journal.claim_pending(
+        task_id=task_id,
+        limit=batch_size,
+        workspace_id=journal_workspace_id,
+    )
+    groups = _build_ingest_groups(ctx, entries, workspace_id)
+    pending_remaining = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "claimed_entry_ids": [entry.id for entry in entries],
+        "pending_remaining": pending_remaining,
+        "has_more": pending_remaining > 0,
+        "groups": [
+            {
+                "group_index": index,
+                "entries": [_journal_entry_payload(entry) for entry in group],
+            }
+            for index, group in enumerate(groups)
+        ],
     }
 
 
@@ -296,3 +361,13 @@ def _normalize_tags(tags: list[str]) -> list[str]:
         seen.add(value)
         normalized.append(value)
     return sorted(normalized)
+
+
+def _journal_entry_payload(entry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "content": entry.content,
+        "workspace_id": entry.workspace_id,
+        "timestamp": entry.timestamp,
+        "status": entry.status,
+    }

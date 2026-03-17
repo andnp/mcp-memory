@@ -45,6 +45,30 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_get_next_dedup_batch",
+            description="Return the next scheduler-selected deduplication batch of active candidate memories for agentic maintenance work.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+            },
+        ),
+        Tool(
+            name="internal_get_next_ingest_batch",
+            description="Claim the next pending System 1 journal entries for one task and return grouped ingest batches.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "batch_size": {"type": "integer", "minimum": 1},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
             name="internal_append_memory_content",
             description="Append new content into an existing memory record and optionally update tags.",
             inputSchema={
