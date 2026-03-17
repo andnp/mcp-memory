@@ -11,6 +11,7 @@ from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
+    SUMMARIZE_MEMORY_PRIORITY,
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
@@ -394,6 +395,7 @@ def _enqueue_summary_task(
             task_id=f"{SUMMARIZE_MEMORY_TASK_NAME}:{memory_id}",
             workspace_id=workspace_id,
             data={"memory_id": memory_id},
+            priority=SUMMARIZE_MEMORY_PRIORITY,
         )
     except sqlite3.IntegrityError:
         return

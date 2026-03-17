@@ -575,10 +575,11 @@ class SQLiteTaskQueue:
         *,
         data: dict[str, Any] | None = None,
         available_at: float | None = None,
+        priority: int | None = None,
     ) -> TaskRecord:
         conn = self._db.get_connection()
         row = conn.execute(
-            "SELECT data, available_at FROM tasks WHERE id = ? AND status = 'pending'",
+            "SELECT data, available_at, priority FROM tasks WHERE id = ? AND status = 'pending'",
             (task_id,),
         ).fetchone()
         if row is None:
@@ -586,10 +587,11 @@ class SQLiteTaskQueue:
 
         next_data = dict(json.loads(row["data"] or "{}")) if data is None else data
         next_available_at = float(row["available_at"]) if available_at is None else available_at
+        next_priority = int(row["priority"]) if priority is None else priority
         now = time.time()
         cursor = conn.execute(
-            "UPDATE tasks SET data = ?, available_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
-            (json.dumps(next_data, sort_keys=True), next_available_at, now, task_id),
+            "UPDATE tasks SET data = ?, available_at = ?, priority = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            (json.dumps(next_data, sort_keys=True), next_available_at, next_priority, now, task_id),
         )
         if cursor.rowcount != 1:
             conn.rollback()

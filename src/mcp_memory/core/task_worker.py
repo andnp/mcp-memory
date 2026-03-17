@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
-from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME
+from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -175,7 +175,7 @@ class RuntimeTaskWorker:
                 "interval_seconds": interval_seconds,
             },
             None,
-            100,
+            task_priority(task.task_name),
             3,
             next_available_at,
         )

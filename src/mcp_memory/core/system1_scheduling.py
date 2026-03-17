@@ -27,6 +27,7 @@ def schedule_system1_ingest(
 ):
     from mcp_memory.core.task_handlers.constants import (
         SYSTEM1_INGEST_DEBOUNCE_SECONDS,
+        SYSTEM1_INGEST_PRIORITY,
         SYSTEM1_INGEST_TASK_NAME,
         SYSTEM1_INGEST_THRESHOLD,
     )
@@ -58,13 +59,17 @@ def schedule_system1_ingest(
         task_name=SYSTEM1_INGEST_TASK_NAME,
         workspace_id=workspace_id,
         data=task_data,
+        priority=SYSTEM1_INGEST_PRIORITY,
         available_at=available_at,
     )
-    if not created and task.status == "pending" and available_at < task.available_at:
+    if not created and task.status == "pending" and (
+        available_at < task.available_at or task.priority != SYSTEM1_INGEST_PRIORITY
+    ):
         task = task_queue.update_pending_task(
             task.id,
             available_at=available_at,
             data=task_data,
+            priority=SYSTEM1_INGEST_PRIORITY,
         )
 
     return System1IngestScheduleResult(

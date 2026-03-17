@@ -7,6 +7,7 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
+from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue
 
@@ -264,6 +265,7 @@ def test_schedule_system1_ingest_debounces_then_pulls_forward_at_threshold(
     assert scheduled.created is True
     assert scheduled.trigger == "system1_debounce"
     assert scheduled.task.available_at == 1900.0
+    assert scheduled.task.priority == SYSTEM1_INGEST_PRIORITY
 
     for index in range(1, 20):
         now += 1.0
@@ -277,6 +279,7 @@ def test_schedule_system1_ingest_debounces_then_pulls_forward_at_threshold(
     assert accelerated.trigger == "system1_threshold"
     assert accelerated.task.id == scheduled.task.id
     assert accelerated.task.available_at == now
+    assert accelerated.task.priority == SYSTEM1_INGEST_PRIORITY
 
 
 @pytest.mark.asyncio

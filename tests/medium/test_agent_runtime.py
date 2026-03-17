@@ -33,6 +33,7 @@ from mcp_memory.core.agent_runtime import (
     handle_taxonomist_task,
 )
 from mcp_memory.core.task_handlers.maintenance import CURATOR_MAX_MEMORY_CHARS, _select_curator_seed_records
+from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEMORY_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
@@ -87,6 +88,7 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         )
         assert summary_task is not None
         assert summary_task.data["memory_id"] == records[0].id
+        assert summary_task.priority == SUMMARIZE_MEMORY_PRIORITY
     finally:
         runtime.close()
 
@@ -390,6 +392,12 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
     assert queue.find_open_task(SWEEPER_TASK_NAME, None) is not None
     assert queue.find_open_task(CURATOR_TASK_NAME, None) is not None
+    project_manager_task = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
+    deduplicator_task = queue.find_open_task(DEDUPLICATOR_TASK_NAME, None)
+    assert project_manager_task is not None
+    assert deduplicator_task is not None
+    assert project_manager_task.priority == task_priority(PROJECT_MANAGER_TASK_NAME)
+    assert deduplicator_task.priority == task_priority(DEDUPLICATOR_TASK_NAME)
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -411,6 +419,7 @@ def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(
     assert ingest_task is not None
     assert ingest_task.data["trigger"] == "system1_debounce"
     assert ingest_task.available_at > ingest_task.created_at
+    assert ingest_task.priority == SYSTEM1_INGEST_PRIORITY
 
 
 def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager) -> None:
@@ -433,6 +442,7 @@ def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager
     assert ingest_task is not None
     assert ingest_task.data["trigger"] == "system1_threshold"
     assert ingest_task.available_at <= ingest_task.updated_at
+    assert ingest_task.priority == SYSTEM1_INGEST_PRIORITY
 
 
 def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch, db_manager) -> None:

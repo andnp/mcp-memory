@@ -31,6 +31,7 @@ from mcp_memory.core.task_handlers import (
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
+    task_priority,
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import TaskRecord
@@ -80,7 +81,9 @@ def build_runtime_task_worker(
 def build_default_task_handlers(
     provider: Any = None,
 ) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
-    scoped = lambda task_name, task: _provider_for_task(provider, task_name, task)
+    def scoped(task_name: str, task: TaskRecord):
+        return _provider_for_task(provider, task_name, task)
+
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(SYSTEM1_INGEST_TASK_NAME, task)),
         SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(SUMMARIZE_MEMORY_TASK_NAME, task)),
@@ -137,6 +140,9 @@ def _ensure_recurring_task_scheduled(
 ) -> None:
     existing = task_queue.find_open_task(task_name, workspace_id)
     if existing is not None:
+        priority = task_priority(task_name)
+        if existing.status == "pending" and existing.priority != priority:
+            task_queue.update_pending_task(existing.id, priority=priority)
         return
 
     summary = task_queue.summarize_task_runs([task_name], workspace_id=workspace_id)[0]
@@ -147,6 +153,7 @@ def _ensure_recurring_task_scheduled(
     task_queue.enqueue_unique(
         task_name=task_name,
         workspace_id=workspace_id,
+        priority=task_priority(task_name),
         available_at=available_at,
         data={
             "workspace_id": workspace_id,

@@ -9,6 +9,7 @@ import time
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
+from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
@@ -178,13 +179,19 @@ class ManagementService:
 
         payload = {"workspace_id": None}
         if force:
-            task = self._task_queue.enqueue(task_name=task_name, workspace_id=None, data=payload)
+            task = self._task_queue.enqueue(
+                task_name=task_name,
+                workspace_id=None,
+                data=payload,
+                priority=task_priority(task_name),
+            )
             return {"status": "enqueued", "created": True, "task": task_payload(task)}
 
         task, created = self._task_queue.enqueue_unique(
             task_name=task_name,
             workspace_id=None,
             data=payload,
+            priority=task_priority(task_name),
         )
         return {
             "status": "enqueued" if created else "already_pending",
