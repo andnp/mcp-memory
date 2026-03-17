@@ -57,17 +57,16 @@ export function CommandBar({ onResult }: CommandBarProps) {
   }
 
   return (
-    <section className="panel p-6">
-      <div className="mb-4 flex items-start justify-between gap-4">
+    <section className="panel p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <div>
           <p className="panel-title">Command Bar</p>
-          <h2 className="mt-2 text-xl font-semibold text-text">Stash thoughts and steer agents from one place</h2>
+          <p className="mt-1 text-xs text-muted">Stash a thought or run <code>/run-agent</code>.</p>
         </div>
-        <span className="rounded-full border border-border px-3 py-1 text-xs text-muted">Ctrl+K</span>
+        <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted">Ctrl+K</span>
       </div>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-        <label className="flex-1 text-sm text-muted">
-          Input
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <label className="flex-1 text-xs text-muted">
           <input
             ref={inputRef}
             value={value}
@@ -78,7 +77,7 @@ export function CommandBar({ onResult }: CommandBarProps) {
                 void handleSubmit();
               }
             }}
-            className="mt-2 w-full rounded-xl border border-border bg-ink px-4 py-3 text-sm text-text outline-none transition focus:border-accent"
+            className="mt-1 w-full rounded-lg border border-border bg-ink px-2.5 py-2 text-xs text-text outline-none transition focus:border-accent"
             placeholder="Type a thought, or /run-agent deduplicator"
           />
         </label>
@@ -86,12 +85,12 @@ export function CommandBar({ onResult }: CommandBarProps) {
           type="button"
           disabled={submitting}
           onClick={() => void handleSubmit()}
-          className="rounded-xl border border-accent bg-accent px-5 py-3 text-sm font-semibold text-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded-lg border border-accent bg-accent px-3 py-2 text-xs font-semibold text-ink transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting ? 'Working…' : 'Submit'}
         </button>
       </div>
-      <p className="mt-3 text-sm text-muted">{hint}</p>
+      <p className="mt-1.5 text-[11px] text-muted">{hint}</p>
     </section>
   );
 }

@@ -22,10 +22,10 @@ export function MemoryDetailPage() {
 
   return (
     <div className="space-y-6">
-      <section className="panel p-6">
+      <section className="panel p-4">
         <p className="panel-title">Memory detail</p>
-        <h2 className="mt-2 text-2xl font-semibold text-text">{record.title}</h2>
-        <div className="mt-3 flex flex-wrap gap-3 text-sm text-muted">
+        <h2 className="mt-1 text-lg font-semibold text-text">{record.title}</h2>
+        <div className="mt-2 flex flex-wrap gap-3 text-sm text-muted">
           <span>{record.type}</span>
           <span>{record.status}</span>
           <span>{record.updated_at}</span>

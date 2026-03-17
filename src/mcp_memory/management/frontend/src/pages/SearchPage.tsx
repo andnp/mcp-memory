@@ -12,10 +12,10 @@ export function SearchPage() {
 
   return (
     <section className="space-y-6">
-      <section className="panel p-6">
+      <section className="panel p-4">
         <p className="panel-title">Explore</p>
-        <h2 className="mt-2 text-2xl font-semibold text-text">Search memories</h2>
-        <div className="mt-4 flex flex-col gap-3 lg:flex-row">
+        <h2 className="mt-1 text-lg font-semibold text-text">Search memories</h2>
+        <div className="mt-3 flex flex-col gap-2 lg:flex-row">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -24,12 +24,12 @@ export function SearchPage() {
                 searchMutation.mutate({ query: query.trim(), limit: 12 });
               }
             }}
-            className="w-full rounded-xl border border-border bg-ink px-4 py-3 text-sm text-text outline-none focus:border-accent"
+            className="w-full rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent"
             placeholder="Search by topic, person, memory title, or concept"
           />
           <button
             type="button"
-            className="rounded-xl border border-accent bg-accent px-5 py-3 text-sm font-semibold text-ink"
+            className="rounded-lg border border-accent bg-accent px-3 py-2 text-xs font-semibold text-ink"
             onClick={() => query.trim() && searchMutation.mutate({ query: query.trim(), limit: 12 })}
           >
             Search

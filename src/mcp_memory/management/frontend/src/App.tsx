@@ -15,24 +15,16 @@ const navItems = [
 
 export default function App() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
-      <header className="flex flex-col gap-4">
-        <div>
-          <p className="panel-title">Memory Command Center</p>
-          <h1 className="mt-2 text-4xl font-semibold tracking-tight text-text">Operator pages for plan 6</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">
-            The dashboard is now split into focused pages so search, audit activity, logs, and memory drill-down can grow without
-            collapsing into one very expensive div.
-          </p>
-        </div>
-        <nav className="flex flex-wrap gap-3">
+    <main className="mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-4 lg:px-6 lg:py-5">
+      <header>
+        <nav className="flex flex-wrap gap-2">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `rounded-full border px-4 py-2 text-sm transition ${
+                `rounded-full border px-3 py-1.5 text-xs transition ${
                   isActive
                     ? 'border-accent bg-accent text-ink'
                     : 'border-border bg-panel/90 text-muted hover:border-accent hover:text-text'

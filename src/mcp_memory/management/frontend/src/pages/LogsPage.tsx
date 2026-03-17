@@ -17,12 +17,12 @@ export function LogsPage() {
 
   return (
     <div className="space-y-6">
-      <section className="panel p-6">
+      <section className="panel p-4">
         <p className="panel-title">Logs</p>
-        <h2 className="mt-2 text-2xl font-semibold text-text">Filtered daemon diagnostics</h2>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <input value={query} onChange={(event) => setQuery(event.target.value)} className="rounded-xl border border-border bg-ink px-4 py-3 text-sm text-text outline-none focus:border-accent" placeholder="message or logger" />
-          <select value={level} onChange={(event) => setLevel(event.target.value)} className="rounded-xl border border-border bg-ink px-4 py-3 text-sm text-text outline-none focus:border-accent">
+        <h2 className="mt-1 text-lg font-semibold text-text">Filtered daemon diagnostics</h2>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          <input value={query} onChange={(event) => setQuery(event.target.value)} className="rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent" placeholder="message or logger" />
+          <select value={level} onChange={(event) => setLevel(event.target.value)} className="rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent">
             <option value="">all levels</option>
             <option value="DEBUG">DEBUG</option>
             <option value="INFO">INFO</option>
@@ -30,9 +30,9 @@ export function LogsPage() {
             <option value="ERROR">ERROR</option>
             <option value="CRITICAL">CRITICAL</option>
           </select>
-          <input value={source} onChange={(event) => setSource(event.target.value)} className="rounded-xl border border-border bg-ink px-4 py-3 text-sm text-text outline-none focus:border-accent" placeholder="source" />
+          <input value={source} onChange={(event) => setSource(event.target.value)} className="rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent" placeholder="source" />
         </div>
-        <p className="mt-3 text-sm text-muted">
+        <p className="mt-2 text-xs text-muted">
           matching={summaryQuery.data?.total ?? 0} · levels={Object.entries(summaryQuery.data?.by_level ?? {}).map(([name, count]) => `${name}:${count}`).join(' • ') || 'none'}
         </p>
       </section>

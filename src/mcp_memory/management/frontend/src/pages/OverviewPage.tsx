@@ -45,7 +45,7 @@ function queueTimingText(readyInSeconds: number, overdueSeconds: number): string
 }
 
 export function OverviewPage() {
-  const [commandResult, setCommandResult] = useState('No command executed yet.');
+  const [commandResult, setCommandResult] = useState<string | null>(null);
   const overviewQuery = useQuery({
     queryKey: ['overview'],
     queryFn: fetchOverview,
@@ -62,16 +62,18 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-border bg-panel/80 px-4 py-3 text-sm text-muted shadow-panel">
+      <div className="rounded-xl border border-border bg-panel/80 px-3 py-2 text-xs text-muted shadow-panel">
         Status: {overviewQuery.isLoading ? 'Loading pulse…' : 'Pulse online'}
       </div>
 
       <CommandBar onResult={setCommandResult} />
 
-      <section className="panel p-4">
-        <p className="panel-title">Command Result</p>
-        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-sm text-text">{commandResult}</pre>
-      </section>
+      {commandResult ? (
+        <section className="panel p-3">
+          <p className="panel-title">Command Result</p>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs text-text">{commandResult}</pre>
+        </section>
+      ) : null}
 
       {overviewQuery.data ? (
         <>
@@ -87,9 +89,9 @@ export function OverviewPage() {
                 <thead>
                   <tr>
                     <th>Agent</th>
-                    <th>Running</th>
-                    <th>Runs</th>
-                    <th>Failures</th>
+                    <th className="hidden md:table-cell">Running</th>
+                    <th className="hidden lg:table-cell">Runs</th>
+                    <th className="hidden lg:table-cell">Failures</th>
                     <th>Last status</th>
                     <th>Last result</th>
                   </tr>
@@ -98,9 +100,9 @@ export function OverviewPage() {
                   {overviewQuery.data.agent_runs.slice(0, 8).map((agent) => (
                     <tr key={agent.task_name}>
                       <td>{agent.task_name}</td>
-                      <td>{agent.running_count}</td>
-                      <td>{agent.total_runs}</td>
-                      <td>{agent.failed_runs}</td>
+                      <td className="hidden md:table-cell">{agent.running_count}</td>
+                      <td className="hidden lg:table-cell">{agent.total_runs}</td>
+                      <td className="hidden lg:table-cell">{agent.failed_runs}</td>
                       <td>{agent.last_status ?? 'never'}</td>
                       <td>{agent.last_result_summary ?? '-'}</td>
                     </tr>
@@ -158,9 +160,9 @@ export function OverviewPage() {
                 <thead>
                   <tr>
                     <th>Title</th>
-                    <th>Type</th>
+                    <th className="hidden md:table-cell">Type</th>
                     <th>Status</th>
-                    <th>Updated</th>
+                    <th className="hidden lg:table-cell">Updated</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -171,9 +173,9 @@ export function OverviewPage() {
                         {record.summary ? <div className="mt-1 text-xs text-muted">{record.summary}</div> : null}
                         {record.tags.length ? <div className="mt-2 text-xs text-muted">{record.tags.join(', ')}</div> : null}
                       </td>
-                      <td>{record.type}</td>
+                      <td className="hidden md:table-cell">{record.type}</td>
                       <td className={statusTone(record.status)}>{record.status}</td>
-                      <td>{record.updated_at}</td>
+                      <td className="hidden lg:table-cell">{record.updated_at}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -191,7 +193,7 @@ export function OverviewPage() {
                     <th>Task</th>
                     <th>Provider</th>
                     <th>Calls 24h</th>
-                    <th>Failures 24h</th>
+                    <th className="hidden md:table-cell">Failures 24h</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -203,7 +205,7 @@ export function OverviewPage() {
                         <div className="mt-1 text-xs text-muted">{usage.model_name}</div>
                       </td>
                       <td>{usage.calls_last_day}</td>
-                      <td>{usage.failures_last_day}</td>
+                      <td className="hidden md:table-cell">{usage.failures_last_day}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -254,7 +256,7 @@ export function OverviewPage() {
                   <tr>
                     <th>Time</th>
                     <th>Level</th>
-                    <th>Source</th>
+                    <th className="hidden md:table-cell">Source</th>
                     <th>Message</th>
                   </tr>
                 </thead>
@@ -263,7 +265,7 @@ export function OverviewPage() {
                     <tr key={entry.id}>
                       <td>{formatTimestamp(entry.created_at)}</td>
                       <td className={statusTone(entry.level.toLowerCase() === 'error' ? 'failed' : entry.level.toLowerCase())}>{entry.level}</td>
-                      <td>
+                      <td className="hidden md:table-cell">
                         <div>{entry.source}</div>
                         <div className="mt-1 text-xs text-muted">{entry.logger_name}</div>
                       </td>
@@ -286,7 +288,7 @@ export function OverviewPage() {
                   <tr>
                     <th>Task</th>
                     <th>State</th>
-                    <th>Priority</th>
+                    <th className="hidden md:table-cell">Priority</th>
                     <th>Timing</th>
                   </tr>
                 </thead>
@@ -298,7 +300,7 @@ export function OverviewPage() {
                         <div className="mt-1 text-xs text-muted">{task.trigger ?? '-'} · {task.workspace_id ?? 'global'}</div>
                       </td>
                       <td className={statusTone(task.pending_state)}>{task.pending_state}</td>
-                      <td>{task.priority}</td>
+                      <td className="hidden md:table-cell">{task.priority}</td>
                       <td>{queueTimingText(task.ready_in_seconds, task.overdue_seconds)}</td>
                     </tr>
                   )) : (
@@ -319,7 +321,7 @@ export function OverviewPage() {
                 <thead>
                   <tr>
                     <th>Reads</th>
-                    <th>Type</th>
+                    <th className="hidden md:table-cell">Type</th>
                     <th>Title</th>
                   </tr>
                 </thead>
@@ -327,7 +329,7 @@ export function OverviewPage() {
                   {overviewQuery.data.top_read_memories.length ? overviewQuery.data.top_read_memories.slice(0, 8).map((record) => (
                     <tr key={record.id}>
                       <td>{record.read_count}</td>
-                      <td>{record.type}</td>
+                      <td className="hidden md:table-cell">{record.type}</td>
                       <td><Link className="text-accent" to={`/memory/${record.id}`}>{record.title}</Link></td>
                     </tr>
                   )) : (

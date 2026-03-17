@@ -14,6 +14,14 @@ export interface RecentAgentRun {
   completed_at: number;
   result_summary: string | null;
   error_text: string | null;
+  result_metadata?: {
+    strategy_used?: string | null;
+    requested_strategy?: string | null;
+    candidate_count?: number | null;
+    grouping_strategy_used?: string | null;
+    requested_grouping_strategy?: string | null;
+    group_count?: number | null;
+  };
 }
 
 export interface ProviderUsage {

@@ -7,6 +7,7 @@
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   background: #0d1117;
   color: #c9d1d9;
+  font-size: 14px;
 }
 
 body {
@@ -22,30 +23,30 @@ body {
 
 @layer components {
   .panel {
-    @apply rounded-2xl border border-border bg-panel/95 shadow-panel;
+    @apply rounded-xl border border-border bg-panel/95 shadow-panel;
   }
 
   .panel-title {
-    @apply text-sm font-semibold uppercase tracking-[0.16em] text-muted;
+    @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-muted;
   }
 
   .metric-card {
-    @apply panel p-5;
+    @apply panel p-3;
   }
 
   .table-shell {
-    @apply overflow-hidden rounded-2xl border border-border bg-panel/95 shadow-panel;
+    @apply overflow-x-auto rounded-2xl border border-border bg-panel/95 shadow-panel;
   }
 
   .table-shell table {
-    @apply w-full border-collapse text-sm;
+    @apply min-w-full border-collapse text-sm;
   }
 
   .table-shell th {
-    @apply border-b border-border px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.16em] text-muted;
+    @apply border-b border-border px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-muted;
   }
 
   .table-shell td {
-    @apply border-b border-border/70 px-4 py-3 align-top;
+    @apply border-b border-border/70 px-2.5 py-1.5 align-top text-[13px];
   }
 }

@@ -16,11 +16,11 @@ export function PulseOverview({ overview }: PulseOverviewProps) {
   ];
 
   return (
-    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
       {cards.map(([label, value]) => (
         <article key={label} className="metric-card">
           <p className="panel-title">{label}</p>
-          <p className="mt-3 text-3xl font-semibold text-text">{value}</p>
+          <p className="mt-1 text-xl font-semibold text-text">{value}</p>
         </article>
       ))}
     </section>
