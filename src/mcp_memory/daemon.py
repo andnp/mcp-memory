@@ -70,15 +70,12 @@ def ensure_daemon_started(
             )
         elif existing is not None:
             logger.warning("Stopping unhealthy global daemon before recovery: pid=%s", existing.pid)
-            try:
-                os.kill(existing.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            _wait_for_process_exit(
+            _terminate_daemon_process(
                 existing.pid,
                 deadline=time.monotonic() + timeout_seconds,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
+            remove_metadata(metadata_path)
             _cleanup_stale_daemon_socket(
                 Path(existing.socket_path) if existing.socket_path else resolve_daemon_socket_path(),
                 probe_timeout_seconds=probe_timeout_seconds,
@@ -123,26 +120,30 @@ def stop_daemon(
     if metadata is None:
         return None
 
-    if not _is_daemon_healthy(metadata):
-        remove_metadata(metadata_path)
-        return metadata
-
-    try:
-        os.kill(metadata.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        remove_metadata(metadata_path)
-        return metadata
-
     deadline = time.monotonic() + max(spec.config.daemon.shutdown_grace_seconds, 1.0)
-    while time.monotonic() < deadline:
-        healthy = _is_daemon_healthy(metadata)
-        running = _is_process_running(metadata.pid)
-        if not healthy and not running:
-            remove_metadata(metadata_path)
-            return metadata
-        time.sleep(spec.config.daemon.healthcheck_interval_seconds)
+    poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
+    probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
+    if not _is_process_running(metadata.pid):
+        remove_metadata(metadata_path)
+        _cleanup_stale_daemon_socket(
+            Path(metadata.socket_path) if metadata.socket_path else resolve_daemon_socket_path(),
+            probe_timeout_seconds=probe_timeout_seconds,
+            reason="owner_missing_on_stop",
+        )
+        return metadata
 
-    raise RuntimeError("Timed out waiting for global daemon shutdown")
+    _terminate_daemon_process(
+        metadata.pid,
+        deadline=deadline,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    _cleanup_stale_daemon_socket(
+        Path(metadata.socket_path) if metadata.socket_path else resolve_daemon_socket_path(),
+        probe_timeout_seconds=probe_timeout_seconds,
+        reason="owner_stopped_on_stop",
+    )
+    remove_metadata(metadata_path)
+    return metadata
 
 
 def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:
@@ -186,6 +187,50 @@ def _wait_for_process_exit(
     raise RuntimeError(f"Timed out waiting for daemon process exit: pid={pid}")
 
 
+def _terminate_daemon_process(
+    pid: int,
+    *,
+    deadline: float,
+    poll_interval_seconds: float,
+) -> None:
+    _signal_daemon_process(pid, signal.SIGTERM)
+    try:
+        _wait_for_process_exit(
+            pid,
+            deadline=deadline,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        return
+    except RuntimeError:
+        if not _is_process_running(pid):
+            return
+        _signal_daemon_process(pid, signal.SIGKILL)
+        _wait_for_process_exit(
+            pid,
+            deadline=deadline,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+
+def _signal_daemon_process(pid: int, sig: signal.Signals) -> None:
+    try:
+        process_group_id = os.getpgid(pid)
+    except (AttributeError, ProcessLookupError, OSError):
+        process_group_id = None
+
+    if process_group_id is not None and process_group_id > 0:
+        try:
+            os.killpg(process_group_id, sig)
+            return
+        except (AttributeError, ProcessLookupError, OSError):
+            pass
+
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return
+
+
 def _cleanup_stale_daemon_socket(
     socket_path: Path,
     *,
@@ -215,11 +260,7 @@ def _terminate_orphaned_daemon_processes(
     poll_interval_seconds: float,
 ) -> None:
     for process in _list_daemon_processes(current_pid=current_pid):
-        try:
-            os.kill(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            continue
-        _wait_for_process_exit(
+        _terminate_daemon_process(
             process.pid,
             deadline=deadline,
             poll_interval_seconds=poll_interval_seconds,

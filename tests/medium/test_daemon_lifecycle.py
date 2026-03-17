@@ -83,6 +83,7 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: next(health_states))
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
     monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
@@ -93,6 +94,53 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
     assert stopped is not None
     assert stopped.pid == 1234
     assert sent_signals == [15]
+    assert not metadata_path.exists()
+
+
+def test_stop_daemon_terminates_unhealthy_running_process_before_removing_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=Config(),
+        workspace_id="workspace-stop",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8124,
+        pid=2345,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon.sock"),
+    )
+    metadata_path = resolve_daemon_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
+    (tmp_path / "daemon.sock").write_text("stale", encoding="utf-8")
+
+    sent_signals: list[int] = []
+    process_states = iter([True, False])
+    removed_sockets: list[Path] = []
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: False)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
+    monkeypatch.setattr("mcp_memory.daemon._probe_daemon_socket", lambda socket_path, timeout_seconds: False)
+    monkeypatch.setattr("mcp_memory.daemon._remove_daemon_socket", lambda socket_path: removed_sockets.append(Path(socket_path)))
+    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+    monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
+
+    stopped = stop_daemon()
+
+    assert stopped is not None
+    assert stopped.pid == 2345
+    assert sent_signals == [15]
+    assert removed_sockets == [tmp_path / "daemon.sock"]
     assert not metadata_path.exists()
 
 
@@ -112,6 +160,13 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
         started_at=1.0,
         status="ready",
     )
+    fresh_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=9001,
+        pid=6789,
+        started_at=2.0,
+        status="ready",
+    )
     metadata_path = resolve_daemon_metadata_path()
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
@@ -119,11 +174,15 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
     spawned: list[tuple[Path, str, int]] = []
     sent_signals: list[int] = []
     process_states = iter([True, False])
-    healthy_states = iter([False, True])
 
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
-    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: next(healthy_states))
+    monkeypatch.setattr(
+        "mcp_memory.daemon._read_daemon_metadata",
+        lambda path: metadata if not spawned and metadata_path.exists() else fresh_metadata,
+    )
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: current.pid == fresh_metadata.pid)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
     monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9001)
@@ -173,6 +232,7 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
     )
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
     monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9002)
@@ -238,6 +298,7 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
             )
         ],
     )
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
     monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9003)
