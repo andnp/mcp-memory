@@ -971,6 +971,108 @@ async def test_graph_linker_escalates_to_provider_with_internal_tool_prompt(monk
 
 
 @pytest.mark.asyncio
+async def test_graph_linker_treats_variant_link_type_spellings_as_existing_links(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        records = []
+        for index in range(13):
+            record = runtime.repository.create_memory(
+                title=f"topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+            records.append(record)
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "links": [
+                        {
+                            "source_id": records[0].id,
+                            "target_id": records[1].id,
+                            "link_type": "DEPENDS_ON",
+                            "context": "provider detected dependency",
+                        }
+                    ]
+                },
+                {
+                    "links": [
+                        {
+                            "source_id": records[0].id,
+                            "target_id": records[1].id,
+                            "link_type": "depends-on",
+                            "context": "provider restated dependency with different casing",
+                        }
+                    ]
+                },
+            ]
+        )
+
+        first = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-variant-link-type-task-1",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+        second = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-variant-link-type-task-2",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        links = runtime.repository.get_links(records[0].id, direction="outgoing")
+
+        assert first["created"] == 1
+        assert second["created"] == 0
+        assert len(links) == 1
+        assert links[0].link_type == "DEPENDS_ON"
+        assert links[0].context == "provider detected dependency"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

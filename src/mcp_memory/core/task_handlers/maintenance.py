@@ -1078,8 +1078,8 @@ def _count_text_lines(value: str) -> int:
 def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type: str) -> bool:
     assert ctx.repository is not None
     return any(
-        link.target_id == target_id and link.link_type == link_type
-        for link in ctx.repository.get_links(source_id, direction="outgoing")
+        link.target_id == target_id
+        for link in ctx.repository.get_links(source_id, direction="outgoing", link_type=link_type)
     )
 
 
