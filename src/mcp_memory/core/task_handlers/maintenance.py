@@ -6,7 +6,7 @@ from inspect import isawaitable
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
@@ -402,6 +402,26 @@ async def handle_memory_curator_task(
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
     )
+    run_agent = getattr(provider, "run_agent", None)
+    if callable(run_agent):
+        agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+            (
+                f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
+                "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
+                "Search, read, list, split, merge, archive, create, update, delete, and link records as needed.\n"
+                "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
+                f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+                "Do not claim work you did not actually execute through MCP tools.\n"
+                "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
+                f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+            )
+        )
+        return {
+            "summary": agentic_result.summary,
+            "execution_mode": "agentic_mcp",
+            "seed_memory_ids": [record.id for record in seed_records],
+        }
+
     loop_result = await run_internal_tool_loop(
         ctx,
         provider,
@@ -425,6 +445,7 @@ async def handle_memory_curator_task(
     summary = _normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
     return {
         "summary": summary,
+        "execution_mode": "json_tool_loop",
         "tool_calls_executed": loop_result.tool_calls_executed,
         "mutations": loop_result.mutating_tool_calls,
         "tool_names_used": loop_result.tool_names_used,

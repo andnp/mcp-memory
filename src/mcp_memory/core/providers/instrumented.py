@@ -167,11 +167,120 @@ class InstrumentedAIProvider:
         return await self.ask_json(prompt)
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
+        started_at = time.time()
+        request_id = str(uuid4())
+        last_event: dict | None = None
+
+        def _observer(payload: dict) -> None:
+            nonlocal last_event
+            last_event = payload
+            if payload.get("event") == "started" and self._task_queue is not None and self._task_id is not None:
+                self._task_queue.set_running_process(
+                    self._task_id,
+                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                    request_id=request_id,
+                )
+            if payload.get("event") == "started":
+                started_value = float(payload.get("started_at", started_at))
+                self._usage_repository.record_conversation(
+                    request_id=request_id,
+                    attempt=int(payload.get("attempt", 1)),
+                    task_name=self._task_name,
+                    task_id=self._task_id,
+                    provider_key=self._provider_key,
+                    provider_name=self._provider_name,
+                    model_name=self._model_name,
+                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                    prompt_text=prompt,
+                    response_text="",
+                    parsed=None,
+                    status="running",
+                    error_text=None,
+                    started_at=started_value,
+                    completed_at=started_value,
+                )
+                return
+            if payload.get("event") != "finished":
+                return
+            self._usage_repository.record_conversation(
+                request_id=request_id,
+                attempt=int(payload.get("attempt", 1)),
+                task_name=self._task_name,
+                task_id=self._task_id,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                prompt_text=prompt,
+                response_text=str(payload.get("raw_text", "")),
+                parsed=_coerce_parsed(payload.get("parsed")),
+                status=str(payload.get("status", "error")),
+                error_text=_coerce_text(payload.get("error")),
+                started_at=float(payload.get("started_at", started_at)),
+                completed_at=float(payload.get("completed_at", time.time())),
+            )
+            if self._task_queue is not None and self._task_id is not None:
+                self._task_queue.clear_running_process(self._task_id)
+
         provider = self._provider
+        binder = getattr(provider, "with_observer", None)
+        if callable(binder):
+            provider = binder(_observer)
         run_agent = getattr(provider, "run_agent", None)
         if not callable(run_agent):
             raise RuntimeError("agentic_provider_not_configured")
-        return await cast(Callable[[str], Awaitable[AgenticRunResult]], run_agent)(prompt)
+        try:
+            result = await cast(Callable[[str], Awaitable[AgenticRunResult]], run_agent)(prompt)
+        except asyncio.CancelledError:
+            self._usage_repository.record_call(
+                task_name=self._task_name,
+                task_id=self._task_id,
+                request_id=request_id,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                status=_extract_status(last_event, fallback="cancelled"),
+                duration_seconds=max(time.time() - started_at, 0.0),
+                created_at=time.time(),
+                error_text="Command cancelled",
+            )
+            if self._task_queue is not None and self._task_id is not None:
+                self._task_queue.clear_running_process(self._task_id)
+            raise
+        except Exception as exc:
+            self._usage_repository.record_call(
+                task_name=self._task_name,
+                task_id=self._task_id,
+                request_id=request_id,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                status=_extract_status(last_event, fallback="error"),
+                duration_seconds=max(time.time() - started_at, 0.0),
+                created_at=time.time(),
+                error_text=str(exc),
+            )
+            if self._task_queue is not None and self._task_id is not None:
+                self._task_queue.clear_running_process(self._task_id)
+            raise
+        self._usage_repository.record_call(
+            task_name=self._task_name,
+            task_id=self._task_id,
+            request_id=request_id,
+            subprocess_pid=_extract_subprocess_pid(last_event),
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            status=_extract_status(last_event, fallback=result.status),
+            duration_seconds=max(time.time() - started_at, 0.0),
+            created_at=time.time(),
+            error_text=None if result.status == "success" else result.summary,
+        )
+        if self._task_queue is not None and self._task_id is not None:
+            self._task_queue.clear_running_process(self._task_id)
+        return result
 
 
 def _coerce_pid(value: object) -> int | None:

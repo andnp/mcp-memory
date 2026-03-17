@@ -6,6 +6,7 @@ from typing import Protocol
 from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers.copilot_cli import CopilotCLIProvider
+from mcp_memory.core.providers.gemini_agentic import GeminiCLIAgenticProvider
 from mcp_memory.core.providers.gemini_cli import GeminiCLIProvider
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider
@@ -67,7 +68,14 @@ def build_json_ai_provider_from_config(config: Config, workspace_root: Path | No
 
 
 def build_agentic_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    del config, workspace_root
+    if config.ai.provider == "gemini-cli":
+        return GeminiCLIAgenticProvider(
+            command=config.gemini_cli.command,
+            model=config.ai.model,
+            timeout_seconds=config.ai.timeout_seconds,
+            max_retries=config.ai.max_retries,
+            cwd=None if workspace_root is None else str(workspace_root),
+        )
     return None
 
 
@@ -75,6 +83,7 @@ __all__ = [
     "AIProvider",
     "AIResponse",
     "CopilotCLIProvider",
+    "GeminiCLIAgenticProvider",
     "GeminiCLIProvider",
     "AgenticRunResult",
     "AgenticTaskProvider",

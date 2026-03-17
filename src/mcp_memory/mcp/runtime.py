@@ -86,6 +86,16 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
             task_queue=task_queue,
         )
     ai_agent_provider = build_agentic_ai_provider_from_config(spec.config, spec.workspace_root)
+    if ai_agent_provider is not None:
+        ai_agent_provider = InstrumentedAIProvider(
+            ai_agent_provider,
+            usage_repository=ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id),
+            provider_key=f"{spec.config.ai.provider}:agentic",
+            provider_name=getattr(ai_agent_provider, "provider_name", f"{spec.config.ai.provider}:agentic"),
+            model_name=spec.config.ai.model,
+            workspace_id=spec.workspace_id,
+            task_queue=task_queue,
+        )
     return ApplicationContext(
         config=spec.config,
         workspace_id=spec.workspace_id,

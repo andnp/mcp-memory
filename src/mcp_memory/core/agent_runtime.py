@@ -40,12 +40,22 @@ from mcp_memory.core.tasks import TaskRecord
 logger = logging.getLogger(__name__)
 
 
+AGENTIC_TASK_NAMES = {
+    CURATOR_TASK_NAME,
+}
+
+
 def build_runtime_task_worker(
     ctx: ApplicationContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
-    active_provider = provider if provider is not None else getattr(ctx, "ai_provider", None)
-    handlers = build_default_task_handlers(active_provider)
+    active_json_provider = (
+        provider
+        if provider is not None
+        else getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
+    )
+    active_agentic_provider = getattr(ctx, "ai_agent_provider", None)
+    handlers = build_default_task_handlers(active_json_provider, active_agentic_provider)
     expected_handlers = {
         SYSTEM1_INGEST_TASK_NAME,
         SUMMARIZE_MEMORY_TASK_NAME,
@@ -73,16 +83,17 @@ def build_runtime_task_worker(
     return RuntimeTaskWorker(
         ctx,
         handlers=handlers,
-        handler_factory=lambda: build_default_task_handlers(active_provider),
+        handler_factory=lambda: build_default_task_handlers(active_json_provider, active_agentic_provider),
         poll_interval_seconds=0.05,
     )
 
 
 def build_default_task_handlers(
     provider: Any = None,
+    agentic_provider: Any = None,
 ) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
     def scoped(task_name: str, task: TaskRecord):
-        return _provider_for_task(provider, task_name, task)
+        return _provider_for_task(provider, agentic_provider, task_name, task)
 
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(SYSTEM1_INGEST_TASK_NAME, task)),
@@ -99,12 +110,15 @@ def build_default_task_handlers(
     }
 
 
-def _provider_for_task(provider: Any, task_name: str, task: TaskRecord):
-    if provider is None:
+def _provider_for_task(provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+    selected_provider = provider
+    if task_name in AGENTIC_TASK_NAMES and agentic_provider is not None:
+        selected_provider = agentic_provider
+    if selected_provider is None:
         return None
-    binder = getattr(provider, "with_usage_context", None)
+    binder = getattr(selected_provider, "with_usage_context", None)
     if not callable(binder):
-        return provider
+        return selected_provider
     return binder(task_name=task_name, task_id=task.id, workspace_id=task.workspace_id)
 
 

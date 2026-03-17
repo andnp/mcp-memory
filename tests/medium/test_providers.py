@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -6,6 +7,7 @@ from mcp_memory.config import AIConfig, Config, CopilotCLIConfig, GeminiCLIConfi
 from mcp_memory.core.providers import (
     AgenticRunResult,
     CopilotCLIProvider,
+    GeminiCLIAgenticProvider,
     GeminiCLIProvider,
     OllamaCLIProvider,
     OpenCodeCLIProvider,
@@ -100,6 +102,72 @@ async def test_gemini_cli_provider_retries_after_failed_process(
 
 
 @pytest.mark.asyncio
+async def test_gemini_agentic_provider_uses_yolo_mode_and_allowed_mcp_server(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(stdout_text='{"summary": "Performed maintenance."}')
+    )
+
+    provider = GeminiCLIAgenticProvider(
+        command="gemini",
+        model="gemini-3-flash-preview",
+        max_retries=0,
+        cwd="/tmp/workspace",
+    )
+
+    result = await provider.run_agent("Clean up the memory store.")
+
+    assert result.status == "success"
+    assert result.summary == "Performed maintenance."
+    assert len(install_fake_subprocess.calls) == 1
+    args, kwargs = install_fake_subprocess.calls[0]
+    assert args == (
+        "gemini",
+        "--model",
+        "gemini-3-flash-preview",
+        "--prompt",
+        "Clean up the memory store.",
+        "--output-format",
+        "json",
+        "--approval-mode",
+        "yolo",
+        "--allowed-mcp-server-names",
+        "mcp-memory-internal",
+    )
+    assert kwargs == {"stdout": -1, "stderr": -1, "cwd": "/tmp/workspace"}
+
+
+@pytest.mark.asyncio
+async def test_gemini_agentic_provider_extracts_nested_summary_from_mixed_response(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stdout_text=json.dumps(
+                {
+                    "response": (
+                        "I performed maintenance.\n\n"
+                        '{"summary": "Split oversized records into focused entries."}'
+                    )
+                }
+            )
+        )
+    )
+
+    provider = GeminiCLIAgenticProvider(
+        command="gemini",
+        model="gemini-3-flash-preview",
+        max_retries=0,
+    )
+
+    result = await provider.run_agent("Clean up the memory store.")
+
+    assert result.status == "success"
+    assert result.summary == "Split oversized records into focused entries."
+
+
+@pytest.mark.asyncio
 async def test_other_cli_providers_use_expected_commands(install_fake_subprocess) -> None:
     install_fake_subprocess.add(
         FakeAsyncProcess(stdout_text='{"ok": true}'),
@@ -166,7 +234,7 @@ def test_split_provider_builders_keep_json_and_agentic_paths_distinct() -> None:
     agentic_provider = build_agentic_ai_provider_from_config(config)
 
     assert isinstance(json_provider, GeminiCLIProvider)
-    assert agentic_provider is None
+    assert isinstance(agentic_provider, GeminiCLIAgenticProvider)
 
 
 @pytest.mark.asyncio

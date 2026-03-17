@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.core.agent_runtime import (
+    AGENTIC_TASK_NAMES,
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
@@ -32,6 +33,7 @@ from mcp_memory.core.agent_runtime import (
     handle_sweeper_task,
     handle_taxonomist_task,
 )
+from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
@@ -1852,6 +1854,71 @@ async def test_memory_curator_retries_when_provider_claims_actions_without_tool_
         assert updated_duplicate is not None and updated_duplicate.status == "archived"
     finally:
         runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(status="success", summary="Curator completed maintenance via MCP tools.")
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        provider = _AgenticProvider()
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-agentic-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["summary"] == "Curator completed maintenance via MCP tools."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert provider.prompts
+        assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
+        assert record.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+def test_agentic_task_names_contains_curator_only_for_now() -> None:
+    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME}
 
 
 @pytest.mark.asyncio
