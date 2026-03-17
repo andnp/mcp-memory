@@ -162,6 +162,7 @@ def _is_mutating_tool_name(name: str) -> bool:
             "internal_create_",
             "internal_delete_",
             "internal_merge_",
+            "internal_split_",
             "internal_update_",
         )
     )

@@ -1585,6 +1585,71 @@ async def test_memory_curator_can_use_internal_tools_to_split_oversized_memory(m
 
 
 @pytest.mark.asyncio
+async def test_memory_curator_distrusts_action_claims_without_internal_tool_calls(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "summary": "Split oversized memory and archived stale observations.",
+                    "actions_taken": 7,
+                }
+            ]
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-unverified-summary-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed = runtime.repository.get_memory(record.id)
+
+        assert result["tool_calls_executed"] == 0
+        assert result["mutations"] == 0
+        assert result["tool_names_used"] == []
+        assert result["summary"] == (
+            "Provider reported actions_taken=7 without using internal tools; "
+            "no curator maintenance actions were executed."
+        )
+        assert refreshed is not None and refreshed.status == "active"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

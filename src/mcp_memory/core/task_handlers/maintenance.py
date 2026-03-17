@@ -416,16 +416,30 @@ async def handle_memory_curator_task(
         ],
         max_rounds=6,
     )
-    summary = loop_result.response.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        summary = None
+    summary = _normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
     return {
         "summary": summary,
         "tool_calls_executed": loop_result.tool_calls_executed,
-        "mutations": loop_result.successful_tool_calls,
+        "mutations": loop_result.mutating_tool_calls,
         "tool_names_used": loop_result.tool_names_used,
         "seed_memory_ids": [record.id for record in seed_records],
     }
+
+
+def _normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: int) -> str | None:
+    raw_summary = response.get("summary")
+    summary = raw_summary.strip() if isinstance(raw_summary, str) and raw_summary.strip() else None
+    if summary is None:
+        return None
+
+    reported_actions_taken = response.get("actions_taken")
+    if tool_calls_executed <= 0 and isinstance(reported_actions_taken, int) and reported_actions_taken > 0:
+        return (
+            f"Provider reported actions_taken={reported_actions_taken} without using internal tools; "
+            "no curator maintenance actions were executed."
+        )
+
+    return summary
 
 
 async def _propose_graph_links(
