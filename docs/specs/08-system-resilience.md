@@ -12,6 +12,7 @@ Use strict filesystem locking around daemon startup.
 - the proxy attempts to acquire a global daemon lock
 - if a healthy global daemon already exists, the proxy reuses it
 - otherwise the proxy spawns the daemon and waits for readiness metadata
+- if daemon metadata exists but the owner is unhealthy or stale, recovery now terminates the real daemon process group before removing metadata and continuing boot
 
 ## 2. Proxy-Daemon Communication
 
@@ -30,6 +31,7 @@ Use ZeroMQ over a stable local IPC socket between the MCP thin proxy and the dae
 - stale-socket and mixed-binary recovery still need stronger migration coverage
 - the daemon hello contract still needs richer runtime-state reporting beyond basic ready health
 - some operator-facing naming still reflects older dashboard/HTTP language and should keep being cleaned up
+- shutdown diagnostics could still be more explicit about whether escalation to `SIGKILL` was required and which child subprocess blocked graceful exit
 
 ### Authoritative Direction
 Move to ZeroMQ over a stable Unix domain socket for the daemon/proxy boundary.
@@ -57,6 +59,7 @@ The transport layer should make duplicate-daemon detection explicit:
 - if a healthy daemon responds, reuse it
 - if the socket exists without a healthy owner, remove the stale socket and continue boot
 - if metadata exists but the live owner disagrees on provenance, surface a loud recovery signal instead of silently continuing
+- if metadata exists for an unhealthy owner whose PID is still running, terminate the real daemon process group before clearing metadata so the system does not enter a split-brain state where the old daemon is still alive but no longer registered
 
 ### Explicit Non-Goal
 Reintroducing dynamic localhost HTTP as the authoritative proxy-daemon boundary is **not** a goal.
@@ -72,6 +75,7 @@ Use a SQLite-backed `tasks` table for background work.
 - failed tasks are retried up to their configured retry limit
 - permanently failed tasks remain visible for inspection
 - worker state survives daemon restarts through the database
+- worker recovery now complements the hardened daemon stop path: stale daemon shutdown no longer relies on metadata removal alone and instead proves the underlying process is gone
 
 ## 4. Deadlettering
 
@@ -102,3 +106,11 @@ The following are still product decisions, not current guarantees:
 - the final socket location and retention policy for stale-socket cleanup
 - whether to add reference counting and daemon autoshutdown
 - whether to add richer recovery/repair flows beyond current startup locking, stale-socket cleanup, and durable tasks
+
+## 8. Current Stop/Restart Safety Notes
+
+- daemon stop/restart now targets the daemon process group, not only the top-level daemon PID
+- graceful shutdown still starts with `SIGTERM`
+- if the daemon does not exit within the configured grace window, shutdown escalates to `SIGKILL`
+- stale socket cleanup runs after stop/recovery so the next boot does not inherit a dead transport endpoint
+- this shipped behavior exists specifically to avoid the previously observed failure mode where CLI/status could show “no daemon registered” while the old daemon process was still alive and interfering with memory reads/writes

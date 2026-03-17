@@ -22,7 +22,7 @@ The runtime is now **relational-first**.
 
 ### Key Features
 
-- **Staged Search Ranking**: Search now combines weighted BM25 keyword retrieval, optional semantic candidates, RRF fusion, sigmoid calibration, recency/access boosts, workspace relevance, graph authority, and degradation penalties.
+- **Graph-Aware Search Ranking**: Search now combines weighted BM25 keyword retrieval, optional semantic candidates, soft workspace-aware semantic ordering, RRF fusion, sigmoid calibration, graph-aware reranking, one-hop graph expansion, and degradation penalties.
 - **Memory-Specific Recency Boost**: Automatically prioritizes recent memories (journals, plans) while preserving long-term facts.
 - **Typed Relational Links**: Memory records can carry explicit typed relationships such as `SUPERSEDES`, `EXTENDS`, and `CONTRADICTS`.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
@@ -31,6 +31,9 @@ The runtime is now **relational-first**.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Global Daemon**: One global daemon per user environment owns runtime state, background workers, and transport coordination.
 - **Stable IPC Transport**: The thin MCP proxy talks to the daemon over a stable ZeroMQ ROUTER/DEALER transport on a Unix socket.
+- **Agentic Maintenance Agents**: Curator, deduplicator, and ingest now run through a trusted internal MCP maintenance surface when an agentic provider is configured.
+- **Crash-Safe Ingest Finalization**: Agentic ingest preserves durable journal claim/delete/release semantics while still allowing direct MCP create/append mutations.
+- **Hardened Daemon Recovery**: Daemon stop/restart now terminates stale process groups, escalates from `SIGTERM` to `SIGKILL` when needed, and cleans stale sockets instead of merely dropping metadata.
 - **Operational Views**: Health, overview, and lineage inspection remain available through the daemon management surface and CLI.
 - **Task-Level Provider Telemetry**: AI provider usage is attributed to the background task that made the call so you can see which agents are actually consuming model time.
 
@@ -86,9 +89,16 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 
 Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
 
-When an AI provider is configured and the internal maintenance MCP surface is available, ingest can now choose to append a thought batch directly into an existing canonical memory instead of always creating a new provisional observation.
+When an agentic AI provider is configured and the internal maintenance MCP surface is available, the current maintenance stack can now:
+- run `memory-curator` through internal MCP maintenance tools
+- run `deduplicator` through the same agentic MCP mode
+- run `ingest-system1` through agentic MCP mode with internal batch claiming and direct append/create mutations while preserving handler-owned journal finalization
+
+Agentic ingest also now normalizes legacy provider payloads that return `results` instead of `actions`, so append opportunities are no longer silently lost when the provider uses the older shape.
 
 Provider usage reporting in `uv run mcp-memory stats` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
+
+Search debug output now exposes graph- and ranking-specific fields such as `authority_supporting_links`, `authority_contradicting_links`, `expanded_by_graph`, `graph_seed_id`, `graph_link_type`, and `graph_rrf_score`, making live search tuning and dogfooding much easier.
 
 Markdown import keeps its tiny file-scanning logic local to the importer instead of preserving a separate file-backed helper layer in the active package structure.
 
@@ -169,6 +179,12 @@ boost_window_days = 180
 max_boost_amount = 0.05
 boost_decay_rate = 0.99
 ```
+
+The current code also applies two shipped ranking behaviors on top of those exposed knobs:
+- a small bonus for graph-supported stable memories (`fact`, `observation`, `reflection`)
+- a damped access bonus for unsupported transient `plan` / `journal` memories
+
+Those two behaviors are intentionally still code-owned while we keep dogfooding the tuned search path.
 
 ## 🏃 Getting Started
 
