@@ -497,6 +497,9 @@ async def test_call_internal_memory_tool_can_split_memory_record(monkeypatch, tm
         first_links = runtime.repository.get_links(first_child_id)
         second_links = runtime.repository.get_links(second_child_id)
         archived_original = runtime.repository.get_memory(original.id)
+        first_metadata = payload["created"][0]["metadata"]
+        second_metadata = payload["created"][1]["metadata"]
+        original_metadata = payload["original"]["metadata"]
 
         assert payload["status"] == "ok"
         assert len(payload["created"]) == 2
@@ -504,6 +507,17 @@ async def test_call_internal_memory_tool_can_split_memory_record(monkeypatch, tm
         assert archived_original is not None and archived_original.status == "archived"
         assert any(link.target_id == original.id and link.link_type == "DEPENDS_ON" for link in first_links)
         assert any(link.target_id == original.id and link.link_type == "DEPENDS_ON" for link in second_links)
+        assert first_metadata["split_from_memory_id"] == original.id
+        assert second_metadata["split_from_memory_id"] == original.id
+        assert first_metadata["split_group_id"] == second_metadata["split_group_id"] == original_metadata["split_group_id"]
+        assert first_metadata["split_part_index"] == 1
+        assert second_metadata["split_part_index"] == 2
+        assert first_metadata["split_part_count"] == 2
+        assert second_metadata["split_part_count"] == 2
+        assert first_metadata["split_sibling_memory_ids"] == [second_child_id]
+        assert second_metadata["split_sibling_memory_ids"] == [first_child_id]
+        assert original_metadata["split_child_memory_ids"] == [first_child_id, second_child_id]
+        assert original_metadata["split_child_count"] == 2
     finally:
         runtime.close()
 

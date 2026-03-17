@@ -2013,14 +2013,32 @@ async def test_memory_curator_can_use_internal_tools_to_split_oversized_memory(m
 
         split_children = runtime.repository.list_memories(workspace_id=runtime.workspace_id, limit=10)
         refreshed_original = runtime.repository.get_memory(oversized.id)
+        created_split_children = [
+            record
+            for record in split_children
+            if record.title in {"Rollout prerequisites", "Rollout execution"}
+        ]
 
         assert result["summary"] == "Split oversized rollout memory into two focused facts."
         assert result["tool_calls_executed"] == 1
         assert result["mutations"] == 1
         assert "internal_split_memory_record" in result["tool_names_used"]
         assert refreshed_original is not None and refreshed_original.status == "archived"
-        assert any(record.title == "Rollout prerequisites" for record in split_children)
-        assert any(record.title == "Rollout execution" for record in split_children)
+        assert len(created_split_children) == 2
+        assert refreshed_original.metadata["split_child_count"] == 2
+        original_child_ids = refreshed_original.metadata["split_child_memory_ids"]
+        assert isinstance(original_child_ids, list)
+        assert set(str(item) for item in original_child_ids) == {record.id for record in created_split_children}
+        split_group_ids = {record.metadata["split_group_id"] for record in created_split_children}
+        assert split_group_ids == {refreshed_original.metadata["split_group_id"]}
+        for child in created_split_children:
+            assert child.metadata["split_from_memory_id"] == oversized.id
+            assert child.metadata["split_part_count"] == 2
+            sibling_ids = child.metadata["split_sibling_memory_ids"]
+            assert isinstance(sibling_ids, list)
+            assert set(str(item) for item in sibling_ids) == {
+                record.id for record in created_split_children if record.id != child.id
+            }
     finally:
         runtime.close()
 

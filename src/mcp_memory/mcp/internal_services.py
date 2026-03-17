@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any
+from uuid import uuid4
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
@@ -264,9 +265,11 @@ def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dic
     link_type = optional_string(arguments, "link_type") or "DEPENDS_ON"
     link_context = optional_string(arguments, "link_context") or "Derived from an oversized memory split by internal maintenance tools."
     archive_original = optional_bool(arguments, "archive_original")
+    split_group_id = str(uuid4())
+    split_part_count = len(raw_parts)
 
     normalized_parts: list[dict[str, Any]] = []
-    for raw_part in raw_parts:
+    for index, raw_part in enumerate(raw_parts, start=1):
         if not isinstance(raw_part, dict):
             return {"status": "error", "error": "split_part_invalid"}
         try:
@@ -286,6 +289,9 @@ def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dic
                 "metadata": {
                     "split_from_memory_id": original.id,
                     "split_from_memory_title": original.title,
+                    "split_group_id": split_group_id,
+                    "split_part_index": index,
+                    "split_part_count": split_part_count,
                     **(optional_object(raw_part, "metadata") or {}),
                 },
             }
@@ -312,13 +318,43 @@ def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dic
             ctx.repository.delete_memory(created.id)
         raise
 
+    child_memory_ids = [record.id for record in created_records]
+    refreshed_created_records = []
+    for created in created_records:
+        sibling_memory_ids = [record_id for record_id in child_memory_ids if record_id != created.id]
+        refreshed = ctx.repository.update_memory(
+            created.id,
+            metadata=_merge_memory_metadata(
+                created.metadata,
+                {
+                    "split_child_memory_ids": child_memory_ids,
+                    "split_sibling_memory_ids": sibling_memory_ids,
+                },
+            ),
+        )
+        refreshed_created_records.append(refreshed or created)
+    created_records = refreshed_created_records
+
+    original_metadata = _merge_memory_metadata(
+        original.metadata,
+        {
+            "split_group_id": split_group_id,
+            "split_child_memory_ids": child_memory_ids,
+            "split_child_count": len(child_memory_ids),
+        },
+    )
+
     archived = None
+    refreshed_original = None
     if archive_original:
-        archived = ctx.repository.update_memory(original.id, status="archived")
+        archived = ctx.repository.update_memory(original.id, status="archived", metadata=original_metadata)
+        refreshed_original = archived
+    else:
+        refreshed_original = ctx.repository.update_memory(original.id, metadata=original_metadata)
 
     return {
         "status": "ok",
-        "original": memory_record_payload(original),
+        "original": memory_record_payload(refreshed_original or original),
         "created": [memory_record_payload(record) for record in created_records],
         "archived": None if archived is None else memory_record_payload(archived),
     }
