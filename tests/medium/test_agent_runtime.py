@@ -1744,8 +1744,7 @@ async def test_deduplicator_limits_observation_absorption_to_seed_subset(monkeyp
 
         assert 0 < absorbed_observations <= DEDUPLICATOR_OBSERVATION_SEED_RECORDS
         assert len(result["seed_memory_ids"]) <= 8
-        assert provider.call_count <= absorbed_observations
-        assert provider.call_count <= DEDUPLICATOR_OBSERVATION_SEED_RECORDS
+        assert provider.call_count == 0
         assert len(archived_observations) == absorbed_observations
         assert len(remaining_observations) == 10 - absorbed_observations
         assert absorbed_observations < 10

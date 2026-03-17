@@ -1004,6 +1004,9 @@ def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> 
 
 
 def _should_use_provider_for_merge(canonical, source) -> bool:
+    if getattr(source, "type", None) == "observation":
+        return False
+
     canonical_content = canonical.content.strip()
     source_content = source.content.strip()
     if not canonical_content or not source_content:
