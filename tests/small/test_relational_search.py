@@ -5,8 +5,8 @@ import pytest
 
 from mcp_memory.config import Config, SearchRankingConfig
 from mcp_memory.embeddings import SQLiteVectorStore
-from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.relational.search import RankingEngine, RelationalMemorySearchService, ScoringWeights
+from mcp_memory.relational.repository import RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.relational.search import RankingEngine, RelationalMemorySearchService, ScoringWeights, _rank_semantic_candidate_ids
 
 
 pytestmark = pytest.mark.small
@@ -471,6 +471,57 @@ def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
     assert peer.id in {result.memory_id for result in results}
 
 
+def test_search_memories_weights_supporting_links_above_contradictions(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    supporting = repository.create_memory(
+        title="Auth architecture authority",
+        content="Auth architecture summary.",
+        summary="Auth architecture summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    contradictory = repository.create_memory(
+        title="Auth architecture contradictory",
+        content="Auth architecture summary.",
+        summary="Auth architecture summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    supporter = repository.create_memory(
+        title="Auth rollout supporter",
+        content="Depends on auth architecture authority.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    supporter_two = repository.create_memory(
+        title="Auth rollout supporter two",
+        content="Also depends on auth architecture authority.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    challenger = repository.create_memory(
+        title="Auth rollout challenger",
+        content="Contradicts auth architecture contradictory.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert supporting is not None and contradictory is not None and supporter is not None and supporter_two is not None and challenger is not None
+
+    repository.add_link(supporter.id, supporting.id, "DEPENDS_ON")
+    repository.add_link(supporter_two.id, supporting.id, "DEPENDS_ON")
+    repository.add_link(challenger.id, contradictory.id, "CONTRADICTS")
+
+    results = service.search_memories("auth architecture summary", workspace_id="workspace-alpha", limit=5)
+    positions = {result.memory_id: index for index, result in enumerate(results)}
+
+    assert positions[supporting.id] < positions[contradictory.id]
+    assert contradictory.id in {result.memory_id for result in results}
+
+
 def test_search_memories_memory_type_hint_does_not_filter_results(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
@@ -502,6 +553,87 @@ def test_search_memories_memory_type_hint_does_not_filter_results(db_manager) ->
 
     assert {result.memory_id for result in results[:2]} == {preferred_fact.id, related_plan.id}
     assert {result.memory_type for result in results[:2]} == {"fact", "plan"}
+
+
+def test_rank_semantic_candidate_ids_prefers_workspace_matches() -> None:
+    local = RelationalMemoryRecord(
+        id="local",
+        title="Local",
+        content="Local",
+        summary="Local",
+        type="fact",
+        status="active",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-03-01T00:00:00+00:00",
+        read_count=0,
+        access_score=0.0,
+        last_accessed_at=None,
+        last_surfaced_at=None,
+        workspace_ids=["workspace-alpha"],
+        tags=[],
+    )
+    remote = RelationalMemoryRecord(
+        id="remote",
+        title="Remote",
+        content="Remote",
+        summary="Remote",
+        type="fact",
+        status="active",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-03-01T00:00:00+00:00",
+        read_count=0,
+        access_score=0.0,
+        last_accessed_at=None,
+        last_surfaced_at=None,
+        workspace_ids=["workspace-beta"],
+        tags=[],
+    )
+
+    ranked = _rank_semantic_candidate_ids(
+        [remote, local],
+        {"remote": 0.51, "local": 0.5},
+        workspace_id="workspace-alpha",
+        limit=2,
+        workspace_multiplier=1.2,
+    )
+
+    assert ranked == ["local", "remote"]
+
+
+def test_search_memories_can_expand_graph_neighbors_from_primary_match(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    rollout_plan = repository.create_memory(
+        title="Token rollout checklist",
+        content="Token rollout checklist for every service.",
+        summary="Rollout checklist.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["token"],
+    )
+    canonical_fact = repository.create_memory(
+        title="Canonical auth policy",
+        content="Use short-lived service tokens and rotation windows.",
+        summary="Canonical auth fact.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert rollout_plan is not None and canonical_fact is not None
+
+    repository.add_link(rollout_plan.id, canonical_fact.id, "DEPENDS_ON")
+
+    results = service.search_memories("token rollout checklist", workspace_id="workspace-alpha", limit=5, debug=True)
+    result_ids = [result.memory_id for result in results]
+    debug_by_id = {result.memory_id: result.ranking_debug for result in results}
+    canonical_debug = debug_by_id[canonical_fact.id]
+
+    assert rollout_plan.id == result_ids[0]
+    assert canonical_fact.id in result_ids
+    assert canonical_debug is not None
+    assert canonical_debug["expanded_by_graph"] is True
+    assert canonical_debug["graph_link_type"] == "DEPENDS_ON"
 
 
 class _FakeEmbedder:

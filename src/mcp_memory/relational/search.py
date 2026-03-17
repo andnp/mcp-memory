@@ -16,6 +16,13 @@ from mcp_memory.utils.db import DatabaseManager
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
+GRAPH_EXPANSION_MAX_SEEDS = 3
+GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED = 10
+GRAPH_EXPANSION_DISCOUNTS = {
+    "DEPENDS_ON": 0.7,
+    "AMENDS": 0.6,
+    "CONTRADICTS": 0.35,
+}
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +60,13 @@ class SearchHealthStatus:
     last_recovery_at: str | None = None
     last_integrity_check_at: str | None = None
     integrity_check_error: str | None = None
+
+
+@dataclass(slots=True)
+class GraphExpansionInfo:
+    rrf_score: float
+    seed_id: str
+    link_type: str
 
 
 @dataclass(slots=True)
@@ -145,9 +159,11 @@ class RankingEngine:
 
     def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> float:
         if isinstance(candidate, RankedMemoryCandidate):
-            incoming_links_count = candidate.incoming_links_count
+            weighted_links = _weighted_incoming_link_count(candidate.incoming_link_type_counts)
+            incoming_links_count = weighted_links if weighted_links > 0 else float(candidate.incoming_links_count)
         else:
-            incoming_links_count = self._repository.count_incoming_links(candidate.id)
+            incoming_links = self._repository.get_links(candidate.id, direction="incoming")
+            incoming_links_count = _weighted_incoming_link_count(_count_links_by_type(incoming_links))
         capped_links = min(incoming_links_count, self._weights.authority_link_cap)
         return 1.0 + (capped_links * self._weights.authority_link_step)
 
@@ -203,6 +219,11 @@ class RankingEngine:
         workspace_multiplier = self.workspace_multiplier(record, workspace_id)
         access_bonus = self.access_bonus(record)
         authority_multiplier = self.authority_multiplier_for_candidate(candidate)
+        authority_counts = (
+            candidate.incoming_link_type_counts
+            if isinstance(candidate, RankedMemoryCandidate)
+            else _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
+        )
         degradation_multiplier = self.degradation_multiplier(record)
         score_after_recency = min(calibrated_score + recency_bonus, 1.0)
         final_score = score_after_recency
@@ -218,6 +239,12 @@ class RankingEngine:
             "workspace_multiplier": round(workspace_multiplier, 6),
             "access_bonus": round(access_bonus, 6),
             "authority_multiplier": round(authority_multiplier, 6),
+            "authority_supporting_links": round(
+                authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0),
+                6,
+            ),
+            "authority_contradicting_links": round(authority_counts.get("CONTRADICTS", 0), 6),
+            "authority_superseding_links": round(authority_counts.get("SUPERSEDES", 0), 6),
             "degradation_multiplier": round(degradation_multiplier, 6),
             "final_score": round(final_score, 6),
             "memory_type": record.type,
@@ -337,6 +364,7 @@ class RelationalMemorySearchService:
         )
         semantic_ids = self._semantic_candidate_ids(
             query,
+            workspace_id=workspace_id,
             status=status,
             limit=50,
         )
@@ -344,6 +372,9 @@ class RelationalMemorySearchService:
         rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
         if not rrf_scores:
             return []
+        graph_expansion = self._expand_graph_candidate_scores(rrf_scores)
+        for memory_id, expansion in graph_expansion.items():
+            rrf_scores[memory_id] = max(rrf_scores.get(memory_id, 0.0), expansion.rrf_score)
 
         candidates = self._repository.get_ranking_candidates(
             list(rrf_scores.keys()),
@@ -377,6 +408,10 @@ class RelationalMemorySearchService:
                     | {
                         "matched_by_keyword": record.id in keyword_id_set,
                         "matched_by_semantic": record.id in semantic_id_set,
+                        "expanded_by_graph": record.id in graph_expansion,
+                        "graph_seed_id": graph_expansion[record.id].seed_id if record.id in graph_expansion else "",
+                        "graph_link_type": graph_expansion[record.id].link_type if record.id in graph_expansion else "",
+                        "graph_rrf_score": round(graph_expansion[record.id].rrf_score, 6) if record.id in graph_expansion else 0.0,
                     }
                 )
                 if debug
@@ -526,14 +561,46 @@ class RelationalMemorySearchService:
     def _semantic_candidate_ids(
         self,
         query: str,
+        workspace_id: str | None,
         *,
         status: str | None,
         limit: int,
     ) -> list[str]:
         candidates = self._repository.list_memories(status=status, limit=500)
         semantic_scores = self._semantic_scores(query, candidates, None, limit=limit)
-        ranked = sorted(semantic_scores.items(), key=lambda item: item[1], reverse=True)
-        return [memory_id for memory_id, _ in ranked[:limit]]
+        return _rank_semantic_candidate_ids(
+            candidates,
+            semantic_scores,
+            workspace_id=workspace_id,
+            limit=limit,
+            workspace_multiplier=self._config.search_ranking.workspace_multiplier,
+        )
+
+    def _expand_graph_candidate_scores(
+        self,
+        rrf_scores: dict[str, float],
+    ) -> dict[str, GraphExpansionInfo]:
+        expanded: dict[str, GraphExpansionInfo] = {}
+        seed_items = sorted(rrf_scores.items(), key=lambda item: item[1], reverse=True)[:GRAPH_EXPANSION_MAX_SEEDS]
+        for seed_id, seed_score in seed_items:
+            links = self._repository.get_links(seed_id, direction="outgoing")
+            expanded_neighbors = 0
+            for link in links:
+                discount = GRAPH_EXPANSION_DISCOUNTS.get(link.link_type)
+                if discount is None:
+                    continue
+                expanded_neighbors += 1
+                if expanded_neighbors > GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED:
+                    break
+                expanded_score = seed_score * discount
+                current = expanded.get(link.target_id)
+                if current is None or expanded_score > current.rrf_score:
+                    expanded[link.target_id] = GraphExpansionInfo(
+                        rrf_score=expanded_score,
+                        seed_id=seed_id,
+                        link_type=link.link_type,
+                    )
+        return expanded
 
     def _ensure_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
         assert self._embedder is not None
@@ -637,3 +704,39 @@ def _embedding_is_stale(embedding_updated_at: float, memory_updated_at: str | No
 
 def _utc_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _rank_semantic_candidate_ids(
+    candidates: list[RelationalMemoryRecord],
+    semantic_scores: dict[str, float],
+    *,
+    workspace_id: str | None,
+    limit: int,
+    workspace_multiplier: float,
+) -> list[str]:
+    candidate_by_id = {candidate.id: candidate for candidate in candidates}
+
+    def _semantic_rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
+        memory_id, score = item
+        candidate = candidate_by_id.get(memory_id)
+        workspace_boost = workspace_multiplier if candidate is not None and workspace_id and workspace_id in candidate.workspace_ids else 1.0
+        updated_at = candidate.updated_at if candidate is not None else ""
+        return (score * workspace_boost, score, updated_at, memory_id)
+
+    ranked = sorted(
+        semantic_scores.items(),
+        key=_semantic_rank_key,
+        reverse=True,
+    )
+    return [memory_id for memory_id, _ in ranked[:limit]]
+
+
+def _count_links_by_type(links: Sequence[MemoryLink]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for link in links:
+        counts[link.link_type] = counts.get(link.link_type, 0) + 1
+    return counts
+
+
+def _weighted_incoming_link_count(counts: dict[str, int]) -> float:
+    return float(counts.get("DEPENDS_ON", 0) + counts.get("AMENDS", 0)) + (0.5 * float(counts.get("CONTRADICTS", 0)))

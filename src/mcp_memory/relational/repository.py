@@ -45,6 +45,7 @@ class RankedMemoryCandidate:
     record: RelationalMemoryRecord
     incoming_links_count: int
     has_incoming_supersedes: bool = False
+    incoming_link_type_counts: dict[str, int] = field(default_factory=dict)
 
 
 class RelationalMemoryRepository:
@@ -243,7 +244,11 @@ class RelationalMemoryRepository:
                 COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv,
                 COALESCE(tag_agg.tags, '') AS tags_csv,
                 COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
-                COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes
+                COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes,
+                COALESCE(link_counts.incoming_depends_on_count, 0) AS incoming_depends_on_count,
+                COALESCE(link_counts.incoming_amends_count, 0) AS incoming_amends_count,
+                COALESCE(link_counts.incoming_contradicts_count, 0) AS incoming_contradicts_count,
+                COALESCE(link_counts.incoming_supersedes_count, 0) AS incoming_supersedes_count
             FROM memories
             LEFT JOIN (
                 SELECT memory_id, GROUP_CONCAT(DISTINCT workspace_id) AS workspace_ids
@@ -260,7 +265,11 @@ class RelationalMemoryRepository:
                 SELECT
                     target_id AS memory_id,
                     COUNT(*) AS incoming_links_count,
-                    MAX(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes
+                    MAX(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes,
+                    SUM(CASE WHEN type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count,
+                    SUM(CASE WHEN type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count,
+                    SUM(CASE WHEN type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count,
+                    SUM(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count
                 FROM links
                 GROUP BY target_id
             ) link_counts ON link_counts.memory_id = memories.id
@@ -293,6 +302,12 @@ class RelationalMemoryRepository:
                 ),
                 incoming_links_count=int(row["incoming_links_count"] or 0),
                 has_incoming_supersedes=bool(row["has_incoming_supersedes"]),
+                incoming_link_type_counts={
+                    "DEPENDS_ON": int(row["incoming_depends_on_count"] or 0),
+                    "AMENDS": int(row["incoming_amends_count"] or 0),
+                    "CONTRADICTS": int(row["incoming_contradicts_count"] or 0),
+                    "SUPERSEDES": int(row["incoming_supersedes_count"] or 0),
+                },
             )
         return [ranked_by_id[memory_id] for memory_id in normalized_ids if memory_id in ranked_by_id]
 

@@ -5,7 +5,6 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
-from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
@@ -429,6 +428,8 @@ def _merge_metadata_lists(existing: list[Any], override: list[Any]) -> list[Any]
 def _enqueue_summary_task(ctx: ApplicationContext, memory_id: str, workspace_ids: list[str]) -> None:
     if ctx.task_queue is None:
         return
+    from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
+
     workspace_id = workspace_ids[0] if workspace_ids else ctx.workspace_id
     try:
         ctx.task_queue.enqueue(
