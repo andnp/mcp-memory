@@ -1,10 +1,12 @@
+import sqlite3
+from pathlib import Path
 from datetime import datetime
 from uuid import UUID
 
 import pytest
 
 from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.utils.db import SCHEMA_VERSION
+from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
 
 
 pytestmark = pytest.mark.small
@@ -41,8 +43,51 @@ def test_database_manager_initializes_relational_memory_schema(db_manager):
     journal_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(system1_journal)").fetchall()
     }
-    assert {"workspace_id", "author"} <= journal_columns
+    assert {"workspace_id", "author", "claim_task_id", "claimed_at"} <= journal_columns
     assert db_manager.get_schema_version() == SCHEMA_VERSION
+
+
+def test_database_manager_migrates_legacy_journal_schema_without_claim_columns(tmp_path: Path) -> None:
+    legacy_db_path = tmp_path / "legacy-memory.db"
+    conn = sqlite3.connect(legacy_db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE system1_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                workspace_id TEXT,
+                author TEXT,
+                timestamp REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+            );
+            CREATE INDEX idx_system1_journal_status ON system1_journal(status);
+            CREATE TABLE schema_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO schema_metadata (key, value) VALUES ('schema_version', '10');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    manager = DatabaseManager(legacy_db_path)
+    try:
+        migrated_conn = manager.get_connection()
+        journal_columns = {
+            row[1] for row in migrated_conn.execute("PRAGMA table_info(system1_journal)").fetchall()
+        }
+        journal_indexes = {
+            row[1] for row in migrated_conn.execute("PRAGMA index_list(system1_journal)").fetchall()
+        }
+
+        assert {"claim_task_id", "claimed_at"} <= journal_columns
+        assert "idx_system1_journal_claim_task_id" in journal_indexes
+        assert manager.get_schema_version() == SCHEMA_VERSION
+    finally:
+        manager.close()
 
 
 def test_relational_repository_create_read_update_and_list_memory(db_manager):
