@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
+import math
 import os
 from pathlib import Path
 import signal
+from statistics import mean
 import time
 
 from mcp_memory.context import ApplicationContext
@@ -18,6 +21,7 @@ from mcp_memory.management.models import (
     AgentRunPayload,
     AIConversationListPayload,
     AIConversationPayload,
+    AgentThroughputBucketPayload,
     EmbeddingStatusPayload,
     HealthPayload,
     JournalSummary,
@@ -26,9 +30,13 @@ from mcp_memory.management.models import (
     MemoryMetricsPayload,
     MemorySearchResultPayload,
     MemorySearchPayload,
+    NerdMetricsPayload,
+    NerdStatPayload,
     OverviewCounts,
     OverviewPayload,
     ProviderUsagePayload,
+    ProviderLatencyBucketPayload,
+    QueueSnapshotPayload,
     QueueDiagnosticPayload,
     RunResultMetadataPayload,
     RuntimeLogListPayload,
@@ -362,6 +370,127 @@ class ManagementService:
     def list_recent_agent_runs(self, limit: int = 20) -> AgentRunHistoryListPayload:
         return AgentRunHistoryListPayload(runs=self._build_recent_agent_runs(limit=limit))
 
+    def get_nerd_metrics(
+        self,
+        *,
+        window_hours: int = 24,
+        bucket_minutes: int = 60,
+        now: float | None = None,
+    ) -> NerdMetricsPayload:
+        if self._db_manager is None:
+            return NerdMetricsPayload(
+                generated_at=time.time() if now is None else now,
+                window_hours=window_hours,
+                bucket_minutes=bucket_minutes,
+            )
+
+        generated_at = time.time() if now is None else now
+        bucket_seconds = max(bucket_minutes * 60, 60)
+        cutoff = generated_at - (window_hours * 3600)
+        conn = self._db_manager.get_connection()
+
+        task_run_query = "SELECT status, completed_at, duration_seconds FROM task_runs WHERE completed_at >= ?"
+        provider_query = (
+            "SELECT provider_key, provider_name, model_name, status, duration_seconds, created_at "
+            "FROM provider_usage WHERE created_at >= ?"
+        )
+        task_params: list[object] = [cutoff]
+        provider_params: list[object] = [cutoff]
+        if self._workspace_id is not None:
+            task_run_query += " AND workspace_id = ?"
+            provider_query += " AND workspace_id = ?"
+            task_params.append(self._workspace_id)
+            provider_params.append(self._workspace_id)
+
+        task_rows = conn.execute(task_run_query, task_params).fetchall()
+        provider_rows = conn.execute(provider_query, provider_params).fetchall()
+
+        task_buckets: dict[float, _TaskBucketAccumulator] = {}
+        for row in task_rows:
+            bucket_start = float(int(float(row["completed_at"]) // bucket_seconds) * bucket_seconds)
+            bucket = task_buckets.setdefault(bucket_start, _TaskBucketAccumulator())
+            bucket.total_runs += 1
+            status = str(row["status"])
+            if status == "completed":
+                bucket.completed_runs += 1
+            elif status == "failed":
+                bucket.failed_runs += 1
+            elif status == "retry":
+                bucket.retry_runs += 1
+            bucket.durations.append(float(row["duration_seconds"] or 0.0))
+
+        agent_throughput = [
+            AgentThroughputBucketPayload(
+                bucket_start=bucket_start,
+                total_runs=bucket.total_runs,
+                completed_runs=bucket.completed_runs,
+                failed_runs=bucket.failed_runs,
+                retry_runs=bucket.retry_runs,
+                avg_duration_seconds=round(mean(bucket.durations), 4) if bucket.durations else 0.0,
+            )
+            for bucket_start, bucket in sorted(task_buckets.items())
+        ]
+
+        provider_buckets: dict[tuple[float, str, str, str], _ProviderBucketAccumulator] = {}
+        all_provider_durations: list[float] = []
+        provider_failures = 0
+        for row in provider_rows:
+            bucket_start = float(int(float(row["created_at"]) // bucket_seconds) * bucket_seconds)
+            key = (
+                bucket_start,
+                str(row["provider_key"]),
+                str(row["provider_name"]),
+                str(row["model_name"]),
+            )
+            bucket = provider_buckets.setdefault(key, _ProviderBucketAccumulator())
+            duration = float(row["duration_seconds"] or 0.0)
+            bucket.call_count += 1
+            bucket.durations.append(duration)
+            all_provider_durations.append(duration)
+            if str(row["status"]) != "success":
+                bucket.failure_count += 1
+                provider_failures += 1
+
+        provider_latency = [
+            ProviderLatencyBucketPayload(
+                bucket_start=bucket_start,
+                provider_key=provider_key,
+                provider_name=provider_name,
+                model_name=model_name,
+                call_count=bucket.call_count,
+                failure_count=bucket.failure_count,
+                avg_duration_seconds=round(mean(bucket.durations), 4) if bucket.durations else 0.0,
+                p95_duration_seconds=round(_percentile(bucket.durations, 0.95), 4),
+            )
+            for (bucket_start, provider_key, provider_name, model_name), bucket in sorted(provider_buckets.items())
+        ]
+
+        queue_rows = self._build_queue_diagnostics(limit=200)
+        queue_snapshot = QueueSnapshotPayload(
+            runnable_count=sum(1 for row in queue_rows if row.pending_state == "runnable"),
+            scheduled_count=sum(1 for row in queue_rows if row.pending_state == "scheduled"),
+            oldest_age_seconds=round(max((row.age_seconds for row in queue_rows), default=0.0), 4),
+        )
+
+        stats = [
+            NerdStatPayload(key="queue_oldest_age", label="Oldest queued age", value=queue_snapshot.oldest_age_seconds, unit="s"),
+            NerdStatPayload(key="runs_last_window", label="Runs in window", value=float(len(task_rows)), unit="runs"),
+            NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if str(row["status"]) == "failed")), unit="runs"),
+            NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),
+            NerdStatPayload(key="provider_failures_last_window", label="Provider failures in window", value=float(provider_failures), unit="calls"),
+            NerdStatPayload(key="provider_p95_latency", label="Provider p95 latency", value=round(_percentile(all_provider_durations, 0.95), 4), unit="s"),
+        ]
+
+        return NerdMetricsPayload(
+            generated_at=generated_at,
+            window_hours=window_hours,
+            bucket_minutes=bucket_minutes,
+            stats=stats,
+            queue_snapshot=queue_snapshot,
+            agent_throughput=agent_throughput,
+            provider_latency=provider_latency,
+        )
+
     def record_thought(self, content: str) -> dict[str, object]:
         if self._journal.journal is None:
             raise ValueError("journal_not_initialized")
@@ -513,7 +642,6 @@ class ManagementService:
         if not candidate.is_file():
             return None
         return candidate
-
     def _build_memory_counts(self) -> tuple[dict[str, int], dict[str, int], int]:
         if self._db_manager is None:
             return {}, {}, 0
@@ -822,6 +950,30 @@ def _decode_run_result(raw_result: object) -> dict[str, object]:
     except ValueError:
         return {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+@dataclass
+class _TaskBucketAccumulator:
+    total_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    retry_runs: int = 0
+    durations: list[float] = field(default_factory=list)
+
+
+@dataclass
+class _ProviderBucketAccumulator:
+    call_count: int = 0
+    failure_count: int = 0
+    durations: list[float] = field(default_factory=list)
+
+
+def _percentile(values: list[float], ratio: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    index = max(math.ceil(len(sorted_values) * ratio) - 1, 0)
+    return float(sorted_values[index])
 
 
 def _terminate_process(pid: int) -> bool:

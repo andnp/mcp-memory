@@ -178,6 +178,49 @@ class RuntimeLogPrunePayload(BaseModel):
     max_log_age_days: int
 
 
+class NerdStatPayload(BaseModel):
+    key: str
+    label: str
+    value: float
+    unit: str | None = None
+
+
+class AgentThroughputBucketPayload(BaseModel):
+    bucket_start: float
+    total_runs: int
+    completed_runs: int
+    failed_runs: int
+    retry_runs: int
+    avg_duration_seconds: float
+
+
+class ProviderLatencyBucketPayload(BaseModel):
+    bucket_start: float
+    provider_key: str
+    provider_name: str
+    model_name: str
+    call_count: int
+    failure_count: int
+    avg_duration_seconds: float
+    p95_duration_seconds: float
+
+
+class QueueSnapshotPayload(BaseModel):
+    runnable_count: int = 0
+    scheduled_count: int = 0
+    oldest_age_seconds: float = 0.0
+
+
+class NerdMetricsPayload(BaseModel):
+    generated_at: float
+    window_hours: int
+    bucket_minutes: int
+    stats: list[NerdStatPayload] = Field(default_factory=list)
+    queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
+    agent_throughput: list[AgentThroughputBucketPayload] = Field(default_factory=list)
+    provider_latency: list[ProviderLatencyBucketPayload] = Field(default_factory=list)
+
+
 class ProviderUsagePayload(BaseModel):
     task_name: str | None = None
     provider_key: str

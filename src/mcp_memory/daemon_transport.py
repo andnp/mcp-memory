@@ -184,6 +184,12 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
         return response
     if path == "/api/overview":
         return routes.service.get_overview().model_dump()
+    if path == "/api/metrics/nerd":
+        return routes.service.get_nerd_metrics(
+            window_hours=_optional_int(payload, "window_hours", default=24, minimum=1, maximum=24 * 14) or 24,
+            bucket_minutes=_optional_int(payload, "bucket_minutes", default=60, minimum=1, maximum=24 * 60) or 60,
+            now=_optional_float(payload, "now"),
+        ).model_dump()
     if path == "/api/tasks":
         return routes.service.list_tasks(
             status=_optional_str(payload, "status"),

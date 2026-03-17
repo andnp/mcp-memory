@@ -32,6 +32,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
+    base_time = time.time() - 300.0
 
     seed_runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
@@ -61,7 +62,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "gemini-3-flash-preview",
                 "success",
                 0.42,
-                time.time(),
+                    base_time + 30.0,
                 None,
             ),
         )
@@ -103,12 +104,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             available_at=time.time() + 60.0,
             data={"trigger": "summary_follow_up"},
         )
-        assert seed_runtime.task_queue.claim_next(now=10.0) is not None
-        seed_runtime.task_queue.fail_permanently(task.id, "missing ext link", failed_at=11.0)
-        assert seed_runtime.task_queue.claim_next(now=12.0) is not None
+        assert seed_runtime.task_queue.claim_next(now=base_time + 10.0) is not None
+        seed_runtime.task_queue.fail_permanently(task.id, "missing ext link", failed_at=base_time + 11.0)
+        assert seed_runtime.task_queue.claim_next(now=base_time + 12.0) is not None
         seed_runtime.task_queue.complete(
             strategy_task.id,
-            completed_at=13.0,
+            completed_at=base_time + 13.0,
             run_result={
                 "merged": 1,
                 "requested_strategy": "semantic",
@@ -128,6 +129,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         overview = await _request_json(metadata, "/api/overview")
         logs = await _request_json(metadata, "/api/logs", {"source": "daemon", "q": "seeded"})
         log_summary = await _request_json(metadata, "/api/logs/summary", {"source": "daemon"})
+        nerd_metrics = await _request_json(metadata, "/api/metrics/nerd", {"window_hours": 24, "bucket_minutes": 60, "now": base_time + 60.0})
         prune_logs = await _request_json(
             metadata,
             "/api/admin/logs/prune",
@@ -257,6 +259,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert logs["logs"][0]["source"] == "daemon"
         assert log_summary["total"] == 1
         assert log_summary["by_level"] == {"INFO": 1}
+        assert nerd_metrics["stats"]
+        assert nerd_metrics["agent_throughput"]
+        assert nerd_metrics["provider_latency"]
+        assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
         assert prune_logs["deleted"] == 0
         assert repair_search["rebuilt"] is True
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")

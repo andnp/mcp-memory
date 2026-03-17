@@ -167,6 +167,47 @@ export interface RuntimeLogSummaryResponse {
   by_source: Record<string, number>;
 }
 
+export interface NerdStat {
+  key: string;
+  label: string;
+  value: number;
+  unit: string | null;
+}
+
+export interface AgentThroughputBucket {
+  bucket_start: number;
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  retry_runs: number;
+  avg_duration_seconds: number;
+}
+
+export interface ProviderLatencyBucket {
+  bucket_start: number;
+  provider_key: string;
+  provider_name: string;
+  model_name: string;
+  call_count: number;
+  failure_count: number;
+  avg_duration_seconds: number;
+  p95_duration_seconds: number;
+}
+
+export interface NerdMetricsResponse {
+  generated_at: number;
+  window_hours: number;
+  bucket_minutes: number;
+  stats: NerdStat[];
+  queue_snapshot: {
+    runnable_count: number;
+    scheduled_count: number;
+    oldest_age_seconds: number;
+  };
+  agent_throughput: AgentThroughputBucket[];
+  provider_latency: ProviderLatencyBucket[];
+}
+
 export interface CommandBarResult {
   status?: string;
   [key: string]: unknown;
@@ -254,6 +295,13 @@ export function fetchLogSummary(params: {
   logger_name?: string;
 } = {}): Promise<RuntimeLogSummaryResponse> {
   return requestJson<RuntimeLogSummaryResponse>('/api/logs/summary', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function fetchNerdMetrics(params: { window_hours?: number; bucket_minutes?: number } = {}): Promise<NerdMetricsResponse> {
+  return requestJson<NerdMetricsResponse>('/api/metrics/nerd', {
     method: 'POST',
     body: JSON.stringify(params),
   });

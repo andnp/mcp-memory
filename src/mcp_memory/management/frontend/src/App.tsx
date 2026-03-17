@@ -3,6 +3,7 @@ import { NavLink, Route, Routes } from 'react-router-dom';
 import { ActivityPage } from './pages/ActivityPage';
 import { LogsPage } from './pages/LogsPage';
 import { MemoryDetailPage } from './pages/MemoryDetailPage';
+import { NerdPage } from './pages/NerdPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { SearchPage } from './pages/SearchPage';
 
@@ -11,6 +12,7 @@ const navItems = [
   { to: '/search', label: 'Search' },
   { to: '/activity', label: 'Activity' },
   { to: '/logs', label: 'Logs' },
+  { to: '/nerd', label: 'Nerd' },
 ];
 
 export default function App() {
@@ -42,6 +44,7 @@ export default function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/logs" element={<LogsPage />} />
+        <Route path="/nerd" element={<NerdPage />} />
         <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
       </Routes>
     </main>
