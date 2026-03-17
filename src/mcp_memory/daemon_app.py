@@ -164,7 +164,8 @@ def create_daemon_app(
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_html() -> HTMLResponse:
+    @app.get("/dashboard/{dashboard_path:path}", response_class=HTMLResponse)
+    async def dashboard_html(dashboard_path: str = "") -> HTMLResponse:
         return HTMLResponse(app.state.routes.service.load_dashboard_html())
 
     @app.get("/assets/{asset_path:path}")

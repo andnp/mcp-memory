@@ -203,6 +203,16 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             status=_optional_str(payload, "status"),
             limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
+    if path == "/api/memories/search":
+        return routes.service.search_memories(
+            query=_required_str(payload, "query"),
+            workspace_id=_optional_str(payload, "workspace_id"),
+            memory_type=_optional_str(payload, "memory_type"),
+            status=_optional_str(payload, "status"),
+            include_superseded=_bool_value(payload, "include_superseded", default=False),
+            limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT) or _DEFAULT_LIST_LIMIT,
+            debug=_bool_value(payload, "debug", default=False),
+        ).model_dump()
     if path == "/api/logs":
         return routes.service.list_logs(
             level=_optional_str(payload, "level"),

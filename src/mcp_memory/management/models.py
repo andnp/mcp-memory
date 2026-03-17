@@ -53,6 +53,21 @@ class CompactMemoryRecord(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class MemorySearchResultPayload(BaseModel):
+    memory_id: str
+    title: str
+    summary: str | None = None
+    memory_type: str
+    status: str
+    tags: list[str] = Field(default_factory=list)
+    workspace_ids: list[str] = Field(default_factory=list)
+    score: float
+
+
+class MemorySearchPayload(BaseModel):
+    results: list[MemorySearchResultPayload] = Field(default_factory=list)
+
+
 class TaskStatusSummary(BaseModel):
     by_status: dict[str, int] = Field(default_factory=dict)
     failed_count: int

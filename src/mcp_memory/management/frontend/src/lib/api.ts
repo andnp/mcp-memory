@@ -24,6 +24,52 @@ export interface ProviderUsage {
   failures_last_day: number;
 }
 
+export interface RecentMemory {
+  id: string;
+  title: string;
+  summary: string | null;
+  type: string;
+  status: string;
+  updated_at: string;
+  tags: string[];
+}
+
+export interface FailedTask {
+  id: string;
+  task_name: string;
+  status: string;
+  retries_count: number;
+  max_retries: number;
+  last_error: string | null;
+}
+
+export interface RecentLog {
+  id: number;
+  created_at: number;
+  level: string;
+  logger_name: string;
+  source: string;
+  message: string;
+}
+
+export interface QueueDiagnostic {
+  task_name: string;
+  pending_state: string;
+  priority: number;
+  age_seconds: number;
+  trigger: string | null;
+  workspace_id: string | null;
+  ready_in_seconds: number;
+  overdue_seconds: number;
+}
+
+export interface TopReadMemory {
+  id: string;
+  title: string;
+  type: string;
+  read_count: number;
+}
+
 export interface OverviewResponse {
   memories: { total: number };
   memory_metrics: {
@@ -38,6 +84,79 @@ export interface OverviewResponse {
   recent_agent_runs: RecentAgentRun[];
   provider_usage: ProviderUsage[];
   journal: { pending_count: number };
+  recent_memories: RecentMemory[];
+  failed_tasks: FailedTask[];
+  recent_logs: RecentLog[];
+  queue_diagnostics: QueueDiagnostic[];
+  top_read_memories: TopReadMemory[];
+}
+
+export interface MemorySearchResult {
+  memory_id: string;
+  title: string;
+  summary: string | null;
+  memory_type: string;
+  status: string;
+  tags: string[];
+  workspace_ids: string[];
+  score: number;
+}
+
+export interface MemorySearchResponse {
+  results: MemorySearchResult[];
+}
+
+export interface MemoryDetailResponse {
+  record: {
+    id: string;
+    title: string;
+    content: string;
+    summary: string | null;
+    type: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    workspace_ids: string[];
+    tags: string[];
+    metadata: Record<string, unknown>;
+  };
+  relationships: {
+    incoming: Array<{ source_id: string; target_id: string; link_type: string; context: string }>;
+    outgoing: Array<{ source_id: string; target_id: string; link_type: string; context: string }>;
+  };
+  superseded: Array<{
+    id: string;
+    title: string;
+    summary: string | null;
+    type: string;
+    status: string;
+  }>;
+}
+
+export interface AIConversation {
+  id: number;
+  request_id: string;
+  task_name: string | null;
+  task_id: string | null;
+  provider_name: string;
+  model_name: string;
+  status: string;
+  error_text: string | null;
+  started_at: number;
+  completed_at: number;
+  duration_seconds: number;
+  prompt_text: string;
+  response_text: string;
+}
+
+export interface AIConversationListResponse {
+  conversations: AIConversation[];
+}
+
+export interface RuntimeLogSummaryResponse {
+  total: number;
+  by_level: Record<string, number>;
+  by_source: Record<string, number>;
 }
 
 export interface CommandBarResult {
@@ -63,6 +182,22 @@ export function fetchOverview(): Promise<OverviewResponse> {
   return requestJson<OverviewResponse>('/api/overview');
 }
 
+export function searchMemories(params: {
+  query: string;
+  limit?: number;
+  memory_type?: string;
+  status?: string;
+}): Promise<MemorySearchResponse> {
+  return requestJson<MemorySearchResponse>('/api/memories/search', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function fetchMemoryDetail(memoryId: string): Promise<MemoryDetailResponse> {
+  return requestJson<MemoryDetailResponse>(`/api/memories/${memoryId}`);
+}
+
 export function recordThought(content: string): Promise<CommandBarResult> {
   return requestJson<CommandBarResult>('/api/record-thought', {
     method: 'POST',
@@ -81,5 +216,37 @@ export function runAllAgents(): Promise<CommandBarResult> {
   return requestJson<CommandBarResult>('/api/admin/agents/run-all', {
     method: 'POST',
     body: JSON.stringify({ force: false }),
+  });
+}
+
+export function fetchAIConversations(limit = 12): Promise<AIConversationListResponse> {
+  return requestJson<AIConversationListResponse>('/api/ai-conversations', {
+    method: 'POST',
+    body: JSON.stringify({ limit }),
+  });
+}
+
+export function fetchLogs(params: {
+  limit?: number;
+  level?: string;
+  q?: string;
+  source?: string;
+  logger_name?: string;
+} = {}): Promise<{ logs: RecentLog[] }> {
+  return requestJson<{ logs: RecentLog[] }>('/api/logs', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function fetchLogSummary(params: {
+  level?: string;
+  q?: string;
+  source?: string;
+  logger_name?: string;
+} = {}): Promise<RuntimeLogSummaryResponse> {
+  return requestJson<RuntimeLogSummaryResponse>('/api/logs/summary', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }

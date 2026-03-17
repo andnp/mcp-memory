@@ -292,16 +292,17 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert conversations["conversations"][0]["subprocess_pid"] == 6543
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"
-        assert "MCP Memory Dashboard" in dashboard
-        assert "Command Bar" in dashboard
-        assert "Background Agents" in dashboard
-        assert "Memory Metrics" in dashboard
-        assert "Embedding Backend" in dashboard
-        assert "Recent Agent Runs" in dashboard
-        assert "Recent Logs" in dashboard
-        assert "AI Provider Usage" in dashboard
-        assert "Refresh Logs" in dashboard
-        assert "Agent Controls" in dashboard
+        assert "MCP Memory Dashboard" in dashboard or "MCP Memory Command Center" in dashboard
+        assert "Command Bar" in dashboard or '<div id="root"></div>' in dashboard
+        if "MCP Memory Dashboard" in dashboard:
+            assert "Background Agents" in dashboard
+            assert "Memory Metrics" in dashboard
+            assert "Embedding Backend" in dashboard
+            assert "Recent Agent Runs" in dashboard
+            assert "Recent Logs" in dashboard
+            assert "AI Provider Usage" in dashboard
+            assert "Refresh Logs" in dashboard
+            assert "Agent Controls" in dashboard
 
 
 @pytest.mark.asyncio
@@ -459,15 +460,20 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     app = create_daemon_app(workspace_root_override=None, cwd=workspace)
     with TestClient(app) as client:
         dashboard = client.get("/dashboard")
+        search_dashboard = client.get("/dashboard/search")
         overview = client.get("/api/overview")
+        search = client.post("/api/memories/search", json={"query": "command center", "limit": 5})
         record_thought = client.post("/api/record-thought", json={"content": "dogfood the react shell"})
         overview_after = client.get("/api/overview")
         missing_asset = client.get("/assets/missing.js")
 
     assert dashboard.status_code == 200
+    assert search_dashboard.status_code == 200
     assert "MCP Memory Dashboard" in dashboard.text or "Memory Command Center" in dashboard.text
     assert overview.status_code == 200
     assert overview.json()["memories"]["total"] >= 1
+    assert search.status_code == 200
+    assert any(result["title"] == "HTTP dashboard fact" for result in search.json()["results"])
     assert record_thought.status_code == 200
     assert record_thought.json()["status"] == "recorded"
     assert overview_after.json()["journal"]["pending_count"] >= overview.json()["journal"]["pending_count"] + 1

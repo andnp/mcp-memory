@@ -24,6 +24,8 @@ from mcp_memory.management.models import (
     MemoryListPayload,
     MemoryDetailPayload,
     MemoryMetricsPayload,
+    MemorySearchResultPayload,
+    MemorySearchPayload,
     OverviewCounts,
     OverviewPayload,
     ProviderUsagePayload,
@@ -44,6 +46,7 @@ from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
     memory_record_payload,
+    search_result_payload,
     task_payload,
 )
 
@@ -385,6 +388,34 @@ class ManagementService:
         )
         return MemoryListPayload(
             records=[compact_memory_record_payload(record) for record in records]
+        )
+
+    def search_memories(
+        self,
+        *,
+        query: str,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 10,
+        debug: bool = False,
+    ) -> MemorySearchPayload:
+        if self._relational_search is None:
+            return MemorySearchPayload()
+        return MemorySearchPayload(
+            results=[
+                MemorySearchResultPayload(**search_result_payload(result))
+                for result in self._relational_search.search_memories(
+                    query,
+                    workspace_id=workspace_id,
+                    limit=limit,
+                    memory_type=memory_type,
+                    status=status,
+                    include_superseded=include_superseded,
+                    debug=debug,
+                )
+            ]
         )
 
     def list_logs(
