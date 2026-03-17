@@ -39,6 +39,7 @@ async def run_internal_tool_loop(
     successful_calls = 0
     mutating_calls = 0
     tool_names_used: list[str] = []
+    last_invalid_positive_response: dict[str, Any] | None = None
 
     for _ in range(max_rounds):
         response = provider.ask(_build_prompt(prompt, allowed_tools, transcript))
@@ -49,6 +50,19 @@ async def run_internal_tool_loop(
 
         tool_calls = _normalize_tool_calls(response.get("tool_calls"))
         if not tool_calls:
+            reported_actions_taken = _reported_positive_actions_taken(response)
+            if reported_actions_taken is not None and executed_calls <= 0:
+                last_invalid_positive_response = response
+                transcript.append(
+                    {
+                        "validation_error": (
+                            "Do not claim positive actions without first issuing tool_calls. "
+                            "If no tools were used, return actions_taken=0 and a no-op summary."
+                        ),
+                        "invalid_response": response,
+                    }
+                )
+                continue
             return InternalToolLoopResult(
                 response=response,
                 tool_calls_executed=executed_calls,
@@ -82,6 +96,15 @@ async def run_internal_tool_loop(
             round_results.append({"name": name, "arguments": arguments, "result": result})
 
         transcript.append({"tool_calls": round_calls, "tool_results": round_results})
+
+    if last_invalid_positive_response is not None and executed_calls <= 0:
+        return InternalToolLoopResult(
+            response=last_invalid_positive_response,
+            tool_calls_executed=executed_calls,
+            successful_tool_calls=successful_calls,
+            mutating_tool_calls=mutating_calls,
+            tool_names_used=tool_names_used,
+        )
 
     return InternalToolLoopResult(
         response={
@@ -128,6 +151,10 @@ def _build_prompt(
             "Respond either with JSON containing `tool_calls` like "
             "{'tool_calls': [{'name': '...', 'arguments': {...}}]} or with the final JSON result for this task."
         ),
+        (
+            "Never claim that positive actions were taken unless those actions were executed through prior `tool_calls` in this conversation. "
+            "If you did not use any tools, your final JSON must report `actions_taken: 0` and describe the result as a no-op."
+        ),
     ]
     if transcript:
         parts.extend(
@@ -166,3 +193,12 @@ def _is_mutating_tool_name(name: str) -> bool:
             "internal_update_",
         )
     )
+
+
+def _reported_positive_actions_taken(response: dict[str, Any]) -> int | None:
+    actions_taken = response.get("actions_taken")
+    if not isinstance(actions_taken, int):
+        return None
+    if actions_taken <= 0:
+        return None
+    return actions_taken

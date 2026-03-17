@@ -32,7 +32,11 @@ from mcp_memory.core.agent_runtime import (
     handle_sweeper_task,
     handle_taxonomist_task,
 )
-from mcp_memory.core.task_handlers.maintenance import CURATOR_MAX_MEMORY_CHARS, _select_curator_seed_records
+from mcp_memory.core.task_handlers.maintenance import (
+    CURATOR_MAX_MEMORY_CHARS,
+    DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
+    _select_curator_seed_records,
+)
 from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEMORY_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
@@ -1417,6 +1421,123 @@ async def test_deduplicator_skips_provider_for_subset_merge(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_deduplicator_limits_observation_absorption_to_seed_subset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    runtime.embedder = _SemanticFakeEmbedder()
+    runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="JWT rollout fact",
+            content="\n".join(
+                [
+                    "JWTs are required for every client rollout.",
+                    "Bearer tokens must be enabled.",
+                    "Rotate signing keys daily.",
+                    "Audit token issuance.",
+                    "Document auth setup.",
+                    "Track rollout readiness.",
+                    "Validate gateway auth.",
+                    "Coordinate client teams.",
+                    "Keep rollout notes current.",
+                    "Monitor auth regressions.",
+                    "Publish migration guidance.",
+                ]
+            ),
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "rollout"],
+        )
+        assert canonical is not None
+
+        for index in range(10):
+            created = runtime.repository.create_memory(
+                title=f"JWT rollout observation {index}",
+                content="\n".join(
+                    [
+                        f"JWT rollout observation {index}.",
+                        "Bearer tokens are required.",
+                        "Rotate signing keys daily.",
+                        "Audit token usage in services.",
+                        "Document auth setup for teams.",
+                        "Track rollout readiness per client.",
+                        "Validate gateway auth.",
+                        "Coordinate client teams.",
+                        "Keep migration notes current.",
+                        "Monitor auth regressions.",
+                        "Publish migration guidance.",
+                    ]
+                ),
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["auth", "rollout"],
+            )
+            assert created is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {"title": "Provider merged title", "content": f"Provider merged content {index}"}
+                for index in range(DEDUPLICATOR_OBSERVATION_SEED_RECORDS)
+            ]
+        )
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-seed-subset-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        archived_observations = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="observation",
+            status="archived",
+            limit=20,
+        )
+        remaining_observations = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="observation",
+            status="active",
+            limit=20,
+        )
+
+        absorbed_observations = result["absorbed_observations"]
+
+        assert 0 < absorbed_observations <= DEDUPLICATOR_OBSERVATION_SEED_RECORDS
+        assert len(result["seed_memory_ids"]) <= 8
+        assert provider.call_count <= absorbed_observations
+        assert provider.call_count <= DEDUPLICATOR_OBSERVATION_SEED_RECORDS
+        assert len(archived_observations) == absorbed_observations
+        assert len(remaining_observations) == 10 - absorbed_observations
+        assert absorbed_observations < 10
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -1645,6 +1766,90 @@ async def test_memory_curator_distrusts_action_claims_without_internal_tool_call
             "no curator maintenance actions were executed."
         )
         assert refreshed is not None and refreshed.status == "active"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_retries_when_provider_claims_actions_without_tool_calls(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="Canonical auth fact",
+            content="JWTs are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs must be required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "summary": "Merged duplicate auth fact into canonical memory.",
+                    "actions_taken": 1,
+                },
+                {
+                    "tool_calls": [
+                        {
+                            "name": "internal_merge_memory_into_canonical",
+                            "arguments": {
+                                "canonical_memory_id": canonical.id,
+                                "source_memory_id": duplicate.id,
+                            },
+                        }
+                    ]
+                },
+                {"summary": "Merged duplicate auth fact into canonical memory.", "actions_taken": 1},
+            ]
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-retry-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_canonical = runtime.repository.get_memory(canonical.id)
+        updated_duplicate = runtime.repository.get_memory(duplicate.id)
+
+        assert provider.call_count == 3
+        assert "validation_error" in provider.prompts[1]
+        assert result["summary"] == "Merged duplicate auth fact into canonical memory."
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
+        assert updated_canonical is not None and "JWTs must be required" in updated_canonical.content
+        assert updated_duplicate is not None and updated_duplicate.status == "archived"
     finally:
         runtime.close()
 

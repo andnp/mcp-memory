@@ -30,6 +30,9 @@ DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
 DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
 DEDUPLICATOR_AI_MIN_COMBINED_LINES = 20
 DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
+DEDUPLICATOR_MAX_SEED_RECORDS = 8
+DEDUPLICATOR_SIZE_ANOMALY_SEED_RECORDS = 2
+DEDUPLICATOR_OBSERVATION_SEED_RECORDS = 4
 CURATOR_MAX_SEED_RECORDS = 8
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 2
 CURATOR_MAX_MEMORY_CHARS = 4000
@@ -290,12 +293,19 @@ async def handle_deduplicator_task(
         )
         if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
-    facts = [record for record in candidates if record.type == "fact"]
-    observations = [record for record in candidates if record.type == "observation"]
+    seed_records = _select_deduplicator_seed_records(candidates)
+    facts = [record for record in seed_records if record.type == "fact"]
+    observations = [record for record in seed_records if record.type == "observation"]
     if not facts:
-        return {"merged": 0, "archived": 0, "absorbed_observations": 0}
+        return {
+            "merged": 0,
+            "archived": 0,
+            "absorbed_observations": 0,
+            "seed_memory_ids": [record.id for record in seed_records],
+        }
 
-    embedding_by_id = _embed_records(ctx, [*facts, *observations])
+    active_facts = [record for record in candidates if record.type == "fact"]
+    embedding_by_id = _embed_records(ctx, [*active_facts, *observations])
     merged = 0
     archived = 0
     absorbed_observations = 0
@@ -311,15 +321,6 @@ async def handle_deduplicator_task(
             merged += 1
             archived += 1
 
-    active_facts = [
-        record
-        for record in ctx.repository.list_memories(
-            workspace_id=workspace_id,
-            status="active",
-            memory_type="fact",
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
-    ]
     active_facts_by_id = {record.id: record for record in active_facts}
     for observation in observations:
         if observation.id in claimed_sources:
@@ -335,7 +336,12 @@ async def handle_deduplicator_task(
         absorbed_observations += 1
         archived += 1
 
-    return {"merged": merged, "archived": archived, "absorbed_observations": absorbed_observations}
+    return {
+        "merged": merged,
+        "archived": archived,
+        "absorbed_observations": absorbed_observations,
+        "seed_memory_ids": [record.id for record in seed_records],
+    }
 
 
 async def handle_taxonomist_task(
@@ -642,6 +648,42 @@ def _collect_similar_fact_groups(facts: list, embedding_by_id: dict[str, list[fl
         if len(group) >= 2:
             groups.append(group)
     return groups
+
+
+def _select_deduplicator_seed_records(candidates: list) -> list:
+    if not candidates:
+        return []
+
+    largest_facts = sorted(
+        [record for record in candidates if record.type == "fact"],
+        key=lambda record: (
+            -len(record.content.strip()),
+            -record.read_count,
+            record.updated_at,
+        ),
+    )
+    prioritized_observations = sorted(
+        [record for record in candidates if record.type == "observation"],
+        key=lambda record: (
+            -record.read_count,
+            -len(record.content.strip()),
+            record.updated_at,
+        ),
+    )
+    prioritized_facts = sorted(
+        [record for record in candidates if record.type == "fact"],
+        key=lambda record: (
+            -record.read_count,
+            -len(record.content.strip()),
+            record.updated_at,
+        ),
+    )
+
+    seed_records: list[Any] = []
+    _extend_unique_seed_records(seed_records, largest_facts, DEDUPLICATOR_SIZE_ANOMALY_SEED_RECORDS)
+    _extend_unique_seed_records(seed_records, prioritized_observations, DEDUPLICATOR_OBSERVATION_SEED_RECORDS)
+    _extend_unique_seed_records(seed_records, prioritized_facts, DEDUPLICATOR_MAX_SEED_RECORDS)
+    return seed_records[:DEDUPLICATOR_MAX_SEED_RECORDS]
 
 
 def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
