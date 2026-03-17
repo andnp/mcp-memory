@@ -25,6 +25,7 @@ from mcp_memory.management.models import (
     OverviewCounts,
     OverviewPayload,
     ProviderUsagePayload,
+    QueueDiagnosticPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -118,6 +119,7 @@ class ManagementService:
             embeddings=self._build_embedding_status(),
             search=self._build_search_health(),
             memory_metrics=memory_metrics,
+            queue_diagnostics=self._build_queue_diagnostics(),
             agent_runs=agent_runs,
             provider_usage=provider_usage,
             recent_agent_runs=recent_agent_runs,
@@ -540,6 +542,42 @@ class ManagementService:
             thought_buffer_entries=0 if journal_row is None else int(journal_row["thought_buffer_entries"]),
             thought_buffer_lines=0 if journal_row is None else int(journal_row["thought_buffer_lines"]),
         )
+
+    def _build_queue_diagnostics(self, limit: int = 8) -> list[QueueDiagnosticPayload]:
+        now = time.time()
+        pending_tasks = self._task_queue.list_tasks(
+            status="pending",
+            workspace_id=self._workspace_id,
+            limit=200,
+        )
+        ordered = sorted(
+            pending_tasks,
+            key=lambda task: (
+                0 if task.available_at <= now else 1,
+                task.priority,
+                task.available_at,
+                task.created_at,
+            ),
+        )
+        diagnostics: list[QueueDiagnosticPayload] = []
+        for task in ordered[:limit]:
+            runnable = task.available_at <= now
+            diagnostics.append(
+                QueueDiagnosticPayload(
+                    task_id=task.id,
+                    task_name=task.task_name,
+                    workspace_id=task.workspace_id,
+                    priority=task.priority,
+                    pending_state="runnable" if runnable else "scheduled",
+                    trigger=task.data.get("trigger") if isinstance(task.data.get("trigger"), str) else None,
+                    created_at=task.created_at,
+                    available_at=task.available_at,
+                    age_seconds=max(now - task.created_at, 0.0),
+                    ready_in_seconds=0.0 if runnable else max(task.available_at - now, 0.0),
+                    overdue_seconds=max(now - task.available_at, 0.0) if runnable else 0.0,
+                )
+            )
+        return diagnostics
 
     def _build_agent_runs(self) -> list[AgentRunPayload]:
         now = time.time()

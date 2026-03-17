@@ -76,6 +76,20 @@ class MemoryMetricsPayload(BaseModel):
     thought_buffer_lines: int
 
 
+class QueueDiagnosticPayload(BaseModel):
+    task_id: str
+    task_name: str
+    workspace_id: str | None = None
+    priority: int
+    pending_state: str
+    trigger: str | None = None
+    created_at: float
+    available_at: float
+    age_seconds: float
+    ready_in_seconds: float = 0.0
+    overdue_seconds: float = 0.0
+
+
 class AgentRunPayload(BaseModel):
     task_name: str
     running_count: int = 0
@@ -174,6 +188,7 @@ class OverviewPayload(BaseModel):
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
     memory_metrics: MemoryMetricsPayload
+    queue_diagnostics: list[QueueDiagnosticPayload] = Field(default_factory=list)
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     provider_usage: list[ProviderUsagePayload] = Field(default_factory=list)
     recent_agent_runs: list[AgentRunHistoryPayload] = Field(default_factory=list)

@@ -552,6 +552,12 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
             workspace_id=runtime.workspace_id,
             available_at=0.0,
         )
+        runtime.task_queue.enqueue(
+            "summarize-memory",
+            task_id="summary-deferred",
+            workspace_id=runtime.workspace_id,
+            available_at=time.time() + 120.0,
+        )
         assert runtime.task_queue.claim_next(now=10.0) is not None
         runtime.task_queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 3})
         runtime.db_manager.get_connection().execute(
@@ -567,6 +573,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
     assert "Search Health" in result.output
     assert "Memory Metrics" in result.output
+    assert "Next Pending Tasks" in result.output
     assert "Background Agents" in result.output
     assert "AI Provider Usage" in result.output
     assert "Top Read Memories" in result.output
@@ -578,6 +585,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "gemini-cli" in result.output
     assert "memory-curator" in result.output
     assert "lines_compressed=3" in result.output
+    assert "summarize-memory" in result.output
 
 
 def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Path) -> None:
@@ -593,6 +601,7 @@ def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Pat
     assert result.exit_code == 0
     assert "Search Health" in result.output
     assert "Memory Metrics" in result.output
+    assert "Next Pending Tasks" in result.output
     assert "Background Agents" in result.output
     assert "AI Provider Usage" in result.output
     assert "Top Read Memories" in result.output

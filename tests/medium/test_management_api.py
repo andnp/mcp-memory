@@ -89,6 +89,13 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             workspace_id=seed_runtime.workspace_id,
             available_at=0.0,
         )
+        seed_runtime.task_queue.enqueue(
+            "summarize-memory",
+            task_id="summarize-pending-1",
+            workspace_id=seed_runtime.workspace_id,
+            available_at=time.time() + 60.0,
+            data={"trigger": "summary_follow_up"},
+        )
         assert seed_runtime.task_queue.claim_next(now=10.0) is not None
         seed_runtime.task_queue.fail_permanently(task.id, "missing ext link", failed_at=11.0)
     finally:
@@ -209,6 +216,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["embeddings"]["model_name"] is not None
         assert overview["search"]["semantic_enabled"] is True
         assert overview["memory_metrics"]["total_memories"] == 2
+        assert overview["queue_diagnostics"]
+        assert overview["queue_diagnostics"][0]["task_name"] == "summarize-memory"
+        assert overview["queue_diagnostics"][0]["pending_state"] in {"scheduled", "runnable"}
         assert "agent_runs" in overview
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
         assert overview["provider_usage"][0]["task_name"] == "graph-linker"

@@ -402,6 +402,35 @@ def _render_top_reads_table(overview) -> None:
     console.print(top_reads_table)
 
 
+def _render_queue_diagnostics_table(overview) -> None:
+    queue_table = Table(title="Next Pending Tasks")
+    queue_table.add_column("Task", no_wrap=True)
+    queue_table.add_column("State", no_wrap=True)
+    queue_table.add_column("Priority", justify="right", no_wrap=True)
+    queue_table.add_column("Age", no_wrap=True)
+    queue_table.add_column("Ready / Overdue", no_wrap=True)
+    queue_table.add_column("Trigger")
+    queue_table.add_column("Workspace")
+    if not overview.queue_diagnostics:
+        queue_table.add_row("-", "-", "-", "-", "No pending tasks", "-", "-")
+    for item in overview.queue_diagnostics:
+        ready_text = (
+            f"overdue {_format_age(item.overdue_seconds)}"
+            if item.pending_state == "runnable"
+            else f"ready in {_format_age(item.ready_in_seconds)}"
+        )
+        queue_table.add_row(
+            item.task_name,
+            item.pending_state,
+            str(item.priority),
+            _format_age(item.age_seconds),
+            ready_text,
+            item.trigger or "-",
+            item.workspace_id or "global",
+        )
+    console.print(queue_table)
+
+
 def _print_agent_details(overview) -> None:
     console.print("[bold]Agent Details[/]")
     for agent in overview.agent_runs:
@@ -446,6 +475,7 @@ def _render_stats_snapshot(
 
     _render_search_health_table(health.search)
     _render_memory_metrics_table(overview, journal_counts)
+    _render_queue_diagnostics_table(overview)
     _render_agent_table(overview)
     _render_provider_usage_table(overview)
     _render_top_reads_table(overview)
