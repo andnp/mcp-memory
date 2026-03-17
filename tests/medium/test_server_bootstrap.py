@@ -200,12 +200,12 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
         dedup_result = await call_internal_memory_tool(
             runtime,
             "internal_get_next_dedup_batch",
-            {"limit": 20},
+            {"task_id": "dedup-batch-test", "strategy": "anomaly", "limit": 20},
         )
         ingest_result = await call_internal_memory_tool(
             runtime,
             "internal_get_next_ingest_batch",
-            {"task_id": "agentic-ingest-batch", "batch_size": 10},
+            {"task_id": "agentic-ingest-batch", "batch_size": 10, "grouping_strategy": "fifo"},
         )
 
         dedup_payload = json.loads(dedup_result[0].text)
@@ -214,11 +214,20 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
         assert dedup_payload["status"] == "ok"
         assert dedup_payload["records"]
         assert {record["id"] for record in dedup_payload["records"]} >= {fact.id, observation.id}
-        assert dedup_payload["strategy"] == "deduplicator_seed_records"
+        assert dedup_payload["requested_strategy"] == "anomaly"
+        assert dedup_payload["strategy"] == "anomaly"
+        assert dedup_payload["strategy_used"] == "anomaly"
+        assert dedup_payload["strategy_fallback_reason"] is None
+        assert dedup_payload["candidate_count"] >= len(dedup_payload["records"])
+        assert dedup_payload["sampled_memory_ids"]
 
         assert ingest_payload["status"] == "ok"
         assert ingest_payload["task_id"] == "agentic-ingest-batch"
+        assert ingest_payload["requested_grouping_strategy"] == "fifo"
+        assert ingest_payload["grouping_strategy_used"] == "fifo"
+        assert ingest_payload["grouping_fallback_reason"] is None
         assert len(ingest_payload["claimed_entry_ids"]) == 2
+        assert ingest_payload["group_count"] >= 1
         assert ingest_payload["groups"]
         assert ingest_payload["groups"][0]["entries"]
         assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"

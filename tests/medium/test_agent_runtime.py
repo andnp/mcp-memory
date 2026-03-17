@@ -1113,7 +1113,7 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
             TaskRecord(
                 id="conflict-detector-ai-task",
                 task_name=CONFLICT_DETECTOR_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
+                data={"workspace_id": runtime.workspace_id, "strategy": "conflict-frontier"},
                 workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
@@ -1131,6 +1131,7 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
         )
 
         assert result["created"] == 2
+        assert result["strategy_used"] == "conflict-frontier"
         assert provider.call_count == 1
         assert provider.prompts
         assert "Available internal tools:" in provider.prompts[0]
@@ -1180,7 +1181,7 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
             TaskRecord(
                 id="defragmenter-task",
                 task_name=DEFRAGMENTER_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
+                data={"workspace_id": runtime.workspace_id, "strategy": "cold-storage"},
                 workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
@@ -1200,7 +1201,7 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
             TaskRecord(
                 id="taxonomist-task",
                 task_name=TAXONOMIST_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
+                data={"workspace_id": runtime.workspace_id, "strategy": "never-surfaced"},
                 workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,
@@ -1227,6 +1228,7 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
 
         assert defrag_result["created"] == 1
         assert defrag_result["archived"] == 2
+        assert defrag_result["strategy_used"] == "cold-storage"
         assert reflections
         source_memory_ids = reflections[0].metadata["source_memory_ids"]
         assert isinstance(source_memory_ids, list)
@@ -1234,6 +1236,7 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
         assert updated_first is not None and updated_first.status == "archived"
         assert updated_second is not None and updated_second.status == "archived"
         assert tax_result["updated"] >= 1
+        assert tax_result["strategy_used"] == "never-surfaced"
         assert updated_stable is not None and updated_stable.tags == ["auth"]
     finally:
         runtime.close()
@@ -2470,7 +2473,7 @@ def test_memory_curator_size_anomaly_pass_can_surface_largest_memory(monkeypatch
             TaskRecord(
                 id="aaa",
                 task_name=CURATOR_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
+                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
                 workspace_id=runtime.workspace_id,
                 status="running",
                 priority=100,

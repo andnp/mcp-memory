@@ -50,7 +50,9 @@ def get_internal_maintenance_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "task_id": {"type": "string"},
                     "workspace_id": {"type": "string"},
+                    "strategy": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1},
                 },
             },
@@ -64,6 +66,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                     "task_id": {"type": "string"},
                     "workspace_id": {"type": "string"},
                     "batch_size": {"type": "integer", "minimum": 1},
+                    "grouping_strategy": {"type": "string"},
                 },
                 "required": ["task_id"],
             },

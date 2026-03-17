@@ -38,8 +38,11 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    from mcp_memory.core.task_handlers.maintenance import _select_deduplicator_seed_records
+    from mcp_memory.core.task_handlers.constants import DEDUPLICATOR_TASK_NAME
+    from mcp_memory.core.task_handlers.maintenance import _select_deduplicator_seed_batch
 
+    task_id = optional_string(arguments, "task_id") or f"{DEDUPLICATOR_TASK_NAME}:internal"
+    strategy = optional_string(arguments, "strategy")
     workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
     limit = optional_positive_int(arguments, "limit", 100)
     candidates = [
@@ -51,13 +54,22 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
         )
         if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
-    seed_records = _select_deduplicator_seed_records(candidates)
+    seed_batch = _select_deduplicator_seed_batch(
+        ctx,
+        candidates,
+        task_id=task_id,
+        strategy=strategy,
+    )
     return {
         "status": "ok",
-        "strategy": "deduplicator_seed_records",
-        "candidate_count": len(candidates),
-        "has_more": len(candidates) > len(seed_records),
-        "records": [compact_memory_record_payload(record).model_dump() for record in seed_records],
+        "requested_strategy": seed_batch.requested_strategy,
+        "strategy": seed_batch.strategy_used,
+        "strategy_used": seed_batch.strategy_used,
+        "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
+        "candidate_count": seed_batch.candidate_count,
+        "has_more": len(candidates) > len(seed_batch.records),
+        "sampled_memory_ids": [record.id for record in seed_batch.records],
+        "records": [compact_memory_record_payload(record).model_dump() for record in seed_batch.records],
     }
 
 
@@ -65,7 +77,7 @@ def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: d
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
 
-    from mcp_memory.core.task_handlers.ingest import _build_ingest_groups
+    from mcp_memory.core.task_handlers.ingest import _build_ingest_groups, _resolve_grouping_strategy
 
     task_id = require_string(arguments, "task_id")
     journal_workspace_id = resolve_pending_workspace_id(
@@ -74,20 +86,35 @@ def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: d
     )
     workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id or "workspace-unknown"
     batch_size = optional_positive_int(arguments, "batch_size", 20)
+    grouping_strategy_requested = optional_string(arguments, "grouping_strategy")
+    grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
+        ctx,
+        requested_strategy=grouping_strategy_requested,
+    )
 
     entries = ctx.journal.claim_pending(
         task_id=task_id,
         limit=batch_size,
         workspace_id=journal_workspace_id,
     )
-    groups = _build_ingest_groups(ctx, entries, workspace_id)
+    groups = _build_ingest_groups(
+        ctx,
+        entries,
+        workspace_id,
+        task_id=task_id,
+        grouping_strategy=grouping_strategy_used,
+    )
     pending_remaining = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
     return {
         "status": "ok",
         "task_id": task_id,
+        "requested_grouping_strategy": grouping_strategy_requested,
+        "grouping_strategy_used": grouping_strategy_used,
+        "grouping_fallback_reason": grouping_fallback_reason,
         "claimed_entry_ids": [entry.id for entry in entries],
         "pending_remaining": pending_remaining,
         "has_more": pending_remaining > 0,
+        "group_count": len(groups),
         "groups": [
             {
                 "group_index": index,

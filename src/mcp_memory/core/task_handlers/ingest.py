@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from random import Random
 import sqlite3
 from datetime import UTC, datetime
 import re
@@ -21,6 +22,14 @@ from mcp_memory.core.tasks import TaskRecord
 SEMANTIC_CLUSTER_SIZE = 5
 SEMANTIC_SIMILARITY_THRESHOLD = 0.3
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
+FIFO_GROUPING_STRATEGY = "fifo"
+SEMANTIC_SEEDED_GROUPING_STRATEGY = "semantic-seeded"
+LEXICAL_SEEDED_GROUPING_STRATEGY = "lexical-seeded"
+INGEST_GROUPING_STRATEGIES = (
+    FIFO_GROUPING_STRATEGY,
+    SEMANTIC_SEEDED_GROUPING_STRATEGY,
+    LEXICAL_SEEDED_GROUPING_STRATEGY,
+)
 
 
 async def handle_ingest_system1_task(
@@ -36,6 +45,11 @@ async def handle_ingest_system1_task(
         task.data.get("journal_workspace_id", task.workspace_id),
     )
     workspace_id = _resolve_workspace_id(ctx, task)
+    grouping_strategy_requested = _requested_grouping_strategy(task.data)
+    grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
+        ctx,
+        requested_strategy=grouping_strategy_requested,
+    )
 
     run_agent = getattr(provider, "run_agent", None)
     if callable(run_agent):
@@ -45,6 +59,7 @@ async def handle_ingest_system1_task(
                     task,
                     workspace_id=workspace_id,
                     batch_size=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
+                    grouping_strategy=grouping_strategy_used,
                 )
             )
             normalized = _normalize_ingest_agentic_result(agentic_result)
@@ -59,6 +74,9 @@ async def handle_ingest_system1_task(
                         released_ids=released_ids,
                         meaningful_actions=0,
                     ),
+                        "requested_grouping_strategy": grouping_strategy_requested,
+                        "grouping_strategy_used": grouping_strategy_used,
+                        "grouping_fallback_reason": grouping_fallback_reason,
                     "summary": normalized["summary"],
                     "execution_mode": "agentic_mcp",
                     "tool_calls_executed": normalized["tool_calls_executed"],
@@ -77,6 +95,9 @@ async def handle_ingest_system1_task(
                     released_ids=[],
                     meaningful_actions=meaningful_actions,
                 ),
+                "requested_grouping_strategy": grouping_strategy_requested,
+                "grouping_strategy_used": grouping_strategy_used,
+                "grouping_fallback_reason": grouping_fallback_reason,
                 "summary": normalized["summary"],
                 "execution_mode": "agentic_mcp",
                 "tool_calls_executed": normalized["tool_calls_executed"],
@@ -93,12 +114,23 @@ async def handle_ingest_system1_task(
         workspace_id=journal_workspace_id,
     )
     if not entries:
-        return _build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0)
+        return {
+            **_build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0),
+            "requested_grouping_strategy": grouping_strategy_requested,
+            "grouping_strategy_used": grouping_strategy_used,
+            "grouping_fallback_reason": grouping_fallback_reason,
+        }
 
     claimed_ids = [entry.id for entry in entries]
     created_ids: list[str] = []
     meaningful_actions = 0
-    grouped_entries = _build_ingest_groups(ctx, entries, workspace_id)
+    grouped_entries = _build_ingest_groups(
+        ctx,
+        entries,
+        workspace_id,
+        task_id=task.id,
+        grouping_strategy=grouping_strategy_used,
+    )
 
     try:
         for group in grouped_entries:
@@ -142,7 +174,11 @@ async def handle_ingest_system1_task(
                 deleted_ids=[],
                 released_ids=released_ids,
                 meaningful_actions=meaningful_actions,
-            )
+            ) | {
+                "requested_grouping_strategy": grouping_strategy_requested,
+                "grouping_strategy_used": grouping_strategy_used,
+                "grouping_fallback_reason": grouping_fallback_reason,
+            }
 
         deleted_ids = ctx.journal.delete_claims(task.id)
         if deleted_ids:
@@ -154,7 +190,11 @@ async def handle_ingest_system1_task(
             deleted_ids=deleted_ids,
             released_ids=[],
             meaningful_actions=meaningful_actions,
-        )
+        ) | {
+            "requested_grouping_strategy": grouping_strategy_requested,
+            "grouping_strategy_used": grouping_strategy_used,
+            "grouping_fallback_reason": grouping_fallback_reason,
+        }
     except BaseException:
         ctx.journal.release_claims(task.id)
         raise
@@ -192,28 +232,30 @@ async def _analyze_ingest_actions(
     return actions, response.mutating_tool_calls
 
 
-def _group_related_entries(entries, threshold: float = 0.3):
+def _group_related_entries(entries, threshold: float = 0.3, *, seed_entries=None):
     if not entries:
         return []
 
-    word_sets = [set(entry.content.lower().split()) for entry in entries]
+    ordered_seed_entries = list(entries if seed_entries is None else seed_entries)
+    word_sets = {entry.id: set(entry.content.lower().split()) for entry in entries}
+    entry_by_id = {entry.id: entry for entry in entries}
     used: set[int] = set()
     groups = []
 
-    for index, entry in enumerate(entries):
-        if index in used:
+    for entry in ordered_seed_entries:
+        if entry.id in used:
             continue
-        group = [entry]
-        used.add(index)
+        group = [entry_by_id[entry.id]]
+        used.add(entry.id)
 
-        for candidate_index in range(index + 1, len(entries)):
-            if candidate_index in used:
+        for candidate in entries:
+            if candidate.id in used or candidate.id == entry.id:
                 continue
-            intersection = len(word_sets[index] & word_sets[candidate_index])
-            union = len(word_sets[index] | word_sets[candidate_index])
+            intersection = len(word_sets[entry.id] & word_sets[candidate.id])
+            union = len(word_sets[entry.id] | word_sets[candidate.id])
             if union > 0 and intersection / union >= threshold:
-                group.append(entries[candidate_index])
-                used.add(candidate_index)
+                group.append(candidate)
+                used.add(candidate.id)
 
         groups.append(group)
 
@@ -224,11 +266,15 @@ def _build_ingest_groups(
     ctx: ApplicationContext,
     entries,
     workspace_id: str,
+    *,
+    task_id: str | None = None,
+    grouping_strategy: str = FIFO_GROUPING_STRATEGY,
 ):
     embedder = getattr(ctx, "embedder", None)
     vector_store = getattr(ctx, "vector_store", None)
+    seed_entries = _seed_entries_for_grouping(entries, task_id=task_id, grouping_strategy=grouping_strategy)
     if embedder is None or vector_store is None:
-        return _group_related_entries(entries)
+        return _group_related_entries(entries, seed_entries=seed_entries)
 
     entry_map = {entry.id: entry for entry in entries}
     embeddings = embedder.embed([entry.content for entry in entries])
@@ -246,7 +292,7 @@ def _build_ingest_groups(
     pending_ids = [entry.id for entry in entries]
     remaining = set(pending_ids)
     groups = []
-    for entry in entries:
+    for entry in seed_entries:
         if entry.id not in remaining:
             continue
         seed_embedding = by_id[entry.id]
@@ -272,7 +318,7 @@ def _build_ingest_groups(
             remaining.discard(group_id)
         groups.append([entry_map[group_id] for group_id in group_ids])
 
-    return groups or _group_related_entries(entries)
+    return groups or _group_related_entries(entries, seed_entries=seed_entries)
 
 
 def _entry_similarity(left: str, right: str, semantic_similarity: float) -> float:
@@ -303,11 +349,12 @@ def _build_ingest_agent_prompt(
     *,
     workspace_id: str,
     batch_size: int,
+    grouping_strategy: str,
 ) -> str:
     return (
         "You are the ingest-system1 maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
-        f"Start with internal_get_next_ingest_batch using task_id='{task.id}' and batch_size={batch_size}.\n"
+        f"Start with internal_get_next_ingest_batch using task_id='{task.id}', batch_size={batch_size}, and grouping_strategy='{grouping_strategy}'.\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
         f"When a thought clearly belongs in an existing canonical memory, prefer internal_append_to_existing_memory_for_ingest with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, and the content to append.\n"
@@ -317,6 +364,43 @@ def _build_ingest_agent_prompt(
         "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
         'When finished, output final JSON only in the form {"summary": "...", "created_memory_ids": ["..."], "meaningful_actions": N}.\n'
     )
+
+
+def _requested_grouping_strategy(values: dict[str, Any]) -> str | None:
+    raw_value = values.get("grouping_strategy")
+    if isinstance(raw_value, str) and raw_value.strip():
+        return raw_value.strip()
+    return None
+
+
+def _resolve_grouping_strategy(
+    ctx: ApplicationContext,
+    *,
+    requested_strategy: str | None,
+) -> tuple[str, str | None]:
+    embedder = getattr(ctx, "embedder", None)
+    vector_store = getattr(ctx, "vector_store", None)
+    default_strategy = (
+        SEMANTIC_SEEDED_GROUPING_STRATEGY
+        if embedder is not None and vector_store is not None
+        else LEXICAL_SEEDED_GROUPING_STRATEGY
+    )
+    if requested_strategy is None:
+        return default_strategy, None
+    if requested_strategy not in INGEST_GROUPING_STRATEGIES:
+        return default_strategy, "unknown_requested_grouping_strategy"
+    if requested_strategy == SEMANTIC_SEEDED_GROUPING_STRATEGY and (embedder is None or vector_store is None):
+        return LEXICAL_SEEDED_GROUPING_STRATEGY, "semantic_grouping_unavailable"
+    return requested_strategy, None
+
+
+def _seed_entries_for_grouping(entries, *, task_id: str | None, grouping_strategy: str):
+    if grouping_strategy == FIFO_GROUPING_STRATEGY or not entries:
+        return list(entries)
+    rng = Random(task_id or "ingest-grouping")
+    seeded_entries = list(entries)
+    rng.shuffle(seeded_entries)
+    return seeded_entries
 
 
 def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
