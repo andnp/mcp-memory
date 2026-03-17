@@ -13,14 +13,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
-from mcp_memory.daemon_transport import DaemonZmqServer
+from mcp_memory.daemon_transport import DaemonZmqServer, dispatch_management_request
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
@@ -83,7 +84,11 @@ def create_daemon_app(
 ):
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     daemon_host = host or spec.config.daemon.host
-    daemon_port = port if port is not None else find_free_port()
+    if port in {None, 0}:
+        daemon_port = find_free_port()
+    else:
+        assert port is not None
+        daemon_port = int(port)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     socket_path = resolve_daemon_socket_path()
     runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
@@ -156,7 +161,52 @@ def create_daemon_app(
             runtime_lock.release()
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)
+
+    @app.get("/", response_class=HTMLResponse)
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard_html() -> HTMLResponse:
+        return HTMLResponse(app.state.routes.service.load_dashboard_html())
+
+    @app.get("/assets/{asset_path:path}")
+    async def dashboard_asset(asset_path: str):
+        resolved = app.state.routes.service.resolve_dashboard_asset_path(asset_path)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="dashboard_asset_not_found")
+        return FileResponse(resolved)
+
+    @app.api_route("/api/{api_path:path}", methods=["GET", "POST"])
+    async def dashboard_api(api_path: str, request: Request):
+        payload = await _payload_from_http_request(request)
+        result = dispatch_management_request(
+            app.state.routes,
+            app.state.metadata,
+            f"/api/{api_path}",
+            payload,
+        )
+        if result.get("status") == "error" and result.get("error") == "unknown_transport_path":
+            raise HTTPException(status_code=404, detail=str(result.get("error")))
+        if result.get("status") == "error":
+            return JSONResponse(result, status_code=400)
+        return JSONResponse(result)
+
     return app
+
+
+async def _payload_from_http_request(request: Request) -> dict[str, object]:
+    payload: dict[str, object] = dict(request.query_params)
+    if request.method != "POST":
+        return payload
+    body = await request.body()
+    if not body:
+        return payload
+    try:
+        decoded = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid_json_body") from exc
+    if not isinstance(decoded, dict):
+        raise HTTPException(status_code=400, detail="json_body_must_be_object")
+    payload.update(decoded)
+    return payload
 
 
 def _resolve_runtime_version() -> str | None:

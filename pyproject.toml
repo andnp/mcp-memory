@@ -13,6 +13,7 @@ dependencies = [
     "click>=8.1.0",
     "rich>=13.0.0",
     "fastapi>=0.116.0",
+    "uvicorn>=0.34.0",
     "mcp>=1.0.0",
     "sentence-transformers>=5.1.0",
     "tomlkit>=0.13.0",

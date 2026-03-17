@@ -18,15 +18,32 @@ def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None
     runner = CliRunner()
 
     class FakeMetadata:
-        transport_endpoint = "ipc:///tmp/mcp-memory.sock"
+        base_url = "http://127.0.0.1:8123"
 
     monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
 
     result = runner.invoke(main, ["dashboard", "--workspace-root", "demo"])
 
     assert result.exit_code == 0
-    assert "Daemon transport ready:" in result.output
-    assert "ipc:///tmp/mcp-memory.sock" in result.output
+    assert "Dashboard ready:" in result.output
+    assert "http://127.0.0.1:8123/dashboard" in result.output
+
+
+def test_dashboard_command_can_open_browser(monkeypatch) -> None:
+    runner = CliRunner()
+    opened: list[str] = []
+
+    class FakeMetadata:
+        base_url = "http://127.0.0.1:8123"
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: opened.append(url) or True)
+
+    result = runner.invoke(main, ["dashboard", "--open"])
+
+    assert result.exit_code == 0
+    assert opened == ["http://127.0.0.1:8123/dashboard"]
+    assert "browser_opened=True" in result.output
 
 
 def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:

@@ -38,6 +38,18 @@
     <h1>MCP Memory Dashboard</h1>
     <p class="muted">Operations snapshot for the local daemon runtime, including background-agent health, embedding state, and memory compression stats.</p>
 
+    <section class="panel" style="margin-bottom: 16px;">
+      <h2>Command Bar</h2>
+      <p class="muted">Stash a thought directly into System 1, or run slash commands like <code>/run-agent defragmenter</code> and <code>/run-all</code>.</p>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-bottom: 12px;">
+        <label style="flex: 1 1 480px;">Input<br />
+          <input id="command-bar-input" style="width: 100%; margin-top: 6px;" placeholder="Type a thought, or /run-agent deduplicator" />
+        </label>
+        <button id="command-bar-submit">Submit</button>
+      </div>
+      <pre id="command-bar-result" class="muted">No command executed yet.</pre>
+    </section>
+
     <section class="grid" id="summary-cards"></section>
 
     <section class="panel" style="margin-bottom: 16px;">
@@ -209,6 +221,45 @@
       });
       const data = await response.json();
       document.getElementById('agent-action-result').textContent = JSON.stringify(data, null, 2);
+      await loadOverview();
+    }
+
+    async function submitCommandBarValue() {
+      const input = document.getElementById('command-bar-input');
+      const value = input.value.trim();
+      if (!value) {
+        document.getElementById('command-bar-result').textContent = 'Enter a thought or slash command.';
+        return;
+      }
+
+      let response;
+      if (value.startsWith('/run-agent ')) {
+        const payload = {
+          task_name: value.slice('/run-agent '.length).trim(),
+          force: false,
+        };
+        response = await fetch('/api/admin/agents/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+      } else if (value === '/run-all' || value === '/run-all-agents') {
+        response = await fetch('/api/admin/agents/run-all', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({force: false}),
+        });
+      } else {
+        response = await fetch('/api/record-thought', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({content: value}),
+        });
+      }
+
+      const data = await response.json();
+      document.getElementById('command-bar-result').textContent = JSON.stringify(data, null, 2);
+      input.value = '';
       await loadOverview();
     }
 
@@ -394,6 +445,28 @@
       }).catch((error) => {
         document.getElementById('agent-action-result').textContent = String(error);
       });
+    });
+
+    document.getElementById('command-bar-submit').addEventListener('click', () => {
+      submitCommandBarValue().catch((error) => {
+        document.getElementById('command-bar-result').textContent = String(error);
+      });
+    });
+
+    document.getElementById('command-bar-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submitCommandBarValue().catch((error) => {
+          document.getElementById('command-bar-result').textContent = String(error);
+        });
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        document.getElementById('command-bar-input').focus();
+      }
     });
 
     document.getElementById('refresh-logs').addEventListener('click', () => {

@@ -169,107 +169,117 @@ class DaemonZmqServer:
         routes = self._routes_provider()
         metadata = self._metadata_provider()
 
-        if path == "/api/health":
-            response = routes.service.get_health().model_dump()
-            response["pid"] = metadata.pid
-            response["status"] = metadata.status
-            response["daemon_scope"] = metadata.daemon_scope
-            response["binary_path"] = metadata.binary_path
-            response["version"] = metadata.version
-            response["transport"] = metadata.transport
-            return response
-        if path == "/api/overview":
-            return routes.service.get_overview().model_dump()
-        if path == "/api/tasks":
-            return routes.service.list_tasks(
-                status=_optional_str(payload, "status"),
-                workspace_id=_optional_str(payload, "workspace_id"),
-                limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
-            ).model_dump()
-        if path == "/api/memories":
-            return routes.service.list_memories(
-                workspace_id=_optional_str(payload, "workspace_id"),
-                memory_type=_optional_str(payload, "memory_type"),
-                status=_optional_str(payload, "status"),
-                limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
-            ).model_dump()
-        if path == "/api/logs":
-            return routes.service.list_logs(
-                level=_optional_str(payload, "level"),
-                logger_name=_optional_str(payload, "logger_name"),
-                source=_optional_str(payload, "source"),
-                query=_optional_str(payload, "q"),
-                after=_optional_float(payload, "after"),
-                before=_optional_float(payload, "before"),
-                limit=_optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
-            ).model_dump()
-        if path == "/api/logs/summary":
-            return routes.service.summarize_logs(
-                level=_optional_str(payload, "level"),
-                logger_name=_optional_str(payload, "logger_name"),
-                source=_optional_str(payload, "source"),
-                query=_optional_str(payload, "q"),
-                after=_optional_float(payload, "after"),
-                before=_optional_float(payload, "before"),
-            ).model_dump()
-        if path == "/api/ai-conversations":
-            return routes.service.list_ai_conversations(
-                request_id=_optional_str(payload, "request_id"),
-                task_name=_optional_str(payload, "task_name"),
-                status=_optional_str(payload, "status"),
-                limit=_optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
-            ).model_dump()
-        if path == "/api/admin/agents/run":
-            return routes.service.enqueue_background_task(
-                _required_str(payload, "task_name"),
-                force=_bool_value(payload, "force", default=False),
-            )
-        if path == "/api/admin/agents/run-all":
-            return {
-                "results": routes.service.enqueue_all_background_tasks(
-                    force=_bool_value(payload, "force", default=False)
-                )
-            }
-        if path == "/api/admin/logs/prune":
-            return routes.service.prune_logs(
-                max_runtime_logs=_optional_int(payload, "max_runtime_logs"),
-                max_log_age_days=_optional_int(payload, "max_log_age_days"),
-            ).model_dump()
-        if path == "/api/admin/search/repair":
-            return _serialize_payload(routes.service.repair_search_index())
-        if path == "/api/admin/links":
-            return _serialize_payload(
-                routes.service.create_memory_link(
-                    source_id=_required_str(payload, "source_id"),
-                    target_id=_required_str(payload, "target_id"),
-                    link_type=_required_str(payload, "link_type"),
-                    context=_required_str(payload, "context"),
-                )
-            )
-        if path == "/api/admin/links/delete":
-            return _serialize_payload(
-                routes.service.delete_memory_link(
-                    source_id=_required_str(payload, "source_id"),
-                    target_id=_required_str(payload, "target_id"),
-                    link_type=_required_str(payload, "link_type"),
-                )
-            )
+        return dispatch_management_request(routes, metadata, path, payload)
 
-        memory_match = _MEMORY_DETAIL_PATH_RE.fullmatch(path)
-        if memory_match is not None:
-            return routes.service.get_memory_detail(memory_match.group("memory_id")).model_dump()
 
-        cancel_match = _TASK_CANCEL_PATH_RE.fullmatch(path)
-        if cancel_match is not None:
-            return _serialize_payload(
-                routes.service.cancel_task(
-                    cancel_match.group("task_id"),
-                    cancelled_by=_optional_str(payload, "cancelled_by") or "cli",
-                    reason=_optional_str(payload, "reason") or "cancelled_by_user",
-                )
+def dispatch_management_request(routes, metadata, path: str, payload: dict[str, object]) -> dict:
+    if path == "/api/health":
+        response = routes.service.get_health().model_dump()
+        response["pid"] = metadata.pid
+        response["status"] = metadata.status
+        response["daemon_scope"] = metadata.daemon_scope
+        response["binary_path"] = metadata.binary_path
+        response["version"] = metadata.version
+        response["transport"] = metadata.transport
+        return response
+    if path == "/api/overview":
+        return routes.service.get_overview().model_dump()
+    if path == "/api/tasks":
+        return routes.service.list_tasks(
+            status=_optional_str(payload, "status"),
+            workspace_id=_optional_str(payload, "workspace_id"),
+            limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
+        ).model_dump()
+    if path == "/api/record-thought":
+        return _serialize_payload(
+            routes.service.record_thought(
+                _required_str(payload, "content"),
             )
+        )
+    if path == "/api/memories":
+        return routes.service.list_memories(
+            workspace_id=_optional_str(payload, "workspace_id"),
+            memory_type=_optional_str(payload, "memory_type"),
+            status=_optional_str(payload, "status"),
+            limit=_optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
+        ).model_dump()
+    if path == "/api/logs":
+        return routes.service.list_logs(
+            level=_optional_str(payload, "level"),
+            logger_name=_optional_str(payload, "logger_name"),
+            source=_optional_str(payload, "source"),
+            query=_optional_str(payload, "q"),
+            after=_optional_float(payload, "after"),
+            before=_optional_float(payload, "before"),
+            limit=_optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
+        ).model_dump()
+    if path == "/api/logs/summary":
+        return routes.service.summarize_logs(
+            level=_optional_str(payload, "level"),
+            logger_name=_optional_str(payload, "logger_name"),
+            source=_optional_str(payload, "source"),
+            query=_optional_str(payload, "q"),
+            after=_optional_float(payload, "after"),
+            before=_optional_float(payload, "before"),
+        ).model_dump()
+    if path == "/api/ai-conversations":
+        return routes.service.list_ai_conversations(
+            request_id=_optional_str(payload, "request_id"),
+            task_name=_optional_str(payload, "task_name"),
+            status=_optional_str(payload, "status"),
+            limit=_optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
+        ).model_dump()
+    if path == "/api/admin/agents/run":
+        return routes.service.enqueue_background_task(
+            _required_str(payload, "task_name"),
+            force=_bool_value(payload, "force", default=False),
+        )
+    if path == "/api/admin/agents/run-all":
+        return {
+            "results": routes.service.enqueue_all_background_tasks(
+                force=_bool_value(payload, "force", default=False)
+            )
+        }
+    if path == "/api/admin/logs/prune":
+        return routes.service.prune_logs(
+            max_runtime_logs=_optional_int(payload, "max_runtime_logs"),
+            max_log_age_days=_optional_int(payload, "max_log_age_days"),
+        ).model_dump()
+    if path == "/api/admin/search/repair":
+        return _serialize_payload(routes.service.repair_search_index())
+    if path == "/api/admin/links":
+        return _serialize_payload(
+            routes.service.create_memory_link(
+                source_id=_required_str(payload, "source_id"),
+                target_id=_required_str(payload, "target_id"),
+                link_type=_required_str(payload, "link_type"),
+                context=_required_str(payload, "context"),
+            )
+        )
+    if path == "/api/admin/links/delete":
+        return _serialize_payload(
+            routes.service.delete_memory_link(
+                source_id=_required_str(payload, "source_id"),
+                target_id=_required_str(payload, "target_id"),
+                link_type=_required_str(payload, "link_type"),
+            )
+        )
 
-        return {"status": "error", "error": "unknown_transport_path", "path": path}
+    memory_match = _MEMORY_DETAIL_PATH_RE.fullmatch(path)
+    if memory_match is not None:
+        return routes.service.get_memory_detail(memory_match.group("memory_id")).model_dump()
+
+    cancel_match = _TASK_CANCEL_PATH_RE.fullmatch(path)
+    if cancel_match is not None:
+        return _serialize_payload(
+            routes.service.cancel_task(
+                cancel_match.group("task_id"),
+                cancelled_by=_optional_str(payload, "cancelled_by") or "cli",
+                reason=_optional_str(payload, "reason") or "cancelled_by_user",
+            )
+        )
+
+    return {"status": "error", "error": "unknown_transport_path", "path": path}
 
 
 def _serialize_tool(tool) -> dict[str, object]:

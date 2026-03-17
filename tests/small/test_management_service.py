@@ -5,6 +5,7 @@ import time
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.management.service import ManagementService
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -198,6 +199,28 @@ def test_management_service_can_cancel_running_task_and_list_conversations(db_ma
     assert cancel_payload["task"]["cancellation_reason"] == "manual_cancel"
     assert conversations.conversations[0].request_id == "req-123"
     assert conversations.conversations[0].subprocess_pid == 4321
+
+
+def test_management_service_can_record_thought_into_journal(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    journal = System1Journal(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        journal=journal,
+        repository=repository,
+        task_queue=task_queue,
+    )
+    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+
+    payload = service.record_thought("remember the command bar")
+
+    assert payload["status"] == "recorded"
+    pending = journal.get_pending(workspace_id="workspace-a")
+    assert [entry.content for entry in pending] == ["remember the command bar"]
 
 
 def test_terminate_process_escalates_to_sigkill_when_sigterm_does_not_exit(monkeypatch) -> None:

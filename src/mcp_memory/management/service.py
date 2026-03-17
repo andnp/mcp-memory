@@ -8,6 +8,7 @@ import time
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
+from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.embeddings import describe_embedder
@@ -66,7 +67,10 @@ class ManagementService:
         )
         self._embedder = ctx.embedder
         self._relational_search = ctx.relational_search
-        self._dashboard_static_path = Path(__file__).with_name("static") / "index.html"
+        self._dashboard_static_root = Path(__file__).with_name("static")
+        self._dashboard_static_path = self._dashboard_static_root / "index.html"
+        self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"
+        self._dashboard_asset_root = self._dashboard_static_root / "dist" / "assets"
 
     def get_health(self):
         embedder_status = self._build_embedding_status()
@@ -355,6 +359,15 @@ class ManagementService:
     def list_recent_agent_runs(self, limit: int = 20) -> AgentRunHistoryListPayload:
         return AgentRunHistoryListPayload(runs=self._build_recent_agent_runs(limit=limit))
 
+    def record_thought(self, content: str) -> dict[str, object]:
+        if self._journal.journal is None:
+            raise ValueError("journal_not_initialized")
+        return RecordThoughtOperation(
+            self._journal.journal,
+            self._task_queue.task_queue,
+            self._runtime_info.workspace_id,
+        ).execute(content)
+
     def list_memories(
         self,
         workspace_id: str | None = None,
@@ -456,7 +469,19 @@ class ManagementService:
         )
 
     def load_dashboard_html(self):
-        return self._dashboard_static_path.read_text(encoding="utf-8")
+        html_path = self._dashboard_dist_path if self._dashboard_dist_path.exists() else self._dashboard_static_path
+        return html_path.read_text(encoding="utf-8")
+
+    def resolve_dashboard_asset_path(self, asset_path: str) -> Path | None:
+        if not asset_path.strip() or not self._dashboard_asset_root.exists():
+            return None
+        candidate = (self._dashboard_asset_root / asset_path).resolve()
+        asset_root = self._dashboard_asset_root.resolve()
+        if asset_root not in candidate.parents and candidate != asset_root:
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
 
     def _build_memory_counts(self) -> tuple[dict[str, int], dict[str, int], int]:
         if self._db_manager is None:

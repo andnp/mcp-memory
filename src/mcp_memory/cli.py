@@ -4,19 +4,20 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import datetime
 import json
-import signal
 import sys
 import time
-from types import FrameType, SimpleNamespace
-from typing import Any
+from types import SimpleNamespace
+import webbrowser
 
 import click
 from rich.console import Console
 from rich.table import Table
+import uvicorn
 
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import DaemonStopResult, create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
+from mcp_memory.daemon_process import find_free_port
 from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
@@ -72,32 +73,19 @@ def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, po
         console_output=True,
         source="daemon",
     )
+    resolved_port = find_free_port() if port == 0 else port
     app = create_daemon_app(
         workspace_root_override=workspace_root,
         host=host,
-        port=port,
+        port=resolved_port,
         enable_idle_shutdown=True,
     )
-    asyncio.run(_serve_daemon_app(app))
-
-
-async def _serve_daemon_app(app) -> None:
-    stop_event = asyncio.Event()
-    previous_handlers: dict[int, Any] = {}
-
-    def _request_shutdown(_signum: int, _frame: FrameType | None) -> None:
-        stop_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        previous_handlers[sig] = signal.getsignal(sig)
-        signal.signal(sig, _request_shutdown)
-
+    config = uvicorn.Config(app, host=host, port=resolved_port, log_level="warning", access_log=False)
+    server = uvicorn.Server(config)
     try:
-        async with app.router.lifespan_context(app):
-            await stop_event.wait()
-    finally:
-        for sig, handler in previous_handlers.items():
-            signal.signal(sig, handler)
+        asyncio.run(server.serve())
+    except KeyboardInterrupt:
+        return
 
 
 def _print_daemon_status(workspace_root: str | None) -> None:
@@ -159,7 +147,7 @@ def _restart_daemon_command(workspace_root: str | None) -> None:
     console.print(f"[green]Daemon restarted:[/] {metadata.transport_endpoint} (pid={metadata.pid})")
 
 
-def _print_dashboard_url(workspace_root: str | None) -> None:
+def _print_dashboard_url(workspace_root: str | None, *, open_browser: bool = False) -> None:
     metadata = None
     try:
         metadata = ensure_daemon_started(workspace_root, None)
@@ -167,7 +155,11 @@ def _print_dashboard_url(workspace_root: str | None) -> None:
         _exit_cli_error(exc)
     if metadata is None:
         return
-    console.print(f"[green]Daemon transport ready:[/] {metadata.transport_endpoint}")
+    dashboard_url = f"{metadata.base_url}/dashboard"
+    console.print(f"[green]Dashboard ready:[/] {dashboard_url}")
+    if open_browser:
+        opened = webbrowser.open(dashboard_url)
+        console.print(f"browser_opened={opened}")
 
 
 def _resolve_stash_content(text_parts: tuple[str, ...]) -> str:
@@ -801,9 +793,10 @@ def daemon_restart(workspace_root: str | None) -> None:
 
 @daemon_group.command(name="dashboard")
 @workspace_root_option
-def dashboard(workspace_root: str | None) -> None:
+@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
+def dashboard(workspace_root: str | None, open_browser: bool) -> None:
     """Ensure the daemon is running and print the active transport endpoint."""
-    _print_dashboard_url(workspace_root)
+    _print_dashboard_url(workspace_root, open_browser=open_browser)
 
 
 @main.command(name="daemon-status", hidden=True)
@@ -826,8 +819,9 @@ def daemon_restart_alias(workspace_root: str | None) -> None:
 
 @main.command(name="dashboard", hidden=True)
 @workspace_root_option
-def dashboard_alias(workspace_root: str | None) -> None:
-    _print_dashboard_url(workspace_root)
+@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
+def dashboard_alias(workspace_root: str | None, open_browser: bool) -> None:
+    _print_dashboard_url(workspace_root, open_browser=open_browser)
 
 
 @main.command(name="stash")

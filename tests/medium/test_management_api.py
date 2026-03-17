@@ -4,6 +4,7 @@ import asyncio
 import time
 from pathlib import Path
 
+from fastapi.testclient import TestClient
 import pytest
 
 from mcp_memory.daemon import create_daemon_app
@@ -134,6 +135,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         )
         repair_search = await _request_json(metadata, "/api/admin/search/repair", {})
         tasks = await _request_json(metadata, "/api/tasks", {"status": "failed"})
+        record_thought = await _request_json(
+            metadata,
+            "/api/record-thought",
+            {"content": "ship the command center incrementally"},
+        )
+        overview_after_thought = await _request_json(metadata, "/api/overview")
         memories = await _request_json(metadata, "/api/memories", {"workspace_id": seed_runtime.workspace_id})
         detail = await _request_json(metadata, f"/api/memories/{primary.id}")
         missing_detail = await _request_json(metadata, "/api/memories/missing-memory-id")
@@ -244,6 +251,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
         assert overview["top_read_memories"] == []
         assert overview["tasks"]["failed_count"] == 1
+        assert record_thought["status"] == "recorded"
+        assert overview_after_thought["journal"]["pending_count"] >= overview["journal"]["pending_count"] + 1
         assert overview["failed_tasks"][0]["last_error"] == "missing ext link"
         assert logs["logs"][0]["source"] == "daemon"
         assert log_summary["total"] == 1
@@ -284,6 +293,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert created_link["status"] == "created"
         assert deleted_link["status"] == "deleted"
         assert "MCP Memory Dashboard" in dashboard
+        assert "Command Bar" in dashboard
         assert "Background Agents" in dashboard
         assert "Memory Metrics" in dashboard
         assert "Embedding Backend" in dashboard
@@ -424,3 +434,41 @@ async def test_management_api_overview_includes_top_read_memories(monkeypatch, t
             "Beta read memory",
         ]
         assert [record["read_count"] for record in overview["top_read_memories"]] == [2, 1]
+
+
+def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.workspace_id is not None
+        runtime.repository.create_memory(
+            title="HTTP dashboard fact",
+            content="Serve the command center over HTTP.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+    finally:
+        runtime.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        dashboard = client.get("/dashboard")
+        overview = client.get("/api/overview")
+        record_thought = client.post("/api/record-thought", json={"content": "dogfood the react shell"})
+        overview_after = client.get("/api/overview")
+        missing_asset = client.get("/assets/missing.js")
+
+    assert dashboard.status_code == 200
+    assert "MCP Memory Dashboard" in dashboard.text or "Memory Command Center" in dashboard.text
+    assert overview.status_code == 200
+    assert overview.json()["memories"]["total"] >= 1
+    assert record_thought.status_code == 200
+    assert record_thought.json()["status"] == "recorded"
+    assert overview_after.json()["journal"]["pending_count"] >= overview.json()["journal"]["pending_count"] + 1
+    assert missing_asset.status_code == 404
