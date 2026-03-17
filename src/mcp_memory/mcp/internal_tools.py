@@ -69,6 +69,43 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_append_to_existing_memory_for_ingest",
+            description="Append ingest content into an existing active memory while preserving ingest lineage metadata, workspace_ids, and system1-appended tagging.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "content": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "entry_ids": {"type": "array", "minItems": 1, "items": {"type": ["integer", "string"]}},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["memory_id", "content", "task_id", "entry_ids"],
+            },
+        ),
+        Tool(
+            name="internal_create_memory_record_for_ingest",
+            description="Create a new memory record for ingest while preserving source_entry_ids, ingest_task_id, default ingest tags, workspace_ids, and summary-task enqueueing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "entry_ids": {"type": "array", "minItems": 1, "items": {"type": ["integer", "string"]}},
+                    "summary": {"type": "string"},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["title", "content", "task_id", "entry_ids"],
+            },
+        ),
+        Tool(
             name="internal_append_memory_content",
             description="Append new content into an existing memory record and optionally update tags, workspace_ids, and metadata.",
             inputSchema={

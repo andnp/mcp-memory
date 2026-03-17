@@ -206,16 +206,14 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
                 claimed_entry_ids = batch_payload["claimed_entry_ids"]
                 append_result = await call_internal_memory_tool(
                     runtime,
-                    "internal_append_memory_content",
+                    "internal_append_to_existing_memory_for_ingest",
                     {
                         "memory_id": target.id,
                         "content": "Prefer deterministic fixtures for pytest.",
-                        "tags": ["testing", "system1-appended"],
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
                         "workspace_ids": [runtime.workspace_id],
-                        "metadata": {
-                            "appended_entry_ids": claimed_entry_ids,
-                            "ingest_task_id": task.id,
-                        },
+                        "tags": ["testing"],
                     },
                 )
                 append_payload = json.loads(append_result[0].text)
@@ -235,7 +233,7 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
                                 "totalCalls": 2,
                                 "byName": {
                                     "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 1},
-                                    "mcp_mcp-memory-internal_internal_append_memory_content": {"count": 1},
+                                    "mcp_mcp-memory-internal_internal_append_to_existing_memory_for_ingest": {"count": 1},
                                 },
                             }
                         },
@@ -255,7 +253,7 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["tool_calls_executed"] == 2
         assert result["mutations"] == 1
         assert result["tool_names_used"] == [
-            "mcp_mcp-memory-internal_internal_append_memory_content",
+            "mcp_mcp-memory-internal_internal_append_to_existing_memory_for_ingest",
             "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
         ]
         assert updated is not None
@@ -264,7 +262,8 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert updated.metadata["ingest_task_id"] == task.id
         assert provider.prompts
         assert "internal_get_next_ingest_batch" in provider.prompts[0]
-        assert "internal_append_memory_content" in provider.prompts[0]
+        assert "internal_append_to_existing_memory_for_ingest" in provider.prompts[0]
+        assert "internal_create_memory_record_for_ingest" in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
     finally:
         runtime.close()

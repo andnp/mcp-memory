@@ -7,7 +7,9 @@ from mcp.types import TextContent
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_services import (
+    internal_append_to_existing_memory_for_ingest_service,
     internal_create_memory_link_service,
+    internal_create_memory_record_for_ingest_service,
     internal_create_memory_record_service,
     internal_delete_memory_link_service,
     internal_delete_memory_record_service,
@@ -64,6 +66,8 @@ def internal_tool_services() -> dict[str, ToolService]:
         "internal_list_memory_records": internal_list_memory_records_service,
         "internal_get_next_dedup_batch": internal_get_next_dedup_batch_service,
         "internal_get_next_ingest_batch": internal_get_next_ingest_batch_service,
+        "internal_append_to_existing_memory_for_ingest": internal_append_to_existing_memory_for_ingest_service,
+        "internal_create_memory_record_for_ingest": internal_create_memory_record_for_ingest_service,
         "internal_append_memory_content": internal_append_memory_content_service,
         "internal_archive_memory_record": internal_archive_memory_record_service,
         "internal_merge_memory_into_canonical": internal_merge_memory_into_canonical_service,

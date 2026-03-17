@@ -53,6 +53,8 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_list_memory_records",
         "internal_get_next_dedup_batch",
         "internal_get_next_ingest_batch",
+        "internal_append_to_existing_memory_for_ingest",
+        "internal_create_memory_record_for_ingest",
         "internal_append_memory_content",
         "internal_archive_memory_record",
         "internal_merge_memory_into_canonical",
@@ -220,6 +222,78 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
         assert ingest_payload["groups"]
         assert ingest_payload["groups"][0]["entries"]
         assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_ingest_tools_preserve_ingest_invariants(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        assert runtime.task_queue is not None
+        existing = runtime.repository.create_memory(
+            title="Testing preferences",
+            content="Prefer pytest.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+            metadata={"appended_entry_ids": [1]},
+        )
+        assert existing is not None
+
+        append_result = await call_internal_memory_tool(
+            runtime,
+            "internal_append_to_existing_memory_for_ingest",
+            {
+                "memory_id": existing.id,
+                "content": "Prefer deterministic fixtures.",
+                "task_id": "ingest-maintenance-task",
+                "entry_ids": [2],
+                "workspace_ids": ["workspace-b"],
+                "tags": ["testing"],
+            },
+        )
+        create_result = await call_internal_memory_tool(
+            runtime,
+            "internal_create_memory_record_for_ingest",
+            {
+                "title": "Pytest fixture policy",
+                "content": "- [2026-03-16 12:00] Prefer deterministic fixtures.",
+                "task_id": "ingest-maintenance-task",
+                "entry_ids": [3, "4"],
+                "workspace_ids": [runtime.workspace_id, "workspace-b"],
+                "tags": ["pytest"],
+            },
+        )
+
+        append_payload = json.loads(append_result[0].text)
+        create_payload = json.loads(create_result[0].text)
+        created_id = create_payload["record"]["id"]
+        created_summary_tasks = runtime.task_queue.list_tasks(
+            status="pending",
+            workspace_id=None,
+            limit=20,
+        )
+
+        assert append_payload["status"] == "ok"
+        assert "deterministic fixtures" in append_payload["record"]["content"]
+        assert set(append_payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
+        assert append_payload["record"]["metadata"]["appended_entry_ids"] == [1, 2]
+        assert append_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
+        assert "system1-appended" in append_payload["record"]["tags"]
+
+        assert create_payload["status"] == "ok"
+        assert create_payload["record"]["metadata"]["source_entry_ids"] == [3, 4]
+        assert create_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
+        assert set(create_payload["record"]["tags"]) == {"auto-ingested", "pytest", "system1"}
+        assert any(
+            task.task_name == "summarize-memory" and task.data.get("memory_id") == created_id
+            for task in created_summary_tasks
+        )
     finally:
         runtime.close()
 

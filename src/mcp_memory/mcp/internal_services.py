@@ -97,6 +97,70 @@ def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: d
     }
 
 
+def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    memory_id = require_string(arguments, "memory_id")
+    content = require_string(arguments, "content")
+    task_id = require_string(arguments, "task_id")
+    entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+    record = ctx.repository.get_memory(memory_id)
+    if record is None:
+        return {"status": "error", "error": "memory_not_found"}
+    if record.status != "active":
+        return {"status": "error", "error": "memory_not_active"}
+
+    tags = string_list(arguments, "tags") if "tags" in arguments else []
+    workspace_ids = string_list(arguments, "workspace_ids") if "workspace_ids" in arguments else []
+    metadata_override = optional_object(arguments, "metadata") or {}
+    merged_metadata = _merge_memory_metadata(
+        record.metadata,
+        {
+            **metadata_override,
+            "appended_entry_ids": entry_ids,
+            "ingest_task_id": task_id,
+        },
+    )
+    updated = ctx.repository.update_memory(
+        memory_id,
+        content=_append_content(record.content, content),
+        tags=_normalize_tags([*record.tags, *tags, "system1-appended"]),
+        workspace_ids=sorted({*record.workspace_ids, *workspace_ids}),
+        metadata=merged_metadata,
+    )
+    if updated is None:
+        return {"status": "error", "error": "memory_not_found"}
+    return {"status": "ok", "record": memory_record_payload(updated)}
+
+
+def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    task_id = require_string(arguments, "task_id")
+    entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+    workspace_ids = string_list(arguments, "workspace_ids") or ([ctx.workspace_id] if ctx.workspace_id is not None else ["workspace-unknown"])
+    metadata_override = optional_object(arguments, "metadata") or {}
+    record = ctx.repository.create_memory(
+        title=require_string(arguments, "title"),
+        content=require_string(arguments, "content"),
+        summary=optional_string(arguments, "summary"),
+        memory_type=optional_string(arguments, "memory_type") or "observation",
+        status=optional_string(arguments, "status") or "active",
+        workspace_ids=workspace_ids,
+        tags=_normalize_tags([*string_list(arguments, "tags"), "auto-ingested", "system1"]),
+        metadata={
+            **metadata_override,
+            "source_entry_ids": entry_ids,
+            "ingest_task_id": task_id,
+        },
+    )
+    assert record is not None
+    _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
+    return {"status": "ok", "record": memory_record_payload(record)}
+
+
 def internal_append_memory_content_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
@@ -423,6 +487,32 @@ def _merge_metadata_lists(existing: list[Any], override: list[Any]) -> list[Any]
                 str_values.add(stripped)
         return sorted(str_values)
     return list(override)
+
+
+def _normalize_ingest_entry_ids(arguments: dict[str, Any], field_name: str) -> list[int]:
+    raw_entry_ids = arguments.get(field_name)
+    if not isinstance(raw_entry_ids, list) or not raw_entry_ids:
+        raise ValueError(f"{field_name} must contain at least one entry id")
+
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in raw_entry_ids:
+        value: int | None = None
+        if isinstance(item, bool):
+            value = None
+        elif isinstance(item, int):
+            value = item
+        elif isinstance(item, str) and item.strip().isdigit():
+            value = int(item.strip())
+        if value is None or value <= 0 or value in seen:
+            if value is None or value <= 0:
+                raise ValueError(f"{field_name} must contain only positive integer ids")
+            continue
+        seen.add(value)
+        normalized.append(value)
+    if not normalized:
+        raise ValueError(f"{field_name} must contain at least one entry id")
+    return normalized
 
 
 def _enqueue_summary_task(ctx: ApplicationContext, memory_id: str, workspace_ids: list[str]) -> None:

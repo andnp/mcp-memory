@@ -310,9 +310,9 @@ def _build_ingest_agent_prompt(
         f"Start with internal_get_next_ingest_batch using task_id='{task.id}' and batch_size={batch_size}.\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
-        "When a thought clearly belongs in an existing canonical memory, prefer internal_append_memory_content.\n"
-        "For append operations, preserve ingest lineage by including metadata with `ingest_task_id` and `appended_entry_ids`, and include all relevant workspace_ids.\n"
-        "When a new memory is warranted, use internal_create_memory_record with memory_type='observation', tags including `auto-ingested` and `system1`, metadata containing `source_entry_ids` and `ingest_task_id`, and `enqueue_summary_task=true`.\n"
+        f"When a thought clearly belongs in an existing canonical memory, prefer internal_append_to_existing_memory_for_ingest with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, and the content to append.\n"
+        f"When a new memory is warranted, use internal_create_memory_record_for_ingest with task_id='{task.id}', the claimed entry_ids, a focused title/content payload, and relevant workspace_ids.\n"
+        "Use the generic append/create tools only when a non-ingest workflow truly requires them.\n"
         f"Use workspace_id '{workspace_id}' when you need a fallback workspace.\n"
         "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
         'When finished, output final JSON only in the form {"summary": "...", "created_memory_ids": ["..."], "meaningful_actions": N}.\n'
