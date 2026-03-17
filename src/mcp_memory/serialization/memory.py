@@ -66,6 +66,9 @@ def task_payload(task: TaskRecord) -> dict:
     return {
         "id": task.id,
         "task_name": task.task_name,
+        "trigger": task.data.get("trigger") if isinstance(task.data, dict) else None,
+        "strategy": task.data.get("strategy") if isinstance(task.data.get("strategy"), str) else None,
+        "grouping_strategy": task.data.get("grouping_strategy") if isinstance(task.data.get("grouping_strategy"), str) else None,
         "workspace_id": task.workspace_id,
         "status": task.status,
         "priority": task.priority,

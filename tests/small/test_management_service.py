@@ -54,6 +54,24 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     )
     assert task_queue.claim_next(now=10.0) is not None
     task_queue.fail_permanently(task.id, "summary provider offline", failed_at=11.0)
+    completed = task_queue.enqueue(
+        "deduplicator",
+        task_id="task-2",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=12.0) is not None
+    task_queue.complete(
+        completed.id,
+        completed_at=14.0,
+        run_result={
+            "merged": 1,
+            "requested_strategy": "semantic",
+            "strategy_used": "semantic",
+            "candidate_count": 8,
+            "sampled_memory_ids": [primary.id],
+        },
+    )
     handler.emit(
         logging.LogRecord(
             name="mcp_memory.tests",
@@ -98,6 +116,11 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.provider_usage[0].task_name == "memory-curator"
     assert overview.provider_usage[0].calls_last_hour == 1
     assert overview.tasks.failed_count == 1
+    deduplicator = next(agent for agent in overview.agent_runs if agent.task_name == "deduplicator")
+    assert deduplicator.last_result_metadata.strategy_used == "semantic"
+    assert deduplicator.last_result_metadata.candidate_count == 8
+    assert deduplicator.last_result_metadata.sampled_memory_ids == [primary.id]
+    assert any(run.result_metadata.strategy_used == "semantic" for run in overview.recent_agent_runs)
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
     assert overview.recent_logs[0].message == "daemon log row"
     assert overview.recent_logs[0].source == "daemon"

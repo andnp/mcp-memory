@@ -90,6 +90,18 @@ class QueueDiagnosticPayload(BaseModel):
     overdue_seconds: float = 0.0
 
 
+class RunResultMetadataPayload(BaseModel):
+    requested_strategy: str | None = None
+    strategy_used: str | None = None
+    strategy_fallback_reason: str | None = None
+    candidate_count: int | None = None
+    sampled_memory_ids: list[str] = Field(default_factory=list)
+    requested_grouping_strategy: str | None = None
+    grouping_strategy_used: str | None = None
+    grouping_fallback_reason: str | None = None
+    group_count: int | None = None
+
+
 class AgentRunPayload(BaseModel):
     task_name: str
     running_count: int = 0
@@ -105,6 +117,7 @@ class AgentRunPayload(BaseModel):
     seconds_since_last_completion: float | None = None
     last_error: str | None = None
     last_result_summary: str | None = None
+    last_result_metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
     next_available_at: float | None = None
     seconds_until_next_run: float | None = None
 
@@ -117,6 +130,11 @@ class AgentRunHistoryPayload(BaseModel):
     duration_seconds: float
     error_text: str | None = None
     result_summary: str | None = None
+    result_metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
+
+
+class AgentRunHistoryListPayload(BaseModel):
+    runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
 
 
 class RuntimeLogPayload(BaseModel):

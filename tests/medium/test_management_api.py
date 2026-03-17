@@ -89,6 +89,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             workspace_id=seed_runtime.workspace_id,
             available_at=0.0,
         )
+        strategy_task = seed_runtime.task_queue.enqueue(
+            "deduplicator",
+            task_id="dedup-observability-1",
+            workspace_id=seed_runtime.workspace_id,
+            available_at=0.0,
+        )
         seed_runtime.task_queue.enqueue(
             "summarize-memory",
             task_id="summarize-pending-1",
@@ -98,6 +104,18 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         )
         assert seed_runtime.task_queue.claim_next(now=10.0) is not None
         seed_runtime.task_queue.fail_permanently(task.id, "missing ext link", failed_at=11.0)
+        assert seed_runtime.task_queue.claim_next(now=12.0) is not None
+        seed_runtime.task_queue.complete(
+            strategy_task.id,
+            completed_at=13.0,
+            run_result={
+                "merged": 1,
+                "requested_strategy": "semantic",
+                "strategy_used": "semantic",
+                "candidate_count": 6,
+                "sampled_memory_ids": [primary.id],
+            },
+        )
     finally:
         seed_runtime.close()
 
@@ -233,8 +251,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert prune_logs["deleted"] == 0
         assert repair_search["rebuilt"] is True
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
+        deduplicator = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "deduplicator")
         assert fact_checker["failed_runs"] == 1
+        assert deduplicator["last_result_metadata"]["strategy_used"] == "semantic"
+        assert deduplicator["last_result_metadata"]["candidate_count"] == 6
         assert overview["recent_agent_runs"]
+        assert any(run["result_metadata"]["strategy_used"] == "semantic" for run in overview["recent_agent_runs"])
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import signal
@@ -451,27 +451,166 @@ def _render_queue_diagnostics_table(overview) -> None:
 def _print_agent_details(overview) -> None:
     console.print("[bold]Agent Details[/]")
     for agent in overview.agent_runs:
+        metadata_text = _format_run_result_metadata(agent.last_result_metadata)
         console.print(
             "- "
             f"{agent.task_name}: "
             f"running={agent.running_count} "
             f"next={_format_age(agent.seconds_until_next_run)} "
             f"last_status={agent.last_status or 'never'} "
-            f"last_result={agent.last_result_summary or '-'}"
+            f"last_result={agent.last_result_summary or '-'} "
+            f"metadata={metadata_text or '-'}"
         )
 
 
 def _print_recent_agent_runs(overview) -> None:
     console.print("[bold]Recent Agent Runs[/]")
     for run in overview.recent_agent_runs:
+        metadata_text = _format_run_result_metadata(run.result_metadata)
         console.print(
             "- "
             f"{run.task_name}: "
             f"status={run.status} "
             f"duration={run.duration_seconds:.2f}s "
             f"result={run.result_summary or '-'} "
+            f"metadata={metadata_text or '-'} "
             f"error={run.error_text or '-'}"
         )
+
+
+def _format_run_result_metadata(metadata) -> str | None:
+    parts: list[str] = []
+    if getattr(metadata, "strategy_used", None) is not None:
+        parts.append(f"strategy={metadata.strategy_used}")
+    if getattr(metadata, "strategy_fallback_reason", None) is not None:
+        parts.append(f"strategy_fallback={metadata.strategy_fallback_reason}")
+    if getattr(metadata, "candidate_count", None) is not None:
+        parts.append(f"candidate_count={metadata.candidate_count}")
+    sampled_memory_ids = getattr(metadata, "sampled_memory_ids", [])
+    if sampled_memory_ids:
+        parts.append(f"sampled={len(sampled_memory_ids)}")
+    if getattr(metadata, "grouping_strategy_used", None) is not None:
+        parts.append(f"grouping={metadata.grouping_strategy_used}")
+    if getattr(metadata, "grouping_fallback_reason", None) is not None:
+        parts.append(f"grouping_fallback={metadata.grouping_fallback_reason}")
+    if getattr(metadata, "group_count", None) is not None:
+        parts.append(f"group_count={metadata.group_count}")
+    return ", ".join(parts) if parts else None
+
+
+def _render_recent_agent_runs_table(payload) -> None:
+    table = Table(title="Recent Agent Runs")
+    table.add_column("Task", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Duration", justify="right", no_wrap=True)
+    table.add_column("Completed", no_wrap=True)
+    table.add_column("Selection")
+    table.add_column("Grouping")
+    table.add_column("Result")
+    if not payload.runs:
+        table.add_row("-", "-", "-", "-", "-", "-", "No recent runs")
+    for run in payload.runs:
+        selection = []
+        grouping = []
+        if run.result_metadata.requested_strategy is not None:
+            selection.append(f"requested={run.result_metadata.requested_strategy}")
+        if run.result_metadata.strategy_used is not None:
+            selection.append(f"used={run.result_metadata.strategy_used}")
+        if run.result_metadata.strategy_fallback_reason is not None:
+            selection.append(f"fallback={run.result_metadata.strategy_fallback_reason}")
+        if run.result_metadata.candidate_count is not None:
+            selection.append(f"candidates={run.result_metadata.candidate_count}")
+        if run.result_metadata.requested_grouping_strategy is not None:
+            grouping.append(f"requested={run.result_metadata.requested_grouping_strategy}")
+        if run.result_metadata.grouping_strategy_used is not None:
+            grouping.append(f"used={run.result_metadata.grouping_strategy_used}")
+        if run.result_metadata.grouping_fallback_reason is not None:
+            grouping.append(f"fallback={run.result_metadata.grouping_fallback_reason}")
+        if run.result_metadata.group_count is not None:
+            grouping.append(f"groups={run.result_metadata.group_count}")
+        table.add_row(
+            run.task_name,
+            run.status,
+            f"{run.duration_seconds:.2f}s",
+            _format_timestamp(run.completed_at),
+            " ".join(selection) or "-",
+            " ".join(grouping) or "-",
+            run.result_summary or "-",
+        )
+    console.print(table)
+
+
+def _build_sampling_summary(payload) -> dict[str, list[dict[str, object]]]:
+    @dataclass
+    class _SamplingSummaryRow:
+        name: str
+        runs: int = 0
+        fallbacks: int = 0
+        tasks: set[str] | None = None
+
+    selection_rows: dict[str, _SamplingSummaryRow] = {}
+    grouping_rows: dict[str, _SamplingSummaryRow] = {}
+    for run in payload.runs:
+        metadata = run.result_metadata
+        if metadata.strategy_used is not None:
+            row = selection_rows.setdefault(
+                metadata.strategy_used,
+                _SamplingSummaryRow(name=metadata.strategy_used, tasks=set()),
+            )
+            row.runs += 1
+            if metadata.strategy_fallback_reason is not None:
+                row.fallbacks += 1
+            assert row.tasks is not None
+            row.tasks.add(run.task_name)
+        if metadata.grouping_strategy_used is not None:
+            row = grouping_rows.setdefault(
+                metadata.grouping_strategy_used,
+                _SamplingSummaryRow(name=metadata.grouping_strategy_used, tasks=set()),
+            )
+            row.runs += 1
+            if metadata.grouping_fallback_reason is not None:
+                row.fallbacks += 1
+            assert row.tasks is not None
+            row.tasks.add(run.task_name)
+    return {
+        "selection": [
+            {"name": row.name, "runs": row.runs, "fallbacks": row.fallbacks, "tasks": sorted(row.tasks or set())}
+            for row in sorted(selection_rows.values(), key=lambda item: (-item.runs, item.name))
+        ],
+        "grouping": [
+            {"name": row.name, "runs": row.runs, "fallbacks": row.fallbacks, "tasks": sorted(row.tasks or set())}
+            for row in sorted(grouping_rows.values(), key=lambda item: (-item.runs, item.name))
+        ],
+    }
+
+
+def _render_sampling_summary(payload) -> None:
+    summary = _build_sampling_summary(payload)
+    selection_table = Table(title="Selection Strategy Usage")
+    selection_table.add_column("Strategy")
+    selection_table.add_column("Runs", justify="right")
+    selection_table.add_column("Fallbacks", justify="right")
+    selection_table.add_column("Tasks")
+    if not summary["selection"]:
+        selection_table.add_row("-", "0", "0", "No strategy metadata recorded")
+    for row in summary["selection"]:
+        tasks = row.get("tasks")
+        tasks_text = ", ".join(tasks) if isinstance(tasks, list) else "-"
+        selection_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
+    console.print(selection_table)
+
+    grouping_table = Table(title="Ingest Grouping Strategy Usage")
+    grouping_table.add_column("Grouping")
+    grouping_table.add_column("Runs", justify="right")
+    grouping_table.add_column("Fallbacks", justify="right")
+    grouping_table.add_column("Tasks")
+    if not summary["grouping"]:
+        grouping_table.add_row("-", "0", "0", "No grouping metadata recorded")
+    for row in summary["grouping"]:
+        tasks = row.get("tasks")
+        tasks_text = ", ".join(tasks) if isinstance(tasks, list) else "-"
+        grouping_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
+    console.print(grouping_table)
 
 
 def _render_stats_snapshot(
@@ -541,18 +680,22 @@ def _render_task_table(payload) -> None:
     table.add_column("Task ID")
     table.add_column("Task")
     table.add_column("Status", no_wrap=True)
+    table.add_column("Selection", no_wrap=True)
+    table.add_column("Grouping", no_wrap=True)
     table.add_column("Workspace")
     table.add_column("PID", justify="right")
     table.add_column("Request")
     table.add_column("Updated", no_wrap=True)
     table.add_column("Error")
     if not payload.tasks:
-        table.add_row("-", "-", "-", "-", "-", "-", "-", "No tasks found")
+        table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No tasks found")
     for task in payload.tasks:
         table.add_row(
             task["id"],
             task["task_name"],
             task["status"],
+            task.get("strategy") or "-",
+            task.get("grouping_strategy") or "-",
             task["workspace_id"] or "-",
             "-" if task.get("subprocess_pid") is None else str(task["subprocess_pid"]),
             task.get("active_request_id") or "-",
@@ -955,6 +1098,41 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_task_table(payload)
+    finally:
+        runtime.close()
+
+
+@task_group.command(name="recent-runs")
+@workspace_root_option
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of recent runs to print")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
+    """Show recent completed background task runs and their sampling metadata."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(limit=limit)
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_recent_agent_runs_table(payload)
+    finally:
+        runtime.close()
+
+
+@task_group.command(name="sampling-summary")
+@workspace_root_option
+@click.option("--limit", default=50, show_default=True, type=int, help="Maximum number of recent runs to summarize")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
+def task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
+    """Summarize recent selection and ingest grouping strategy usage."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(limit=limit)
+        summary = _build_sampling_summary(payload)
+        if json_output:
+            click.echo(json.dumps(summary, sort_keys=True))
+            return
+        _render_sampling_summary(payload)
     finally:
         runtime.close()
 

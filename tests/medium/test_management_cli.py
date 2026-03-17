@@ -591,7 +591,15 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
             available_at=time.time() + 120.0,
         )
         assert runtime.task_queue.claim_next(now=10.0) is not None
-        runtime.task_queue.complete(task.id, completed_at=14.0, run_result={"lines_compressed": 3})
+        runtime.task_queue.complete(
+            task.id,
+            completed_at=14.0,
+            run_result={
+                "lines_compressed": 3,
+                "strategy_used": "cold-storage",
+                "candidate_count": 5,
+            },
+        )
         runtime.db_manager.get_connection().execute(
             "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (runtime.workspace_id, "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.5, time.time(), None),
@@ -617,6 +625,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     assert "gemini-cli" in result.output
     assert "memory-curator" in result.output
     assert "lines_compressed=3" in result.output
+    assert "strategy_used=cold-storage" in result.output
     assert "summarize-memory" in result.output
 
 
@@ -821,6 +830,7 @@ def test_task_list_and_cancel_commands_show_running_task_metadata(monkeypatch, t
             "memory-curator",
             task_id="cancel-cli-task",
             workspace_id=runtime.workspace_id,
+            data={"strategy": "anomaly", "grouping_strategy": "fifo"},
             available_at=0.0,
         )
         assert runtime.task_queue.claim_next(now=10.0) is not None
@@ -840,10 +850,81 @@ def test_task_list_and_cancel_commands_show_running_task_metadata(monkeypatch, t
     list_payload = json.loads(list_result.output)
     assert list_result.exit_code == 0
     assert list_payload["tasks"][0]["task_name"] == "memory-curator"
+    assert list_payload["tasks"][0]["strategy"] == "anomaly"
+    assert list_payload["tasks"][0]["grouping_strategy"] == "fifo"
     assert list_payload["tasks"][0]["subprocess_pid"] == 4444
     assert list_payload["tasks"][0]["active_request_id"] == "req-cli-1"
     assert cancel_result.exit_code == 0
     assert "cancellation_requested" in cancel_result.output or "cancelled" in cancel_result.output
+
+
+def test_task_recent_runs_and_sampling_summary_commands(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        dedup = runtime.task_queue.enqueue(
+            "deduplicator",
+            task_id="recent-run-dedup",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        ingest = runtime.task_queue.enqueue(
+            "ingest-system1",
+            task_id="recent-run-ingest",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.complete(
+            dedup.id,
+            completed_at=12.0,
+            run_result={
+                "merged": 1,
+                "requested_strategy": "semantic",
+                "strategy_used": "semantic",
+                "candidate_count": 8,
+                "sampled_memory_ids": ["memory-1", "memory-2"],
+            },
+        )
+        assert runtime.task_queue.claim_next(now=13.0) is not None
+        runtime.task_queue.complete(
+            ingest.id,
+            completed_at=14.0,
+            run_result={
+                "meaningful_actions": 1,
+                "requested_grouping_strategy": "fifo",
+                "grouping_strategy_used": "fifo",
+                "group_count": 2,
+            },
+        )
+    finally:
+        runtime.close()
+
+    recent_result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace), "--json"])
+    summary_result = runner.invoke(main, ["task", "sampling-summary", "--workspace-root", str(workspace)])
+    summary_json_result = runner.invoke(main, ["task", "sampling-summary", "--workspace-root", str(workspace), "--json"])
+
+    recent_payload = json.loads(recent_result.output)
+    assert recent_result.exit_code == 0
+    assert any(run["result_metadata"]["strategy_used"] == "semantic" for run in recent_payload["runs"])
+    assert any(run["result_metadata"]["grouping_strategy_used"] == "fifo" for run in recent_payload["runs"])
+    assert summary_result.exit_code == 0
+    assert "Selection Strategy Usage" in summary_result.output
+    assert "Ingest Grouping Strategy Usage" in summary_result.output
+    assert "semantic" in summary_result.output
+    assert "fifo" in summary_result.output
+    summary_payload = json.loads(summary_json_result.output)
+    assert summary_json_result.exit_code == 0
+    assert summary_payload["selection"][0]["name"] == "semantic"
+    assert summary_payload["grouping"][0]["name"] == "fifo"
 
 
 def test_conversation_commands_render_and_return_json(monkeypatch, tmp_path: Path) -> None:

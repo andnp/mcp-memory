@@ -13,6 +13,7 @@ from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
+    AgentRunHistoryListPayload,
     AgentRunPayload,
     AIConversationListPayload,
     AIConversationPayload,
@@ -26,6 +27,7 @@ from mcp_memory.management.models import (
     OverviewPayload,
     ProviderUsagePayload,
     QueueDiagnosticPayload,
+    RunResultMetadataPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -111,7 +113,7 @@ class ManagementService:
         journal_counts = {"pending": memory_metrics.thought_buffer_entries}
         agent_runs = self._build_agent_runs()
         provider_usage = self._build_provider_usage()
-        recent_agent_runs = self._build_recent_agent_runs()
+        recent_agent_runs = self.list_recent_agent_runs().runs
         recent_logs = self.list_logs(limit=10).logs
 
         return OverviewPayload(
@@ -349,6 +351,9 @@ class ManagementService:
             limit=limit,
         )
         return TaskListPayload(tasks=[task_payload(task) for task in tasks])
+
+    def list_recent_agent_runs(self, limit: int = 20) -> AgentRunHistoryListPayload:
+        return AgentRunHistoryListPayload(runs=self._build_recent_agent_runs(limit=limit))
 
     def list_memories(
         self,
@@ -630,6 +635,7 @@ class ManagementService:
                     seconds_since_last_completion=seconds_since_last_completion,
                     last_error=summary.last_error,
                     last_result_summary=_format_result_summary(summary.last_result),
+                    last_result_metadata=_extract_run_result_metadata(summary.last_result),
                     next_available_at=next_available_at,
                     seconds_until_next_run=seconds_until_next_run,
                 )
@@ -673,6 +679,7 @@ class ManagementService:
                 duration_seconds=float(row["duration_seconds"] or 0.0),
                 error_text=row["error_text"],
                 result_summary=_format_result_summary(_decode_run_result(row["result_json"])),
+                result_metadata=_extract_run_result_metadata(_decode_run_result(row["result_json"])),
             )
             for row in rows
         ]
@@ -698,6 +705,15 @@ def _format_result_summary(result: dict[str, object]) -> str | None:
         "processed_entry_ids",
         "created_memory_ids",
         "lines_compressed",
+        "requested_strategy",
+        "strategy_used",
+        "strategy_fallback_reason",
+        "candidate_count",
+        "sampled_memory_ids",
+        "requested_grouping_strategy",
+        "grouping_strategy_used",
+        "grouping_fallback_reason",
+        "group_count",
     )
     formatted_parts: list[str] = []
     for key in preferred_keys:
@@ -717,6 +733,29 @@ def _format_result_summary(result: dict[str, object]) -> str | None:
         if isinstance(value, (str, int, float, bool)):
             formatted_parts.append(f"{key}={value}")
     return ", ".join(formatted_parts) if formatted_parts else None
+
+
+def _extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataPayload:
+    sampled_memory_ids = result.get("sampled_memory_ids")
+    return RunResultMetadataPayload(
+        requested_strategy=_coerce_str(result.get("requested_strategy")),
+        strategy_used=_coerce_str(result.get("strategy_used")),
+        strategy_fallback_reason=_coerce_str(result.get("strategy_fallback_reason")),
+        candidate_count=_coerce_int(result.get("candidate_count")),
+        sampled_memory_ids=[str(item) for item in sampled_memory_ids] if isinstance(sampled_memory_ids, list) else [],
+        requested_grouping_strategy=_coerce_str(result.get("requested_grouping_strategy")),
+        grouping_strategy_used=_coerce_str(result.get("grouping_strategy_used")),
+        grouping_fallback_reason=_coerce_str(result.get("grouping_fallback_reason")),
+        group_count=_coerce_int(result.get("group_count")),
+    )
+
+
+def _coerce_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _coerce_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _decode_run_result(raw_result: object) -> dict[str, object]:
