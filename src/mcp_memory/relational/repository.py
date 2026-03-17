@@ -129,6 +129,7 @@ class RelationalMemoryRepository:
         link_type: str,
         context: str = "",
     ):
+        normalized_link_type = self._normalize_link_type(link_type)
         conn = self._db.get_connection()
         with conn:
             conn.execute(
@@ -136,13 +137,13 @@ class RelationalMemoryRepository:
                 INSERT OR REPLACE INTO links (source_id, target_id, type, context)
                 VALUES (?, ?, ?, ?)
                 """,
-                (source_id, target_id, link_type, context),
+                (source_id, target_id, normalized_link_type, context.strip()),
             )
         return MemoryLink(
             source_id=source_id,
             target_id=target_id,
-            link_type=link_type,
-            context=context,
+            link_type=normalized_link_type,
+            context=context.strip(),
         )
 
     def remove_link(
@@ -151,11 +152,12 @@ class RelationalMemoryRepository:
         target_id: str,
         link_type: str,
     ) -> bool:
+        normalized_link_type = self._normalize_link_type(link_type)
         conn = self._db.get_connection()
         with conn:
             cursor = conn.execute(
                 "DELETE FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
-                (source_id, target_id, link_type),
+                (source_id, target_id, normalized_link_type),
             )
         return cursor.rowcount > 0
 
@@ -329,7 +331,7 @@ class RelationalMemoryRepository:
         params: list[str] = [memory_id]
         if link_type is not None:
             query += " AND type = ?"
-            params.append(link_type)
+            params.append(self._normalize_link_type(link_type))
         query += f" {order_by}"
 
         rows = conn.execute(query, params).fetchall()
@@ -344,10 +346,11 @@ class RelationalMemoryRepository:
         ]
 
     def has_incoming_link(self, memory_id: str, link_type: str):
+        normalized_link_type = self._normalize_link_type(link_type)
         conn = self._db.get_connection()
         row = conn.execute(
             "SELECT 1 FROM links WHERE target_id = ? AND type = ? LIMIT 1",
-            (memory_id, link_type),
+            (memory_id, normalized_link_type),
         ).fetchone()
         return row is not None
 
@@ -677,6 +680,12 @@ class RelationalMemoryRepository:
     def _validate_required_text(self, field_name: str, value: str):
         if not value:
             raise ValueError(f"{field_name} must be non-empty")
+
+    def _normalize_link_type(self, link_type: str) -> str:
+        normalized_link_type = re.sub(r"[\s-]+", "_", link_type.strip()).upper()
+        if not normalized_link_type:
+            raise ValueError("link_type must be non-empty")
+        return normalized_link_type
 
     def _utc_now(self):
         return datetime.now(UTC).isoformat()

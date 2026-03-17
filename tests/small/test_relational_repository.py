@@ -192,3 +192,37 @@ def test_relational_repository_rejects_invalid_domain_values(db_manager):
 
     with pytest.raises(ValueError, match="invalid status"):
         repository.update_memory(created.id, status="unknown")
+
+
+def test_relational_repository_normalizes_link_types_and_collapses_semantic_duplicates(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    source = repository.create_memory(
+        title="Source fact",
+        content="Depends on the canonical auth architecture.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    target = repository.create_memory(
+        title="Target fact",
+        content="Canonical auth architecture.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+
+    assert source is not None and target is not None
+
+    first = repository.add_link(source.id, target.id, "depends_on", "first context")
+    second = repository.add_link(source.id, target.id, "Depends-On", "updated context")
+    outgoing = repository.get_links(source.id, direction="outgoing")
+    filtered = repository.get_links(source.id, direction="outgoing", link_type="depends on")
+
+    assert first.link_type == "DEPENDS_ON"
+    assert second.link_type == "DEPENDS_ON"
+    assert len(outgoing) == 1
+    assert outgoing[0].link_type == "DEPENDS_ON"
+    assert outgoing[0].context == "updated context"
+    assert filtered[0].link_type == "DEPENDS_ON"
+    assert repository.has_incoming_link(target.id, "depends-on") is True
+    assert repository.remove_link(source.id, target.id, "depends on") is True
+    assert repository.get_links(source.id, direction="outgoing") == []
