@@ -43,6 +43,7 @@ from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEM
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from tests.sdk.providers import FakeAIProvider
 
@@ -132,7 +133,7 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
         provider = FakeAIProvider(
             responses=[
                 {
-                    "actions": [
+                    "results": [
                         {
                             "type": "append",
                             "entry_indices": [0],
@@ -153,6 +154,118 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert len(memories) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        entry = runtime.journal.record(
+            "The user also prefers deterministic fixtures for pytest.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-task",
+        )
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                append_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_append_memory_content",
+                    {
+                        "memory_id": target.id,
+                        "content": "Prefer deterministic fixtures for pytest.",
+                        "tags": ["testing", "system1-appended"],
+                        "workspace_ids": [runtime.workspace_id],
+                        "metadata": {
+                            "appended_entry_ids": claimed_entry_ids,
+                            "ingest_task_id": task.id,
+                        },
+                    },
+                )
+                append_payload = json.loads(append_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest appended the new preference into the canonical testing memory.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest appended the new preference into the canonical testing memory.",
+                                "created_memory_ids": [append_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 2,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 1},
+                                    "mcp_mcp-memory-internal_internal_append_memory_content": {"count": 1},
+                                },
+                            }
+                        },
+                    },
+                )
+
+        provider = _AgenticProvider()
+        result = await handle_ingest_system1_task(runtime, task, provider)
+        updated = runtime.repository.get_memory(target.id)
+
+        assert result["created_memory_ids"] == [target.id]
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["deleted_entry_ids"] == [entry.id]
+        assert result["released_entry_ids"] == []
+        assert result["meaningful_actions"] == 1
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 2
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == [
+            "mcp_mcp-memory-internal_internal_append_memory_content",
+            "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
+        ]
+        assert updated is not None
+        assert "deterministic fixtures" in updated.content
+        assert updated.metadata["appended_entry_ids"] == [entry.id]
+        assert updated.metadata["ingest_task_id"] == task.id
+        assert provider.prompts
+        assert "internal_get_next_ingest_batch" in provider.prompts[0]
+        assert "internal_append_memory_content" in provider.prompts[0]
+        assert "Do not delete or release journal claims yourself" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -2022,8 +2135,8 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         runtime.close()
 
 
-def test_agentic_task_names_contains_curator_and_deduplicator() -> None:
-    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, DEDUPLICATOR_TASK_NAME}
+def test_agentic_task_names_contains_curator_deduplicator_and_ingest() -> None:
+    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, DEDUPLICATOR_TASK_NAME, SYSTEM1_INGEST_TASK_NAME}
 
 
 @pytest.mark.asyncio

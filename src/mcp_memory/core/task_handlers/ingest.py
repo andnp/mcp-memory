@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 import re
-from typing import Any
+from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
@@ -35,6 +36,56 @@ async def handle_ingest_system1_task(
         task.data.get("journal_workspace_id", task.workspace_id),
     )
     workspace_id = _resolve_workspace_id(ctx, task)
+
+    run_agent = getattr(provider, "run_agent", None)
+    if callable(run_agent):
+        try:
+            agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+                _build_ingest_agent_prompt(
+                    task,
+                    workspace_id=workspace_id,
+                    batch_size=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
+                )
+            )
+            normalized = _normalize_ingest_agentic_result(agentic_result)
+            meaningful_actions = max(normalized["meaningful_actions"], normalized["mutations"])
+            if meaningful_actions <= 0:
+                released_ids = ctx.journal.release_claims(task.id)
+                return {
+                    **_build_ingest_result(
+                        created_ids=normalized["created_memory_ids"],
+                        claimed_ids=released_ids,
+                        deleted_ids=[],
+                        released_ids=released_ids,
+                        meaningful_actions=0,
+                    ),
+                    "summary": normalized["summary"],
+                    "execution_mode": "agentic_mcp",
+                    "tool_calls_executed": normalized["tool_calls_executed"],
+                    "mutations": normalized["mutations"],
+                    "tool_names_used": normalized["tool_names_used"],
+                }
+
+            deleted_ids = ctx.journal.delete_claims(task.id)
+            if deleted_ids:
+                _cleanup_deleted_thought_embeddings(ctx, deleted_ids)
+            return {
+                **_build_ingest_result(
+                    created_ids=normalized["created_memory_ids"],
+                    claimed_ids=deleted_ids,
+                    deleted_ids=deleted_ids,
+                    released_ids=[],
+                    meaningful_actions=meaningful_actions,
+                ),
+                "summary": normalized["summary"],
+                "execution_mode": "agentic_mcp",
+                "tool_calls_executed": normalized["tool_calls_executed"],
+                "mutations": normalized["mutations"],
+                "tool_names_used": normalized["tool_names_used"],
+            }
+        except BaseException:
+            ctx.journal.release_claims(task.id)
+            raise
 
     entries = ctx.journal.claim_pending(
         task_id=task.id,
@@ -135,7 +186,7 @@ async def _analyze_ingest_actions(
             "internal_list_memory_records",
         ],
     )
-    actions = response.response.get("actions", [])
+    actions = _extract_ingest_actions(response.response)
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
     return actions, response.mutating_tool_calls
@@ -245,6 +296,59 @@ def _cleanup_deleted_thought_embeddings(ctx: ApplicationContext, deleted_ids: li
             source_id=str(entry_id),
             model_name=model_name,
         )
+
+
+def _build_ingest_agent_prompt(
+    task: TaskRecord,
+    *,
+    workspace_id: str,
+    batch_size: int,
+) -> str:
+    return (
+        "You are the ingest-system1 maintenance agent for the global memory store.\n"
+        "Use the workspace-local internal MCP maintenance tools directly.\n"
+        f"Start with internal_get_next_ingest_batch using task_id='{task.id}' and batch_size={batch_size}.\n"
+        "Only process journal entries claimed for this task.\n"
+        "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
+        "When a thought clearly belongs in an existing canonical memory, prefer internal_append_memory_content.\n"
+        "For append operations, preserve ingest lineage by including metadata with `ingest_task_id` and `appended_entry_ids`, and include all relevant workspace_ids.\n"
+        "When a new memory is warranted, use internal_create_memory_record with memory_type='observation', tags including `auto-ingested` and `system1`, metadata containing `source_entry_ids` and `ingest_task_id`, and `enqueue_summary_task=true`.\n"
+        f"Use workspace_id '{workspace_id}' when you need a fallback workspace.\n"
+        "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
+        'When finished, output final JSON only in the form {"summary": "...", "created_memory_ids": ["..."], "meaningful_actions": N}.\n'
+    )
+
+
+def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
+    parsed = agentic_result.parsed if isinstance(getattr(agentic_result, "parsed", None), dict) else {}
+    response_payload = parsed
+    response_text = parsed.get("response")
+    if not {"summary", "created_memory_ids", "meaningful_actions"} <= set(response_payload) and isinstance(response_text, str):
+        nested = _extract_embedded_json_object(response_text)
+        if isinstance(nested, dict):
+            response_payload = nested
+    raw_tool_stats = parsed.get("stats")
+    tool_stats = raw_tool_stats if isinstance(raw_tool_stats, dict) else {}
+    raw_tool_payload = tool_stats.get("tools")
+    tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
+    return {
+        "summary": _coerce_text_summary(getattr(agentic_result, "summary", None)) or _coerce_text_summary(response_payload.get("summary")),
+        "created_memory_ids": _coerce_string_list(response_payload.get("created_memory_ids")),
+        "meaningful_actions": _coerce_non_negative_int(response_payload.get("meaningful_actions")),
+        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
+        "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
+        "tool_names_used": _extract_agentic_tool_names(tool_payload.get("byName")),
+    }
+
+
+def _extract_ingest_actions(response: dict[str, Any]) -> list[dict[str, Any]] | object:
+    actions = response.get("actions")
+    if isinstance(actions, list):
+        return actions
+    results = response.get("results")
+    if isinstance(results, list):
+        return results
+    return actions
 
 
 def _execute_ingest_actions(
@@ -440,3 +544,70 @@ def _format_entries(entries) -> str:
         timestamp = datetime.fromtimestamp(entry.timestamp, tz=UTC)
         lines.append(f"- [{timestamp.strftime('%Y-%m-%d %H:%M')}] {entry.content}")
     return "\n".join(lines)
+
+
+def _coerce_non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    return 0
+
+
+def _coerce_text_summary(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return normalized
+
+
+def _extract_embedded_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        json_start = text.find("{")
+        json_end = text.rfind("}") + 1
+        if json_start < 0 or json_end <= json_start:
+            return None
+        try:
+            parsed = json.loads(text[json_start:json_end])
+        except json.JSONDecodeError:
+            return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _extract_agentic_tool_names(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+
+
+def _count_mutating_agentic_tool_calls(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    read_only_tool_names = {
+        "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
+        "mcp_mcp-memory-internal_internal_search_memory_records",
+        "mcp_mcp-memory-internal_internal_read_memory_record",
+        "mcp_mcp-memory-internal_internal_list_memory_records",
+    }
+    total = 0
+    for name, payload in value.items():
+        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
+            continue
+        total += _coerce_non_negative_int(payload.get("count"))
+    return total

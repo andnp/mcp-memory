@@ -70,13 +70,15 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_append_memory_content",
-            description="Append new content into an existing memory record and optionally update tags.",
+            description="Append new content into an existing memory record and optionally update tags, workspace_ids, and metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
                     "content": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
                 },
                 "required": ["memory_id", "content"],
             },
@@ -145,7 +147,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_create_memory_record",
-            description="Create a new memory record for maintenance and cleanup workflows.",
+            description="Create a new memory record for maintenance and cleanup workflows, optionally enqueueing follow-up summarization.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -157,6 +159,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                     "workspace_ids": {"type": "array", "items": {"type": "string"}},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "metadata": {"type": "object"},
+                    "enqueue_summary_task": {"type": "boolean"},
                 },
                 "required": ["title", "content"],
             },

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
+from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
@@ -110,7 +112,16 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
     merged_tags = record.tags
     if isinstance(tags, list):
         merged_tags = _normalize_tags([*record.tags, *[str(tag) for tag in tags]])
-    updated = ctx.repository.update_memory(memory_id, content=merged_content, tags=merged_tags)
+    workspace_ids = string_list(arguments, "workspace_ids") if "workspace_ids" in arguments else None
+    metadata_override = optional_object(arguments, "metadata") if "metadata" in arguments else None
+    merged_metadata = _merge_memory_metadata(record.metadata, metadata_override)
+    updated = ctx.repository.update_memory(
+        memory_id,
+        content=merged_content,
+        tags=merged_tags,
+        workspace_ids=sorted({*record.workspace_ids, *workspace_ids}) if workspace_ids else None,
+        metadata=merged_metadata,
+    )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
     return {"status": "ok", "record": memory_record_payload(updated)}
@@ -266,6 +277,8 @@ def internal_create_memory_record_service(ctx: ApplicationContext, arguments: di
         metadata=optional_object(arguments, "metadata"),
     )
     assert record is not None
+    if optional_bool(arguments, "enqueue_summary_task"):
+        _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
     return {"status": "ok", "record": memory_record_payload(record)}
 
 
@@ -382,6 +395,51 @@ def _normalize_tags(tags: list[str]) -> list[str]:
         seen.add(value)
         normalized.append(value)
     return sorted(normalized)
+
+
+def _merge_memory_metadata(existing: dict[str, Any], override: dict[str, object] | None) -> dict[str, object] | None:
+    if override is None:
+        return None
+    merged: dict[str, object] = dict(existing)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, list) and isinstance(value, list):
+            merged[key] = _merge_metadata_lists(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _merge_metadata_lists(existing: list[Any], override: list[Any]) -> list[Any]:
+    int_values: set[int] = set()
+    if all(isinstance(item, int) and not isinstance(item, bool) for item in [*existing, *override]):
+        for item in [*existing, *override]:
+            int_values.add(int(item))
+        return sorted(int_values)
+    str_values: set[str] = set()
+    if all(isinstance(item, str) for item in [*existing, *override]):
+        for item in [*existing, *override]:
+            stripped = str(item).strip()
+            if stripped:
+                str_values.add(stripped)
+        return sorted(str_values)
+    return list(override)
+
+
+def _enqueue_summary_task(ctx: ApplicationContext, memory_id: str, workspace_ids: list[str]) -> None:
+    if ctx.task_queue is None:
+        return
+    workspace_id = workspace_ids[0] if workspace_ids else ctx.workspace_id
+    try:
+        ctx.task_queue.enqueue(
+            task_name=SUMMARIZE_MEMORY_TASK_NAME,
+            task_id=f"{SUMMARIZE_MEMORY_TASK_NAME}:{memory_id}",
+            workspace_id=workspace_id,
+            data={"memory_id": memory_id},
+            priority=SUMMARIZE_MEMORY_PRIORITY,
+        )
+    except sqlite3.IntegrityError:
+        return
 
 
 def _journal_entry_payload(entry) -> dict[str, Any]:

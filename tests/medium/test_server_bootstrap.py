@@ -129,6 +129,46 @@ async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_append_workspace_ids_and_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        record = runtime.repository.create_memory(
+            title="Testing preferences",
+            content="Prefer pytest.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+            metadata={"appended_entry_ids": [1]},
+        )
+        assert record is not None
+
+        append_result = await call_internal_memory_tool(
+            runtime,
+            "internal_append_memory_content",
+            {
+                "memory_id": record.id,
+                "content": "Prefer deterministic fixtures.",
+                "workspace_ids": ["workspace-b"],
+                "metadata": {"appended_entry_ids": [2], "ingest_task_id": "ingest-agentic-task"},
+            },
+        )
+
+        payload = json.loads(append_result[0].text)
+
+        assert payload["status"] == "ok"
+        assert "deterministic fixtures" in payload["record"]["content"]
+        assert set(payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
+        assert payload["record"]["metadata"]["appended_entry_ids"] == [1, 2]
+        assert payload["record"]["metadata"]["ingest_task_id"] == "ingest-agentic-task"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -253,6 +293,39 @@ async def test_call_internal_memory_tool_can_create_update_link_and_delete(monke
         assert delete_link_payload["status"] == "ok"
         assert delete_payload["status"] == "ok"
         assert runtime.repository.get_memory(created_id) is None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_create_record_and_enqueue_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.task_queue is not None
+        created_result = await call_internal_memory_tool(
+            runtime,
+            "internal_create_memory_record",
+            {
+                "title": "Canonical testing preference",
+                "content": "Prefer deterministic fixtures.",
+                "memory_type": "observation",
+                "tags": ["testing"],
+                "enqueue_summary_task": True,
+            },
+        )
+        created_payload = json.loads(created_result[0].text)
+        created_id = created_payload["record"]["id"]
+        summary_task = runtime.task_queue.find_open_task(
+            "summarize-memory",
+            runtime.workspace_id or "global",
+        )
+
+        assert created_payload["status"] == "ok"
+        assert summary_task is not None
+        assert summary_task.data["memory_id"] == created_id
     finally:
         runtime.close()
 
