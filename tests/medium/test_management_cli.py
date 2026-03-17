@@ -7,6 +7,7 @@ import time
 from click.testing import CliRunner
 
 from mcp_memory.cli import main
+from mcp_memory.daemon import DaemonMetadata, DaemonStopResult
 from mcp_memory.mcp.runtime import create_runtime
 
 
@@ -58,35 +59,64 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
 def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
     runner = CliRunner()
 
-    class FakeMetadata:
-        pid = 123
-        workspace_id = "global"
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8123,
+        pid=123,
+        started_at=100.0,
+        status="ready",
+    )
 
-    monkeypatch.setattr("mcp_memory.cli.stop_daemon", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr(
+        "mcp_memory.cli.stop_daemon",
+        lambda workspace_root, cwd=None: DaemonStopResult(
+            metadata=metadata,
+            stop_reason="owner_stopped_on_stop",
+            signal_sequence=("SIGTERM",),
+            process_group_id=123,
+            escalated_to_sigkill=False,
+            stale_socket_removed=False,
+        ),
+    )
 
     result = runner.invoke(main, ["daemon", "stop"])
 
     assert result.exit_code == 0
     assert "Daemon stopped:" in result.output
     assert "scope=global" in result.output
+    assert "signals=SIGTERM" in result.output
+    assert "escalated=False" in result.output
 
 
 def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
     runner = CliRunner()
 
-    class FakeMetadata:
-        pid = 456
-        transport_endpoint = "ipc:///tmp/mcp-memory.sock"
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8124,
+        pid=456,
+        started_at=100.0,
+        status="ready",
+        transport="zmq",
+        socket_path="/tmp/mcp-memory.sock",
+    )
 
     stop_calls: list[tuple[str | None, object | None]] = []
     start_calls: list[tuple[str | None, object | None]] = []
     monkeypatch.setattr(
         "mcp_memory.cli.stop_daemon",
-        lambda workspace_root, cwd=None: stop_calls.append((workspace_root, cwd)) or None,
+        lambda workspace_root, cwd=None: stop_calls.append((workspace_root, cwd)) or DaemonStopResult(
+            metadata=metadata,
+            stop_reason="owner_stopped_on_stop",
+            signal_sequence=("SIGTERM", "SIGKILL"),
+            process_group_id=456,
+            escalated_to_sigkill=True,
+            stale_socket_removed=True,
+        ),
     )
     monkeypatch.setattr(
         "mcp_memory.cli.ensure_daemon_started",
-        lambda workspace_root, cwd=None: start_calls.append((workspace_root, cwd)) or FakeMetadata(),
+        lambda workspace_root, cwd=None: start_calls.append((workspace_root, cwd)) or metadata,
     )
 
     result = runner.invoke(main, ["daemon", "restart", "--workspace-root", "demo"])
@@ -95,6 +125,8 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
     assert stop_calls == [("demo", None)]
     assert start_calls == [("demo", None)]
     assert "ipc:///tmp/mcp-memory.sock" in result.output
+    assert "Previous daemon stop:" in result.output
+    assert "escalated=True" in result.output
 
 
 def test_install_command_writes_workspace_hook_and_gemini_configs(monkeypatch, tmp_path: Path) -> None:

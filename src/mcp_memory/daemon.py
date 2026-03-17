@@ -38,6 +38,27 @@ class _DaemonProcess:
     command: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _DaemonTerminationResult:
+    signal_sequence: tuple[str, ...] = ()
+    process_group_id: int | None = None
+    escalated_to_sigkill: bool = False
+
+
+@dataclass(frozen=True)
+class DaemonStopResult:
+    metadata: DaemonMetadata
+    stop_reason: str
+    signal_sequence: tuple[str, ...] = ()
+    process_group_id: int | None = None
+    escalated_to_sigkill: bool = False
+    stale_socket_removed: bool = False
+
+    @property
+    def pid(self) -> int:
+        return self.metadata.pid
+
+
 def ensure_daemon_started(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -113,7 +134,7 @@ def inspect_daemon(
 def stop_daemon(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
-) -> DaemonMetadata | None:
+) -> DaemonStopResult | None:
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     metadata = read_daemon_metadata(metadata_path)
@@ -125,25 +146,36 @@ def stop_daemon(
     probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
     if not _is_process_running(metadata.pid):
         remove_metadata(metadata_path)
-        _cleanup_stale_daemon_socket(
+        stale_socket_removed = _cleanup_stale_daemon_socket(
             Path(metadata.socket_path) if metadata.socket_path else resolve_daemon_socket_path(),
             probe_timeout_seconds=probe_timeout_seconds,
             reason="owner_missing_on_stop",
         )
-        return metadata
+        return DaemonStopResult(
+            metadata=metadata,
+            stop_reason="owner_missing_on_stop",
+            stale_socket_removed=stale_socket_removed,
+        )
 
-    _terminate_daemon_process(
+    termination = _terminate_daemon_process(
         metadata.pid,
         deadline=deadline,
         poll_interval_seconds=poll_interval_seconds,
     )
-    _cleanup_stale_daemon_socket(
+    stale_socket_removed = _cleanup_stale_daemon_socket(
         Path(metadata.socket_path) if metadata.socket_path else resolve_daemon_socket_path(),
         probe_timeout_seconds=probe_timeout_seconds,
         reason="owner_stopped_on_stop",
     )
     remove_metadata(metadata_path)
-    return metadata
+    return DaemonStopResult(
+        metadata=metadata,
+        stop_reason="owner_stopped_on_stop",
+        signal_sequence=termination.signal_sequence,
+        process_group_id=termination.process_group_id,
+        escalated_to_sigkill=termination.escalated_to_sigkill,
+        stale_socket_removed=stale_socket_removed,
+    )
 
 
 def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:
@@ -153,6 +185,7 @@ def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = No
 __all__ = [
     "DaemonLockTimeoutError",
     "DaemonMetadata",
+    "DaemonStopResult",
     "create_daemon_app",
     "daemon_url",
     "ensure_daemon_started",
@@ -192,27 +225,42 @@ def _terminate_daemon_process(
     *,
     deadline: float,
     poll_interval_seconds: float,
-) -> None:
-    _signal_daemon_process(pid, signal.SIGTERM)
+) -> _DaemonTerminationResult:
+    signal_sequence = [signal.SIGTERM.name]
+    process_group_id = _signal_daemon_process(pid, signal.SIGTERM)
     try:
         _wait_for_process_exit(
             pid,
             deadline=deadline,
             poll_interval_seconds=poll_interval_seconds,
         )
-        return
+        return _DaemonTerminationResult(
+            signal_sequence=tuple(signal_sequence),
+            process_group_id=process_group_id,
+            escalated_to_sigkill=False,
+        )
     except RuntimeError:
         if not _is_process_running(pid):
-            return
-        _signal_daemon_process(pid, signal.SIGKILL)
+            return _DaemonTerminationResult(
+                signal_sequence=tuple(signal_sequence),
+                process_group_id=process_group_id,
+                escalated_to_sigkill=False,
+            )
+        process_group_id = _signal_daemon_process(pid, signal.SIGKILL) or process_group_id
+        signal_sequence.append(signal.SIGKILL.name)
         _wait_for_process_exit(
             pid,
             deadline=deadline,
             poll_interval_seconds=poll_interval_seconds,
         )
+        return _DaemonTerminationResult(
+            signal_sequence=tuple(signal_sequence),
+            process_group_id=process_group_id,
+            escalated_to_sigkill=True,
+        )
 
 
-def _signal_daemon_process(pid: int, sig: signal.Signals) -> None:
+def _signal_daemon_process(pid: int, sig: signal.Signals) -> int | None:
     try:
         process_group_id = os.getpgid(pid)
     except (AttributeError, ProcessLookupError, OSError):
@@ -221,14 +269,15 @@ def _signal_daemon_process(pid: int, sig: signal.Signals) -> None:
     if process_group_id is not None and process_group_id > 0:
         try:
             os.killpg(process_group_id, sig)
-            return
+            return process_group_id
         except (AttributeError, ProcessLookupError, OSError):
             pass
 
     try:
         os.kill(pid, sig)
     except ProcessLookupError:
-        return
+        return process_group_id
+    return process_group_id
 
 
 def _cleanup_stale_daemon_socket(
@@ -236,14 +285,15 @@ def _cleanup_stale_daemon_socket(
     *,
     probe_timeout_seconds: float,
     reason: str,
-) -> None:
+) -> bool:
     if not _socket_path_exists(socket_path):
-        return
+        return False
     if _probe_daemon_socket(socket_path, timeout_seconds=probe_timeout_seconds):
         logger.warning("Daemon socket still responded during %s; leaving it in place: %s", reason, socket_path)
-        return
+        return False
     logger.warning("Cleaning stale daemon socket during %s: %s", reason, socket_path)
     _remove_daemon_socket(socket_path)
+    return True
 
 
 def _socket_path_exists(socket_path: Path) -> bool:

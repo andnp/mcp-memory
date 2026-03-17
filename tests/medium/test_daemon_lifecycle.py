@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.config import Config, resolve_daemon_metadata_path
-from mcp_memory.daemon import DaemonMetadata, ensure_daemon_started, read_daemon_metadata, stop_daemon
+from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
 from mcp_memory.daemon_process import is_daemon_healthy
 
 
@@ -93,6 +93,9 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
 
     assert stopped is not None
     assert stopped.pid == 1234
+    assert isinstance(stopped, DaemonStopResult)
+    assert stopped.signal_sequence == ("SIGTERM",)
+    assert stopped.escalated_to_sigkill is False
     assert sent_signals == [15]
     assert not metadata_path.exists()
 
@@ -139,9 +142,61 @@ def test_stop_daemon_terminates_unhealthy_running_process_before_removing_metada
 
     assert stopped is not None
     assert stopped.pid == 2345
+    assert isinstance(stopped, DaemonStopResult)
+    assert stopped.stop_reason == "owner_stopped_on_stop"
+    assert stopped.stale_socket_removed is True
     assert sent_signals == [15]
     assert removed_sockets == [tmp_path / "daemon.sock"]
     assert not metadata_path.exists()
+
+
+def test_stop_daemon_reports_sigkill_escalation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.shutdown_grace_seconds = 0.1
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-stop",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8124,
+        pid=3456,
+        started_at=1.0,
+        status="ready",
+    )
+    metadata_path = resolve_daemon_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
+
+    sent_signals: list[int] = []
+    process_states = iter([True, True, True, False])
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
+    wait_calls = iter([RuntimeError("timeout"), None])
+
+    def _fake_wait(pid: int, deadline: float, poll_interval_seconds: float) -> None:
+        result = next(wait_calls)
+        if isinstance(result, Exception):
+            raise result
+
+    monkeypatch.setattr(
+        "mcp_memory.daemon._wait_for_process_exit",
+        _fake_wait,
+    )
+
+    stopped = stop_daemon()
+
+    assert stopped is not None
+    assert stopped.signal_sequence == ("SIGTERM", "SIGKILL")
+    assert stopped.escalated_to_sigkill is True
+    assert sent_signals == [15, 9]
 
 
 def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monkeypatch, tmp_path: Path) -> None:

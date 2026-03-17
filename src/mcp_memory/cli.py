@@ -16,7 +16,7 @@ from rich.table import Table
 
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
-from mcp_memory.daemon import create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
+from mcp_memory.daemon import DaemonStopResult, create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
 from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
@@ -119,26 +119,43 @@ def _print_daemon_status(workspace_root: str | None) -> None:
 
 
 def _stop_daemon_command(workspace_root: str | None) -> None:
-    metadata = None
+    stop_result = None
     try:
-        metadata = stop_daemon(workspace_root, None)
+        stop_result = stop_daemon(workspace_root, None)
     except Exception as exc:
         _exit_cli_error(exc)
-    if metadata is None:
+    if stop_result is None:
         console.print("[yellow]No daemon metadata found.[/]")
         return
+    metadata = stop_result.metadata if isinstance(stop_result, DaemonStopResult) else stop_result
     console.print(f"[green]Daemon stopped:[/] pid={metadata.pid} scope=global")
+    if isinstance(stop_result, DaemonStopResult):
+        signals = ",".join(stop_result.signal_sequence) if stop_result.signal_sequence else "none"
+        console.print(
+            "reason="
+            f"{stop_result.stop_reason} "
+            f"signals={signals} "
+            f"escalated={stop_result.escalated_to_sigkill} "
+            f"pgid={stop_result.process_group_id or '-'} "
+            f"stale_socket_removed={stop_result.stale_socket_removed}"
+        )
 
 
 def _restart_daemon_command(workspace_root: str | None) -> None:
     metadata = None
+    stop_result = None
     try:
-        stop_daemon(workspace_root, None)
+        stop_result = stop_daemon(workspace_root, None)
         metadata = ensure_daemon_started(workspace_root, None)
     except Exception as exc:
         _exit_cli_error(exc)
     if metadata is None:
         return
+    if isinstance(stop_result, DaemonStopResult):
+        signals = ",".join(stop_result.signal_sequence) if stop_result.signal_sequence else "none"
+        console.print(
+            f"[dim]Previous daemon stop:[/] reason={stop_result.stop_reason} signals={signals} escalated={stop_result.escalated_to_sigkill}"
+        )
     console.print(f"[green]Daemon restarted:[/] {metadata.transport_endpoint} (pid={metadata.pid})")
 
 
