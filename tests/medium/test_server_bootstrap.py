@@ -258,6 +258,63 @@ async def test_call_internal_memory_tool_can_create_update_link_and_delete(monke
 
 
 @pytest.mark.asyncio
+async def test_call_internal_memory_tool_merge_can_override_canonical_fields(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        canonical = runtime.repository.create_memory(
+            title="Canonical auth fact",
+            content="JWTs are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+            metadata={"merged_source_ids": ["older-source"]},
+        )
+        source = runtime.repository.create_memory(
+            title="Auth rollout detail",
+            content="JWT rollout is now required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth", "rollout"],
+        )
+        assert canonical is not None and source is not None
+
+        merge_result = await call_internal_memory_tool(
+            runtime,
+            "internal_merge_memory_into_canonical",
+            {
+                "canonical_memory_id": canonical.id,
+                "source_memory_id": source.id,
+                "title": "Canonical auth rollout fact",
+                "content": "JWT rollout is required for all clients.",
+                "summary": "Unified rollout requirement.",
+                "tags": ["auth", "rollout"],
+                "metadata": {"deduplicator_task_id": "dedup-live-task"},
+                "link_context": "Merged rollout observation into canonical auth fact.",
+            },
+        )
+
+        payload = json.loads(merge_result[0].text)
+        updated = runtime.repository.get_memory(canonical.id)
+        archived = runtime.repository.get_memory(source.id)
+        links = runtime.repository.get_links(canonical.id)
+
+        assert payload["status"] == "ok"
+        assert payload["canonical"]["title"] == "Canonical auth rollout fact"
+        assert payload["canonical"]["summary"] == "Unified rollout requirement."
+        assert payload["canonical"]["tags"] == ["auth", "rollout"]
+        assert updated is not None and updated.metadata["deduplicator_task_id"] == "dedup-live-task"
+        assert updated.metadata["merged_source_ids"] == sorted(["older-source", source.id])
+        assert archived is not None and archived.status == "archived"
+        assert any(link.target_id == source.id and link.context == "Merged rollout observation into canonical auth fact." for link in links)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_call_internal_memory_tool_can_split_memory_record(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

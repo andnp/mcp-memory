@@ -94,12 +94,19 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_merge_memory_into_canonical",
-            description="Merge a source memory into a canonical memory, then archive the source and link lineage.",
+            description="Merge a source memory into a canonical memory, optionally rewriting canonical fields, then archive the source and link lineage.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "canonical_memory_id": {"type": "string"},
                     "source_memory_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "workspace_ids": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                    "link_context": {"type": "string"},
                 },
                 "required": ["canonical_memory_id", "source_memory_id"],
             },

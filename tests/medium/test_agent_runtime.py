@@ -1559,10 +1559,24 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
                 status="success",
                 summary="Deduplicator merged duplicate facts via MCP tools.",
                 parsed={
-                    "summary": "Deduplicator merged duplicate facts via MCP tools.",
-                    "merged": 1,
-                    "archived": 1,
-                    "absorbed_observations": 0,
+                    "response": json.dumps(
+                        {
+                            "summary": "Deduplicator merged duplicate facts via MCP tools.",
+                            "merged": 1,
+                            "archived": 1,
+                            "absorbed_observations": 0,
+                        }
+                    ),
+                    "stats": {
+                        "tools": {
+                            "totalCalls": 4,
+                            "byName": {
+                                "mcp_mcp-memory-internal_internal_get_next_dedup_batch": {"count": 1},
+                                "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 2},
+                                "mcp_mcp-memory-internal_internal_read_memory_record": {"count": 1},
+                            },
+                        }
+                    },
                 },
             )
 
@@ -1612,9 +1626,18 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
         assert result["archived"] == 1
         assert result["absorbed_observations"] == 0
         assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 4
+        assert result["mutations"] == 2
+        assert result["tool_names_used"] == [
+            "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
+            "mcp_mcp-memory-internal_internal_merge_memory_into_canonical",
+            "mcp_mcp-memory-internal_internal_read_memory_record",
+        ]
         assert provider.prompts
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "internal_get_next_dedup_batch" in provider.prompts[0]
+        assert "internal_merge_memory_into_canonical" in provider.prompts[0]
+        assert "deduplicator_task_id='deduplicator-agentic-task'" in provider.prompts[0]
         assert canonical.id in provider.prompts[0]
         assert duplicate.id in provider.prompts[0]
     finally:

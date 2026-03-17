@@ -307,7 +307,7 @@ async def handle_deduplicator_task(
     run_agent = getattr(provider, "run_agent", None)
     if callable(run_agent):
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-            _build_deduplicator_agent_prompt(seed_records)
+            _build_deduplicator_agent_prompt(task, seed_records)
         )
         return _normalize_deduplicator_agentic_result(agentic_result, seed_records)
 
@@ -780,13 +780,16 @@ def _deduplicator_seed_payload_item(record) -> dict[str, Any]:
     }
 
 
-def _build_deduplicator_agent_prompt(seed_records: list) -> str:
+def _build_deduplicator_agent_prompt(task: TaskRecord, seed_records: list) -> str:
     seed_payload = [_deduplicator_seed_payload_item(record) for record in seed_records]
     return (
         "You are the deduplicator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
         "Start with internal_get_next_dedup_batch to confirm the current seed batch before making changes.\n"
         "Merge highly similar fact memories into canonical records, preserve lineage with SUPERSEDES links, and absorb matching observations into the most appropriate fact when justified.\n"
+        "Prefer internal_merge_memory_into_canonical for every merge or observation absorption so canonical metadata, archived sources, and lineage stay consistent.\n"
+        f"When using internal_merge_memory_into_canonical, include metadata with deduplicator_task_id='{task.id}' and preserve merged_source_ids.\n"
+        "Only fall back to separate update/archive/link calls when you are creating a brand new canonical fact first and then merging other records into it.\n"
         "Prefer safe, minimal merges. Do not merge records unless the content overlap is strong and the resulting canonical memory stays coherent.\n"
         "Do not claim work you did not actually execute through MCP tools.\n"
         'When finished, output final JSON only in the form {"summary": "...", "merged": N, "archived": N, "absorbed_observations": N}.\n\n'
@@ -796,12 +799,26 @@ def _build_deduplicator_agent_prompt(seed_records: list) -> str:
 
 def _normalize_deduplicator_agentic_result(agentic_result: Any, seed_records: list) -> dict[str, Any]:
     parsed = agentic_result.parsed if isinstance(getattr(agentic_result, "parsed", None), dict) else {}
+    response_payload = parsed
+    response_text = parsed.get("response")
+    if not {"summary", "merged", "archived", "absorbed_observations"} <= set(response_payload) and isinstance(response_text, str):
+        nested = _extract_embedded_json_object(response_text)
+        if isinstance(nested, dict):
+            response_payload = nested
+    raw_tool_stats = parsed.get("stats")
+    tool_stats = raw_tool_stats if isinstance(raw_tool_stats, dict) else {}
+    raw_tool_payload = tool_stats.get("tools")
+    tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
+    tool_names_used = _extract_agentic_tool_names(tool_payload.get("byName"))
     return {
-        "summary": getattr(agentic_result, "summary", None),
-        "merged": _coerce_non_negative_int(parsed.get("merged")),
-        "archived": _coerce_non_negative_int(parsed.get("archived")),
-        "absorbed_observations": _coerce_non_negative_int(parsed.get("absorbed_observations")),
+        "summary": _coerce_text_summary(getattr(agentic_result, "summary", None)) or _coerce_text_summary(response_payload.get("summary")),
+        "merged": _coerce_non_negative_int(response_payload.get("merged")),
+        "archived": _coerce_non_negative_int(response_payload.get("archived")),
+        "absorbed_observations": _coerce_non_negative_int(response_payload.get("absorbed_observations")),
         "execution_mode": "agentic_mcp",
+        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
+        "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
+        "tool_names_used": tool_names_used,
         "seed_memory_ids": [record.id for record in seed_records],
     }
 
@@ -838,6 +855,52 @@ def _coerce_non_negative_int(value: object) -> int:
     if isinstance(value, int):
         return max(value, 0)
     return 0
+
+
+def _coerce_text_summary(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _extract_embedded_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        json_start = text.find("{")
+        json_end = text.rfind("}") + 1
+        if json_start < 0 or json_end <= json_start:
+            return None
+        try:
+            parsed = json.loads(text[json_start:json_end])
+        except json.JSONDecodeError:
+            return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _extract_agentic_tool_names(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+
+
+def _count_mutating_agentic_tool_calls(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    read_only_tool_names = {
+        "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
+        "mcp_mcp-memory-internal_internal_read_memory_record",
+        "mcp_mcp-memory-internal_internal_search_memory_records",
+        "mcp_mcp-memory-internal_internal_list_memory_records",
+    }
+    total = 0
+    for name, payload in value.items():
+        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
+            continue
+        total += _coerce_non_negative_int(payload.get("count"))
+    return total
 
 
 def _should_use_provider_for_defragment_group(group: list, source_lines: int) -> bool:

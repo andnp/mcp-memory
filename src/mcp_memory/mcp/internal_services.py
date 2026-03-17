@@ -136,15 +136,36 @@ def internal_merge_memory_into_canonical_service(ctx: ApplicationContext, argume
     if canonical is None or source is None:
         return {"status": "error", "error": "memory_not_found"}
 
-    merged_content = _append_content(canonical.content, source.summary or source.content)
+    merged_title = optional_string(arguments, "title") or canonical.title
+    merged_content = optional_string(arguments, "content") or _append_content(canonical.content, source.summary or source.content)
+    merged_summary = optional_string(arguments, "summary")
+    tags = string_list(arguments, "tags") if "tags" in arguments else None
+    workspace_ids = string_list(arguments, "workspace_ids") if "workspace_ids" in arguments else None
+    metadata_override = optional_object(arguments, "metadata") or {}
+    merged_metadata = dict(canonical.metadata)
+    if metadata_override:
+        merged_metadata.update(metadata_override)
+    merged_source_ids = merged_metadata.get("merged_source_ids", [])
+    if not isinstance(merged_source_ids, list):
+        merged_source_ids = []
+    merged_metadata["merged_source_ids"] = sorted({*map(str, merged_source_ids), source.id})
+
     updated = ctx.repository.update_memory(
         canonical.id,
+        title=merged_title,
         content=merged_content,
-        tags=_normalize_tags([*canonical.tags, *source.tags]),
-        workspace_ids=sorted({*canonical.workspace_ids, *source.workspace_ids}),
+        summary=merged_summary,
+        tags=_normalize_tags(tags) if tags is not None else _normalize_tags([*canonical.tags, *source.tags]),
+        workspace_ids=list(workspace_ids) if workspace_ids else sorted({*canonical.workspace_ids, *source.workspace_ids}),
+        metadata=merged_metadata,
     )
     assert updated is not None
-    ctx.repository.add_link(updated.id, source.id, "SUPERSEDES", "Merged into canonical memory by internal maintenance tools.")
+    ctx.repository.add_link(
+        updated.id,
+        source.id,
+        "SUPERSEDES",
+        optional_string(arguments, "link_context") or "Merged into canonical memory by internal maintenance tools.",
+    )
     archived = ctx.repository.update_memory(source.id, status="archived")
     return {
         "status": "ok",
