@@ -7,6 +7,7 @@
 ### 1.1 Core Tables
 - **`memories`**: `id (UUID PRIMARY KEY)`, `title (TEXT)`, `content (TEXT)`, `summary (TEXT)`, `type (VARCHAR)`, `status (VARCHAR: active, stale, degraded, archived)`, `access_score (REAL)`, `last_accessed_at (DATETIME)`, `last_surfaced_at (DATETIME)`, `created_at (DATETIME)`, `updated_at (DATETIME)`, `metadata (JSON)`.
     - **Types**: `journal`, `plan`, `fact`, `observation`, `reflection`.
+    - **Current metadata conventions** may include ingest lineage (`source_entry_ids`, `appended_entry_ids`, `ingest_task_id`), merge lineage (`merged_source_ids`), and split lineage (`split_group_id`, `split_from_memory_id`, `split_part_index`, `split_part_count`, `split_child_memory_ids`, `split_sibling_memory_ids`).
 - **`memory_workspaces`**: `memory_id (UUID)`, `workspace_id (VARCHAR)`. (Many-to-many junction for "Soft Projects").
 - **`links`**: `source_id (UUID)`, `target_id (UUID)`, `type (VARCHAR)`, `context (TEXT)`.
     - **Edge Types**: `SUPERSEDES`, `DEPENDS_ON`, `AMENDS`, `CONTRADICTS`.
@@ -64,7 +65,7 @@ When an agent wakes up, it selects a batch of memories using one of these heuris
 - **Anomalies**: Absolute largest or smallest memories (for splitting/merging).
 
 ### 4.2 The Agent Roster
-1. **The Ingestor**: Flushes System 1 → System 2. In the current agentic path it claims journal batches through an internal MCP tool, performs direct MCP create/append mutations, and still relies on handler-owned claim finalization so delete/release semantics stay crash-safe. It preserves and accumulates memory workspace associations as relevance metadata when thoughts from additional workspaces are incorporated.
+1. **The Ingestor**: Flushes System 1 → System 2. In the current agentic path it claims journal batches through an internal MCP tool, performs direct MCP create/append mutations through ingest-specific internal tools, and still relies on handler-owned claim finalization so delete/release semantics stay crash-safe. It preserves and accumulates memory workspace associations as relevance metadata when thoughts from additional workspaces are incorporated.
 2. **The Summarizer**: Maintains the 2-sentence `summary` field for all memories.
 3. **The Graph Linker**: Discovers new semantic relationships between silos using the Strategy Roulette.
 4. **The Conflict Detector**: Identifies contradictions and flags them in the Web UI inbox.
@@ -75,3 +76,7 @@ When an agent wakes up, it selects a batch of memories using one of these heuris
 9. **The Sweeper**: Purges telemetry (`tasks`, `journal`) older than 7 days.
 
 Trusted maintenance agents currently include fully agentic curator, deduplicator, and ingest workflows backed by the internal MCP maintenance surface.
+
+### 4.3 Current Maintenance Notes
+- deduplicator observation absorption now stays deterministic; provider-assisted rewriting is reserved for fact-to-fact merges
+- split maintenance preserves richer lineage structure through shared split-group metadata, part ordering, sibling ids, and original child-set metadata

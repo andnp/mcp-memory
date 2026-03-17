@@ -31,8 +31,10 @@ Use a SQLite-backed `tasks` table with a worker loop.
 ### 3.1.2 Current Agentic Maintenance Mode
 - trusted maintenance agents may run through an internal MCP maintenance surface when an agentic provider is configured
 - `memory-curator` and `deduplicator` now use this path for real maintenance mutations
-- `ingest-system1` now also uses an agentic MCP path: it claims work through `internal_get_next_ingest_batch`, mutates memories through internal append/create tools, and still relies on handler-owned claim finalization so journal safety is preserved outside the model loop
-- ingest create mutations can enqueue summarize follow-up work directly from the internal tool layer, and append mutations can merge `workspace_ids` plus ingest lineage metadata (`appended_entry_ids`, `ingest_task_id`)
+- `ingest-system1` now also uses an agentic MCP path: it claims work through `internal_get_next_ingest_batch`, prefers ingest-specific append/create tools, and still relies on handler-owned claim finalization so journal safety is preserved outside the model loop
+- ingest create mutations can enqueue summarize follow-up work directly from the internal tool layer, and append mutations can merge `workspace_ids` plus ingest lineage metadata (`appended_entry_ids`, `ingest_task_id`) without relying on prompt-only discipline
+- deduplicator observation absorption now stays on a deterministic local path; provider-assisted rewriting is reserved for fact-to-fact merges to reduce per-run fan-out
+- split-oriented maintenance now stamps shared split-group and sibling metadata so later reads and cleanup passes can reconstruct the decomposition structure from either the parent or child side
 
 ### 3.2 Execute
 - the daemon starts a runtime worker

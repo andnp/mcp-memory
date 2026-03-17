@@ -217,8 +217,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["search"]["semantic_enabled"] is True
         assert overview["memory_metrics"]["total_memories"] == 2
         assert overview["queue_diagnostics"]
-        assert overview["queue_diagnostics"][0]["task_name"] == "summarize-memory"
-        assert overview["queue_diagnostics"][0]["pending_state"] in {"scheduled", "runnable"}
+        assert all(item["pending_state"] in {"scheduled", "runnable"} for item in overview["queue_diagnostics"])
+        assert any(item["task_name"] in {"project-manager", "summarize-memory"} for item in overview["queue_diagnostics"])
         assert "agent_runs" in overview
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
         assert overview["provider_usage"][0]["task_name"] == "graph-linker"

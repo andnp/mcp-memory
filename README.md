@@ -94,6 +94,12 @@ When an agentic AI provider is configured and the internal maintenance MCP surfa
 - run `deduplicator` through the same agentic MCP mode
 - run `ingest-system1` through agentic MCP mode with internal batch claiming and direct append/create mutations while preserving handler-owned journal finalization
 
+Agentic ingest now prefers dedicated ingest-specific internal tools for append/create mutations, so `ingest_task_id`, entry lineage, workspace propagation, and summarize-task enqueueing live in the tool layer instead of prompt instructions.
+
+Deduplicator observation absorption now stays deterministic and reserves provider-assisted rewriting for fact-to-fact merges, which reduces per-run provider fan-out without changing the recurring maintenance cadence.
+
+Split maintenance now records richer lineage structure: split children share a `split_group_id`, include per-part ordering/count metadata plus sibling IDs, and the original memory records the full child set/count.
+
 Agentic ingest also now normalizes legacy provider payloads that return `results` instead of `actions`, so append opportunities are no longer silently lost when the provider uses the older shape.
 
 Provider usage reporting in `uv run mcp-memory stats` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
