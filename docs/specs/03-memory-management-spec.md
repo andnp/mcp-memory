@@ -57,17 +57,40 @@ The active runtime now uses a staged ranking pipeline:
 ## 4. Maintenance Agents (The Background Daemon)
 
 ### 4.1 The Strategy Roulette (Intelligent Sampling)
-When an agent wakes up, it selects a batch of memories using one of these heuristics:
+Target behavior for entropy-capable maintenance agents:
+
+When a maintenance agent wakes up, it should select a batch of memories using one of these heuristics:
 - **Semantic Cluster**: Dense groups of similar memories (for merging).
-- **Pure Noise**: 10 random memories (to find lateral connections).
+- **Bounded Noise**: Random sample from under-touched, non-recently-mutated candidates (to find lateral connections without wasting runs).
 - **Cold Storage**: Least recently read memories (to check for obsolescence).
 - **Never Surfaced**: Memories that consistently score low in search.
 - **Anomalies**: Absolute largest or smallest memories (for splitting/merging).
+- **Graph Bridge**: Records that appear semantically connected to other clusters but lack explicit links.
+- **Orphan / Low Support**: Records with weak graph support and little evidence of long-term value.
+- **Cooldown Escape**: Records outside the recent maintenance hot set so repeated runs do not keep revisiting the same memories.
+- **Conflict Frontier**: Fact/plan candidates that look potentially incompatible but are not yet linked by `CONTRADICTS`.
+
+Entropy is a **selection-layer concern** only. The durable task queue, ingest claim/delete/release semantics, and mutation safety rails remain deterministic.
+
+Selection design requirements:
+- strategy choice should be reproducible for one task run via a task-scoped seed
+- each batch acquisition should return explicit strategy metadata for observability
+- sampling should be bounded and auditable rather than free-form randomness throughout the run
+- agents may combine deterministic prioritization with stochastic tie-breaking or seed selection
+
+Suggested initial assignment:
+- `memory-curator`: anomaly, cold-storage, never-surfaced, orphan/low-support, bounded-noise
+- `deduplicator`: semantic, anomaly, cooldown-escape
+- `graph-linker`: semantic, graph-bridge, bounded-noise
+- `conflict-detector`: semantic, conflict-frontier, never-surfaced
+- `defragmenter`: cold-storage, semantic, orphan/low-support
+- `taxonomist`: cold-storage, never-surfaced, bounded-noise
+- `ingest-system1`: deterministic FIFO claim ordering with semantic grouping only inside the claimed batch
 
 ### 4.2 The Agent Roster
 1. **The Ingestor**: Flushes System 1 → System 2. In the current agentic path it claims journal batches through an internal MCP tool, performs direct MCP create/append mutations through ingest-specific internal tools, and still relies on handler-owned claim finalization so delete/release semantics stay crash-safe. It preserves and accumulates memory workspace associations as relevance metadata when thoughts from additional workspaces are incorporated.
 2. **The Summarizer**: Maintains the 2-sentence `summary` field for all memories.
-3. **The Graph Linker**: Discovers new semantic relationships between silos using the Strategy Roulette.
+3. **The Graph Linker**: Discovers new semantic relationships between silos and is a natural future consumer of strategy-roulette batch selection.
 4. **The Conflict Detector**: Identifies contradictions and flags them in the Web UI inbox.
 5. **The Defragmenter**: Synthesizes clusters of old journals into single `reflection` memories and creates `SUPERSEDES` links.
 6. **The Taxonomist**: Normalizes and deduplicates the tag ontology autonomously.
@@ -78,5 +101,7 @@ When an agent wakes up, it selects a batch of memories using one of these heuris
 Trusted maintenance agents currently include fully agentic curator, deduplicator, and ingest workflows backed by the internal MCP maintenance surface.
 
 ### 4.3 Current Maintenance Notes
+- current runtime is still mostly deterministic and recency-biased for candidate acquisition; full strategy roulette is planned but not yet broadly implemented
+- `memory-curator` currently adds limited anomaly pressure for oversized memories, including a periodic larger-memory pass keyed from task identity
 - deduplicator observation absorption now stays deterministic; provider-assisted rewriting is reserved for fact-to-fact merges
 - split maintenance preserves richer lineage structure through shared split-group metadata, part ordering, sibling ids, and original child-set metadata

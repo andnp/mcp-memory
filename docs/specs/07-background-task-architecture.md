@@ -67,7 +67,7 @@ Use a SQLite-backed `tasks` table with a worker loop.
 The present runtime does **not** require:
 - Huey
 - reference-count-based shutdown semantics
-- strategy-roulette scheduling
+- task-queue-level random scheduling
 - always-on daemon behavior
 
 Trusted maintenance agents may use a separate internal MCP surface for read/search/archive/append/merge operations; this surface is intentionally separate from the public assistant-facing MCP tool set.
@@ -76,10 +76,12 @@ That trusted surface is no longer hypothetical: it is now the active execution p
 
 ## 6. Future Work
 Potential future additions:
-- richer scheduling policies
+- richer selection policies for maintenance batches, including strategy roulette at the candidate-selection layer
 - broader maintenance agent roster
 - more explicit per-task observability in the dashboard
 - lifecycle changes if the daemon transport model evolves
+
+If strategy roulette is added, it should operate above the durable queue by selecting different seed batches for one maintenance run while preserving deterministic queue ordering, ingest fairness, and crash-safe claim finalization.
 
 Recent product feedback also suggests a future compact per-task maintenance summary should show which internal MCP tools were used, whether shutdown required escalation, and which provider/task combination produced each mutation batch.
 
