@@ -350,6 +350,12 @@ class RelationalMemorySearchService:
             status=status,
             include_superseded=include_superseded,
         )
+        if status is None:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if (candidate.record.status if isinstance(candidate, RankedMemoryCandidate) else candidate.status) != "archived"
+            ]
         candidate_by_id = {
             (candidate.record.id if isinstance(candidate, RankedMemoryCandidate) else candidate.id): candidate
             for candidate in candidates

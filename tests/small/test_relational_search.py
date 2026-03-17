@@ -388,6 +388,42 @@ def test_search_memories_penalizes_stale_records_and_updates_last_surfaced(db_ma
     assert refreshed_stale is not None and refreshed_stale.last_surfaced_at is not None
 
 
+def test_search_memories_hides_archived_by_default_but_allows_explicit_archived_queries(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    active = repository.create_memory(
+        title="RLCore architecture active",
+        content="Focused active RLCore architecture note.",
+        summary="Active RLCore architecture summary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        tags=["architecture"],
+    )
+    archived = repository.create_memory(
+        title="RLCore architecture archived",
+        content="Archived oversized RLCore architecture blob.",
+        summary="Archived RLCore architecture summary.",
+        memory_type="fact",
+        status="archived",
+        workspace_ids=["workspace-alpha"],
+        tags=["architecture"],
+    )
+    assert active is not None and archived is not None
+
+    default_results = service.search_memories("RLCore architecture", workspace_id="workspace-alpha", limit=10)
+    archived_results = service.search_memories(
+        "RLCore architecture",
+        workspace_id="workspace-alpha",
+        limit=10,
+        status="archived",
+    )
+
+    assert [result.memory_id for result in default_results] == [active.id]
+    assert [result.memory_id for result in archived_results] == [archived.id]
+
+
 def test_search_memories_applies_graph_authority_boost(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())

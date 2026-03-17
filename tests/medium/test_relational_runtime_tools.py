@@ -84,6 +84,59 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_search_memory_tool_hides_archived_by_default_but_can_request_them(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        active = runtime.repository.create_memory(
+            title="Architecture active",
+            content="Focused active architecture note.",
+            summary="Active architecture summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            status="active",
+            tags=["architecture"],
+        )
+        archived = runtime.repository.create_memory(
+            title="Architecture archived",
+            content="Archived architecture blob.",
+            summary="Archived architecture summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            status="archived",
+            tags=["architecture"],
+        )
+        assert active is not None and archived is not None
+
+        default_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {"query": "architecture", "limit": 10},
+                )
+            )[0].text
+        )
+        archived_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {"query": "architecture", "limit": 10, "status": "archived"},
+                )
+            )[0].text
+        )
+
+        assert [result["memory_id"] for result in default_payload["results"]] == [active.id]
+        assert [result["memory_id"] for result in archived_payload["results"]] == [archived.id]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_search_memory_tool_uses_active_workspace_context(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
