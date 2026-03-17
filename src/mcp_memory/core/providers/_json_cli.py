@@ -54,7 +54,7 @@ class JSONCLIProvider:
             clone._observer = _chain_observers(existing, observer)
         return clone
 
-    async def ask(self, prompt: str) -> dict:
+    async def ask_json(self, prompt: str) -> dict:
         last_error: str | None = None
         for attempt in range(self._max_retries + 1):
             response = await self._execute(prompt, attempt=attempt + 1)
@@ -72,6 +72,9 @@ class JSONCLIProvider:
         raise RuntimeError(
             f"{self.provider_name} failed after {self._max_retries + 1} attempts: {last_error}"
         )
+
+    async def ask(self, prompt: str) -> dict:
+        return await self.ask_json(prompt)
 
     def build_command(self, prompt: str) -> tuple[str, ...]:
         raise NotImplementedError

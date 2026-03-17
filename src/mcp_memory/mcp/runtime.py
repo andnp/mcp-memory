@@ -17,7 +17,8 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import SQLiteVectorStore, build_embedder
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
-from mcp_memory.core.providers import build_ai_provider_from_config
+from mcp_memory.core.providers import build_agentic_ai_provider_from_config
+from mcp_memory.core.providers import build_json_ai_provider_from_config
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -73,17 +74,18 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
     )
     relational_search.run_startup_health_check()
     task_queue = SQLiteTaskQueue(db_manager)
-    ai_provider = build_ai_provider_from_config(spec.config, spec.workspace_root)
-    if ai_provider is not None:
-        ai_provider = InstrumentedAIProvider(
-            ai_provider,
+    ai_json_provider = build_json_ai_provider_from_config(spec.config, spec.workspace_root)
+    if ai_json_provider is not None:
+        ai_json_provider = InstrumentedAIProvider(
+            ai_json_provider,
             usage_repository=ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id),
             provider_key=spec.config.ai.provider,
-            provider_name=getattr(ai_provider, "provider_name", spec.config.ai.provider),
+            provider_name=getattr(ai_json_provider, "provider_name", spec.config.ai.provider),
             model_name=spec.config.ai.model,
             workspace_id=spec.workspace_id,
             task_queue=task_queue,
         )
+    ai_agent_provider = build_agentic_ai_provider_from_config(spec.config, spec.workspace_root)
     return ApplicationContext(
         config=spec.config,
         workspace_id=spec.workspace_id,
@@ -94,7 +96,9 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         repository=repository,
         relational_search=relational_search,
         task_queue=task_queue,
-        ai_provider=ai_provider,
+        ai_json_provider=ai_json_provider,
+        ai_agent_provider=ai_agent_provider,
+        ai_provider=ai_json_provider,
         embedder=embedder,
         vector_store=vector_store,
         search_health=relational_search.get_health(),

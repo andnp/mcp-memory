@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
+from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
@@ -44,7 +46,7 @@ class InstrumentedAIProvider:
             task_queue=self._task_queue,
         )
 
-    async def ask(self, prompt: str) -> dict:
+    async def ask_json(self, prompt: str) -> dict:
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
@@ -105,7 +107,11 @@ class InstrumentedAIProvider:
         if callable(binder):
             provider = binder(_observer)
         try:
-            response = await provider.ask(prompt)
+            ask_json = getattr(provider, "ask_json", None)
+            if callable(ask_json):
+                response = await cast(Callable[[str], Awaitable[dict[str, Any]]], ask_json)(prompt)
+            else:
+                response = await cast(Callable[[str], Awaitable[dict[str, Any]]], getattr(provider, "ask"))(prompt)
         except asyncio.CancelledError:
             self._usage_repository.record_call(
                 task_name=self._task_name,
@@ -156,6 +162,16 @@ class InstrumentedAIProvider:
         if self._task_queue is not None and self._task_id is not None:
             self._task_queue.clear_running_process(self._task_id)
         return response
+
+    async def ask(self, prompt: str) -> dict:
+        return await self.ask_json(prompt)
+
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        provider = self._provider
+        run_agent = getattr(provider, "run_agent", None)
+        if not callable(run_agent):
+            raise RuntimeError("agentic_provider_not_configured")
+        return await cast(Callable[[str], Awaitable[AgenticRunResult]], run_agent)(prompt)
 
 
 def _coerce_pid(value: object) -> int | None:

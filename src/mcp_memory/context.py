@@ -21,6 +21,8 @@ class ApplicationContext:
     repository: RelationalMemoryRepository | None = None
     relational_search: Any = None
     task_queue: Any = None
+    ai_json_provider: Any = None
+    ai_agent_provider: Any = None
     ai_provider: Any = None
     embedder: Any = None
     vector_store: Any = None

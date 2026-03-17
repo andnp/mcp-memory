@@ -4,11 +4,14 @@ import pytest
 
 from mcp_memory.config import AIConfig, Config, CopilotCLIConfig, GeminiCLIConfig, OllamaCLIConfig, OpenCodeCLIConfig
 from mcp_memory.core.providers import (
+    AgenticRunResult,
     CopilotCLIProvider,
     GeminiCLIProvider,
     OllamaCLIProvider,
     OpenCodeCLIProvider,
+    build_agentic_ai_provider_from_config,
     build_ai_provider_from_config,
+    build_json_ai_provider_from_config,
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.tasks import SQLiteTaskQueue
@@ -156,6 +159,16 @@ def test_build_ai_provider_from_config_supports_expanded_providers() -> None:
     assert isinstance(ollama, OllamaCLIProvider)
 
 
+def test_split_provider_builders_keep_json_and_agentic_paths_distinct() -> None:
+    config = Config(ai=AIConfig(provider="gemini-cli"), gemini_cli=GeminiCLIConfig(command="gemini"))
+
+    json_provider = build_json_ai_provider_from_config(config)
+    agentic_provider = build_agentic_ai_provider_from_config(config)
+
+    assert isinstance(json_provider, GeminiCLIProvider)
+    assert agentic_provider is None
+
+
 @pytest.mark.asyncio
 async def test_instrumented_provider_records_task_name_with_usage_context(db_manager) -> None:
     class _Provider:
@@ -181,6 +194,57 @@ async def test_instrumented_provider_records_task_name_with_usage_context(db_man
     assert rows[0]["task_name"] == "memory-curator"
     assert rows[0]["provider_key"] == "gemini-cli"
     assert rows[0]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_prefers_ask_json_when_available(db_manager) -> None:
+    class _Provider:
+        def __init__(self) -> None:
+            self.ask_calls = 0
+            self.ask_json_calls = 0
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            self.ask_calls += 1
+            return {"path": "ask", "prompt": prompt}
+
+        async def ask_json(self, prompt: str) -> dict[str, object]:
+            self.ask_json_calls += 1
+            return {"path": "ask_json", "prompt": prompt}
+
+    provider_impl = _Provider()
+    provider = InstrumentedAIProvider(
+        provider_impl,
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    )
+
+    result = await provider.ask_json("clean json mode")
+
+    assert result["path"] == "ask_json"
+    assert provider_impl.ask_json_calls == 1
+    assert provider_impl.ask_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_can_forward_agentic_runs(db_manager) -> None:
+    class _Provider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            return AgenticRunResult(status="success", summary=prompt)
+
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    )
+
+    result = await provider.run_agent("agent mode")
+
+    assert result.status == "success"
+    assert result.summary == "agent mode"
 
 
 @pytest.mark.asyncio

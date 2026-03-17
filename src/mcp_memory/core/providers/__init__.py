@@ -7,6 +7,9 @@ from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers.copilot_cli import CopilotCLIProvider
 from mcp_memory.core.providers.gemini_cli import GeminiCLIProvider
+from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.providers.interfaces import AgenticTaskProvider
+from mcp_memory.core.providers.interfaces import JSONTaskProvider
 from mcp_memory.core.providers.ollama_cli import OllamaCLIProvider
 from mcp_memory.core.providers.opencode_cli import OpenCodeCLIProvider
 
@@ -59,13 +62,27 @@ def build_ai_provider_from_config(config: Config, workspace_root: Path | None = 
     raise ValueError(f"Unsupported AI provider: {config.ai.provider}")
 
 
+def build_json_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
+    return build_ai_provider_from_config(config, workspace_root)
+
+
+def build_agentic_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
+    del config, workspace_root
+    return None
+
+
 __all__ = [
     "AIProvider",
     "AIResponse",
     "CopilotCLIProvider",
     "GeminiCLIProvider",
+    "AgenticRunResult",
+    "AgenticTaskProvider",
+    "JSONTaskProvider",
     "OllamaCLIProvider",
     "OpenCodeCLIProvider",
+    "build_agentic_ai_provider_from_config",
     "build_ai_provider",
     "build_ai_provider_from_config",
+    "build_json_ai_provider_from_config",
 ]
