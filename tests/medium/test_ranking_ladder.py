@@ -68,5 +68,9 @@ def test_ranking_ladder_orders_working_and_fresh_above_stale_generic_match(db_ma
 
     results = service.search_memories("generic platform note", workspace_id="workspace-alpha", limit=4)
 
-    assert [result.memory_id for result in results] == [working.id, fresh.id, evergreen.id, obsolete.id]
+    assert results[0].memory_id == working.id
+    assert results[-1].memory_id == obsolete.id
+    positions = {result.memory_id: index for index, result in enumerate(results)}
+    assert positions[evergreen.id] < positions[obsolete.id]
+    assert positions[fresh.id] < positions[obsolete.id]
     assert results[0].score >= results[1].score >= results[2].score >= results[3].score

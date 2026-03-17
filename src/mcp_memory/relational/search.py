@@ -152,6 +152,13 @@ class RankingEngine:
             return 0.0
         return self._weights.access_bonus_scale * math.log10(current_access_score + 1.0)
 
+    def adjusted_access_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
+        bonus = self.access_bonus(record)
+        supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
+        if supporting_links <= 0 and record.type in {"journal", "plan"}:
+            return bonus * 0.5
+        return bonus
+
     def authority_multiplier(self, record: RelationalMemoryRecord) -> float:
         incoming_links_count = self._repository.count_incoming_links(record.id)
         capped_links = min(incoming_links_count, self._weights.authority_link_cap)
@@ -172,16 +179,23 @@ class RankingEngine:
             return 1.0
         return self._weights.degradation_multiplier
 
+    def graph_support_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
+        supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
+        if supporting_links <= 0 or record.type not in {"fact", "observation", "reflection"}:
+            return 0.0
+        return min((supporting_links * 0.08) + 0.04, 0.2)
+
     def score_from_rrf(
         self,
         record: RelationalMemoryRecord,
         rrf_score: float,
         workspace_id: str | None = None,
     ) -> float:
+        authority_counts = _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
         score = self.calibrate_score(rrf_score)
-        score = min(score + self.type_aware_recency_bonus(record), 1.0)
+        score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
         score *= self.workspace_multiplier(record, workspace_id)
-        score += self.access_bonus(record)
+        score += self.adjusted_access_bonus(record, authority_counts)
         score *= self.authority_multiplier(record)
         score *= self.degradation_multiplier(record)
         return min(max(score, 0.0), 1.0)
@@ -197,10 +211,15 @@ class RankingEngine:
             record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
             if record.id not in rrf_scores:
                 continue
+            authority_counts = (
+                candidate.incoming_link_type_counts
+                if isinstance(candidate, RankedMemoryCandidate)
+                else _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
+            )
             score = self.calibrate_score(rrf_scores[record.id])
-            score = min(score + self.type_aware_recency_bonus(record), 1.0)
+            score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
             score *= self.workspace_multiplier(record, workspace_id)
-            score += self.access_bonus(record)
+            score += self.adjusted_access_bonus(record, authority_counts)
             score *= self.authority_multiplier_for_candidate(candidate)
             score *= self.degradation_multiplier(record)
             ranked.append((record, min(max(score, 0.0), 1.0)))
@@ -217,15 +236,16 @@ class RankingEngine:
         calibrated_score = self.calibrate_score(rrf_score)
         recency_bonus = self.type_aware_recency_bonus(record)
         workspace_multiplier = self.workspace_multiplier(record, workspace_id)
-        access_bonus = self.access_bonus(record)
-        authority_multiplier = self.authority_multiplier_for_candidate(candidate)
         authority_counts = (
             candidate.incoming_link_type_counts
             if isinstance(candidate, RankedMemoryCandidate)
             else _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
         )
+        support_bonus = self.graph_support_bonus(record, authority_counts)
+        access_bonus = self.adjusted_access_bonus(record, authority_counts)
+        authority_multiplier = self.authority_multiplier_for_candidate(candidate)
         degradation_multiplier = self.degradation_multiplier(record)
-        score_after_recency = min(calibrated_score + recency_bonus, 1.0)
+        score_after_recency = min(calibrated_score + recency_bonus + support_bonus, 1.0)
         final_score = score_after_recency
         final_score *= workspace_multiplier
         final_score += access_bonus
@@ -236,6 +256,7 @@ class RankingEngine:
             "rrf_score": round(rrf_score, 6),
             "calibrated_score": round(calibrated_score, 6),
             "recency_bonus": round(recency_bonus, 6),
+            "graph_support_bonus": round(support_bonus, 6),
             "workspace_multiplier": round(workspace_multiplier, 6),
             "access_bonus": round(access_bonus, 6),
             "authority_multiplier": round(authority_multiplier, 6),

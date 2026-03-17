@@ -522,6 +522,53 @@ def test_search_memories_weights_supporting_links_above_contradictions(db_manage
     assert contradictory.id in {result.memory_id for result in results}
 
 
+def test_search_memories_prefers_graph_supported_canonical_memory_over_unsupported_working_plan(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    working_plan = repository.create_memory(
+        title="Ingest migration working plan",
+        content="Agentic ingest final shape execution plan.",
+        summary="Working plan summary.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["ingest"],
+    )
+    canonical_observation = repository.create_memory(
+        title="Ingest final-shape canonical note",
+        content="Agentic ingest final shape with durable claim finalization.",
+        summary="Canonical ingest summary.",
+        memory_type="observation",
+        workspace_ids=["workspace-alpha"],
+        tags=["ingest"],
+    )
+    supporting_fact = repository.create_memory(
+        title="Ingest implementation detail",
+        content="Depends on the canonical ingest final shape memory.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert working_plan is not None and canonical_observation is not None and supporting_fact is not None
+
+    repository.record_access(
+        working_plan.id,
+        access_score=64.0,
+        accessed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    repository.add_link(supporting_fact.id, canonical_observation.id, "DEPENDS_ON")
+
+    results = service.search_memories("agentic ingest final shape", workspace_id="workspace-alpha", limit=5, debug=True)
+    positions = {result.memory_id: index for index, result in enumerate(results)}
+    canonical_debug = next(result.ranking_debug for result in results if result.memory_id == canonical_observation.id)
+    plan_debug = next(result.ranking_debug for result in results if result.memory_id == working_plan.id)
+
+    assert positions[canonical_observation.id] < positions[working_plan.id]
+    assert canonical_debug is not None
+    assert plan_debug is not None
+    assert float(canonical_debug["graph_support_bonus"]) > 0
+    assert float(plan_debug["access_bonus"]) < 0.1
+
+
 def test_search_memories_memory_type_hint_does_not_filter_results(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
