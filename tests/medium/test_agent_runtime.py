@@ -1540,6 +1540,88 @@ async def test_deduplicator_limits_observation_absorption_to_seed_subset(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(
+                status="success",
+                summary="Deduplicator merged duplicate facts via MCP tools.",
+                parsed={
+                    "summary": "Deduplicator merged duplicate facts via MCP tools.",
+                    "merged": 1,
+                    "archived": 1,
+                    "absorbed_observations": 0,
+                },
+            )
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="Canonical auth fact",
+            content="JWTs are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs must be required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = _AgenticProvider()
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-agentic-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["summary"] == "Deduplicator merged duplicate facts via MCP tools."
+        assert result["merged"] == 1
+        assert result["archived"] == 1
+        assert result["absorbed_observations"] == 0
+        assert result["execution_mode"] == "agentic_mcp"
+        assert provider.prompts
+        assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
+        assert "internal_get_next_dedup_batch" in provider.prompts[0]
+        assert canonical.id in provider.prompts[0]
+        assert duplicate.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -1917,8 +1999,8 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         runtime.close()
 
 
-def test_agentic_task_names_contains_curator_only_for_now() -> None:
-    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME}
+def test_agentic_task_names_contains_curator_and_deduplicator() -> None:
+    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, DEDUPLICATOR_TASK_NAME}
 
 
 @pytest.mark.asyncio

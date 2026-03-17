@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 AGENTIC_TASK_NAMES = {
+    DEDUPLICATOR_TASK_NAME,
     CURATOR_TASK_NAME,
 }
 

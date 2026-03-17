@@ -304,6 +304,13 @@ async def handle_deduplicator_task(
             "seed_memory_ids": [record.id for record in seed_records],
         }
 
+    run_agent = getattr(provider, "run_agent", None)
+    if callable(run_agent):
+        agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+            _build_deduplicator_agent_prompt(seed_records)
+        )
+        return _normalize_deduplicator_agentic_result(agentic_result, seed_records)
+
     active_facts = [record for record in candidates if record.type == "fact"]
     embedding_by_id = _embed_records(ctx, [*active_facts, *observations])
     merged = 0
@@ -760,6 +767,45 @@ def _curator_seed_payload_item(record) -> dict[str, Any]:
     }
 
 
+def _deduplicator_seed_payload_item(record) -> dict[str, Any]:
+    summary_source = record.summary or record.content
+    return {
+        "id": record.id,
+        "type": record.type,
+        "status": record.status,
+        "content_size_chars": len(record.content.strip()),
+        "title": _truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
+        "summary": _truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
+        "tags": list(record.tags[:CURATOR_MAX_TAGS]),
+    }
+
+
+def _build_deduplicator_agent_prompt(seed_records: list) -> str:
+    seed_payload = [_deduplicator_seed_payload_item(record) for record in seed_records]
+    return (
+        "You are the deduplicator maintenance agent for the global memory store.\n"
+        "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
+        "Start with internal_get_next_dedup_batch to confirm the current seed batch before making changes.\n"
+        "Merge highly similar fact memories into canonical records, preserve lineage with SUPERSEDES links, and absorb matching observations into the most appropriate fact when justified.\n"
+        "Prefer safe, minimal merges. Do not merge records unless the content overlap is strong and the resulting canonical memory stays coherent.\n"
+        "Do not claim work you did not actually execute through MCP tools.\n"
+        'When finished, output final JSON only in the form {"summary": "...", "merged": N, "archived": N, "absorbed_observations": N}.\n\n'
+        f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+    )
+
+
+def _normalize_deduplicator_agentic_result(agentic_result: Any, seed_records: list) -> dict[str, Any]:
+    parsed = agentic_result.parsed if isinstance(getattr(agentic_result, "parsed", None), dict) else {}
+    return {
+        "summary": getattr(agentic_result, "summary", None),
+        "merged": _coerce_non_negative_int(parsed.get("merged")),
+        "archived": _coerce_non_negative_int(parsed.get("archived")),
+        "absorbed_observations": _coerce_non_negative_int(parsed.get("absorbed_observations")),
+        "execution_mode": "agentic_mcp",
+        "seed_memory_ids": [record.id for record in seed_records],
+    }
+
+
 def _extend_unique_seed_records(seed_records: list[Any], candidates: list[Any], limit: int) -> None:
     seen_ids = {record.id for record in seed_records}
     for record in candidates:
@@ -784,6 +830,14 @@ def _truncate_text(value: str | None, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _coerce_non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    return 0
 
 
 def _should_use_provider_for_defragment_group(group: list, source_lines: int) -> bool:
