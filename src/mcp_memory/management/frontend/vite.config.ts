@@ -18,5 +18,13 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, '../static/dist'),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query'],
+          'plot-vendor': ['@observablehq/plot'],
+        },
+      },
+    },
   },
 });

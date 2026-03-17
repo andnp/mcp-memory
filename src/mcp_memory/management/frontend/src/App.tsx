@@ -1,11 +1,13 @@
+import { lazy, Suspense } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
 
 import { ActivityPage } from './pages/ActivityPage';
 import { LogsPage } from './pages/LogsPage';
 import { MemoryDetailPage } from './pages/MemoryDetailPage';
-import { NerdPage } from './pages/NerdPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { SearchPage } from './pages/SearchPage';
+
+const NerdPage = lazy(async () => import('./pages/NerdPage').then((module) => ({ default: module.NerdPage })));
 
 const navItems = [
   { to: '/', label: 'Overview', end: true },
@@ -39,14 +41,16 @@ export default function App() {
         </nav>
       </header>
 
-      <Routes>
-        <Route path="/" element={<OverviewPage />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/activity" element={<ActivityPage />} />
-        <Route path="/logs" element={<LogsPage />} />
-        <Route path="/nerd" element={<NerdPage />} />
-        <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
-      </Routes>
+      <Suspense fallback={<section className="panel p-3 text-xs text-muted">Loading page…</section>}>
+        <Routes>
+          <Route path="/" element={<OverviewPage />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/activity" element={<ActivityPage />} />
+          <Route path="/logs" element={<LogsPage />} />
+          <Route path="/nerd" element={<NerdPage />} />
+          <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
+        </Routes>
+      </Suspense>
     </main>
   );
 }
