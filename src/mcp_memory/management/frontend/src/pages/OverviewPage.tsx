@@ -170,8 +170,8 @@ export function OverviewPage() {
                     <tr key={record.id}>
                       <td>
                         <Link className="font-medium text-accent" to={`/memory/${record.id}`}>{record.title}</Link>
-                        {record.summary ? <div className="mt-1 text-xs text-muted">{record.summary}</div> : null}
-                        {record.tags.length ? <div className="mt-2 text-xs text-muted">{record.tags.join(', ')}</div> : null}
+                        {record.summary ? <div className="mt-1 max-w-[26rem] truncate text-[11px] text-muted" title={record.summary}>{record.summary}</div> : null}
+                        {record.tags.length ? <div className="mt-1 max-w-[26rem] truncate text-[10px] text-muted" title={record.tags.join(', ')}>{record.tags.join(', ')}</div> : null}
                       </td>
                       <td className="hidden md:table-cell">{record.type}</td>
                       <td className={statusTone(record.status)}>{record.status}</td>
@@ -201,8 +201,8 @@ export function OverviewPage() {
                     <tr key={`${usage.provider_key}-${usage.task_name ?? 'global'}-${index}`}>
                       <td>{usage.task_name ?? '-'}</td>
                       <td>
-                        <div>{usage.provider_key}</div>
-                        <div className="mt-1 text-xs text-muted">{usage.model_name}</div>
+                        <div className="truncate" title={usage.provider_key}>{usage.provider_key}</div>
+                        <div className="mt-1 truncate text-[10px] text-muted" title={usage.model_name}>{usage.model_name}</div>
                       </td>
                       <td>{usage.calls_last_day}</td>
                       <td className="hidden md:table-cell">{usage.failures_last_day}</td>
@@ -235,7 +235,7 @@ export function OverviewPage() {
                         <div className={`mt-1 text-xs ${statusTone(task.status)}`}>{task.status}</div>
                       </td>
                       <td>{task.retries_count}/{task.max_retries}</td>
-                      <td>{task.last_error ?? '-'}</td>
+                      <td className="max-w-[20rem] truncate" title={task.last_error ?? ''}>{task.last_error ?? '-'}</td>
                     </tr>
                   )) : (
                     <tr>
@@ -269,7 +269,7 @@ export function OverviewPage() {
                         <div>{entry.source}</div>
                         <div className="mt-1 text-xs text-muted">{entry.logger_name}</div>
                       </td>
-                      <td>{entry.message}</td>
+                      <td className="max-w-[28rem] truncate" title={entry.message}>{entry.message}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -296,8 +296,8 @@ export function OverviewPage() {
                   {overviewQuery.data.queue_diagnostics.length ? overviewQuery.data.queue_diagnostics.slice(0, 8).map((task, index) => (
                     <tr key={`${task.task_name}-${task.workspace_id ?? 'global'}-${index}`}>
                       <td>
-                        <div>{task.task_name}</div>
-                        <div className="mt-1 text-xs text-muted">{task.trigger ?? '-'} · {task.workspace_id ?? 'global'}</div>
+                        <div className="truncate" title={task.task_name}>{task.task_name}</div>
+                        <div className="mt-1 truncate text-[10px] text-muted" title={`${task.trigger ?? '-'} · ${task.workspace_id ?? 'global'}`}>{task.trigger ?? '-'} · {task.workspace_id ?? 'global'}</div>
                       </td>
                       <td className={statusTone(task.pending_state)}>{task.pending_state}</td>
                       <td className="hidden md:table-cell">{task.priority}</td>

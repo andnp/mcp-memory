@@ -53,10 +53,10 @@ export function LogsPage() {
                 <td>{formatTimestamp(entry.created_at)}</td>
                 <td>{entry.level}</td>
                 <td>
-                  <div>{entry.source}</div>
-                  <div className="mt-1 text-xs text-muted">{entry.logger_name}</div>
+                  <div className="truncate" title={entry.source}>{entry.source}</div>
+                  <div className="mt-1 truncate text-[10px] text-muted" title={entry.logger_name}>{entry.logger_name}</div>
                 </td>
-                <td>{entry.message}</td>
+                <td className="max-w-[34rem] truncate" title={entry.message}>{entry.message}</td>
               </tr>
             ))}
           </tbody>

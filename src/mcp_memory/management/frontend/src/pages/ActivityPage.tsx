@@ -86,7 +86,7 @@ export function ActivityPage() {
                 const isSelected = selectedRun?.task_name === run.task_name && selectedRun.completed_at === run.completed_at;
                 return (
                 <tr key={runKey} className={isSelected ? 'bg-ink/80' : ''} onClick={() => setSelectedRunKey(runKey)}>
-                  <td>{run.task_name}</td>
+                  <td className="max-w-[14rem] truncate" title={run.task_name}>{run.task_name}</td>
                   <td>{run.status}</td>
                   <td>{formatTimestamp(run.completed_at)}</td>
                   <td>{run.duration_seconds.toFixed(2)}s</td>
@@ -149,19 +149,19 @@ export function ActivityPage() {
                 {relatedConversations.map((conversation) => (
                   <tr key={conversation.id}>
                     <td>
-                      <div>{conversation.task_name ?? '-'}</div>
-                      <div className="mt-1 text-xs text-muted">request {conversation.request_id}</div>
+                      <div className="max-w-[12rem] truncate" title={conversation.task_name ?? '-'}>{conversation.task_name ?? '-'}</div>
+                      <div className="mt-1 text-[10px] text-muted">request {conversation.request_id}</div>
                     </td>
                     <td>
-                      <div>{conversation.provider_name}</div>
-                      <div className="mt-1 text-xs text-muted">{conversation.model_name}</div>
+                      <div className="truncate" title={conversation.provider_name}>{conversation.provider_name}</div>
+                      <div className="mt-1 truncate text-[10px] text-muted" title={conversation.model_name}>{conversation.model_name}</div>
                     </td>
                     <td>{conversation.status}</td>
                     <td>
-                      <div className="text-xs text-muted">Prompt</div>
-                      <div className="mt-1 max-h-24 overflow-hidden text-ellipsis">{conversation.prompt_text}</div>
-                      <div className="mt-3 text-xs text-muted">Response</div>
-                      <div className="mt-1 max-h-24 overflow-hidden text-ellipsis">{conversation.response_text}</div>
+                      <div className="text-[10px] text-muted">P</div>
+                      <div className="mt-0.5 max-w-[24rem] truncate" title={conversation.prompt_text}>{conversation.prompt_text}</div>
+                      <div className="mt-1.5 text-[10px] text-muted">R</div>
+                      <div className="mt-0.5 max-w-[24rem] truncate" title={conversation.response_text}>{conversation.response_text}</div>
                     </td>
                   </tr>
                 ))}

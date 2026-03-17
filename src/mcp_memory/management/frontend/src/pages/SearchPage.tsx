@@ -56,9 +56,9 @@ export function SearchPage() {
               <tr key={result.memory_id}>
                 <td>{result.score.toFixed(3)}</td>
                 <td>
-                  <Link className="font-medium text-accent" to={`/memory/${result.memory_id}`}>{result.title}</Link>
-                  {result.summary ? <div className="mt-1 text-xs text-muted">{result.summary}</div> : null}
-                  {result.tags.length ? <div className="mt-2 text-xs text-muted">{result.tags.join(', ')}</div> : null}
+                  <Link className="block truncate font-medium text-accent" to={`/memory/${result.memory_id}`} title={result.title}>{result.title}</Link>
+                  {result.summary ? <div className="mt-1 max-w-[30rem] truncate text-[11px] text-muted" title={result.summary}>{result.summary}</div> : null}
+                  {result.tags.length ? <div className="mt-1 max-w-[30rem] truncate text-[10px] text-muted" title={result.tags.join(', ')}>{result.tags.join(', ')}</div> : null}
                 </td>
                 <td>{result.memory_type}</td>
                 <td>{result.status}</td>
