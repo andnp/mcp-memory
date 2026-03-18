@@ -76,7 +76,7 @@ class AIConfig:
     provider: str = "none"
     model: str = "gemini-3-flash-preview"
     timeout_seconds: float = 900.0
-    max_retries: int = 1
+    max_retries: int = 0
 
     def __post_init__(self) -> None:
         if self.provider not in {"none", "gemini-cli", "copilot-cli", "opencode", "ollama"}:
@@ -85,6 +85,38 @@ class AIConfig:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
             raise ValueError("ai.max_retries must be >= 0")
+
+
+@dataclass
+class ProviderRoutingConfig:
+    profiles: dict[str, AIConfig] = field(default_factory=dict)
+    task_routes: dict[str, list[str]] = field(default_factory=dict)
+    profile_daily_call_limits: dict[str, int] = field(default_factory=dict)
+    default_json_route: list[str] = field(default_factory=list)
+    default_agentic_route: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        normalized_profiles: dict[str, AIConfig] = {}
+        for key, value in self.profiles.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("provider_routing.profiles keys must be non-empty strings")
+            normalized_profiles[key.strip()] = value
+        self.profiles = normalized_profiles
+        self.task_routes = {
+            str(task_name).strip(): [str(item).strip() for item in route if isinstance(item, str) and str(item).strip()]
+            for task_name, route in self.task_routes.items()
+            if isinstance(task_name, str) and task_name.strip() and isinstance(route, list)
+        }
+        self.profile_daily_call_limits = {
+            str(profile_key).strip(): int(limit)
+            for profile_key, limit in self.profile_daily_call_limits.items()
+            if isinstance(profile_key, str) and profile_key.strip()
+        }
+        for profile_key, limit in self.profile_daily_call_limits.items():
+            if limit < 1:
+                raise ValueError(f"provider_routing.profile_daily_call_limits[{profile_key!r}] must be >= 1")
+        self.default_json_route = [item.strip() for item in self.default_json_route if isinstance(item, str) and item.strip()]
+        self.default_agentic_route = [item.strip() for item in self.default_agentic_route if isinstance(item, str) and item.strip()]
 
 
 @dataclass
@@ -193,6 +225,7 @@ class Config:
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
+    provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -226,6 +259,51 @@ def _load_memory_config(data: dict[str, Any]) -> MemoryConfig:
     return MemoryConfig(**kwargs)
 
 
+def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig:
+    profiles: dict[str, AIConfig] = {}
+    raw_profiles = data.get("profiles", {})
+    if isinstance(raw_profiles, dict):
+        for key, value in raw_profiles.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            profiles[key] = _load_dataclass_from_dict(AIConfig, value)
+
+    def _normalize_route_map(value: object) -> dict[str, list[str]]:
+        if not isinstance(value, dict):
+            return {}
+        normalized: dict[str, list[str]] = {}
+        for key, items in value.items():
+            if not isinstance(key, str):
+                continue
+            if isinstance(items, list):
+                normalized[key] = [str(item).strip() for item in items if isinstance(item, str) and str(item).strip()]
+            elif isinstance(items, str) and items.strip():
+                normalized[key] = [items.strip()]
+        return normalized
+
+    def _normalize_route_list(value: object) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if isinstance(item, str) and str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    raw_limits = data.get("profile_daily_call_limits", {})
+    profile_daily_call_limits = {
+        str(key): int(value)
+        for key, value in raw_limits.items()
+        if isinstance(raw_limits, dict) and isinstance(key, str) and isinstance(value, int)
+    }
+
+    return ProviderRoutingConfig(
+        profiles=profiles,
+        task_routes=_normalize_route_map(data.get("task_routes", {})),
+        profile_daily_call_limits=profile_daily_call_limits,
+        default_json_route=_normalize_route_list(data.get("default_json_route", [])),
+        default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
+    )
+
+
 def resolve_default_config_path() -> Path:
     return Path.home() / ".config" / DEFAULT_APP_NAME / "config.toml"
 
@@ -249,7 +327,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "provider": "none",
         "model": "gemini-3-flash-preview",
         "timeout_seconds": 900,
-        "max_retries": 1,
+        "max_retries": 0,
     }
     document["gemini_cli"] = {"command": "gemini"}
     document["copilot_cli"] = {"command": "copilot"}
@@ -280,6 +358,26 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "access_bonus_scale": 0.1,
         "authority_link_step": 0.02,
         "authority_link_cap": 10,
+    }
+    document["provider_routing"] = {
+        "profiles": {
+            "copilot-mini": {
+                "provider": "copilot-cli",
+                "model": "gpt-5-mini",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            }
+        },
+        "task_routes": {
+            "ingest-system1": ["copilot-mini"],
+            "deduplicator": ["copilot-mini"],
+            "memory-curator": ["copilot-mini"],
+        },
+        "profile_daily_call_limits": {
+            "copilot-mini": 50,
+        },
+        "default_json_route": [],
+        "default_agentic_route": [],
     }
     memory_table = tomlkit.table()
     memory_table.update({
@@ -332,6 +430,7 @@ def load_config(config_path: Path | None = None) -> Config:
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
+        provider_routing=_load_provider_routing_config(raw.get("provider_routing", {})),
     )
 
 

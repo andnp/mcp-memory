@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from mcp_memory.core.providers._json_cli import AIResponse
+from mcp_memory.core.providers._json_cli import build_cli_failure_exception
 from mcp_memory.core.providers.gemini_cli import GeminiCLIProvider
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 
@@ -65,12 +66,10 @@ class GeminiCLIAgenticProvider(GeminiCLIProvider):
                     subprocess_pid=response.subprocess_pid,
                 )
         assert last_response is not None
-        return AgenticRunResult(
-            status="error",
-            summary=None,
-            raw_text=last_response.raw_text,
-            parsed=last_response.parsed if isinstance(last_response.parsed, dict) else None,
-            subprocess_pid=last_response.subprocess_pid,
+        raise build_cli_failure_exception(
+            self.provider_name,
+            self._max_retries + 1,
+            last_response.error,
         )
 
 

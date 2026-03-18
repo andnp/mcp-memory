@@ -6,11 +6,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.utils.db import DatabaseManager
 
 VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
 VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
 FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
+_SUMMARY_UNSET = object()
 
 
 @dataclass
@@ -80,7 +82,11 @@ class RelationalMemoryRepository:
         if not normalized_workspace_ids:
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
-        summary_text = summary or self._build_summary(normalized_content)
+        summary_text = summary or self._build_summary(
+            title=normalized_title,
+            content=normalized_content,
+            memory_type=normalized_type,
+        )
         payload = json.dumps(metadata or {}, sort_keys=True)
         record_id = memory_id or str(uuid4())
 
@@ -242,7 +248,7 @@ class RelationalMemoryRepository:
         rows = conn.execute(
             """
             SELECT
-                memories.*, 
+                memories.*,
                 COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv,
                 COALESCE(tag_agg.tags, '') AS tags_csv,
                 COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
@@ -448,7 +454,7 @@ class RelationalMemoryRepository:
         memory_id: str,
         title: str | None = None,
         content: str | None = None,
-        summary: str | None = None,
+        summary: str | None | object = _SUMMARY_UNSET,
         memory_type: str | None = None,
         status: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -477,12 +483,26 @@ class RelationalMemoryRepository:
         if workspace_ids is not None and not self._normalize_values(workspace_ids):
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
+        existing = self.get_memory(memory_id)
+        if existing is None:
+            return None
+
+        resolved_summary = summary
+        if summary is _SUMMARY_UNSET and (
+            normalized_title is not None or normalized_content is not None or normalized_type is not None
+        ):
+            resolved_summary = self._build_summary(
+                title=normalized_title or existing.title,
+                content=normalized_content or existing.content,
+                memory_type=normalized_type or existing.type,
+            )
+
         columns = []
         values = []
         updates = {
             "title": normalized_title,
             "content": normalized_content,
-            "summary": summary,
+            "summary": None if resolved_summary is _SUMMARY_UNSET else resolved_summary,
             "type": normalized_type,
             "status": normalized_status,
             "access_score": access_score,
@@ -690,17 +710,12 @@ class RelationalMemoryRepository:
     def _utc_now(self):
         return datetime.now(UTC).isoformat()
 
-    def _build_summary(self, content: str):
-        stripped = content.strip()
-        if not stripped:
-            return ""
-
-        sentences = [segment.strip() for segment in stripped.split(".") if segment.strip()]
-        if len(sentences) >= 2:
-            return ". ".join(sentences[:2]) + "."
-        if len(stripped) <= 220:
-            return stripped
-        return stripped[:217].rstrip() + "..."
+    def _build_summary(self, *, title: str, content: str, memory_type: str | None = None):
+        return build_deterministic_summary(
+            title=title,
+            content=content,
+            memory_type=memory_type,
+        )
 
 
 def _split_csv_values(value: str | None) -> list[str]:

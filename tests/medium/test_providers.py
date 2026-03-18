@@ -1,11 +1,13 @@
 import asyncio
 import json
+import time
 
 import pytest
 
 from mcp_memory.config import AIConfig, Config, CopilotCLIConfig, GeminiCLIConfig, OllamaCLIConfig, OpenCodeCLIConfig
 from mcp_memory.core.providers import (
     AgenticRunResult,
+    CopilotCLIAgenticProvider,
     CopilotCLIProvider,
     GeminiCLIAgenticProvider,
     GeminiCLIProvider,
@@ -16,6 +18,8 @@ from mcp_memory.core.providers import (
     build_json_ai_provider_from_config,
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
+from mcp_memory.core.providers._json_cli import ProviderBackoffError
+from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from tests.sdk.providers import FakeAsyncProcess
@@ -102,6 +106,28 @@ async def test_gemini_cli_provider_retries_after_failed_process(
 
 
 @pytest.mark.asyncio
+async def test_gemini_cli_provider_raises_backoff_error_for_quota_exhaustion(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stderr_text=(
+                "TerminalQuotaError: You have exhausted your capacity on this model. "
+                "Your quota will reset after 3h50m47s.\nretryDelayMs: 13847179.189666"
+            ),
+            returncode=1,
+        )
+    )
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+
+    with pytest.raises(ProviderBackoffError) as exc_info:
+        await provider.ask("retry this request")
+
+    assert exc_info.value.retry_delay_seconds == pytest.approx(13847.179189666)
+
+
+@pytest.mark.asyncio
 async def test_gemini_agentic_provider_uses_yolo_mode_and_allowed_mcp_server(
     install_fake_subprocess,
 ) -> None:
@@ -168,9 +194,31 @@ async def test_gemini_agentic_provider_extracts_nested_summary_from_mixed_respon
 
 
 @pytest.mark.asyncio
+async def test_gemini_agentic_provider_raises_backoff_error_for_quota_exhaustion(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stderr_text=(
+                "TerminalQuotaError: You have exhausted your capacity on this model. "
+                "Your quota will reset after 59m59s.\nretryDelayMs: 3599000"
+            ),
+            returncode=1,
+        )
+    )
+
+    provider = GeminiCLIAgenticProvider(command="gemini", max_retries=0)
+
+    with pytest.raises(ProviderBackoffError) as exc_info:
+        await provider.run_agent("Clean up the memory store.")
+
+    assert exc_info.value.retry_delay_seconds == pytest.approx(3599.0)
+
+
+@pytest.mark.asyncio
 async def test_other_cli_providers_use_expected_commands(install_fake_subprocess) -> None:
     install_fake_subprocess.add(
-        FakeAsyncProcess(stdout_text='{"ok": true}'),
+        FakeAsyncProcess(stdout_text='{"type":"assistant.message","data":{"content":"{\\"ok\\": true}"}}'),
         FakeAsyncProcess(stdout_text='{"ok": true}'),
         FakeAsyncProcess(stdout_text='{"ok": true}'),
     )
@@ -185,10 +233,16 @@ async def test_other_cli_providers_use_expected_commands(install_fake_subprocess
 
     assert install_fake_subprocess.calls[0][0] == (
         "copilot",
-        "ask",
         "--model",
         "gpt-5.4",
-        "--json",
+        "--output-format",
+        "json",
+        "--stream",
+        "off",
+        "--silent",
+        "--no-ask-user",
+        "--no-custom-instructions",
+        "--prompt",
         "link these memories",
     )
     assert install_fake_subprocess.calls[1][0] == (
@@ -235,6 +289,97 @@ def test_split_provider_builders_keep_json_and_agentic_paths_distinct() -> None:
 
     assert isinstance(json_provider, GeminiCLIProvider)
     assert isinstance(agentic_provider, GeminiCLIAgenticProvider)
+
+
+def test_split_provider_builders_support_copilot_agentic() -> None:
+    config = Config(ai=AIConfig(provider="copilot-cli"), copilot_cli=CopilotCLIConfig(command="copilot"))
+
+    json_provider = build_json_ai_provider_from_config(config)
+    agentic_provider = build_agentic_ai_provider_from_config(config, workspace_root=None)
+
+    assert isinstance(json_provider, CopilotCLIProvider)
+    assert isinstance(agentic_provider, CopilotCLIAgenticProvider)
+
+
+@pytest.mark.asyncio
+async def test_copilot_agentic_provider_uses_autopilot_and_inline_mcp_config(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stdout_text='{"type":"assistant.message","data":{"content":"{\\"summary\\": \\\"Performed maintenance.\\\"}"}}'
+        )
+    )
+
+    provider = CopilotCLIAgenticProvider(
+        command="copilot",
+        model="gpt-5-mini",
+        max_retries=0,
+        cwd="/tmp/workspace",
+    )
+
+    result = await provider.run_agent("Clean up the memory store.")
+
+    assert result.status == "success"
+    assert result.summary == "Performed maintenance."
+    args, kwargs = install_fake_subprocess.calls[0]
+    assert args[:14] == (
+        "copilot",
+        "--model",
+        "gpt-5-mini",
+        "--output-format",
+        "json",
+        "--stream",
+        "off",
+        "--silent",
+        "--no-ask-user",
+        "--no-custom-instructions",
+        "--autopilot",
+        "--allow-all-tools",
+        "--max-autopilot-continues",
+        "12",
+    )
+    assert args[14] == "--available-tools"
+    available_tools = args[15]
+    assert "mcp-memory-internal-internal_search_memory_records" in available_tools
+    assert "mcp-memory-internal-internal_read_memory_record" in available_tools
+    assert args[16] == "--additional-mcp-config"
+    mcp_config = json.loads(args[17])
+    assert mcp_config["mcpServers"]["mcp-memory-internal"]["type"] == "stdio"
+    assert mcp_config["mcpServers"]["mcp-memory-internal"]["command"] == "uv"
+    assert mcp_config["mcpServers"]["mcp-memory-internal"]["args"] == [
+        "run",
+        "mcp-memory",
+        "internal-run",
+        "--workspace-root",
+        "/tmp/workspace",
+    ]
+    assert args[18:20] == ("--prompt", "Clean up the memory store.")
+    assert kwargs == {"stdout": -1, "stderr": -1, "cwd": "/tmp/workspace"}
+
+
+@pytest.mark.asyncio
+async def test_copilot_agentic_provider_prefers_json_result_over_trailing_non_json_messages(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stdout_text="\n".join(
+                [
+                    '{"type":"assistant.message","data":{"content":"planning to search"}}',
+                    '{"type":"assistant.message","data":{"content":"{\\"summary\\": \\\"Structured answer.\\\"}"}}',
+                    '{"type":"assistant.message","data":{"content":"Task completed but no task_complete tool exists."}}',
+                ]
+            )
+        )
+    )
+
+    provider = CopilotCLIAgenticProvider(command="copilot", max_retries=0)
+
+    result = await provider.run_agent("Return a structured answer.")
+
+    assert result.summary == "Structured answer."
+    assert result.parsed == {"summary": "Structured answer."}
 
 
 @pytest.mark.asyncio
@@ -313,6 +458,71 @@ async def test_instrumented_provider_can_forward_agentic_runs(db_manager) -> Non
 
     assert result.status == "success"
     assert result.summary == "agent mode"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_reports_agentic_capability_from_wrapped_provider(db_manager) -> None:
+    class _JsonOnlyProvider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"ok": True, "prompt": prompt}
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            return AgenticRunResult(status="success", summary=prompt)
+
+    json_provider = InstrumentedAIProvider(
+        _JsonOnlyProvider(),
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="copilot-mini",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+    )
+    agentic_provider = InstrumentedAIProvider(
+        _AgenticProvider(),
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="gemini-cli:agentic",
+        provider_name="Gemini CLI Agentic",
+        model_name="gemini-3-flash-preview",
+    )
+
+    assert json_provider.supports_agentic() is False
+    assert agentic_provider.supports_agentic() is True
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_enforces_daily_budget_before_call(db_manager) -> None:
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"ok": True, "prompt": prompt}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    repository.record_call(
+        task_name="summarize-memory",
+        task_id="task-a",
+        request_id="req-a",
+        subprocess_pid=None,
+        provider_key="copilot-mini",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        status="success",
+        duration_seconds=0.1,
+        created_at=time.time(),
+        error_text=None,
+    )
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-mini",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        daily_call_limit=1,
+    )
+
+    with pytest.raises(ProviderBudgetExceeded) as exc_info:
+        await provider.ask("cheap but capped")
+
+    assert exc_info.value.provider_key == "copilot-mini"
+    assert exc_info.value.daily_call_limit == 1
 
 
 @pytest.mark.asyncio

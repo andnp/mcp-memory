@@ -234,3 +234,23 @@ class ProviderUsageRepository:
             )
             for row in rows
         ]
+
+    def count_recent_calls(
+        self,
+        *,
+        provider_keys: list[str],
+        now: float | None = None,
+        window_seconds: float = 86400.0,
+    ) -> int:
+        if self._db_manager is None or not provider_keys:
+            return 0
+        current_time = time.time() if now is None else now
+        cutoff = current_time - window_seconds
+        placeholders = ",".join("?" for _ in provider_keys)
+        params: list[object] = [*provider_keys, cutoff]
+        query = f"SELECT COUNT(*) AS total FROM provider_usage WHERE provider_key IN ({placeholders}) AND created_at >= ?"
+        if self._workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(self._workspace_id)
+        row = self._db_manager.get_connection().execute(query, params).fetchone()
+        return 0 if row is None else int(row["total"] or 0)

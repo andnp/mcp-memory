@@ -466,7 +466,8 @@ async def handle_deduplicator_task(
         }
 
     run_agent = getattr(provider, "run_agent", None)
-    if callable(run_agent):
+    supports_agentic = getattr(provider, "supports_agentic", None)
+    if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
             _build_deduplicator_agent_prompt(task, seed_records, strategy_used=seed_batch.strategy_used)
         )
@@ -610,7 +611,8 @@ async def handle_memory_curator_task(
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
     )
     run_agent = getattr(provider, "run_agent", None)
-    if callable(run_agent):
+    supports_agentic = getattr(provider, "supports_agentic", None)
+    if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
             (
                 f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
@@ -618,6 +620,7 @@ async def handle_memory_curator_task(
                 "Search, read, list, split, merge, archive, create, update, delete, and link records as needed.\n"
                 "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
                 f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+                "When you create, merge, or materially rewrite a memory and you already understand it, include or refresh a concise summary in the same tool call instead of relying on a later standalone summarizer.\n"
                 "Do not claim work you did not actually execute through MCP tools.\n"
                 "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
                 f"Sampling strategy: {seed_batch.strategy_used}\n"
@@ -1069,6 +1072,7 @@ def _build_deduplicator_agent_prompt(task: TaskRecord, seed_records: list, *, st
         "Merge highly similar fact memories into canonical records, preserve lineage with SUPERSEDES links, and absorb matching observations into the most appropriate fact when justified.\n"
         "Prefer internal_merge_memory_into_canonical for every merge or observation absorption so canonical metadata, archived sources, and lineage stay consistent.\n"
         f"When using internal_merge_memory_into_canonical, include metadata with deduplicator_task_id='{task.id}' and preserve merged_source_ids.\n"
+        "When the merged canonical fact is clear, include a concise summary in the same merge call so no separate summarizer pass is needed.\n"
         "Only fall back to separate update/archive/link calls when you are creating a brand new canonical fact first and then merging other records into it.\n"
         "Prefer safe, minimal merges. Do not merge records unless the content overlap is strong and the resulting canonical memory stays coherent.\n"
         "Do not claim work you did not actually execute through MCP tools.\n"

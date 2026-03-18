@@ -5,6 +5,7 @@ from typing import Protocol
 
 from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
 from mcp_memory.core.providers._json_cli import AIResponse
+from mcp_memory.core.providers.copilot_agentic import CopilotCLIAgenticProvider
 from mcp_memory.core.providers.copilot_cli import CopilotCLIProvider
 from mcp_memory.core.providers.gemini_agentic import GeminiCLIAgenticProvider
 from mcp_memory.core.providers.gemini_cli import GeminiCLIProvider
@@ -34,54 +35,78 @@ def build_ai_provider(ai_config: AIConfig, gemini_cli: GeminiCLIConfig, workspac
     raise ValueError(f"Unsupported AI provider: {ai_config.provider}")
 
 
-def build_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    if config.ai.provider == "none":
+def build_json_ai_provider(ai_config: AIConfig, config: Config, workspace_root: Path | None = None):
+    if ai_config.provider == "none":
         return None
-    if config.ai.provider == "gemini-cli":
-        return build_ai_provider(config.ai, config.gemini_cli, workspace_root)
-    if config.ai.provider == "copilot-cli":
+    if ai_config.provider == "gemini-cli":
+        return GeminiCLIProvider(
+            command=config.gemini_cli.command,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
+            cwd=None if workspace_root is None else str(workspace_root),
+        )
+    if ai_config.provider == "copilot-cli":
         return CopilotCLIProvider(
             command=config.copilot_cli.command,
-            model=config.ai.model,
-            timeout_seconds=config.ai.timeout_seconds,
-            max_retries=config.ai.max_retries,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
+            cwd=None if workspace_root is None else str(workspace_root),
         )
-    if config.ai.provider == "opencode":
+    if ai_config.provider == "opencode":
         return OpenCodeCLIProvider(
             command=config.opencode.command,
-            model=config.ai.model,
-            timeout_seconds=config.ai.timeout_seconds,
-            max_retries=config.ai.max_retries,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
         )
-    if config.ai.provider == "ollama":
+    if ai_config.provider == "ollama":
         return OllamaCLIProvider(
             command=config.ollama.command,
-            model=config.ai.model,
-            timeout_seconds=config.ai.timeout_seconds,
-            max_retries=config.ai.max_retries,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
         )
-    raise ValueError(f"Unsupported AI provider: {config.ai.provider}")
+    raise ValueError(f"Unsupported AI provider: {ai_config.provider}")
 
 
-def build_json_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    return build_ai_provider_from_config(config, workspace_root)
-
-
-def build_agentic_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    if config.ai.provider == "gemini-cli":
+def build_agentic_ai_provider(ai_config: AIConfig, config: Config, workspace_root: Path | None = None):
+    if ai_config.provider == "gemini-cli":
         return GeminiCLIAgenticProvider(
             command=config.gemini_cli.command,
-            model=config.ai.model,
-            timeout_seconds=config.ai.timeout_seconds,
-            max_retries=config.ai.max_retries,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
+            cwd=None if workspace_root is None else str(workspace_root),
+        )
+    if ai_config.provider == "copilot-cli":
+        return CopilotCLIAgenticProvider(
+            command=config.copilot_cli.command,
+            model=ai_config.model,
+            timeout_seconds=ai_config.timeout_seconds,
+            max_retries=ai_config.max_retries,
             cwd=None if workspace_root is None else str(workspace_root),
         )
     return None
 
 
+def build_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
+    return build_json_ai_provider(config.ai, config, workspace_root)
+
+
+def build_json_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
+    return build_json_ai_provider(config.ai, config, workspace_root)
+
+
+def build_agentic_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
+    return build_agentic_ai_provider(config.ai, config, workspace_root)
+
+
 __all__ = [
     "AIProvider",
     "AIResponse",
+    "CopilotCLIAgenticProvider",
     "CopilotCLIProvider",
     "GeminiCLIAgenticProvider",
     "GeminiCLIProvider",
@@ -91,7 +116,9 @@ __all__ = [
     "OllamaCLIProvider",
     "OpenCodeCLIProvider",
     "build_agentic_ai_provider_from_config",
+    "build_agentic_ai_provider",
     "build_ai_provider",
     "build_ai_provider_from_config",
+    "build_json_ai_provider",
     "build_json_ai_provider_from_config",
 ]

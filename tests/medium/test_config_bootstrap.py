@@ -24,6 +24,10 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.ai.provider == "none"
     assert config.daemon.host == "127.0.0.1"
     assert config.search_ranking.calibration_threshold == 0.035
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
+    assert config.provider_routing.task_routes["deduplicator"] == ["copilot-mini"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-mini"]
+    assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
 
 
 def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
@@ -53,6 +57,43 @@ def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
     assert config.search_ranking.access_bonus_scale == 0.08
     assert config.search_ranking.authority_link_step == 0.03
     assert config.search_ranking.authority_link_cap == 8
+
+
+def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[provider_routing]\n"
+        'default_json_route = ["copilot-mini"]\n'
+        'default_agentic_route = ["gemini-cheap"]\n'
+        "\n"
+        "[provider_routing.task_routes]\n"
+        'ingest-system1 = ["copilot-mini", "gemini-cheap"]\n'
+        'summarize-memory = ["copilot-mini"]\n'
+        "\n"
+        "[provider_routing.profile_daily_call_limits]\n"
+        'copilot-mini = 50\n'
+        'gemini-cheap = 20\n'
+        "\n"
+        "[provider_routing.profiles.copilot-mini]\n"
+        'provider = "copilot-cli"\n'
+        'model = "gpt-5-mini"\n'
+        'max_retries = 0\n'
+        "\n"
+        "[provider_routing.profiles.gemini-cheap]\n"
+        'provider = "gemini-cli"\n'
+        'model = "gemini-3-flash-preview"\n'
+        'max_retries = 0\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.provider_routing.default_json_route == ["copilot-mini"]
+    assert config.provider_routing.default_agentic_route == ["gemini-cheap"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
+    assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
+    assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
 
 
 def test_resolve_workspace_root_prefers_git_root(tmp_path: Path) -> None:

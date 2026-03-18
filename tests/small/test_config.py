@@ -27,6 +27,13 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert created == config_path
     assert config_path.exists()
     assert loaded.ai.provider == "none"
+    assert loaded.ai.max_retries == 0
+    assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
+    assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini"]
+    assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-mini"]
+    assert loaded.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
+    assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
+    assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
     assert loaded.gemini_cli.command == "gemini"
     assert loaded.copilot_cli.command == "copilot"
     assert loaded.opencode.command == "opencode"

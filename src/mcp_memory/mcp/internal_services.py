@@ -153,6 +153,7 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     updated = ctx.repository.update_memory(
         memory_id,
         content=_append_content(record.content, content),
+        summary=optional_string(arguments, "summary") if "summary" in arguments else None,
         tags=_normalize_tags([*record.tags, *tags, "system1-appended"]),
         workspace_ids=sorted({*record.workspace_ids, *workspace_ids}),
         metadata=merged_metadata,
@@ -209,6 +210,7 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
     updated = ctx.repository.update_memory(
         memory_id,
         content=merged_content,
+        summary=optional_string(arguments, "summary") if "summary" in arguments else None,
         tags=merged_tags,
         workspace_ids=sorted({*record.workspace_ids, *workspace_ids}) if workspace_ids else None,
         metadata=merged_metadata,

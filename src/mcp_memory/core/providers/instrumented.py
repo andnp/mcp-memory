@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
 from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
@@ -22,6 +23,8 @@ class InstrumentedAIProvider:
         task_id: str | None = None,
         workspace_id: str | None = None,
         task_queue = None,
+        budget_key: str | None = None,
+        daily_call_limit: int | None = None,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
@@ -32,6 +35,8 @@ class InstrumentedAIProvider:
         self._task_id = task_id
         self._workspace_id = workspace_id
         self._task_queue = task_queue
+        self._budget_key = budget_key or provider_key
+        self._daily_call_limit = daily_call_limit
 
     def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
         return InstrumentedAIProvider(
@@ -44,9 +49,37 @@ class InstrumentedAIProvider:
             task_id=task_id,
             workspace_id=workspace_id,
             task_queue=self._task_queue,
+            budget_key=self._budget_key,
+            daily_call_limit=self._daily_call_limit,
         )
 
+    def budget_available(self, *, now: float | None = None) -> bool:
+        if self._daily_call_limit is None:
+            return True
+        calls_last_day = self._usage_repository.count_recent_calls(
+            provider_keys=[self._budget_key, f"{self._budget_key}:agentic"],
+            now=now,
+        )
+        return calls_last_day < self._daily_call_limit
+
+    def _enforce_daily_budget(self) -> None:
+        if self._daily_call_limit is None:
+            return
+        calls_last_day = self._usage_repository.count_recent_calls(
+            provider_keys=[self._budget_key, f"{self._budget_key}:agentic"],
+        )
+        if calls_last_day >= self._daily_call_limit:
+            raise ProviderBudgetExceeded(
+                self._budget_key,
+                calls_last_day=calls_last_day,
+                daily_call_limit=self._daily_call_limit,
+            )
+
+    def supports_agentic(self) -> bool:
+        return callable(getattr(self._provider, "run_agent", None))
+
     async def ask_json(self, prompt: str) -> dict:
+        self._enforce_daily_budget()
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
@@ -167,6 +200,7 @@ class InstrumentedAIProvider:
         return await self.ask_json(prompt)
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
+        self._enforce_daily_budget()
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None

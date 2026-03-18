@@ -32,12 +32,17 @@ from mcp_memory.core.agent_runtime import (
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
+    _provider_for_task,
 )
-from mcp_memory.core.providers import AgenticRunResult
+from mcp_memory.core.providers import AgenticRunResult, CopilotCLIAgenticProvider
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
     _select_curator_seed_records,
+)
+from mcp_memory.core.task_handlers.ingest import (
+    INGEST_APPEND_TOOL_NAME,
+    INGEST_CREATE_TOOL_NAME,
 )
 from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEMORY_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
@@ -45,6 +50,7 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.mcp import runtime as runtime_module
 from tests.sdk.providers import FakeAIProvider
 
 
@@ -206,7 +212,7 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
                 claimed_entry_ids = batch_payload["claimed_entry_ids"]
                 append_result = await call_internal_memory_tool(
                     runtime,
-                    "internal_append_to_existing_memory_for_ingest",
+                    INGEST_APPEND_TOOL_NAME,
                     {
                         "memory_id": target.id,
                         "content": "Prefer deterministic fixtures for pytest.",
@@ -233,7 +239,7 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
                                 "totalCalls": 2,
                                 "byName": {
                                     "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 1},
-                                    "mcp_mcp-memory-internal_internal_append_to_existing_memory_for_ingest": {"count": 1},
+                                    f"mcp_mcp-memory-internal_{INGEST_APPEND_TOOL_NAME}": {"count": 1},
                                 },
                             }
                         },
@@ -253,8 +259,8 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["tool_calls_executed"] == 2
         assert result["mutations"] == 1
         assert result["tool_names_used"] == [
-            "mcp_mcp-memory-internal_internal_append_to_existing_memory_for_ingest",
             "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
+            f"mcp_mcp-memory-internal_{INGEST_APPEND_TOOL_NAME}",
         ]
         assert updated is not None
         assert "deterministic fixtures" in updated.content
@@ -262,9 +268,68 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert updated.metadata["ingest_task_id"] == task.id
         assert provider.prompts
         assert "internal_get_next_ingest_batch" in provider.prompts[0]
-        assert "internal_append_to_existing_memory_for_ingest" in provider.prompts[0]
-        assert "internal_create_memory_record_for_ingest" in provider.prompts[0]
+        assert INGEST_APPEND_TOOL_NAME in provider.prompts[0]
+        assert INGEST_CREATE_TOOL_NAME in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_raises_when_agentic_provider_uses_no_tools_while_entries_are_pending(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        entry = runtime.journal.record(
+            "This pending thought should not be silently ignored.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-no-tools",
+        )
+
+        class _NoToolAgenticProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                return AgenticRunResult(
+                    status="success",
+                    summary="No action taken.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "No action taken.",
+                                "created_memory_ids": [],
+                                "meaningful_actions": 0,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        with pytest.raises(RuntimeError, match="ingest_agentic_no_tool_calls_with_pending_entries"):
+            await handle_ingest_system1_task(runtime, task, _NoToolAgenticProvider())
+
+        pending_entries = runtime.journal.get_pending(workspace_id=runtime.workspace_id)
+        assert [pending.id for pending in pending_entries] == [entry.id]
     finally:
         runtime.close()
 
@@ -480,9 +545,9 @@ async def test_summarize_handler_uses_provider_and_falls_back(monkeypatch, tmp_p
         provider = FakeAIProvider(responses=[{"summary": "Provider-generated summary."}])
         provider_result = await handle_summarize_memory_task(runtime, task, provider)
         updated = runtime.repository.get_memory(record.id)
-        assert provider_result["summary"] == "Provider-generated summary."
+        assert provider_result["summary"] == "First sentence. Second sentence."
         assert updated is not None
-        assert updated.summary == "Provider-generated summary."
+        assert updated.summary == "First sentence. Second sentence."
 
         failing_provider = FakeAIProvider(error=RuntimeError("offline"))
         fallback_result = await handle_summarize_memory_task(runtime, task, failing_provider)
@@ -1861,6 +1926,91 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_deduplicator_accepts_copilot_style_agentic_payload_without_tool_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _CopilotLikeAgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(
+                status="success",
+                summary="Deduplicator merged duplicate facts via Copilot agentic MCP.",
+                parsed={
+                    "summary": "Deduplicator merged duplicate facts via Copilot agentic MCP.",
+                    "merged": 1,
+                    "archived": 1,
+                    "absorbed_observations": 0,
+                },
+            )
+
+    try:
+        canonical = runtime.repository.create_memory(
+            title="Canonical auth fact",
+            content="JWTs are required.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs must be required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert canonical is not None and duplicate is not None
+
+        provider = _CopilotLikeAgenticProvider()
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-copilot-agentic-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["summary"] == "Deduplicator merged duplicate facts via Copilot agentic MCP."
+        assert result["merged"] == 1
+        assert result["archived"] == 1
+        assert result["absorbed_observations"] == 0
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 0
+        assert result["mutations"] == 0
+        assert result["tool_names_used"] == []
+        assert provider.prompts
+        assert "internal_get_next_dedup_batch" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -2256,6 +2406,71 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _CopilotLikeAgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(
+                status="success",
+                summary="Curator completed Copilot MCP maintenance.",
+                parsed={"summary": "Curator completed Copilot MCP maintenance."},
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        provider = _CopilotLikeAgenticProvider()
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-copilot-agentic-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["summary"] == "Curator completed Copilot MCP maintenance."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert provider.prompts
+        assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
+        assert record.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
 def test_agentic_task_names_contains_curator_deduplicator_and_ingest() -> None:
     assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, DEDUPLICATOR_TASK_NAME, SYSTEM1_INGEST_TASK_NAME}
 
@@ -2508,6 +2723,10 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
     assert runtime.repository is not None
 
     try:
+        runtime.ai_json_provider = None
+        runtime.ai_agent_provider = None
+        runtime.ai_provider = None
+        runtime.ai_provider_registry = {}
         runtime.journal.record("first queue thought")
         runtime.journal.record("second queue thought")
         runtime.task_queue.enqueue(
@@ -2544,7 +2763,7 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
 
     try:
         runtime.journal.record("provider-backed ingest thought", workspace_id=runtime.workspace_id)
-        runtime.ai_provider = FakeAIProvider(
+        fake_provider = FakeAIProvider(
             responses=[
                 {
                     "actions": [
@@ -2558,6 +2777,9 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
                 }
             ]
         )
+        runtime.ai_json_provider = fake_provider
+        runtime.ai_provider = fake_provider
+        runtime.ai_provider_registry = {}
         task = runtime.task_queue.enqueue(
             SYSTEM1_INGEST_TASK_NAME,
             workspace_id=runtime.workspace_id,
@@ -2574,15 +2796,58 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
             await asyncio.sleep(0.02)
         await worker.stop(0.1)
 
-        assert runtime.ai_provider.call_count >= 1
-        assert runtime.ai_provider.prompts
+        assert fake_provider.call_count >= 1
+        assert fake_provider.prompts
         assert any(
             "Analyze these system1 journal entries" in prompt
-            for prompt in runtime.ai_provider.prompts
+            for prompt in fake_provider.prompts
         )
         records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
         assert records
         assert records[0].title == "Provider-backed ingest thought"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "task_name",
+    [SYSTEM1_INGEST_TASK_NAME, DEDUPLICATOR_TASK_NAME, CURATOR_TASK_NAME],
+)
+async def test_runtime_agentic_routes_prefer_copilot_agentic_provider(
+    monkeypatch,
+    tmp_path: Path,
+    task_name: str,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(runtime_module, "_provider_command_available", lambda provider: True)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.task_queue is not None
+
+    try:
+        task = runtime.task_queue.enqueue(
+            task_name,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id=f"copilot-agentic-route-{task_name}",
+        )
+
+        selected = _provider_for_task(
+            runtime,
+            runtime.ai_json_provider,
+            runtime.ai_agent_provider,
+            task_name,
+            task,
+        )
+
+        assert selected is not None
+        wrapped_provider = getattr(selected, "_provider", None)
+        assert isinstance(wrapped_provider, CopilotCLIAgenticProvider)
     finally:
         runtime.close()
 
@@ -2599,6 +2864,10 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
     assert runtime.task_queue is not None
 
     try:
+        runtime.ai_json_provider = None
+        runtime.ai_agent_provider = None
+        runtime.ai_provider = None
+        runtime.ai_provider_registry = {}
         for index in range(45):
             runtime.journal.record(f"sqlite queue batch item {index}")
 

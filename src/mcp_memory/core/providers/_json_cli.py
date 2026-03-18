@@ -4,12 +4,18 @@ import asyncio
 import copy
 import json
 import logging
+import re
 from dataclasses import dataclass
 import time
 from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
+_RETRY_DELAY_MS_RE = re.compile(r"retryDelayMs:\s*([0-9]+(?:\.[0-9]+)?)")
+_RESET_AFTER_RE = re.compile(
+    r"reset after\s*(?:(?P<hours>\d+)h)?\s*(?:(?P<minutes>\d+)m)?\s*(?:(?P<seconds>\d+)s)?",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -23,6 +29,12 @@ class AIResponse:
     @property
     def success(self) -> bool:
         return self.parsed is not None and self.error is None
+
+
+class ProviderBackoffError(RuntimeError):
+    def __init__(self, message: str, *, retry_delay_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_delay_seconds = retry_delay_seconds
 
 
 class JSONCLIProvider:
@@ -69,8 +81,10 @@ class JSONCLIProvider:
                     attempt + 1,
                     last_error,
                 )
-        raise RuntimeError(
-            f"{self.provider_name} failed after {self._max_retries + 1} attempts: {last_error}"
+        raise build_cli_failure_exception(
+            self.provider_name,
+            self._max_retries + 1,
+            last_error,
         )
 
     async def ask(self, prompt: str) -> dict:
@@ -283,3 +297,33 @@ def _chain_observers(*observers: Callable[[dict[str, Any]], None]):
             observer(payload)
 
     return _notify
+
+
+def build_cli_failure_exception(
+    provider_name: str,
+    attempts: int,
+    last_error: str | None,
+) -> RuntimeError:
+    message = f"{provider_name} failed after {attempts} attempts: {last_error}"
+    retry_delay_seconds = recommended_retry_delay_seconds(last_error)
+    if retry_delay_seconds is None:
+        return RuntimeError(message)
+    return ProviderBackoffError(message, retry_delay_seconds=retry_delay_seconds)
+
+
+def recommended_retry_delay_seconds(error_text: str | None) -> float | None:
+    if not error_text:
+        return None
+    retry_delay_match = _RETRY_DELAY_MS_RE.search(error_text)
+    if retry_delay_match is not None:
+        return max(float(retry_delay_match.group(1)) / 1000.0, 0.0)
+    if "QUOTA_EXHAUSTED" not in error_text and "quota will reset after" not in error_text.lower():
+        return None
+    reset_match = _RESET_AFTER_RE.search(error_text)
+    if reset_match is None:
+        return 900.0
+    hours = int(reset_match.group("hours") or 0)
+    minutes = int(reset_match.group("minutes") or 0)
+    seconds = int(reset_match.group("seconds") or 0)
+    total_seconds = (hours * 3600) + (minutes * 60) + seconds
+    return float(total_seconds if total_seconds > 0 else 900)

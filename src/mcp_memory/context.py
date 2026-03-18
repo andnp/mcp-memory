@@ -24,6 +24,7 @@ class ApplicationContext:
     ai_json_provider: Any = None
     ai_agent_provider: Any = None
     ai_provider: Any = None
+    ai_provider_registry: dict[str, Any] | None = None
     embedder: Any = None
     vector_store: Any = None
     search_health: Any = None

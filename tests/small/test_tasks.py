@@ -358,6 +358,45 @@ async def test_runtime_task_worker_retries_and_dead_letters_failures(db_manager)
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_honors_exception_specific_retry_delay(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    class _RetryLaterError(RuntimeError):
+        def __init__(self) -> None:
+            super().__init__("retry later")
+            self.retry_delay_seconds = 12.0
+
+    def fail_task(ctx: ApplicationContext, task) -> None:
+        raise _RetryLaterError()
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        "failing-task",
+        available_at=0.0,
+        max_retries=2,
+        task_id="failing-task-delayed",
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"failing-task": fail_task},
+        poll_interval_seconds=0.01,
+        retry_delay_seconds=0.0,
+    )
+
+    await worker.start()
+    for _ in range(50):
+        if queue.get_task(task.id).status == "pending" and queue.get_task(task.id).retries_count == 1:
+            break
+        await asyncio.sleep(0.01)
+    await worker.stop(0.05)
+
+    failed_once = queue.get_task(task.id)
+    assert failed_once.status == "pending"
+    assert failed_once.retries_count == 1
+    assert failed_once.available_at == pytest.approx(failed_once.updated_at + 12.0)
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_dead_letters_unknown_tasks(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)

@@ -127,11 +127,15 @@ class RuntimeTaskWorker:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
                 await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
                 return
+            retry_delay_seconds = self._retry_delay_seconds
+            requested_retry_delay = getattr(exc, "retry_delay_seconds", None)
+            if isinstance(requested_retry_delay, (int, float)):
+                retry_delay_seconds = max(float(requested_retry_delay), 0.0)
             failed_task = await asyncio.to_thread(
                 task_queue.fail,
                 task.id,
                 str(exc),
-                self._retry_delay_seconds,
+                retry_delay_seconds,
             )
             await self._schedule_follow_up(task, failed_task)
             return

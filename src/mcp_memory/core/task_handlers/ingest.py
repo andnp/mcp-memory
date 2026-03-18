@@ -30,6 +30,8 @@ INGEST_GROUPING_STRATEGIES = (
     SEMANTIC_SEEDED_GROUPING_STRATEGY,
     LEXICAL_SEEDED_GROUPING_STRATEGY,
 )
+INGEST_APPEND_TOOL_NAME = "internal_ingest_append_memory"
+INGEST_CREATE_TOOL_NAME = "internal_ingest_create_memory"
 
 
 async def handle_ingest_system1_task(
@@ -44,6 +46,7 @@ async def handle_ingest_system1_task(
         ctx.journal,
         task.data.get("journal_workspace_id", task.workspace_id),
     )
+    pending_count_before_run = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
     workspace_id = _resolve_workspace_id(ctx, task)
     grouping_strategy_requested = _requested_grouping_strategy(task.data)
     grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
@@ -52,7 +55,8 @@ async def handle_ingest_system1_task(
     )
 
     run_agent = getattr(provider, "run_agent", None)
-    if callable(run_agent):
+    supports_agentic = getattr(provider, "supports_agentic", None)
+    if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
         try:
             agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
                 _build_ingest_agent_prompt(
@@ -64,6 +68,17 @@ async def handle_ingest_system1_task(
             )
             normalized = _normalize_ingest_agentic_result(agentic_result)
             meaningful_actions = max(normalized["meaningful_actions"], normalized["mutations"])
+            if (
+                pending_count_before_run > 0
+                and normalized["tool_calls_executed"] <= 0
+                and meaningful_actions <= 0
+                and not normalized["created_memory_ids"]
+            ):
+                ctx.journal.release_claims(task.id)
+                raise RuntimeError(
+                    "ingest_agentic_no_tool_calls_with_pending_entries: "
+                    f"pending_count={pending_count_before_run}"
+                )
             if meaningful_actions <= 0:
                 released_ids = ctx.journal.release_claims(task.id)
                 return {
@@ -210,9 +225,10 @@ async def _analyze_ingest_actions(
     prompt = (
         "Analyze these system1 journal entries and return JSON with actions.\n"
         'Allowed actions: {"type": "create"|"ignore"|"append", "entry_indices": [...], '
-        '"target_memory_id": "...", "title": "...", "content": "..."}.\n'
+        '"target_memory_id": "...", "title": "...", "content": "...", "summary": "..."}.\n'
         f"Active workspace_id: {workspace_id}. "
         "If a thought clearly belongs in an existing canonical memory, prefer append and identify the target_memory_id. "
+        "When you already understand the resulting memory well, include a concise summary so the handler can update it without another background task. "
         "Use internal maintenance tools to search and read existing memories before choosing a target whenever append might apply.\n\n"
         f"Entries:\n{entry_text}"
     )
@@ -357,8 +373,8 @@ def _build_ingest_agent_prompt(
         f"Start with internal_get_next_ingest_batch using task_id='{task.id}', batch_size={batch_size}, and grouping_strategy='{grouping_strategy}'.\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
-        f"When a thought clearly belongs in an existing canonical memory, prefer internal_append_to_existing_memory_for_ingest with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, and the content to append.\n"
-        f"When a new memory is warranted, use internal_create_memory_record_for_ingest with task_id='{task.id}', the claimed entry_ids, a focused title/content payload, and relevant workspace_ids.\n"
+        f"When a thought clearly belongs in an existing canonical memory, prefer {INGEST_APPEND_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, the content to append, and a concise summary when you already understand the updated memory.\n"
+        f"When a new memory is warranted, use {INGEST_CREATE_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, a focused title/content payload, relevant workspace_ids, and a concise summary when you can provide one cheaply.\n"
         "Use the generic append/create tools only when a non-ingest workflow truly requires them.\n"
         f"Use workspace_id '{workspace_id}' when you need a fallback workspace.\n"
         "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
@@ -467,6 +483,11 @@ def _execute_ingest_actions(
             if target is None:
                 continue
             updated = _append_entries_to_existing_memory(ctx, target, selected_entries, task)
+            requested_summary = action.get("summary")
+            if isinstance(requested_summary, str) and requested_summary.strip():
+                refreshed = ctx.repository.update_memory(updated.id, summary=requested_summary.strip())
+                if refreshed is not None:
+                    updated = refreshed
             append_workspace_ids = _resolve_entry_workspace_ids(selected_entries, workspace_id)
             missing_workspace_ids = [item for item in append_workspace_ids if item not in updated.workspace_ids]
             if missing_workspace_ids:
@@ -486,6 +507,11 @@ def _execute_ingest_actions(
         record = ctx.repository.create_memory(
             title=title,
             content=content,
+            summary=(
+                str(action.get("summary")).strip()
+                if isinstance(action.get("summary"), str) and str(action.get("summary")).strip()
+                else None
+            ),
             workspace_ids=_resolve_entry_workspace_ids(selected_entries, workspace_id),
             tags=["auto-ingested", "system1"],
             memory_type="observation",

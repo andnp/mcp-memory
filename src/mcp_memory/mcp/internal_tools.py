@@ -72,13 +72,14 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="internal_append_to_existing_memory_for_ingest",
+            name="internal_ingest_append_memory",
             description="Append ingest content into an existing active memory while preserving ingest lineage metadata, workspace_ids, and system1-appended tagging.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
                     "content": {"type": "string"},
+                    "summary": {"type": "string"},
                     "task_id": {"type": "string"},
                     "entry_ids": {"type": "array", "minItems": 1, "items": {"type": ["integer", "string"]}},
                     "workspace_ids": {"type": "array", "items": {"type": "string"}},
@@ -89,7 +90,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="internal_create_memory_record_for_ingest",
+            name="internal_ingest_create_memory",
             description="Create a new memory record for ingest while preserving source_entry_ids, ingest_task_id, default ingest tags, workspace_ids, and summary-task enqueueing.",
             inputSchema={
                 "type": "object",
@@ -116,6 +117,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "properties": {
                     "memory_id": {"type": "string"},
                     "content": {"type": "string"},
+                    "summary": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "workspace_ids": {"type": "array", "items": {"type": "string"}},
                     "metadata": {"type": "object"},

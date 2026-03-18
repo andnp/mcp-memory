@@ -45,6 +45,7 @@ AGENTIC_TASK_NAMES = {
     DEDUPLICATOR_TASK_NAME,
     CURATOR_TASK_NAME,
 }
+DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS = 300.0
 
 
 def build_runtime_task_worker(
@@ -87,6 +88,7 @@ def build_runtime_task_worker(
         handlers=handlers,
         handler_factory=lambda: build_default_task_handlers(active_json_provider, active_agentic_provider),
         poll_interval_seconds=0.05,
+        retry_delay_seconds=DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS,
     )
 
 
@@ -94,30 +96,76 @@ def build_default_task_handlers(
     provider: Any = None,
     agentic_provider: Any = None,
 ) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
-    def scoped(task_name: str, task: TaskRecord):
-        return _provider_for_task(provider, agentic_provider, task_name, task)
+    def scoped(ctx: ApplicationContext, task_name: str, task: TaskRecord):
+        return _provider_for_task(ctx, provider, agentic_provider, task_name, task)
 
     return {
-        SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(SYSTEM1_INGEST_TASK_NAME, task)),
-        SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(SUMMARIZE_MEMORY_TASK_NAME, task)),
-        GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(GRAPH_LINKER_TASK_NAME, task)),
-        CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, scoped(CONFLICT_DETECTOR_TASK_NAME, task)),
-        DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, scoped(DEFRAGMENTER_TASK_NAME, task)),
-        DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, scoped(DEDUPLICATOR_TASK_NAME, task)),
-        TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, scoped(TAXONOMIST_TASK_NAME, task)),
-        CURATOR_TASK_NAME: lambda ctx, task: handle_memory_curator_task(ctx, task, scoped(CURATOR_TASK_NAME, task)),
+        SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(ctx, SYSTEM1_INGEST_TASK_NAME, task)),
+        SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(ctx, SUMMARIZE_MEMORY_TASK_NAME, task)),
+        GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(ctx, GRAPH_LINKER_TASK_NAME, task)),
+        CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, scoped(ctx, CONFLICT_DETECTOR_TASK_NAME, task)),
+        DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, scoped(ctx, DEFRAGMENTER_TASK_NAME, task)),
+        DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, scoped(ctx, DEDUPLICATOR_TASK_NAME, task)),
+        TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, scoped(ctx, TAXONOMIST_TASK_NAME, task)),
+        CURATOR_TASK_NAME: lambda ctx, task: handle_memory_curator_task(ctx, task, scoped(ctx, CURATOR_TASK_NAME, task)),
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,
         SWEEPER_TASK_NAME: handle_sweeper_task,
     }
 
 
-def _provider_for_task(provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+    registry = getattr(ctx, "ai_provider_registry", None) or {}
+    routing = None if ctx.config is None else ctx.config.provider_routing
+    prefer_agentic = task_name in AGENTIC_TASK_NAMES
+
+    candidate_route_keys: list[str] = []
+    if routing is not None:
+        if task_name in routing.task_routes:
+            candidate_route_keys = routing.task_routes[task_name]
+        elif prefer_agentic and routing.default_agentic_route:
+            candidate_route_keys = routing.default_agentic_route
+        elif not prefer_agentic and routing.default_json_route:
+            candidate_route_keys = routing.default_json_route
+
+    if candidate_route_keys:
+        found_routed_provider = False
+        for route_key in candidate_route_keys:
+            bundle = registry.get(route_key)
+            if not isinstance(bundle, dict):
+                continue
+            selected_provider = _select_provider_from_bundle(bundle, prefer_agentic=prefer_agentic)
+            if selected_provider is None:
+                continue
+            found_routed_provider = True
+            budget_available = getattr(selected_provider, "budget_available", None)
+            if callable(budget_available) and not budget_available():
+                logger.warning("Skipping over-budget provider route", extra={"task_name": task_name, "route_key": route_key})
+                continue
+            return _bind_provider(selected_provider, task_name=task_name, task=task)
+        if found_routed_provider:
+            return None
+
     selected_provider = provider
-    if task_name in AGENTIC_TASK_NAMES and agentic_provider is not None:
+    if prefer_agentic and agentic_provider is not None:
         selected_provider = agentic_provider
     if selected_provider is None:
         return None
+    budget_available = getattr(selected_provider, "budget_available", None)
+    if callable(budget_available) and not budget_available():
+        return None
+    return _bind_provider(selected_provider, task_name=task_name, task=task)
+
+
+def _select_provider_from_bundle(bundle: dict[str, Any], *, prefer_agentic: bool):
+    if prefer_agentic and bundle.get("agentic") is not None:
+        return bundle.get("agentic")
+    if bundle.get("json") is not None:
+        return bundle.get("json")
+    return bundle.get("agentic")
+
+
+def _bind_provider(selected_provider: Any, *, task_name: str, task: TaskRecord):
     binder = getattr(selected_provider, "with_usage_context", None)
     if not callable(binder):
         return selected_provider
