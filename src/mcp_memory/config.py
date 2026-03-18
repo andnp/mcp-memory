@@ -94,6 +94,8 @@ class ProviderRoutingConfig:
     profile_daily_call_limits: dict[str, int] = field(default_factory=dict)
     default_json_route: list[str] = field(default_factory=list)
     default_agentic_route: list[str] = field(default_factory=list)
+    fallback_to_json_only: bool = False
+    low_priority_task_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         normalized_profiles: dict[str, AIConfig] = {}
@@ -117,6 +119,50 @@ class ProviderRoutingConfig:
                 raise ValueError(f"provider_routing.profile_daily_call_limits[{profile_key!r}] must be >= 1")
         self.default_json_route = [item.strip() for item in self.default_json_route if isinstance(item, str) and item.strip()]
         self.default_agentic_route = [item.strip() for item in self.default_agentic_route if isinstance(item, str) and item.strip()]
+        self.low_priority_task_names = [item.strip() for item in self.low_priority_task_names if isinstance(item, str) and item.strip()]
+
+
+@dataclass
+class IngestSuppressionWindow:
+    start_hour: int
+    end_hour: int
+    days_of_week: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.start_hour <= 23):
+            raise ValueError("ingest_suppression.windows.start_hour must be in [0, 23]")
+        if not (0 <= self.end_hour <= 23):
+            raise ValueError("ingest_suppression.windows.end_hour must be in [0, 23]")
+        normalized_days: list[int] = []
+        for day in self.days_of_week:
+            if not isinstance(day, int) or not (0 <= day <= 6):
+                raise ValueError("ingest_suppression.windows.days_of_week must contain integers in [0, 6]")
+            if day not in normalized_days:
+                normalized_days.append(day)
+        self.days_of_week = normalized_days
+
+
+@dataclass
+class IngestSuppressionConfig:
+    enabled: bool = False
+    windows: list[IngestSuppressionWindow] = field(default_factory=list)
+
+
+@dataclass
+class IngestEscalationConfig:
+    enabled: bool = True
+    deterministic_first: bool = True
+    agentic_pending_count_threshold: int = 8
+    novelty_threshold: float = 0.6
+    preview_entry_limit: int = 8
+
+    def __post_init__(self) -> None:
+        if self.agentic_pending_count_threshold < 1:
+            raise ValueError("ingest_escalation.agentic_pending_count_threshold must be >= 1")
+        if not (0.0 <= self.novelty_threshold <= 1.0):
+            raise ValueError("ingest_escalation.novelty_threshold must be in [0.0, 1.0]")
+        if self.preview_entry_limit < 1:
+            raise ValueError("ingest_escalation.preview_entry_limit must be >= 1")
 
 
 @dataclass
@@ -226,6 +272,8 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
     provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
+    ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
+    ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -301,6 +349,39 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
         profile_daily_call_limits=profile_daily_call_limits,
         default_json_route=_normalize_route_list(data.get("default_json_route", [])),
         default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
+        fallback_to_json_only=bool(data.get("fallback_to_json_only", False)),
+        low_priority_task_names=_normalize_route_list(data.get("low_priority_task_names", [])),
+    )
+
+
+def _load_ingest_suppression_config(data: dict[str, Any]) -> IngestSuppressionConfig:
+    windows: list[IngestSuppressionWindow] = []
+    raw_windows = data.get("windows", [])
+    if isinstance(raw_windows, list):
+        for item in raw_windows:
+            if not isinstance(item, dict):
+                continue
+            days = item.get("days_of_week", [])
+            windows.append(
+                IngestSuppressionWindow(
+                    start_hour=int(item.get("start_hour", 0)),
+                    end_hour=int(item.get("end_hour", 0)),
+                    days_of_week=[int(day) for day in days] if isinstance(days, list) else [],
+                )
+            )
+    return IngestSuppressionConfig(
+        enabled=bool(data.get("enabled", False)),
+        windows=windows,
+    )
+
+
+def _load_ingest_escalation_config(data: dict[str, Any]) -> IngestEscalationConfig:
+    return IngestEscalationConfig(
+        enabled=bool(data.get("enabled", True)),
+        deterministic_first=bool(data.get("deterministic_first", True)),
+        agentic_pending_count_threshold=int(data.get("agentic_pending_count_threshold", 8)),
+        novelty_threshold=float(data.get("novelty_threshold", 0.6)),
+        preview_entry_limit=int(data.get("preview_entry_limit", 8)),
     )
 
 
@@ -361,23 +442,50 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     }
     document["provider_routing"] = {
         "profiles": {
+            "copilot-strong": {
+                "provider": "copilot-cli",
+                "model": "gpt-5.4",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
             "copilot-mini": {
                 "provider": "copilot-cli",
                 "model": "gpt-5-mini",
                 "timeout_seconds": 900,
                 "max_retries": 0,
+            },
+            "gemini-cheap": {
+                "provider": "gemini-cli",
+                "model": "gemini-3-flash-preview",
+                "timeout_seconds": 900,
+                "max_retries": 0,
             }
         },
         "task_routes": {
-            "ingest-system1": ["copilot-mini"],
-            "deduplicator": ["copilot-mini"],
-            "memory-curator": ["copilot-mini"],
+            "ingest-system1": ["copilot-mini", "gemini-cheap"],
+            "deduplicator": ["copilot-mini", "gemini-cheap"],
+            "memory-curator": ["copilot-strong", "gemini-cheap"],
         },
         "profile_daily_call_limits": {
+            "copilot-strong": 20,
             "copilot-mini": 50,
+            "gemini-cheap": 100,
         },
         "default_json_route": [],
         "default_agentic_route": [],
+        "fallback_to_json_only": False,
+        "low_priority_task_names": [],
+    }
+    document["ingest_suppression"] = {
+        "enabled": False,
+        "windows": [],
+    }
+    document["ingest_escalation"] = {
+        "enabled": True,
+        "deterministic_first": True,
+        "agentic_pending_count_threshold": 8,
+        "novelty_threshold": 0.6,
+        "preview_entry_limit": 8,
     }
     memory_table = tomlkit.table()
     memory_table.update({
@@ -431,6 +539,8 @@ def load_config(config_path: Path | None = None) -> Config:
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
         provider_routing=_load_provider_routing_config(raw.get("provider_routing", {})),
+        ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
+        ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
     )
 
 

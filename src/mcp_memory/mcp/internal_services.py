@@ -7,7 +7,7 @@ from uuid import uuid4
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
-from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
+from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list, validate_ingest_mutation_payload
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
 
 
@@ -129,10 +129,14 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    memory_id = require_string(arguments, "memory_id")
-    content = require_string(arguments, "content")
-    task_id = require_string(arguments, "task_id")
-    entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+    try:
+        memory_id = require_string(arguments, "memory_id")
+        content = require_string(arguments, "content")
+        task_id = require_string(arguments, "task_id")
+        entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+        validate_ingest_mutation_payload(entry_ids=entry_ids, content=content)
+    except (TypeError, ValueError) as exc:
+        return {"status": "error", "error": "invalid_ingest_payload", "detail": str(exc)}
     record = ctx.repository.get_memory(memory_id)
     if record is None:
         return {"status": "error", "error": "memory_not_found"}
@@ -167,13 +171,19 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
 
-    task_id = require_string(arguments, "task_id")
-    entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+    try:
+        task_id = require_string(arguments, "task_id")
+        entry_ids = _normalize_ingest_entry_ids(arguments, "entry_ids")
+        title = require_string(arguments, "title")
+        content = require_string(arguments, "content")
+        validate_ingest_mutation_payload(entry_ids=entry_ids, content=content, title=title)
+    except (TypeError, ValueError) as exc:
+        return {"status": "error", "error": "invalid_ingest_payload", "detail": str(exc)}
     workspace_ids = string_list(arguments, "workspace_ids") or ([ctx.workspace_id] if ctx.workspace_id is not None else ["workspace-unknown"])
     metadata_override = optional_object(arguments, "metadata") or {}
     record = ctx.repository.create_memory(
-        title=require_string(arguments, "title"),
-        content=require_string(arguments, "content"),
+        title=title,
+        content=content,
         summary=optional_string(arguments, "summary"),
         memory_type=optional_string(arguments, "memory_type") or "observation",
         status=optional_string(arguments, "status") or "active",

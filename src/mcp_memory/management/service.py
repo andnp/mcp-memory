@@ -470,10 +470,11 @@ class ManagementService:
         ]
 
         queue_rows = self._build_queue_diagnostics(limit=200)
+        runnable_queue_rows = [row for row in queue_rows if row.pending_state == "runnable"]
         queue_snapshot = QueueSnapshotPayload(
-            runnable_count=sum(1 for row in queue_rows if row.pending_state == "runnable"),
+            runnable_count=len(runnable_queue_rows),
             scheduled_count=sum(1 for row in queue_rows if row.pending_state == "scheduled"),
-            oldest_age_seconds=round(max((row.age_seconds for row in queue_rows), default=0.0), 4),
+            oldest_age_seconds=round(max((row.age_seconds for row in runnable_queue_rows), default=0.0), 4),
         )
 
         graph_topology = self._build_graph_topology()
@@ -483,7 +484,7 @@ class ManagementService:
         provider_failure_rate = 0.0 if not provider_rows else provider_failures / len(provider_rows)
 
         stats = [
-            NerdStatPayload(key="queue_oldest_age", label="Oldest queued age", value=queue_snapshot.oldest_age_seconds, unit="s"),
+            NerdStatPayload(key="queue_oldest_age", label="Oldest runnable age", value=queue_snapshot.oldest_age_seconds, unit="s"),
             NerdStatPayload(key="runs_last_window", label="Runs in window", value=float(len(task_rows)), unit="runs"),
             NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if str(row["status"]) == "failed")), unit="runs"),
             NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),

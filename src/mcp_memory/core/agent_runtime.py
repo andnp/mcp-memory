@@ -184,6 +184,7 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
             task_queue,
             journal,
             None,
+            suppression_config=None if ctx.config is None else ctx.config.ingest_suppression,
         )
 
     for task_name, interval_seconds in RECURRING_TASK_INTERVAL_SECONDS.items():

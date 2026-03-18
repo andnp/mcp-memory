@@ -213,6 +213,31 @@ def test_management_service_can_cancel_running_task_and_list_conversations(db_ma
     assert conversations.conversations[0].subprocess_pid == 4321
 
 
+def test_management_service_ignores_scheduled_tasks_for_oldest_runnable_age(db_manager) -> None:
+    task_queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        task_queue=task_queue,
+    )
+    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+
+    task_queue.enqueue(
+        "ingest-system1",
+        task_id="scheduled-only",
+        workspace_id="workspace-a",
+        available_at=time.time() + 500.0,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=time.time())
+
+    assert nerd_metrics.queue_snapshot.runnable_count == 0
+    assert nerd_metrics.queue_snapshot.scheduled_count == 1
+    assert nerd_metrics.queue_snapshot.oldest_age_seconds == 0.0
+    assert all(alert.key != "queue_oldest_age" for alert in nerd_metrics.alerts)
+
+
 def test_management_service_can_record_thought_into_journal(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     journal = System1Journal(db_manager)

@@ -131,6 +131,31 @@ async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_call_internal_memory_tool_rejects_invalid_ingest_mutations(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        create_result = await call_internal_memory_tool(
+            runtime,
+            "internal_ingest_create_memory",
+            {
+                "task_id": "ingest-invalid",
+                "entry_ids": [],
+                "title": "Marker",
+                "content": "marker",
+            },
+        )
+
+        create_payload = json.loads(create_result[0].text)
+        assert create_payload["status"] == "error"
+        assert create_payload["error"] == "invalid_ingest_payload"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_call_internal_memory_tool_can_append_workspace_ids_and_metadata(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

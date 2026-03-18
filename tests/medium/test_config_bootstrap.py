@@ -24,10 +24,16 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.ai.provider == "none"
     assert config.daemon.host == "127.0.0.1"
     assert config.search_ranking.calibration_threshold == 0.035
-    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
-    assert config.provider_routing.task_routes["deduplicator"] == ["copilot-mini"]
-    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-mini"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-cheap"]
+    assert config.provider_routing.fallback_to_json_only is False
+    assert config.provider_routing.low_priority_task_names == []
+    assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
+    assert config.provider_routing.profiles["gemini-cheap"].model == "gemini-3-flash-preview"
+    assert config.ingest_suppression.enabled is False
+    assert config.ingest_escalation.enabled is True
 
 
 def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
@@ -65,6 +71,8 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
         "[provider_routing]\n"
         'default_json_route = ["copilot-mini"]\n'
         'default_agentic_route = ["gemini-cheap"]\n'
+        'fallback_to_json_only = false\n'
+        'low_priority_task_names = ["deduplicator"]\n'
         "\n"
         "[provider_routing.task_routes]\n"
         'ingest-system1 = ["copilot-mini", "gemini-cheap"]\n'
@@ -90,10 +98,42 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
 
     assert config.provider_routing.default_json_route == ["copilot-mini"]
     assert config.provider_routing.default_agentic_route == ["gemini-cheap"]
+    assert config.provider_routing.fallback_to_json_only is False
+    assert config.provider_routing.low_priority_task_names == ["deduplicator"]
     assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
     assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
+
+
+def test_load_config_reads_ingest_control_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[ingest_suppression]\n"
+        "enabled = true\n"
+        "\n"
+        "[[ingest_suppression.windows]]\n"
+        "start_hour = 22\n"
+        "end_hour = 6\n"
+        "days_of_week = [0, 1, 2, 3, 4]\n"
+        "\n"
+        "[ingest_escalation]\n"
+        "enabled = true\n"
+        "deterministic_first = true\n"
+        "agentic_pending_count_threshold = 12\n"
+        "novelty_threshold = 0.75\n"
+        "preview_entry_limit = 5\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.ingest_suppression.enabled is True
+    assert len(config.ingest_suppression.windows) == 1
+    assert config.ingest_suppression.windows[0].start_hour == 22
+    assert config.ingest_escalation.agentic_pending_count_threshold == 12
+    assert config.ingest_escalation.novelty_threshold == 0.75
+    assert config.ingest_escalation.preview_entry_limit == 5
 
 
 def test_resolve_workspace_root_prefers_git_root(tmp_path: Path) -> None:

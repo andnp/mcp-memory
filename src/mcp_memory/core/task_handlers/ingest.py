@@ -62,6 +62,15 @@ async def handle_ingest_system1_task(
             "reason": "no_pending_entries",
         }
 
+    provider = _resolve_ingest_execution_provider(
+        ctx,
+        task,
+        provider,
+        journal_workspace_id=journal_workspace_id,
+        workspace_id=workspace_id,
+        pending_count_before_run=pending_count_before_run,
+    )
+
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
@@ -416,6 +425,69 @@ def _resolve_grouping_strategy(
     if requested_strategy == SEMANTIC_SEEDED_GROUPING_STRATEGY and (embedder is None or vector_store is None):
         return LEXICAL_SEEDED_GROUPING_STRATEGY, "semantic_grouping_unavailable"
     return requested_strategy, None
+
+
+def _resolve_ingest_execution_provider(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any,
+    *,
+    journal_workspace_id,
+    workspace_id: str,
+    pending_count_before_run: int,
+):
+    if provider is None or ctx.journal is None:
+        return provider
+    escalation_config = None if ctx.config is None else ctx.config.ingest_escalation
+    if escalation_config is None or not escalation_config.enabled or not escalation_config.deterministic_first:
+        return provider
+
+    supports_agentic = getattr(provider, "supports_agentic", None)
+    if callable(supports_agentic) and not supports_agentic():
+        return provider
+
+    if not _is_routed_ingest_provider(ctx, provider):
+        return provider
+    if pending_count_before_run >= escalation_config.agentic_pending_count_threshold:
+        return provider
+
+    preview_entries = ctx.journal.get_pending(workspace_id=journal_workspace_id)[: escalation_config.preview_entry_limit]
+    novelty_score = _estimate_ingest_novelty(ctx, preview_entries, workspace_id=workspace_id)
+    if novelty_score < escalation_config.novelty_threshold:
+        return None
+    return provider
+
+
+def _is_routed_ingest_provider(ctx: ApplicationContext, provider: Any) -> bool:
+    profile_key = getattr(provider, "_budget_key", None)
+    registry = getattr(ctx, "ai_provider_registry", None) or {}
+    return isinstance(profile_key, str) and profile_key in registry
+
+
+def _estimate_ingest_novelty(ctx: ApplicationContext, entries, *, workspace_id: str) -> float:
+    if ctx.repository is None or not entries:
+        return 1.0
+    candidates = ctx.repository.list_memories(workspace_id=workspace_id, status="active", limit=25)
+    if not candidates:
+        return 1.0
+    max_similarities: list[float] = []
+    for entry in entries:
+        entry_text = entry.content.strip()
+        best_similarity = 0.0
+        for candidate in candidates:
+            candidate_text = _memory_similarity_text(candidate)
+            best_similarity = max(best_similarity, _entry_similarity(entry_text, candidate_text, 0.0))
+        max_similarities.append(best_similarity)
+    if not max_similarities:
+        return 1.0
+    average_similarity = sum(max_similarities) / len(max_similarities)
+    return max(0.0, min(1.0, 1.0 - average_similarity))
+
+
+def _memory_similarity_text(record) -> str:
+    summary = record.summary or ""
+    lead_line = record.content.strip().splitlines()[0] if record.content.strip() else ""
+    return " ".join(part for part in [record.title, summary, lead_line] if part).strip()
 
 
 def _seed_entries_for_grouping(entries, *, task_id: str | None, grouping_strategy: str):

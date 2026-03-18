@@ -11,10 +11,12 @@ class RecordThoughtOperation:
         journal: System1Journal,
         task_queue: SQLiteTaskQueue | None,
         workspace_id: str | None,
+        suppression_config=None,
     ) -> None:
         self._journal = journal
         self._task_queue = task_queue
         self._workspace_id = workspace_id
+        self._suppression_config = suppression_config
 
     def execute(self, content: str) -> dict:
         entry = self._journal.record(content, workspace_id=self._workspace_id)
@@ -24,7 +26,12 @@ class RecordThoughtOperation:
         }
 
         if self._task_queue is not None:
-            scheduled = schedule_system1_ingest(self._task_queue, self._journal, self._workspace_id)
+            scheduled = schedule_system1_ingest(
+                self._task_queue,
+                self._journal,
+                self._workspace_id,
+                suppression_config=self._suppression_config,
+            )
             if scheduled is not None and scheduled.trigger == "system1_threshold":
                 ingest_task = scheduled.task
                 created = scheduled.created

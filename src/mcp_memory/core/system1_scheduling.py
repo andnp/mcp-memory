@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from mcp_memory.core.journal import System1Journal, _ALL_WORKSPACES
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
@@ -24,6 +25,7 @@ def schedule_system1_ingest(
     workspace_id: str | None,
     *,
     now: float | None = None,
+    suppression_config=None,
 ):
     from mcp_memory.core.task_handlers.constants import (
         SYSTEM1_INGEST_DEBOUNCE_SECONDS,
@@ -48,6 +50,11 @@ def schedule_system1_ingest(
         trigger = "system1_debounce"
         available_at = max(oldest_pending_timestamp + SYSTEM1_INGEST_DEBOUNCE_SECONDS, scheduled_at)
 
+    suppressed_until = _resolve_ingest_suppression_until(scheduled_at, suppression_config)
+    if suppressed_until is not None:
+        available_at = max(available_at, suppressed_until)
+        trigger = f"{trigger}_suppressed"
+
     task_data = {
         "workspace_id": workspace_id,
         "journal_workspace_id": _serialize_pending_workspace_id(journal_workspace_id),
@@ -55,6 +62,8 @@ def schedule_system1_ingest(
         "pending_count": pending_count,
         "oldest_pending_timestamp": oldest_pending_timestamp,
     }
+    if suppressed_until is not None:
+        task_data["suppressed_until"] = suppressed_until
     task, created = task_queue.enqueue_unique(
         task_name=SYSTEM1_INGEST_TASK_NAME,
         workspace_id=workspace_id,
@@ -97,3 +106,40 @@ def _serialize_pending_workspace_id(workspace_id: object) -> str | None:
     if workspace_id is _ALL_WORKSPACES:
         return _ALL_WORKSPACES_WIRE
     return workspace_id if isinstance(workspace_id, str) else None
+
+
+def _resolve_ingest_suppression_until(now: float, suppression_config) -> float | None:
+    if suppression_config is None or not getattr(suppression_config, "enabled", False):
+        return None
+    windows = getattr(suppression_config, "windows", [])
+    if not windows:
+        return None
+
+    current = datetime.fromtimestamp(now).astimezone()
+    current_hour = current.hour + (current.minute / 60.0) + (current.second / 3600.0)
+    candidate_end_times: list[float] = []
+
+    for window in windows:
+        days = set(getattr(window, "days_of_week", []))
+        start_hour = int(getattr(window, "start_hour", 0))
+        end_hour = int(getattr(window, "end_hour", 0))
+        if start_hour == end_hour:
+            if not days or current.weekday() in days:
+                end_dt = (current + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+                candidate_end_times.append(end_dt.timestamp())
+            continue
+        if start_hour < end_hour:
+            if (not days or current.weekday() in days) and start_hour <= current_hour < end_hour:
+                end_dt = current.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+                candidate_end_times.append(end_dt.timestamp())
+            continue
+        if current_hour >= start_hour and (not days or current.weekday() in days):
+            end_dt = (current + timedelta(days=1)).replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            candidate_end_times.append(end_dt.timestamp())
+            continue
+        previous_day = (current.weekday() - 1) % 7
+        if current_hour < end_hour and (not days or previous_day in days):
+            end_dt = current.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+            candidate_end_times.append(end_dt.timestamp())
+
+    return min(candidate_end_times) if candidate_end_times else None

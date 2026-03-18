@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 import pytest
 
@@ -280,6 +281,35 @@ def test_schedule_system1_ingest_debounces_then_pulls_forward_at_threshold(
     assert accelerated.task.id == scheduled.task.id
     assert accelerated.task.available_at == now
     assert accelerated.task.priority == SYSTEM1_INGEST_PRIORITY
+
+
+def test_schedule_system1_ingest_respects_active_suppression_window(
+    db_manager,
+    monkeypatch,
+) -> None:
+    from mcp_memory.config import IngestSuppressionConfig, IngestSuppressionWindow
+
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    now = datetime(2026, 3, 17, 22, 15).astimezone().timestamp()
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("quiet-hours note", workspace_id="workspace-a")
+
+    scheduled = schedule_system1_ingest(
+        queue,
+        journal,
+        "workspace-a",
+        now=now,
+        suppression_config=IngestSuppressionConfig(
+            enabled=True,
+            windows=[IngestSuppressionWindow(start_hour=22, end_hour=6)],
+        ),
+    )
+
+    assert scheduled is not None
+    assert scheduled.trigger == "system1_debounce_suppressed"
+    assert scheduled.task.available_at == pytest.approx(datetime(2026, 3, 18, 6, 0).astimezone().timestamp())
 
 
 @pytest.mark.asyncio

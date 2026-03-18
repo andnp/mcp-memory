@@ -30,7 +30,8 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.journal is None:
         return {"status": "error", "error": "journal_not_initialized"}
 
-    operation = RecordThoughtOperation(ctx.journal, ctx.task_queue, ctx.workspace_id)
+    suppression_config = None if ctx.config is None else ctx.config.ingest_suppression
+    operation = RecordThoughtOperation(ctx.journal, ctx.task_queue, ctx.workspace_id, suppression_config)
     return operation.execute(require_string(arguments, "content"))
 
 

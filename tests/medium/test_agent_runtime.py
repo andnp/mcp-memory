@@ -276,6 +276,75 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_ingest_handler_skips_agentic_provider_for_low_novelty_routed_batches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+    assert runtime.config is not None
+
+    try:
+        runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        runtime.journal.record(
+            "Prefer pytest-based integration coverage.",
+            workspace_id=runtime.workspace_id,
+        )
+        runtime.config.ingest_escalation.agentic_pending_count_threshold = 10
+        runtime.config.ingest_escalation.novelty_threshold = 0.9
+
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-json-fallback",
+        )
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.run_agent_calls = 0
+                self._budget_key = "copilot-mini"
+
+            def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+                return self
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.run_agent_calls += 1
+                return AgenticRunResult(status="success", summary="should not run")
+
+        agentic_provider = _AgenticProvider()
+        runtime.ai_provider_registry = {
+            "copilot-mini": {
+                "agentic": agentic_provider,
+            }
+        }
+
+        result = await handle_ingest_system1_task(runtime, task, agentic_provider)
+
+        assert result["meaningful_actions"] == 1
+        assert agentic_provider.run_agent_calls == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_ingest_handler_raises_when_agentic_provider_uses_no_tools_while_entries_are_pending(
     monkeypatch,
     tmp_path: Path,
@@ -644,7 +713,7 @@ def test_bootstrap_background_tasks_pulls_ingest_forward_at_threshold(db_manager
     from mcp_memory.context import ApplicationContext
 
     journal = System1Journal(db_manager)
-    for index in range(20):
+    for index in range(40):
         journal.record(f"capture pending context {index}", workspace_id="workspace-a")
     ctx = ApplicationContext(
         workspace_id="workspace-a",
@@ -2922,7 +2991,7 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
         await worker.stop(0.1)
 
         pending_counts = runtime.journal.count_by_status()
-        assert pending_counts.get("pending", 0) == 5
+        assert pending_counts.get("pending", 0) == 25
         assert pending_counts.get("claimed", 0) == 0
         assert pending_counts.get("processed", 0) == 0
         delayed_tasks = runtime.task_queue.list_tasks(
