@@ -264,10 +264,10 @@ def test_schedule_system1_ingest_debounces_then_pulls_forward_at_threshold(
     assert scheduled is not None
     assert scheduled.created is True
     assert scheduled.trigger == "system1_debounce"
-    assert scheduled.task.available_at == 1900.0
+    assert scheduled.task.available_at == 3700.0
     assert scheduled.task.priority == SYSTEM1_INGEST_PRIORITY
 
-    for index in range(1, 20):
+    for index in range(1, 40):
         now += 1.0
         monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda current=now: current)
         journal.record(f"note {index}", workspace_id="workspace-a")

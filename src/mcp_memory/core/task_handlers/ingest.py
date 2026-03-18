@@ -53,6 +53,14 @@ async def handle_ingest_system1_task(
         ctx,
         requested_strategy=grouping_strategy_requested,
     )
+    if pending_count_before_run <= 0:
+        return {
+            **_build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0),
+            "requested_grouping_strategy": grouping_strategy_requested,
+            "grouping_strategy_used": grouping_strategy_used,
+            "grouping_fallback_reason": grouping_fallback_reason,
+            "reason": "no_pending_entries",
+        }
 
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
