@@ -29,6 +29,7 @@ async def _request_json(metadata, path: str, payload: dict | None = None) -> dic
 async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr("mcp_memory.mcp.runtime._provider_command_available", lambda _provider: False)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
@@ -263,6 +264,14 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
+        assert nerd_metrics["graph_topology"]["total_memories"] == 2
+        assert nerd_metrics["graph_topology"]["total_links"] == 1
+        assert nerd_metrics["graph_topology"]["link_type_counts"] == {"SUPERSEDES": 1}
+        assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 2
+        assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
+        assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
+        assert nerd_metrics["search_quality"]["semantic_enabled"] is True
+        assert any(alert["key"] == "cold_memory_rate" for alert in nerd_metrics["alerts"])
         assert prune_logs["deleted"] == 0
         assert repair_search["rebuilt"] is True
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")

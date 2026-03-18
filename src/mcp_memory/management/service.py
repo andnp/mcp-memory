@@ -6,7 +6,7 @@ import math
 import os
 from pathlib import Path
 import signal
-from statistics import mean
+from statistics import mean, median
 import time
 
 from mcp_memory.context import ApplicationContext
@@ -23,13 +23,16 @@ from mcp_memory.management.models import (
     AIConversationPayload,
     AgentThroughputBucketPayload,
     EmbeddingStatusPayload,
+    GraphTopologyPayload,
     HealthPayload,
     JournalSummary,
+    MemoryLifecyclePayload,
     MemoryListPayload,
     MemoryDetailPayload,
     MemoryMetricsPayload,
     MemorySearchResultPayload,
     MemorySearchPayload,
+    NerdAlertPayload,
     NerdMetricsPayload,
     NerdStatPayload,
     OverviewCounts,
@@ -43,6 +46,7 @@ from mcp_memory.management.models import (
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
     RuntimeLogSummaryPayload,
+    SearchQualityPayload,
     SearchHealthPayload,
     StorageSummary,
     TaskListPayload,
@@ -64,16 +68,16 @@ class ManagementService:
         pipeline = MemoryPipeline.from_context(ctx, controller)
         self._controller = controller
         self._db_manager = ctx.db_manager
-        self._workspace_id = None
+        self._workspace_id = ctx.workspace_id
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
-        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
+        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=self._workspace_id)
         self._runtime_logs = RuntimeLogRepository(
             ctx.db_manager,
-            workspace_id=None,
+            workspace_id=self._workspace_id,
             config=None if ctx.config is None else ctx.config.logging,
         )
         self._embedder = ctx.embedder
@@ -472,6 +476,12 @@ class ManagementService:
             oldest_age_seconds=round(max((row.age_seconds for row in queue_rows), default=0.0), 4),
         )
 
+        graph_topology = self._build_graph_topology()
+        memory_lifecycle = self._build_memory_lifecycle()
+        search_quality = self._build_search_quality(graph_topology=graph_topology, memory_lifecycle=memory_lifecycle)
+
+        provider_failure_rate = 0.0 if not provider_rows else provider_failures / len(provider_rows)
+
         stats = [
             NerdStatPayload(key="queue_oldest_age", label="Oldest queued age", value=queue_snapshot.oldest_age_seconds, unit="s"),
             NerdStatPayload(key="runs_last_window", label="Runs in window", value=float(len(task_rows)), unit="runs"),
@@ -479,6 +489,10 @@ class ManagementService:
             NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),
             NerdStatPayload(key="provider_failures_last_window", label="Provider failures in window", value=float(provider_failures), unit="calls"),
             NerdStatPayload(key="provider_p95_latency", label="Provider p95 latency", value=round(_percentile(all_provider_durations, 0.95), 4), unit="s"),
+            NerdStatPayload(key="provider_failure_rate", label="Provider failure rate", value=round(provider_failure_rate, 4), unit="pct"),
+            NerdStatPayload(key="orphan_rate", label="Orphan rate", value=round(graph_topology.orphan_rate, 4), unit="pct"),
+            NerdStatPayload(key="cold_memory_rate", label="Cold memory rate", value=round(memory_lifecycle.cold_memory_rate, 4), unit="pct"),
+            NerdStatPayload(key="search_fallback_count", label="Search fallback count", value=float(search_quality.fallback_count), unit="count"),
         ]
 
         return NerdMetricsPayload(
@@ -487,6 +501,16 @@ class ManagementService:
             bucket_minutes=bucket_minutes,
             stats=stats,
             queue_snapshot=queue_snapshot,
+            graph_topology=graph_topology,
+            memory_lifecycle=memory_lifecycle,
+            search_quality=search_quality,
+            alerts=self._build_nerd_alerts(
+                queue_snapshot=queue_snapshot,
+                graph_topology=graph_topology,
+                memory_lifecycle=memory_lifecycle,
+                search_quality=search_quality,
+                provider_failure_rate=provider_failure_rate,
+            ),
             agent_throughput=agent_throughput,
             provider_latency=provider_latency,
         )
@@ -642,6 +666,7 @@ class ManagementService:
         if not candidate.is_file():
             return None
         return candidate
+
     def _build_memory_counts(self) -> tuple[dict[str, int], dict[str, int], int]:
         if self._db_manager is None:
             return {}, {}, 0
@@ -867,6 +892,208 @@ class ManagementService:
             )
             for row in rows
         ]
+
+    def _build_graph_topology(self) -> GraphTopologyPayload:
+        memory_rows = self._list_scoped_memories()
+        memory_ids = {str(row["id"]) for row in memory_rows}
+        if not memory_ids:
+            return GraphTopologyPayload()
+
+        link_rows = self._list_scoped_links(memory_ids)
+        degree_by_memory = {memory_id: 0 for memory_id in memory_ids}
+        support_by_memory: set[str] = set()
+        link_type_counts: dict[str, int] = {}
+
+        for row in link_rows:
+            link_type = str(row["type"])
+            link_type_counts[link_type] = link_type_counts.get(link_type, 0) + 1
+            source_id = str(row["source_id"])
+            target_id = str(row["target_id"])
+            if source_id in degree_by_memory:
+                degree_by_memory[source_id] += 1
+            if target_id in degree_by_memory:
+                degree_by_memory[target_id] += 1
+                if link_type in {"DEPENDS_ON", "AMENDS"}:
+                    support_by_memory.add(target_id)
+
+        total_memories = len(memory_ids)
+        orphan_count = sum(1 for degree in degree_by_memory.values() if degree == 0)
+        total_links = len(link_rows)
+        average_degree = sum(degree_by_memory.values()) / total_memories
+        return GraphTopologyPayload(
+            total_memories=total_memories,
+            total_links=total_links,
+            average_degree=round(average_degree, 4),
+            orphan_count=orphan_count,
+            orphan_rate=round(orphan_count / total_memories, 4),
+            graph_supported_count=len(support_by_memory),
+            graph_supported_rate=round(len(support_by_memory) / total_memories, 4),
+            link_type_counts=link_type_counts,
+        )
+
+    def _build_memory_lifecycle(self) -> MemoryLifecyclePayload:
+        memory_rows = self._list_scoped_memories()
+        if not memory_rows:
+            return MemoryLifecyclePayload()
+
+        by_status: dict[str, int] = {}
+        by_type: dict[str, int] = {}
+        content_sizes: list[int] = []
+        cold_memory_count = 0
+        never_surfaced_count = 0
+        stale_count = 0
+        degraded_count = 0
+
+        for row in memory_rows:
+            status = str(row["status"])
+            memory_type = str(row["type"])
+            by_status[status] = by_status.get(status, 0) + 1
+            by_type[memory_type] = by_type.get(memory_type, 0) + 1
+
+            content_size = int(row["content_bytes"] or 0)
+            content_sizes.append(content_size)
+            if row["last_accessed_at"] is None:
+                cold_memory_count += 1
+            if row["last_surfaced_at"] is None:
+                never_surfaced_count += 1
+            if status == "stale":
+                stale_count += 1
+            if status == "degraded":
+                degraded_count += 1
+
+        total_memories = len(memory_rows)
+        return MemoryLifecyclePayload(
+            by_status=by_status,
+            by_type=by_type,
+            total_content_bytes=sum(content_sizes),
+            median_content_bytes=round(float(median(content_sizes)), 4) if content_sizes else 0.0,
+            cold_memory_count=cold_memory_count,
+            cold_memory_rate=round(cold_memory_count / total_memories, 4),
+            never_surfaced_count=never_surfaced_count,
+            stale_count=stale_count,
+            degraded_count=degraded_count,
+        )
+
+    def _build_search_quality(
+        self,
+        *,
+        graph_topology: GraphTopologyPayload,
+        memory_lifecycle: MemoryLifecyclePayload,
+    ) -> SearchQualityPayload:
+        health = self._build_search_health()
+        return SearchQualityPayload(
+            semantic_enabled=health.semantic_enabled,
+            degraded=health.degraded,
+            fallback_count=health.fallback_count,
+            rebuild_count=health.rebuild_count,
+            graph_supported_count=graph_topology.graph_supported_count,
+            graph_supported_rate=graph_topology.graph_supported_rate,
+            never_surfaced_count=memory_lifecycle.never_surfaced_count,
+            last_error=health.last_error,
+        )
+
+    def _build_nerd_alerts(
+        self,
+        *,
+        queue_snapshot: QueueSnapshotPayload,
+        graph_topology: GraphTopologyPayload,
+        memory_lifecycle: MemoryLifecyclePayload,
+        search_quality: SearchQualityPayload,
+        provider_failure_rate: float,
+    ) -> list[NerdAlertPayload]:
+        alerts: list[NerdAlertPayload] = []
+        if queue_snapshot.oldest_age_seconds >= 300.0:
+            alerts.append(
+                NerdAlertPayload(
+                    key="queue_oldest_age",
+                    severity="warning",
+                    label="Queue backlog aging",
+                    message="The oldest runnable task is older than 5 minutes.",
+                    value=round(queue_snapshot.oldest_age_seconds, 4),
+                    threshold=300.0,
+                    unit="s",
+                )
+            )
+        if provider_failure_rate >= 0.2:
+            alerts.append(
+                NerdAlertPayload(
+                    key="provider_failure_rate",
+                    severity="error",
+                    label="Provider failures elevated",
+                    message="Provider failures exceeded 20% in the selected window.",
+                    value=round(provider_failure_rate, 4),
+                    threshold=0.2,
+                    unit="pct",
+                )
+            )
+        if graph_topology.orphan_rate >= 0.25:
+            alerts.append(
+                NerdAlertPayload(
+                    key="orphan_rate",
+                    severity="warning",
+                    label="Orphan rate rising",
+                    message="More than 25% of scoped memories have no links.",
+                    value=round(graph_topology.orphan_rate, 4),
+                    threshold=0.25,
+                    unit="pct",
+                )
+            )
+        if search_quality.degraded or search_quality.fallback_count > 0:
+            alerts.append(
+                NerdAlertPayload(
+                    key="search_health",
+                    severity="warning" if search_quality.degraded else "info",
+                    label="Search health degraded",
+                    message="Search has entered a degraded or fallback mode; ranking quality may be reduced.",
+                    value=float(search_quality.fallback_count),
+                    threshold=0.0,
+                    unit="count",
+                )
+            )
+        if memory_lifecycle.cold_memory_rate >= 0.5:
+            alerts.append(
+                NerdAlertPayload(
+                    key="cold_memory_rate",
+                    severity="info",
+                    label="Cold memory tail growing",
+                    message="At least half of scoped memories have never been accessed.",
+                    value=round(memory_lifecycle.cold_memory_rate, 4),
+                    threshold=0.5,
+                    unit="pct",
+                )
+            )
+        return alerts
+
+    def _list_scoped_memories(self):
+        if self._db_manager is None:
+            return []
+        conn = self._db_manager.get_connection()
+        query = (
+            "SELECT memories.id, memories.type, memories.status, memories.last_accessed_at, memories.last_surfaced_at, "
+            "LENGTH(COALESCE(memories.content, '')) AS content_bytes FROM memories"
+        )
+        params: list[object] = []
+        if self._workspace_id is not None:
+            query += (
+                " WHERE EXISTS (SELECT 1 FROM memory_workspaces WHERE memory_workspaces.memory_id = memories.id "
+                "AND memory_workspaces.workspace_id = ?)"
+            )
+            params.append(self._workspace_id)
+        return conn.execute(query, params).fetchall()
+
+    def _list_scoped_links(self, memory_ids: set[str]):
+        if self._db_manager is None or not memory_ids:
+            return []
+        conn = self._db_manager.get_connection()
+        if self._workspace_id is None:
+            return conn.execute("SELECT source_id, target_id, type FROM links").fetchall()
+
+        placeholders = ",".join("?" for _ in memory_ids)
+        params = [*memory_ids, *memory_ids]
+        query = (
+            f"SELECT source_id, target_id, type FROM links WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})"
+        )
+        return conn.execute(query, params).fetchall()
 
 
 def _format_result_summary(result: dict[str, object]) -> str | None:

@@ -103,6 +103,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     overview = service.get_overview()
     detail = service.get_memory_detail(primary.id)
     health = service.get_health()
+    nerd_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=time.time())
     filtered_logs = service.list_logs(query="daemon", source="daemon")
     summary = service.summarize_logs(source="daemon")
     prune_result = service.prune_logs(max_runtime_logs=1, max_log_age_days=30)
@@ -140,6 +141,17 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.failed_tasks[0]["status"] == "failed"
     assert health.runtime_active is True
     assert health.workspace_id == "workspace-a"
+    assert nerd_metrics.graph_topology.total_memories == 2
+    assert nerd_metrics.graph_topology.total_links == 1
+    assert nerd_metrics.graph_topology.link_type_counts == {"SUPERSEDES": 1}
+    assert nerd_metrics.graph_topology.orphan_rate == 0.0
+    assert nerd_metrics.memory_lifecycle.by_status == {"active": 1, "stale": 1}
+    assert nerd_metrics.memory_lifecycle.by_type == {"plan": 2}
+    assert nerd_metrics.memory_lifecycle.cold_memory_count == 0
+    assert nerd_metrics.search_quality.semantic_enabled is False
+    assert nerd_metrics.search_quality.graph_supported_rate == 0.0
+    assert any(stat.key == "orphan_rate" for stat in nerd_metrics.stats)
+    assert nerd_metrics.alerts == []
 
 
 def test_management_service_can_cancel_running_task_and_list_conversations(db_manager, monkeypatch) -> None:

@@ -211,12 +211,60 @@ class QueueSnapshotPayload(BaseModel):
     oldest_age_seconds: float = 0.0
 
 
+class GraphTopologyPayload(BaseModel):
+    total_memories: int = 0
+    total_links: int = 0
+    average_degree: float = 0.0
+    orphan_count: int = 0
+    orphan_rate: float = 0.0
+    graph_supported_count: int = 0
+    graph_supported_rate: float = 0.0
+    link_type_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class MemoryLifecyclePayload(BaseModel):
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_type: dict[str, int] = Field(default_factory=dict)
+    total_content_bytes: int = 0
+    median_content_bytes: float = 0.0
+    cold_memory_count: int = 0
+    cold_memory_rate: float = 0.0
+    never_surfaced_count: int = 0
+    stale_count: int = 0
+    degraded_count: int = 0
+
+
+class SearchQualityPayload(BaseModel):
+    semantic_enabled: bool = False
+    degraded: bool = False
+    fallback_count: int = 0
+    rebuild_count: int = 0
+    graph_supported_count: int = 0
+    graph_supported_rate: float = 0.0
+    never_surfaced_count: int = 0
+    last_error: str | None = None
+
+
+class NerdAlertPayload(BaseModel):
+    key: str
+    severity: str
+    label: str
+    message: str
+    value: float
+    threshold: float | None = None
+    unit: str | None = None
+
+
 class NerdMetricsPayload(BaseModel):
     generated_at: float
     window_hours: int
     bucket_minutes: int
     stats: list[NerdStatPayload] = Field(default_factory=list)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
+    graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
+    memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)
+    search_quality: SearchQualityPayload = Field(default_factory=SearchQualityPayload)
+    alerts: list[NerdAlertPayload] = Field(default_factory=list)
     agent_throughput: list[AgentThroughputBucketPayload] = Field(default_factory=list)
     provider_latency: list[ProviderLatencyBucketPayload] = Field(default_factory=list)
 

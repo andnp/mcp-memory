@@ -194,6 +194,50 @@ export interface ProviderLatencyBucket {
   p95_duration_seconds: number;
 }
 
+export interface GraphTopology {
+  total_memories: number;
+  total_links: number;
+  average_degree: number;
+  orphan_count: number;
+  orphan_rate: number;
+  graph_supported_count: number;
+  graph_supported_rate: number;
+  link_type_counts: Record<string, number>;
+}
+
+export interface MemoryLifecycle {
+  by_status: Record<string, number>;
+  by_type: Record<string, number>;
+  total_content_bytes: number;
+  median_content_bytes: number;
+  cold_memory_count: number;
+  cold_memory_rate: number;
+  never_surfaced_count: number;
+  stale_count: number;
+  degraded_count: number;
+}
+
+export interface SearchQuality {
+  semantic_enabled: boolean;
+  degraded: boolean;
+  fallback_count: number;
+  rebuild_count: number;
+  graph_supported_count: number;
+  graph_supported_rate: number;
+  never_surfaced_count: number;
+  last_error: string | null;
+}
+
+export interface NerdAlert {
+  key: string;
+  severity: 'info' | 'warning' | 'error';
+  label: string;
+  message: string;
+  value: number;
+  threshold: number | null;
+  unit: string | null;
+}
+
 export interface NerdMetricsResponse {
   generated_at: number;
   window_hours: number;
@@ -204,6 +248,10 @@ export interface NerdMetricsResponse {
     scheduled_count: number;
     oldest_age_seconds: number;
   };
+  graph_topology: GraphTopology;
+  memory_lifecycle: MemoryLifecycle;
+  search_quality: SearchQuality;
+  alerts: NerdAlert[];
   agent_throughput: AgentThroughputBucket[];
   provider_latency: ProviderLatencyBucket[];
 }
@@ -211,6 +259,15 @@ export interface NerdMetricsResponse {
 export interface CommandBarResult {
   status?: string;
   [key: string]: unknown;
+}
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -222,7 +279,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    throw new ApiError(response.status, `Request failed: ${response.status}`);
   }
   return (await response.json()) as T;
 }
