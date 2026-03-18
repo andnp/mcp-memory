@@ -19,9 +19,14 @@ from mcp_memory.core.sampling import (
     GRAPH_BRIDGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
-    RouletteProvider,
     SEMANTIC_STRATEGY,
     SamplingBatch,
+)
+from mcp_memory.core.task_handlers.maintenance_framework import (
+    requested_sampling_strategy,
+    sample_maintenance_candidates,
+    sampling_payload,
+    support_counts_for_candidates,
 )
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
@@ -262,14 +267,7 @@ async def handle_graph_linker_task(
     )
     candidates = sampled_batch.records
     if len(candidates) < 2:
-        return {
-            "created": 0,
-            "requested_strategy": sampled_batch.requested_strategy,
-            "strategy_used": sampled_batch.strategy_used,
-            "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-            "candidate_count": sampled_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in candidates],
-        }
+        return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _propose_graph_links(ctx, candidates, provider)
     created = 0
@@ -279,14 +277,7 @@ async def handle_graph_linker_task(
         ctx.repository.add_link(source_id, target_id, link_type, context)
         created += 1
 
-    return {
-        "created": created,
-        "requested_strategy": sampled_batch.requested_strategy,
-        "strategy_used": sampled_batch.strategy_used,
-        "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-        "candidate_count": sampled_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in candidates],
-    }
+    return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
 
 
 async def handle_conflict_detector_task(
@@ -316,14 +307,7 @@ async def handle_conflict_detector_task(
     )
     candidates = sampled_batch.records
     if len(candidates) < 2:
-        return {
-            "created": 0,
-            "requested_strategy": sampled_batch.requested_strategy,
-            "strategy_used": sampled_batch.strategy_used,
-            "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-            "candidate_count": sampled_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in candidates],
-        }
+        return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _propose_conflicts(ctx, candidates, provider)
     created = 0
@@ -337,14 +321,7 @@ async def handle_conflict_detector_task(
             ctx.repository.add_link(right_id, left_id, "CONTRADICTS", context)
             created += 1
 
-    return {
-        "created": created,
-        "requested_strategy": sampled_batch.requested_strategy,
-        "strategy_used": sampled_batch.strategy_used,
-        "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-        "candidate_count": sampled_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in candidates],
-    }
+    return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
 
 
 async def handle_defragmenter_task(
@@ -376,15 +353,7 @@ async def handle_defragmenter_task(
     candidates = sampled_batch.records
     groups = _collect_defragment_groups(candidates)
     if not groups:
-        return {
-            "created": 0,
-            "archived": 0,
-            "requested_strategy": sampled_batch.requested_strategy,
-            "strategy_used": sampled_batch.strategy_used,
-            "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-            "candidate_count": sampled_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in candidates],
-        }
+        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, archived=0)
 
     created = 0
     archived = 0
@@ -413,16 +382,13 @@ async def handle_defragmenter_task(
             if updated is not None:
                 archived += 1
 
-    return {
-        "created": created,
-        "archived": archived,
-        "lines_compressed": lines_compressed,
-        "requested_strategy": sampled_batch.requested_strategy,
-        "strategy_used": sampled_batch.strategy_used,
-        "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-        "candidate_count": sampled_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in candidates],
-    }
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        created=created,
+        archived=archived,
+        lines_compressed=lines_compressed,
+    )
 
 
 async def handle_deduplicator_task(
@@ -453,17 +419,14 @@ async def handle_deduplicator_task(
     facts = [record for record in seed_records if record.type == "fact"]
     observations = [record for record in seed_records if record.type == "observation"]
     if not facts:
-        return {
-            "merged": 0,
-            "archived": 0,
-            "absorbed_observations": 0,
-            "requested_strategy": seed_batch.requested_strategy,
-            "strategy_used": seed_batch.strategy_used,
-            "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-            "candidate_count": seed_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in seed_records],
-            "seed_memory_ids": [record.id for record in seed_records],
-        }
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            seed_records=seed_records,
+            merged=0,
+            archived=0,
+            absorbed_observations=0,
+        )
 
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
@@ -471,14 +434,11 @@ async def handle_deduplicator_task(
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
             _build_deduplicator_agent_prompt(task, seed_records, strategy_used=seed_batch.strategy_used)
         )
-        return {
-            **_normalize_deduplicator_agentic_result(agentic_result, seed_records),
-            "requested_strategy": seed_batch.requested_strategy,
-            "strategy_used": seed_batch.strategy_used,
-            "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-            "candidate_count": seed_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in seed_records],
-        }
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            extra=_normalize_deduplicator_agentic_result(agentic_result, seed_records),
+        )
 
     active_facts = [record for record in candidates if record.type == "fact"]
     embedding_by_id = _embed_records(ctx, [*active_facts, *observations])
@@ -512,17 +472,14 @@ async def handle_deduplicator_task(
         absorbed_observations += 1
         archived += 1
 
-    return {
-        "merged": merged,
-        "archived": archived,
-        "absorbed_observations": absorbed_observations,
-        "requested_strategy": seed_batch.requested_strategy,
-        "strategy_used": seed_batch.strategy_used,
-        "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-        "candidate_count": seed_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in seed_records],
-        "seed_memory_ids": [record.id for record in seed_records],
-    }
+    return sampling_payload(
+        seed_batch,
+        sampled_records=seed_records,
+        seed_records=seed_records,
+        merged=merged,
+        archived=archived,
+        absorbed_observations=absorbed_observations,
+    )
 
 
 async def handle_taxonomist_task(
@@ -561,14 +518,7 @@ async def handle_taxonomist_task(
         refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
         if refreshed is not None:
             updated += 1
-    return {
-        "updated": updated,
-        "requested_strategy": sampled_batch.requested_strategy,
-        "strategy_used": sampled_batch.strategy_used,
-        "strategy_fallback_reason": sampled_batch.strategy_fallback_reason,
-        "candidate_count": sampled_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in candidates],
-    }
+    return sampling_payload(sampled_batch, sampled_records=candidates, updated=updated)
 
 
 async def handle_memory_curator_task(
@@ -584,17 +534,14 @@ async def handle_memory_curator_task(
     seed_batch = _select_curator_seed_batch(ctx, task)
     seed_records = seed_batch.records
     if not seed_records:
-        return {
-            "summary": None,
-            "tool_calls_executed": 0,
-            "mutations": 0,
-            "reason": "no_seed_records",
-            "requested_strategy": seed_batch.requested_strategy,
-            "strategy_used": seed_batch.strategy_used,
-            "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-            "candidate_count": seed_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in seed_records],
-        }
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            summary=None,
+            tool_calls_executed=0,
+            mutations=0,
+            reason="no_seed_records",
+        )
 
     seed_payload = [
         _curator_seed_payload_item(record)
@@ -627,16 +574,13 @@ async def handle_memory_curator_task(
                 f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
             )
         )
-        return {
-            "summary": agentic_result.summary,
-            "execution_mode": "agentic_mcp",
-            "requested_strategy": seed_batch.requested_strategy,
-            "strategy_used": seed_batch.strategy_used,
-            "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-            "candidate_count": seed_batch.candidate_count,
-            "sampled_memory_ids": [record.id for record in seed_records],
-            "seed_memory_ids": [record.id for record in seed_records],
-        }
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            seed_records=seed_records,
+            summary=agentic_result.summary,
+            execution_mode="agentic_mcp",
+        )
 
     loop_result = await run_internal_tool_loop(
         ctx,
@@ -659,19 +603,16 @@ async def handle_memory_curator_task(
         max_rounds=6,
     )
     summary = _normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
-    return {
-        "summary": summary,
-        "execution_mode": "json_tool_loop",
-        "tool_calls_executed": loop_result.tool_calls_executed,
-        "mutations": loop_result.mutating_tool_calls,
-        "tool_names_used": loop_result.tool_names_used,
-        "requested_strategy": seed_batch.requested_strategy,
-        "strategy_used": seed_batch.strategy_used,
-        "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
-        "candidate_count": seed_batch.candidate_count,
-        "sampled_memory_ids": [record.id for record in seed_records],
-        "seed_memory_ids": [record.id for record in seed_records],
-    }
+    return sampling_payload(
+        seed_batch,
+        sampled_records=seed_records,
+        seed_records=seed_records,
+        summary=summary,
+        execution_mode="json_tool_loop",
+        tool_calls_executed=loop_result.tool_calls_executed,
+        mutations=loop_result.mutating_tool_calls,
+        tool_names_used=loop_result.tool_names_used,
+    )
 
 
 def _normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: int) -> str | None:
@@ -907,17 +848,31 @@ def _select_deduplicator_seed_batch(
             records=[],
         )
 
-    provider = RouletteProvider(
+    deduplicator_task = TaskRecord(
+        id=task_id,
         task_name=DEDUPLICATOR_TASK_NAME,
-        task_id=task_id,
-        candidates=candidates,
-        support_counts=_build_support_counts(ctx, candidates),
+        data={} if strategy is None else {"strategy": strategy},
+        workspace_id=None,
+        status="pending",
+        priority=0,
+        retries_count=0,
+        max_retries=0,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
     )
-    sampled_batch = provider.get_batch(
-        strategy=strategy,
+    sampled_batch = sample_maintenance_candidates(
+        ctx,
+        deduplicator_task,
+        candidates,
         allowed_strategies=DEDUPLICATOR_ALLOWED_STRATEGIES,
         strategy_weights=DEDUPLICATOR_STRATEGY_WEIGHTS,
         limit=min(len(candidates), DEDUPLICATOR_MAX_SEED_RECORDS * 2),
+        support_counts=_build_support_counts(ctx, candidates),
     )
     seed_records = _select_deduplicator_seed_records(sampled_batch.records)
     return SamplingBatch(
@@ -988,16 +943,14 @@ def _select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Sam
             records=[],
         )
 
-    sampled_batch = RouletteProvider(
-        task_name=task.task_name,
-        task_id=task.id,
-        candidates=candidates,
-        support_counts=_build_support_counts(ctx, candidates),
-    ).get_batch(
-        strategy=_requested_sampling_strategy(task),
+    sampled_batch = sample_maintenance_candidates(
+        ctx,
+        task,
+        candidates,
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,
         limit=min(len(candidates), CURATOR_MAX_SEED_RECORDS * 2),
+        support_counts=_build_support_counts(ctx, candidates),
     )
     sampled_candidates = sampled_batch.records
 
@@ -1128,8 +1081,7 @@ def _should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
 
 
 def _build_support_counts(ctx: ApplicationContext, candidates: list) -> dict[str, int]:
-    assert ctx.repository is not None
-    return {record.id: ctx.repository.count_incoming_links(record.id) for record in candidates}
+    return support_counts_for_candidates(ctx, candidates)
 
 
 def _sample_maintenance_candidates(
@@ -1141,22 +1093,10 @@ def _sample_maintenance_candidates(
     strategy_weights: dict[str, int],
     limit: int,
 ) -> SamplingBatch:
-    if not candidates:
-        return SamplingBatch(
-            requested_strategy=_requested_sampling_strategy(task),
-            strategy_used=_requested_sampling_strategy(task) or "none",
-            strategy_fallback_reason=None,
-            candidate_count=0,
-            records=[],
-        )
-
-    return RouletteProvider(
-        task_name=task.task_name,
-        task_id=task.id,
-        candidates=candidates,
-        support_counts=_build_support_counts(ctx, candidates),
-    ).get_batch(
-        strategy=_requested_sampling_strategy(task),
+    return sample_maintenance_candidates(
+        ctx,
+        task,
+        candidates,
         allowed_strategies=allowed_strategies,
         strategy_weights=strategy_weights,
         limit=limit,
@@ -1164,10 +1104,7 @@ def _sample_maintenance_candidates(
 
 
 def _requested_sampling_strategy(task: TaskRecord) -> str | None:
-    raw_value = task.data.get("strategy")
-    if isinstance(raw_value, str) and raw_value.strip():
-        return raw_value.strip()
-    return None
+    return requested_sampling_strategy(task)
 
 
 def _truncate_text(value: str | None, limit: int) -> str:

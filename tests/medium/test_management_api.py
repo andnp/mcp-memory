@@ -271,6 +271,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
         assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
         assert nerd_metrics["search_quality"]["semantic_enabled"] is True
+        assert any(item["task_name"] == "memory-curator" for item in nerd_metrics["route_audit"])
+        summarize_route = next(item for item in nerd_metrics["route_audit"] if item["task_name"] == "summarize-memory")
+        assert summarize_route["task_class"] == "deterministic"
+        assert summarize_route["resolved_provider_key"] is None
         assert any(alert["key"] == "cold_memory_rate" for alert in nerd_metrics["alerts"])
         assert prune_logs["deleted"] == 0
         assert repair_search["rebuilt"] is True

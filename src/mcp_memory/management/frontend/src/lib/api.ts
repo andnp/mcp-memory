@@ -238,6 +238,25 @@ export interface NerdAlert {
   unit: string | null;
 }
 
+export interface TaskRouteAudit {
+  task_name: string;
+  task_class: string;
+  execution_kind: string;
+  low_priority: boolean;
+  configured_primary_route: string | null;
+  configured_fallback_routes: string[];
+  resolved_provider_key: string | null;
+  resolved_model_name: string | null;
+  resolved_provider_type: string | null;
+  resolved_supports_agentic: boolean | null;
+  recent_provider_key: string | null;
+  recent_model_name: string | null;
+  recent_status: string | null;
+  recent_success_count: number;
+  recent_failure_count: number;
+  on_primary_route: boolean | null;
+}
+
 export interface NerdMetricsResponse {
   generated_at: number;
   window_hours: number;
@@ -251,6 +270,7 @@ export interface NerdMetricsResponse {
   graph_topology: GraphTopology;
   memory_lifecycle: MemoryLifecycle;
   search_quality: SearchQuality;
+  route_audit: TaskRouteAudit[];
   alerts: NerdAlert[];
   agent_throughput: AgentThroughputBucket[];
   provider_latency: ProviderLatencyBucket[];

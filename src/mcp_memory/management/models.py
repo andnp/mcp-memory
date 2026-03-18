@@ -255,6 +255,25 @@ class NerdAlertPayload(BaseModel):
     unit: str | None = None
 
 
+class TaskRouteAuditPayload(BaseModel):
+    task_name: str
+    task_class: str
+    execution_kind: str
+    low_priority: bool = False
+    configured_primary_route: str | None = None
+    configured_fallback_routes: list[str] = Field(default_factory=list)
+    resolved_provider_key: str | None = None
+    resolved_model_name: str | None = None
+    resolved_provider_type: str | None = None
+    resolved_supports_agentic: bool | None = None
+    recent_provider_key: str | None = None
+    recent_model_name: str | None = None
+    recent_status: str | None = None
+    recent_success_count: int = 0
+    recent_failure_count: int = 0
+    on_primary_route: bool | None = None
+
+
 class NerdMetricsPayload(BaseModel):
     generated_at: float
     window_hours: int
@@ -264,6 +283,7 @@ class NerdMetricsPayload(BaseModel):
     graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
     memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)
     search_quality: SearchQualityPayload = Field(default_factory=SearchQualityPayload)
+    route_audit: list[TaskRouteAuditPayload] = Field(default_factory=list)
     alerts: list[NerdAlertPayload] = Field(default_factory=list)
     agent_throughput: list[AgentThroughputBucketPayload] = Field(default_factory=list)
     provider_latency: list[ProviderLatencyBucketPayload] = Field(default_factory=list)

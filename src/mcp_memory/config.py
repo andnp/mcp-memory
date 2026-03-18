@@ -91,6 +91,7 @@ class AIConfig:
 class ProviderRoutingConfig:
     profiles: dict[str, AIConfig] = field(default_factory=dict)
     task_routes: dict[str, list[str]] = field(default_factory=dict)
+    task_classes: dict[str, str] = field(default_factory=dict)
     profile_daily_call_limits: dict[str, int] = field(default_factory=dict)
     default_json_route: list[str] = field(default_factory=list)
     default_agentic_route: list[str] = field(default_factory=list)
@@ -108,6 +109,11 @@ class ProviderRoutingConfig:
             str(task_name).strip(): [str(item).strip() for item in route if isinstance(item, str) and str(item).strip()]
             for task_name, route in self.task_routes.items()
             if isinstance(task_name, str) and task_name.strip() and isinstance(route, list)
+        }
+        self.task_classes = {
+            str(task_name).strip(): str(task_class).strip()
+            for task_name, task_class in self.task_classes.items()
+            if isinstance(task_name, str) and task_name.strip() and isinstance(task_class, str) and str(task_class).strip()
         }
         self.profile_daily_call_limits = {
             str(profile_key).strip(): int(limit)
@@ -346,6 +352,11 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
     return ProviderRoutingConfig(
         profiles=profiles,
         task_routes=_normalize_route_map(data.get("task_routes", {})),
+        task_classes={
+            str(key).strip(): str(value).strip()
+            for key, value in data.get("task_classes", {}).items()
+            if isinstance(data.get("task_classes", {}), dict) and isinstance(key, str) and isinstance(value, str)
+        },
         profile_daily_call_limits=profile_daily_call_limits,
         default_json_route=_normalize_route_list(data.get("default_json_route", [])),
         default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
@@ -466,6 +477,19 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
             "deduplicator": ["copilot-mini", "gemini-cheap"],
             "memory-curator": ["copilot-strong", "gemini-cheap"],
         },
+        "task_classes": {
+            "ingest-system1": "cheap_agentic",
+            "deduplicator": "cheap_agentic",
+            "memory-curator": "premium_agentic",
+            "graph-linker": "cheap_json",
+            "conflict-detector": "cheap_json",
+            "defragmenter": "cheap_json",
+            "taxonomist": "cheap_json",
+            "fact-checker": "deterministic",
+            "project-manager": "deterministic",
+            "summarize-memory": "deterministic",
+            "sweeper": "deterministic",
+        },
         "profile_daily_call_limits": {
             "copilot-strong": 20,
             "copilot-mini": 50,
@@ -474,7 +498,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "default_json_route": [],
         "default_agentic_route": [],
         "fallback_to_json_only": False,
-        "low_priority_task_names": [],
+        "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
     }
     document["ingest_suppression"] = {
         "enabled": False,

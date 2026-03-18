@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import _provider_for_task
@@ -60,12 +62,7 @@ def test_provider_for_task_uses_fallback_route_when_first_provider_is_over_budge
 
     selected = _provider_for_task(ctx, None, None, "summarize-memory", task)
 
-    assert selected == {
-        "provider": "gemini-cheap",
-        "task_name": "summarize-memory",
-        "task_id": "summary-task",
-        "workspace_id": "workspace-a",
-    }
+    assert selected is None
 
 
 def test_provider_for_task_falls_back_to_legacy_default_when_routed_profile_is_unavailable() -> None:
@@ -100,12 +97,7 @@ def test_provider_for_task_falls_back_to_legacy_default_when_routed_profile_is_u
 
     selected = _provider_for_task(ctx, default_provider, None, "summarize-memory", task)
 
-    assert selected == {
-        "provider": "default-provider",
-        "task_name": "summarize-memory",
-        "task_id": "summary-task",
-        "workspace_id": "workspace-a",
-    }
+    assert selected is None
 
 
 def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic() -> None:
@@ -155,3 +147,77 @@ def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic(
         "task_id": "dedup-task",
         "workspace_id": "workspace-a",
     }
+
+
+def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budget(caplog) -> None:
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                    task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
+                profiles={
+                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=False)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=False)},
+        },
+    )
+    task = TaskRecord(
+        id="summary-task",
+        task_name="graph-linker",
+        data={"memory_id": "abc"},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        selected = _provider_for_task(ctx, None, None, "graph-linker", task)
+
+    assert selected is None
+    assert any("exhausted all configured routes" in message for message in caplog.messages)
+
+
+def test_provider_for_deterministic_task_never_selects_provider() -> None:
+    default_provider = _FakeProvider("default-provider", available=True)
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            provider_routing=ProviderRoutingConfig(),
+        ),
+        ai_provider_registry={},
+    )
+    task = TaskRecord(
+        id="summary-task",
+        task_name="summarize-memory",
+        data={"memory_id": "abc"},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    selected = _provider_for_task(ctx, default_provider, None, "summarize-memory", task)
+
+    assert selected is None

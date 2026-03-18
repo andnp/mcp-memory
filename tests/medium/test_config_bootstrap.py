@@ -28,7 +28,9 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-cheap"]
     assert config.provider_routing.fallback_to_json_only is False
-    assert config.provider_routing.low_priority_task_names == []
+    assert config.provider_routing.task_classes["memory-curator"] == "premium_agentic"
+    assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
+    assert config.provider_routing.low_priority_task_names == ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"]
     assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
     assert config.provider_routing.profiles["gemini-cheap"].model == "gemini-3-flash-preview"
@@ -78,6 +80,10 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
         'ingest-system1 = ["copilot-mini", "gemini-cheap"]\n'
         'summarize-memory = ["copilot-mini"]\n'
         "\n"
+        "[provider_routing.task_classes]\n"
+        'ingest-system1 = "cheap_agentic"\n'
+        'summarize-memory = "deterministic"\n'
+        "\n"
         "[provider_routing.profile_daily_call_limits]\n"
         'copilot-mini = 50\n'
         'gemini-cheap = 20\n'
@@ -101,6 +107,8 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
     assert config.provider_routing.fallback_to_json_only is False
     assert config.provider_routing.low_priority_task_names == ["deduplicator"]
     assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_classes["ingest-system1"] == "cheap_agentic"
+    assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
     assert config.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
     assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"

@@ -12,8 +12,12 @@ import time
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.provider_policy import select_provider_for_task
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
+from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_TASK_NAME
+from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES, DEFAULT_LOW_PRIORITY_TASK_NAMES, task_class_for_task
+from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
@@ -49,6 +53,7 @@ from mcp_memory.management.models import (
     SearchQualityPayload,
     SearchHealthPayload,
     StorageSummary,
+    TaskRouteAuditPayload,
     TaskListPayload,
     TaskStatusSummary,
 )
@@ -82,6 +87,10 @@ class ManagementService:
         )
         self._embedder = ctx.embedder
         self._relational_search = ctx.relational_search
+        self._config = ctx.config
+        self._ai_json_provider = getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
+        self._ai_agent_provider = getattr(ctx, "ai_agent_provider", None)
+        self._ai_provider_registry = getattr(ctx, "ai_provider_registry", None) or {}
         self._dashboard_static_root = Path(__file__).with_name("static")
         self._dashboard_static_path = self._dashboard_static_root / "index.html"
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"
@@ -480,6 +489,7 @@ class ManagementService:
         graph_topology = self._build_graph_topology()
         memory_lifecycle = self._build_memory_lifecycle()
         search_quality = self._build_search_quality(graph_topology=graph_topology, memory_lifecycle=memory_lifecycle)
+        route_audit = self._build_route_audit()
 
         provider_failure_rate = 0.0 if not provider_rows else provider_failures / len(provider_rows)
 
@@ -505,11 +515,13 @@ class ManagementService:
             graph_topology=graph_topology,
             memory_lifecycle=memory_lifecycle,
             search_quality=search_quality,
+            route_audit=route_audit,
             alerts=self._build_nerd_alerts(
                 queue_snapshot=queue_snapshot,
                 graph_topology=graph_topology,
                 memory_lifecycle=memory_lifecycle,
                 search_quality=search_quality,
+                route_audit=route_audit,
                 provider_failure_rate=provider_failure_rate,
             ),
             agent_throughput=agent_throughput,
@@ -866,7 +878,7 @@ class ManagementService:
                 avg_duration_last_hour=summary.avg_duration_last_hour,
                 avg_duration_last_day=summary.avg_duration_last_day,
             )
-            for summary in self._provider_usage.summarize_usage()
+            for summary in self._provider_usage.summarize_usage(workspace_id=self._workspace_id)
         ]
 
     def _build_recent_agent_runs(self, limit: int = 20) -> list[AgentRunHistoryPayload]:
@@ -1000,6 +1012,7 @@ class ManagementService:
         graph_topology: GraphTopologyPayload,
         memory_lifecycle: MemoryLifecyclePayload,
         search_quality: SearchQualityPayload,
+        route_audit: list[TaskRouteAuditPayload],
         provider_failure_rate: float,
     ) -> list[NerdAlertPayload]:
         alerts: list[NerdAlertPayload] = []
@@ -1063,7 +1076,134 @@ class ManagementService:
                     unit="pct",
                 )
             )
+        curator_route = next((item for item in route_audit if item.task_name == "memory-curator"), None)
+        if (
+            curator_route is not None
+            and curator_route.configured_primary_route is not None
+            and curator_route.recent_provider_key is not None
+            and not curator_route.recent_provider_key.startswith(curator_route.configured_primary_route)
+        ):
+            alerts.append(
+                NerdAlertPayload(
+                    key="curator_route_fallback",
+                    severity="warning",
+                    label="Curator off premium lane",
+                    message="Recent curator runs used a non-primary provider route; review premium-lane fallback behavior.",
+                    value=float(curator_route.recent_failure_count),
+                    threshold=0.0,
+                    unit="count",
+                )
+            )
         return alerts
+
+    def _build_route_audit(self) -> list[TaskRouteAuditPayload]:
+        task_names = [*TRIGGERABLE_BACKGROUND_TASK_NAMES, SUMMARIZE_MEMORY_TASK_NAME]
+        usage_by_task: dict[str, tuple[int, int]] = {}
+        top_provider_by_task: dict[str, tuple[str, str]] = {}
+        top_provider_rank_by_task: dict[str, tuple[int, int]] = {}
+        for summary in self._provider_usage.summarize_usage(workspace_id=self._workspace_id):
+            task_name = summary.task_name
+            if task_name is None:
+                continue
+            success_count, failure_count = usage_by_task.get(task_name, (0, 0))
+            usage_by_task[task_name] = (
+                success_count + summary.calls_last_day - summary.failures_last_day,
+                failure_count + summary.failures_last_day,
+            )
+            rank = (summary.calls_last_day, -summary.failures_last_day)
+            previous_rank = top_provider_rank_by_task.get(task_name)
+            if previous_rank is None or rank > previous_rank:
+                top_provider_by_task[task_name] = (summary.provider_key, summary.model_name)
+                top_provider_rank_by_task[task_name] = rank
+
+        audits: list[TaskRouteAuditPayload] = []
+        for task_name in task_names:
+            task_class = task_class_for_task(self._config, task_name)
+            execution_kind = (
+                "agentic"
+                if task_class in {"cheap_agentic", "premium_agentic"}
+                else "deterministic" if task_class == "deterministic" else "json"
+            )
+            configured_routes = self._configured_routes_for_task(task_name, execution_kind=execution_kind)
+            selected = self._select_provider_for_audit(task_name)
+            selected_provider_key = None if selected is None else getattr(selected, "_provider_key", None)
+            selected_model_name = None if selected is None else getattr(selected, "_model_name", None)
+            underlying_provider = None if selected is None else getattr(selected, "_provider", None)
+            supports_agentic = None
+            if selected is not None:
+                supports_agentic_method = getattr(selected, "supports_agentic", None)
+                if callable(supports_agentic_method):
+                    supports_agentic = bool(supports_agentic_method())
+            recent = self._provider_usage.list_conversations(task_name=task_name, limit=1)
+            recent_record = recent[0] if recent else None
+            recent_success_count, recent_failure_count = usage_by_task.get(task_name, (0, 0))
+            usage_fallback = top_provider_by_task.get(task_name)
+
+            audits.append(
+                TaskRouteAuditPayload(
+                    task_name=task_name,
+                    task_class=task_class,
+                    execution_kind=execution_kind,
+                    low_priority=task_name in set((self._config.provider_routing.low_priority_task_names if self._config is not None else []) or DEFAULT_LOW_PRIORITY_TASK_NAMES),
+                    configured_primary_route=configured_routes[0] if configured_routes else None,
+                    configured_fallback_routes=configured_routes[1:] if len(configured_routes) > 1 else [],
+                    resolved_provider_key=selected_provider_key,
+                    resolved_model_name=selected_model_name,
+                    resolved_provider_type=None if underlying_provider is None else type(underlying_provider).__name__,
+                    resolved_supports_agentic=supports_agentic,
+                    recent_provider_key=(None if recent_record is None else recent_record.provider_key) or (None if usage_fallback is None else usage_fallback[0]),
+                    recent_model_name=(None if recent_record is None else recent_record.model_name) or (None if usage_fallback is None else usage_fallback[1]),
+                    recent_status=None if recent_record is None else recent_record.status,
+                    recent_success_count=recent_success_count,
+                    recent_failure_count=recent_failure_count,
+                    on_primary_route=None if selected_provider_key is None or not configured_routes else selected_provider_key == configured_routes[0] or str(selected_provider_key).startswith(configured_routes[0]),
+                )
+            )
+        return audits
+
+    def _configured_routes_for_task(self, task_name: str, *, execution_kind: str) -> list[str]:
+        if self._config is None:
+            return []
+        routing = self._config.provider_routing
+        if execution_kind == "deterministic":
+            return []
+        if task_name in routing.task_routes:
+            return list(routing.task_routes[task_name])
+        if execution_kind == "agentic":
+            return list(routing.default_agentic_route)
+        return list(routing.default_json_route)
+
+    def _select_provider_for_audit(self, task_name: str):
+        task = TaskRecord(
+            id=f"audit:{task_name}",
+            task_name=task_name,
+            data={"workspace_id": self._workspace_id},
+            workspace_id=self._workspace_id,
+            status="pending",
+            priority=task_priority(task_name),
+            retries_count=0,
+            max_retries=0,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        )
+        audit_ctx = ApplicationContext(
+            config=self._config,
+            workspace_id=self._workspace_id,
+            ai_provider_registry=self._ai_provider_registry,
+        )
+        return select_provider_for_task(
+            audit_ctx,
+            self._ai_json_provider,
+            self._ai_agent_provider,
+            task_name,
+            task,
+            agentic_task_names=set(DEFAULT_AGENTIC_TASK_NAMES),
+        )
 
     def _list_scoped_memories(self):
         if self._db_manager is None:

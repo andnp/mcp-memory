@@ -207,6 +207,21 @@ export function NerdPage() {
     { label: 'Last error', value: nerdQuery.data.search_quality.last_error ?? 'none' },
   ];
 
+  const routeRows = nerdQuery.data.route_audit.map((route) => ({
+    task: route.task_name,
+    className: route.task_class,
+    configured: route.configured_primary_route
+      ? [route.configured_primary_route, ...route.configured_fallback_routes].join(' → ')
+      : 'deterministic',
+    resolved: route.resolved_provider_key
+      ? `${route.resolved_provider_key}${route.resolved_model_name ? ` (${route.resolved_model_name})` : ''}`
+      : 'none',
+    recent: route.recent_provider_key
+      ? `${route.recent_provider_key}${route.recent_status ? ` / ${route.recent_status}` : ''}`
+      : 'none',
+    calls: `${route.recent_success_count}✓ / ${route.recent_failure_count}✗`,
+  }));
+
   return (
     <div className="space-y-4">
       <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
@@ -305,6 +320,37 @@ export function NerdPage() {
         <KeyValueTable title="Graph topology" rows={graphRows} />
         <KeyValueTable title="Memory lifecycle" rows={lifecycleRows} />
         <KeyValueTable title="Search quality" rows={searchRows} />
+      </section>
+
+      <section className="table-shell">
+        <div className="border-b border-border px-3 py-2">
+          <p className="panel-title">Route audit</p>
+          <h2 className="mt-1 text-base font-semibold text-text">Configured vs resolved background-agent routing</h2>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Class</th>
+              <th>Configured</th>
+              <th>Resolved now</th>
+              <th>Recent usage</th>
+              <th>24h</th>
+            </tr>
+          </thead>
+          <tbody>
+            {routeRows.map((route) => (
+              <tr key={route.task}>
+                <td>{route.task}</td>
+                <td>{route.className}</td>
+                <td>{route.configured}</td>
+                <td>{route.resolved}</td>
+                <td>{route.recent}</td>
+                <td>{route.calls}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
     </div>
   );

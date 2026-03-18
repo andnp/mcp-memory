@@ -6,6 +6,8 @@ import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.provider_policy import select_provider_for_task
+from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
@@ -39,12 +41,7 @@ from mcp_memory.core.tasks import TaskRecord
 
 logger = logging.getLogger(__name__)
 
-
-AGENTIC_TASK_NAMES = {
-    SYSTEM1_INGEST_TASK_NAME,
-    DEDUPLICATOR_TASK_NAME,
-    CURATOR_TASK_NAME,
-}
+AGENTIC_TASK_NAMES = set(DEFAULT_AGENTIC_TASK_NAMES)
 DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS = 300.0
 
 
@@ -115,61 +112,20 @@ def build_default_task_handlers(
 
 
 def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
-    registry = getattr(ctx, "ai_provider_registry", None) or {}
-    routing = None if ctx.config is None else ctx.config.provider_routing
-    prefer_agentic = task_name in AGENTIC_TASK_NAMES
-
-    candidate_route_keys: list[str] = []
-    if routing is not None:
-        if task_name in routing.task_routes:
-            candidate_route_keys = routing.task_routes[task_name]
-        elif prefer_agentic and routing.default_agentic_route:
-            candidate_route_keys = routing.default_agentic_route
-        elif not prefer_agentic and routing.default_json_route:
-            candidate_route_keys = routing.default_json_route
-
-    if candidate_route_keys:
-        found_routed_provider = False
-        for route_key in candidate_route_keys:
-            bundle = registry.get(route_key)
-            if not isinstance(bundle, dict):
-                continue
-            selected_provider = _select_provider_from_bundle(bundle, prefer_agentic=prefer_agentic)
-            if selected_provider is None:
-                continue
-            found_routed_provider = True
-            budget_available = getattr(selected_provider, "budget_available", None)
-            if callable(budget_available) and not budget_available():
-                logger.warning("Skipping over-budget provider route", extra={"task_name": task_name, "route_key": route_key})
-                continue
-            return _bind_provider(selected_provider, task_name=task_name, task=task)
-        if found_routed_provider:
-            return None
-
-    selected_provider = provider
-    if prefer_agentic and agentic_provider is not None:
-        selected_provider = agentic_provider
-    if selected_provider is None:
+    selected = select_provider_for_task(
+        ctx,
+        provider,
+        agentic_provider,
+        task_name,
+        task,
+        agentic_task_names=AGENTIC_TASK_NAMES,
+    )
+    if selected is None:
         return None
-    budget_available = getattr(selected_provider, "budget_available", None)
-    if callable(budget_available) and not budget_available():
-        return None
-    return _bind_provider(selected_provider, task_name=task_name, task=task)
-
-
-def _select_provider_from_bundle(bundle: dict[str, Any], *, prefer_agentic: bool):
-    if prefer_agentic and bundle.get("agentic") is not None:
-        return bundle.get("agentic")
-    if bundle.get("json") is not None:
-        return bundle.get("json")
-    return bundle.get("agentic")
-
-
-def _bind_provider(selected_provider: Any, *, task_name: str, task: TaskRecord):
-    binder = getattr(selected_provider, "with_usage_context", None)
-    if not callable(binder):
-        return selected_provider
-    return binder(task_name=task_name, task_id=task.id, workspace_id=task.workspace_id)
+    selected_provider_key = getattr(selected, "_provider_key", None)
+    if selected_provider_key is not None:
+        logger.debug("Selected provider for task", extra={"task_name": task_name, "provider_key": selected_provider_key})
+    return selected
 
 
 def bootstrap_background_tasks(ctx: ApplicationContext) -> None:

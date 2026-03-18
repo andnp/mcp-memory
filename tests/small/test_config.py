@@ -32,7 +32,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
     assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-cheap"]
     assert loaded.provider_routing.fallback_to_json_only is False
-    assert loaded.provider_routing.low_priority_task_names == []
+    assert loaded.provider_routing.task_classes["memory-curator"] == "premium_agentic"
+    assert loaded.provider_routing.task_classes["summarize-memory"] == "deterministic"
+    assert loaded.provider_routing.low_priority_task_names == ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"]
     assert loaded.provider_routing.profile_daily_call_limits["copilot-strong"] == 20
     assert loaded.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
     assert loaded.provider_routing.profile_daily_call_limits["gemini-cheap"] == 100

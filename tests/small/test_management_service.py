@@ -88,6 +88,10 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
     )
+    db_manager.get_connection().execute(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, time.time(), None),
+    )
     db_manager.get_connection().commit()
 
     ctx = ApplicationContext(
@@ -117,6 +121,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.provider_usage[0].provider_key == "gemini-cli"
     assert overview.provider_usage[0].task_name == "memory-curator"
     assert overview.provider_usage[0].calls_last_hour == 1
+    assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli"}
     assert overview.tasks.failed_count == 1
     deduplicator = next(agent for agent in overview.agent_runs if agent.task_name == "deduplicator")
     assert deduplicator.last_result_metadata.strategy_used == "semantic"
@@ -150,8 +155,14 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert nerd_metrics.memory_lifecycle.cold_memory_count == 0
     assert nerd_metrics.search_quality.semantic_enabled is False
     assert nerd_metrics.search_quality.graph_supported_rate == 0.0
+    curator_route = next(item for item in nerd_metrics.route_audit if item.task_name == "memory-curator")
+    summarize_route = next(item for item in nerd_metrics.route_audit if item.task_name == "summarize-memory")
+    assert curator_route.task_class == "premium_agentic"
+    assert curator_route.recent_provider_key == "gemini-cli"
+    assert summarize_route.task_class == "deterministic"
+    assert summarize_route.resolved_provider_key is None
     assert any(stat.key == "orphan_rate" for stat in nerd_metrics.stats)
-    assert nerd_metrics.alerts == []
+    assert all(alert.key != "curator_route_fallback" for alert in nerd_metrics.alerts)
 
 
 def test_management_service_can_cancel_running_task_and_list_conversations(db_manager, monkeypatch) -> None:
