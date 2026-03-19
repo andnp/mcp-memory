@@ -29,6 +29,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
 )
 import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
+import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
     CURATOR_TASK_NAME,
@@ -45,9 +46,6 @@ from mcp_memory.core.tasks import TaskRecord
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 DEFRAGMENTER_GROUP_SIMILARITY_THRESHOLD = 0.45
-GRAPH_LINKER_AI_MIN_CANDIDATES = 12
-GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
-CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
 DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
 DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
 DEDUPLICATOR_MAX_SEED_RECORDS = 8
@@ -322,7 +320,7 @@ async def handle_graph_linker_task(
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
-    proposed_pairs = await _propose_graph_links(ctx, candidates, provider)
+    proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
     created = 0
     for source_id, target_id, link_type, context in proposed_pairs:
         if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
@@ -362,7 +360,7 @@ async def handle_conflict_detector_task(
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
-    proposed_pairs = await _propose_conflicts(ctx, candidates, provider)
+    proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
     created = 0
     for left_id, right_id, context in proposed_pairs:
         if left_id == right_id:
@@ -658,120 +656,6 @@ def _normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed:
             "no curator maintenance actions were executed."
         )
     return summary
-
-
-async def _propose_graph_links(
-    ctx: ApplicationContext,
-    candidates: list,
-    provider: Any = None,
-) -> list[tuple[str, str, str, str]]:
-    fallback = _fallback_graph_links(candidates)
-    if (
-        provider is None
-        or len(fallback) >= GRAPH_LINKER_FALLBACK_LINK_TARGET
-        or len(candidates) <= GRAPH_LINKER_AI_MIN_CANDIDATES
-    ):
-        return fallback
-
-    if provider is not None:
-        response = await run_internal_tool_loop(
-            ctx,
-            provider=provider,
-            prompt=_build_linker_prompt(candidates),
-            allowed_tool_names=[
-                "internal_search_memory_records",
-                "internal_read_memory_record",
-                "internal_list_memory_records",
-            ],
-            max_rounds=3,
-        )
-        proposals = response.response.get("links", [])
-        if isinstance(proposals, list):
-            normalized: list[tuple[str, str, str, str]] = []
-            for item in proposals:
-                if not isinstance(item, dict):
-                    continue
-                source_id = str(item.get("source_id", "")).strip()
-                target_id = str(item.get("target_id", "")).strip()
-                link_type = str(item.get("link_type", "")).strip() or "DEPENDS_ON"
-                context = str(item.get("context", "")).strip() or "Auto-linked by graph linker."
-                if source_id and target_id:
-                    normalized.append((source_id, target_id, link_type, context))
-            if normalized:
-                return normalized
-
-    return fallback
-
-
-async def _propose_conflicts(
-    ctx: ApplicationContext,
-    candidates: list,
-    provider: Any = None,
-) -> list[tuple[str, str, str]]:
-    fallback = _fallback_conflicts(candidates)
-    if provider is None or fallback or len(candidates) <= CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
-        return fallback
-
-    if provider is not None:
-        response = await run_internal_tool_loop(
-            ctx,
-            provider=provider,
-            prompt=_build_conflict_prompt(candidates),
-            allowed_tool_names=[
-                "internal_search_memory_records",
-                "internal_read_memory_record",
-                "internal_list_memory_records",
-            ],
-            max_rounds=3,
-        )
-        proposals = response.response.get("conflicts", [])
-        if isinstance(proposals, list):
-            normalized: list[tuple[str, str, str]] = []
-            for item in proposals:
-                if not isinstance(item, dict):
-                    continue
-                left_id = str(item.get("left_id", "")).strip()
-                right_id = str(item.get("right_id", "")).strip()
-                context = str(item.get("context", "")).strip() or "Potential contradiction detected."
-                if left_id and right_id:
-                    normalized.append((left_id, right_id, context))
-            if normalized:
-                return normalized
-
-    return fallback
-
-
-def _fallback_graph_links(candidates: list) -> list[tuple[str, str, str, str]]:
-    proposals: list[tuple[str, str, str, str]] = []
-    for source, target in _iter_candidate_pairs(candidates):
-        shared_tags = sorted(set(source.tags) & set(target.tags))
-        token_overlap = _token_overlap(source.title, target.title)
-        if not shared_tags and token_overlap < 0.34:
-            continue
-        newer, older = _sort_newer_first(source, target)
-        link_type = "AMENDS" if newer.type == older.type else "DEPENDS_ON"
-        context = (
-            f"Auto-linked from shared tags ({', '.join(shared_tags)})"
-            if shared_tags
-            else "Auto-linked from title similarity."
-        )
-        proposals.append((newer.id, older.id, link_type, context))
-    return proposals[:10]
-
-
-def _fallback_conflicts(candidates: list) -> list[tuple[str, str, str]]:
-    proposals: list[tuple[str, str, str]] = []
-    for left, right in _iter_candidate_pairs(candidates):
-        if left.type != right.type:
-            continue
-        if left.content.strip() == right.content.strip():
-            continue
-        shared_tags = set(left.tags) & set(right.tags)
-        title_overlap = _token_overlap(left.title, right.title)
-        if title_overlap < 0.5 and not shared_tags:
-            continue
-        proposals.append((left.id, right.id, "Potential contradiction detected from overlapping titles/tags."))
-    return proposals[:10]
 
 
 def _collect_defragment_groups(candidates: list) -> list[list]:
