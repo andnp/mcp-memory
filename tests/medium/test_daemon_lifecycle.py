@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 import signal
 
+from click.testing import CliRunner
 import pytest
 import mcp_memory.daemon as daemon_module
 
+from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
 from mcp_memory.daemon_process import DaemonSpawnDetails, is_daemon_healthy, spawn_daemon_process
@@ -171,6 +173,30 @@ def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exit
     assert 'exit_code=17' in message
     assert f'startup_log={startup_log_path}' in message
     assert 'Traceback: bind failed' in message
+
+
+def test_cli_dashboard_surfaces_startup_failure_diagnostics(monkeypatch) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        'mcp_memory.cli.ensure_daemon_started',
+        lambda workspace_root, cwd=None: (_ for _ in ()).throw(
+            RuntimeError(
+                'Timed out waiting for global daemon startup. '
+                'startup_log=/tmp/daemon.log metadata=missing\n'
+                'Startup log tail (/tmp/daemon.log):\n'
+                'Traceback: bind failed'
+            )
+        ),
+    )
+
+    result = runner.invoke(main, ['daemon', 'dashboard'])
+
+    assert result.exit_code == 1
+    assert 'Error:' in result.output
+    assert 'Timed out waiting for global daemon startup.' in result.output
+    assert 'Startup log tail (/tmp/daemon.log):' in result.output
+    assert 'Traceback: bind failed' in result.output
 
 
 def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch, tmp_path: Path) -> None:
