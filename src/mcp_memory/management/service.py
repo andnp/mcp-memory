@@ -324,15 +324,24 @@ class ManagementService:
     def get_nerd_metrics(
         self,
         *,
+        scope: str | None = None,
+        workspace_id: str | None = None,
         window_hours: int = 24,
         bucket_minutes: int = 60,
         now: float | None = None,
     ) -> NerdMetricsPayload:
+        effective_workspace_id = self._resolve_nerd_metrics_workspace_id(
+            scope=scope,
+            workspace_id=workspace_id,
+        )
         return build_nerd_metrics(
             db_manager=self._db_manager,
-            workspace_id=self._workspace_id,
+            workspace_id=effective_workspace_id,
             task_queue=self._task_queue,
-            provider_usage_repo=self._provider_usage,
+            provider_usage_repo=ProviderUsageRepository(
+                self._db_manager,
+                workspace_id=effective_workspace_id,
+            ),
             config=self._config,
             ai_json_provider=self._ai_json_provider,
             ai_agent_provider=self._ai_agent_provider,
@@ -342,6 +351,24 @@ class ManagementService:
             bucket_minutes=bucket_minutes,
             now=now,
         )
+
+    def _resolve_nerd_metrics_workspace_id(
+        self,
+        *,
+        scope: str | None,
+        workspace_id: str | None,
+    ) -> str | None:
+        if workspace_id is not None:
+            return workspace_id
+        if scope is None:
+            return self._workspace_id
+        if scope == "global":
+            return None
+        if scope == "workspace":
+            if self._workspace_id is None:
+                raise ValueError("workspace_id_required_for_workspace_scope")
+            return self._workspace_id
+        raise ValueError("scope_must_be_global_or_workspace")
 
     def record_thought(self, content: str) -> dict[str, object]:
         if self._journal.journal is None:

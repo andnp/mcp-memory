@@ -425,6 +425,8 @@ export interface NerdMetricsResponse {
   provider_latency: ProviderLatencyBucket[];
 }
 
+export type NerdMetricsScope = 'global' | 'workspace';
+
 export interface CommandBarResult {
   status?: string;
   [key: string]: unknown;
@@ -538,7 +540,12 @@ export function fetchLogSummary(params: {
   });
 }
 
-export function fetchNerdMetrics(params: { window_hours?: number; bucket_minutes?: number } = {}): Promise<NerdMetricsResponse> {
+export function fetchNerdMetrics(params: {
+  scope?: NerdMetricsScope;
+  workspace_id?: string;
+  window_hours?: number;
+  bucket_minutes?: number;
+} = {}): Promise<NerdMetricsResponse> {
   return requestJson<NerdMetricsResponse>(withQueryParams('/api/metrics/nerd', params), {
     method: 'POST',
   });

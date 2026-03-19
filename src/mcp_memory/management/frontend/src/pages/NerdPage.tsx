@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 
@@ -8,6 +8,7 @@ import {
   type CountBucket,
   type MaintenanceDeltaBucket,
   type MaintenanceEvent,
+  type NerdMetricsScope,
   type ShareSeries,
 } from '../lib/api';
 
@@ -292,15 +293,60 @@ const NERD_WINDOW_OPTIONS: Record<NerdWindow, { label: string; window_hours: num
 const NERD_WINDOW_ORDER: NerdWindow[] = ['24h', '7d', '30d'];
 
 export function NerdPage() {
+  const [selectedScope, setSelectedScope] = useState<NerdMetricsScope>('global');
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const [selectedWindow, setSelectedWindow] = useState<NerdWindow>('24h');
   const selectedWindowConfig = NERD_WINDOW_OPTIONS[selectedWindow];
 
-  const nerdQuery = useQuery({
-    queryKey: ['nerd-metrics', selectedWindow],
-    queryFn: () => fetchNerdMetrics(selectedWindowConfig),
+  const workspaceOptionsQuery = useQuery({
+    queryKey: ['nerd-metrics', 'workspace-options', selectedWindow],
+    queryFn: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global' }),
     refetchInterval: 5000,
     retry: false,
   });
+
+  const workspaceOptions = useMemo(
+    () => workspaceOptionsQuery.data?.composition.by_workspace ?? [],
+    [workspaceOptionsQuery.data],
+  );
+
+  useEffect(() => {
+    if (selectedScope !== 'workspace') {
+      return;
+    }
+    if (workspaceOptions.some((option) => option.key === selectedWorkspaceId)) {
+      return;
+    }
+    const fallbackWorkspaceId = workspaceOptions[0]?.key ?? '';
+    if (fallbackWorkspaceId) {
+      setSelectedWorkspaceId(fallbackWorkspaceId);
+      return;
+    }
+    setSelectedScope('global');
+  }, [selectedScope, selectedWorkspaceId, workspaceOptions]);
+
+  const nerdQuery = useQuery({
+    queryKey: ['nerd-metrics', selectedWindow, selectedScope, selectedWorkspaceId],
+    queryFn: () => fetchNerdMetrics({
+      ...selectedWindowConfig,
+      scope: selectedScope,
+      workspace_id: selectedScope === 'workspace' ? selectedWorkspaceId : undefined,
+    }),
+    enabled: selectedScope === 'global' || Boolean(selectedWorkspaceId),
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  function handleWorkspaceChange(event: ChangeEvent<HTMLSelectElement>) {
+    const workspaceId = event.target.value;
+    if (!workspaceId) {
+      setSelectedScope('global');
+      setSelectedWorkspaceId('');
+      return;
+    }
+    setSelectedWorkspaceId(workspaceId);
+    setSelectedScope('workspace');
+  }
 
   const throughputChart = useMemo(() => {
     if (!nerdQuery.data?.agent_throughput.length) {
@@ -635,25 +681,59 @@ export function NerdPage() {
             description="High-signal runtime pulse: headline stats, active alerts, queue health, and provider throughput telemetry."
           />
 
-          <section className="panel flex items-center gap-1 self-start p-1">
-            <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Window</span>
-            {NERD_WINDOW_ORDER.map((windowKey) => {
-              const isSelected = windowKey === selectedWindow;
-              return (
-                <button
-                  key={windowKey}
-                  type="button"
-                  onClick={() => setSelectedWindow(windowKey)}
-                  className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${isSelected
-                    ? 'border-accent bg-accent text-ink'
-                    : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
-                  }`}
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            <section className="panel flex items-center gap-1 p-1">
+              <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Window</span>
+              {NERD_WINDOW_ORDER.map((windowKey) => {
+                const isSelected = windowKey === selectedWindow;
+                return (
+                  <button
+                    key={windowKey}
+                    type="button"
+                    onClick={() => setSelectedWindow(windowKey)}
+                    className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${isSelected
+                      ? 'border-accent bg-accent text-ink'
+                      : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
+                    }`}
+                  >
+                    {NERD_WINDOW_OPTIONS[windowKey].label}
+                  </button>
+                );
+              })}
+            </section>
+
+            <section className="panel flex items-center gap-2 p-1">
+              <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Scope</span>
+              <button
+                type="button"
+                onClick={() => setSelectedScope('global')}
+                className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${selectedScope === 'global'
+                  ? 'border-accent bg-accent text-ink'
+                  : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
+                }`}
+              >
+                Global
+              </button>
+              <label className="flex items-center">
+                <span className="sr-only">Workspace scope</span>
+                <select
+                  value={selectedScope === 'workspace' ? selectedWorkspaceId : ''}
+                  onChange={handleWorkspaceChange}
+                  disabled={workspaceOptionsQuery.isPending || workspaceOptions.length === 0}
+                  className="rounded-full border border-border bg-transparent px-3 py-1 text-[11px] font-medium text-text outline-none transition hover:border-accent disabled:cursor-not-allowed disabled:text-muted"
                 >
-                  {NERD_WINDOW_OPTIONS[windowKey].label}
-                </button>
-              );
-            })}
-          </section>
+                  <option value="">
+                    {workspaceOptionsQuery.isPending ? 'Loading workspaces…' : 'Workspace…'}
+                  </option>
+                  {workspaceOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
+          </div>
         </div>
 
         <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">

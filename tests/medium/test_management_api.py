@@ -153,6 +153,16 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         logs = await _request_json(metadata, "/api/logs", {"source": "daemon", "q": "seeded"})
         log_summary = await _request_json(metadata, "/api/logs/summary", {"source": "daemon"})
         nerd_metrics = await _request_json(metadata, "/api/metrics/nerd", {"window_hours": 24, "bucket_minutes": 60, "now": base_time + 60.0})
+        global_nerd_metrics = await _request_json(
+            metadata,
+            "/api/metrics/nerd",
+            {"scope": "global", "window_hours": 24, "bucket_minutes": 60, "now": base_time + 60.0},
+        )
+        workspace_override_nerd_metrics = await _request_json(
+            metadata,
+            "/api/metrics/nerd?scope=workspace&workspace_id=workspace-b",
+            {"window_hours": 24, "bucket_minutes": 60, "now": base_time + 60.0},
+        )
         prune_logs = await _request_json(
             metadata,
             "/api/admin/logs/prune",
@@ -297,6 +307,15 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["graph_topology"]["total_memories"] == 2
         assert nerd_metrics["graph_topology"]["total_links"] == 1
         assert nerd_metrics["graph_topology"]["link_type_counts"] == {"SUPERSEDES": 1}
+        assert global_nerd_metrics["graph_topology"]["total_memories"] == 3
+        assert global_nerd_metrics["composition"]["by_workspace"] == [
+            {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2},
+            {"key": "workspace-b", "label": "workspace-b", "count": 1},
+        ]
+        assert workspace_override_nerd_metrics["graph_topology"]["total_memories"] == 1
+        assert workspace_override_nerd_metrics["composition"]["by_workspace"] == [
+            {"key": "workspace-b", "label": "workspace-b", "count": 1}
+        ]
         assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 2
         assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
         assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2

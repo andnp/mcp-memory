@@ -184,6 +184,69 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
     assert [item.buckets[-1].count for item in global_nerd.growth_dynamics.workspace_contribution_share] == [1, 1]
 
 
+def test_management_service_nerd_metrics_accepts_global_and_workspace_overrides(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    repository.create_memory(
+        title="Workspace A fact",
+        content="Scoped to workspace A.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        created_at="1970-01-01T00:00:01+00:00",
+        updated_at="1970-01-01T00:00:01+00:00",
+    )
+    repository.create_memory(
+        title="Workspace B fact",
+        content="Scoped to workspace B.",
+        workspace_ids=["workspace-b"],
+        memory_type="fact",
+        created_at="1970-01-01T00:00:02+00:00",
+        updated_at="1970-01-01T00:00:02+00:00",
+    )
+
+    db_manager.get_connection().executemany(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, 10.0, None),
+            ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, 20.0, None),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    default_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+    global_metrics = service.get_nerd_metrics(scope="global", window_hours=24, bucket_minutes=60, now=100.0)
+    workspace_override_metrics = service.get_nerd_metrics(
+        scope="workspace",
+        workspace_id="workspace-b",
+        window_hours=24,
+        bucket_minutes=60,
+        now=100.0,
+    )
+
+    assert default_metrics.graph_topology.total_memories == 1
+    assert [(item.key, item.count) for item in default_metrics.composition.by_workspace] == [("workspace-a", 1)]
+    assert [item.provider_key for item in default_metrics.provider_latency] == ["gemini-cli"]
+
+    assert global_metrics.graph_topology.total_memories == 2
+    assert [(item.key, item.count) for item in global_metrics.composition.by_workspace] == [
+        ("workspace-a", 1),
+        ("workspace-b", 1),
+    ]
+    assert {item.provider_key for item in global_metrics.provider_latency} == {"gemini-cli", "copilot-mini"}
+
+    assert workspace_override_metrics.graph_topology.total_memories == 1
+    assert [(item.key, item.count) for item in workspace_override_metrics.composition.by_workspace] == [("workspace-b", 1)]
+    assert [item.provider_key for item in workspace_override_metrics.provider_latency] == ["copilot-mini"]
+
+
 def test_management_service_nerd_metrics_composition_distributions_and_timelines(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
