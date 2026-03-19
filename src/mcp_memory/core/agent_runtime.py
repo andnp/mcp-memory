@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.provider_policy import select_provider_for_task
+from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
@@ -49,13 +49,14 @@ def build_runtime_task_worker(
     ctx: ApplicationContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
+    provider_selection_inputs = _provider_selection_inputs_from_context(ctx)
     active_json_provider = (
         provider
         if provider is not None
         else getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
     )
     active_agentic_provider = getattr(ctx, "ai_agent_provider", None)
-    handlers = build_default_task_handlers(active_json_provider, active_agentic_provider)
+    handlers = build_default_task_handlers(active_json_provider, active_agentic_provider, provider_selection_inputs=provider_selection_inputs)
     expected_handlers = {
         SYSTEM1_INGEST_TASK_NAME,
         SUMMARIZE_MEMORY_TASK_NAME,
@@ -83,7 +84,7 @@ def build_runtime_task_worker(
     return RuntimeTaskWorker(
         ctx,
         handlers=handlers,
-        handler_factory=lambda: build_default_task_handlers(active_json_provider, active_agentic_provider),
+        handler_factory=lambda: build_default_task_handlers(active_json_provider, active_agentic_provider, provider_selection_inputs=provider_selection_inputs),
         poll_interval_seconds=0.05,
         retry_delay_seconds=DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS,
     )
@@ -92,9 +93,12 @@ def build_runtime_task_worker(
 def build_default_task_handlers(
     provider: Any = None,
     agentic_provider: Any = None,
+    *,
+    provider_selection_inputs: ProviderSelectionInputs | None = None,
 ) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
     def scoped(ctx: ApplicationContext, task_name: str, task: TaskRecord):
-        return _provider_for_task(ctx, provider, agentic_provider, task_name, task)
+        inputs = provider_selection_inputs or _provider_selection_inputs_from_context(ctx)
+        return _provider_for_task_inputs(inputs, provider, agentic_provider, task_name, task)
 
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(ctx, SYSTEM1_INGEST_TASK_NAME, task)),
@@ -111,9 +115,16 @@ def build_default_task_handlers(
     }
 
 
-def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
-    selected = select_provider_for_task(
-        ctx,
+def _provider_selection_inputs_from_context(ctx: ApplicationContext) -> ProviderSelectionInputs:
+    return ProviderSelectionInputs(
+        config=ctx.config,
+        ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
+    )
+
+
+def _provider_for_task_inputs(inputs: ProviderSelectionInputs, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+    selected = select_provider_for_inputs(
+        inputs,
         provider,
         agentic_provider,
         task_name,
@@ -126,6 +137,10 @@ def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider:
     if selected_provider_key is not None:
         logger.debug("Selected provider for task", extra={"task_name": task_name, "provider_key": selected_provider_key})
     return selected
+
+
+def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+    return _provider_for_task_inputs(_provider_selection_inputs_from_context(ctx), provider, agentic_provider, task_name, task)
 
 
 def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
