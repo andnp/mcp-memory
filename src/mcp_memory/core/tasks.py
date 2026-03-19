@@ -395,6 +395,28 @@ class SQLiteTaskQueue:
             updated_at=updated_at,
         )
 
+    def touch_running_task(
+        self,
+        task_id: str,
+        *,
+        updated_at: float | None = None,
+    ) -> TaskRecord:
+        now = time.time() if updated_at is None else updated_at
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not running")
+        conn.commit()
+        return self.get_task(task_id)
+
     def request_cancel(
         self,
         task_id: str,
@@ -531,8 +553,12 @@ class SQLiteTaskQueue:
         current_time = time.time() if now is None else now
         recovered: list[TaskRecord] = []
         for task in self.list_tasks(status="running", workspace_id=workspace_id, limit=200):
-            started_at = task.started_at or task.claimed_at or task.updated_at
-            is_stale = max(current_time - started_at, 0.0) >= stale_after_seconds
+            recent_activity_at = max(
+                task.updated_at,
+                task.started_at or task.updated_at,
+                task.claimed_at or task.updated_at,
+            )
+            is_stale = max(current_time - recent_activity_at, 0.0) >= stale_after_seconds
             if task.subprocess_pid is not None:
                 if _is_process_alive(task.subprocess_pid):
                     continue
@@ -817,6 +843,18 @@ class SQLiteTaskQueue:
 
         rows = self._db.get_connection().execute(query, params).fetchall()
         return [self._row_to_task_run(row) for row in rows]
+
+    def get_latest_successful_task_completion(
+        self,
+        task_name: str,
+    ) -> float | None:
+        row = self._db.get_connection().execute(
+            "SELECT MAX(completed_at) AS completed_at FROM task_runs WHERE task_name = ? AND status = 'completed'",
+            (task_name,),
+        ).fetchone()
+        if row is None or row["completed_at"] is None:
+            return None
+        return float(row["completed_at"])
 
     def summarize_task_runs(
         self,

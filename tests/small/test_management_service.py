@@ -8,6 +8,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.management.service import ManagementService
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 
@@ -224,6 +225,51 @@ def test_management_service_can_cancel_running_task_and_list_conversations(db_ma
     assert cancel_payload["task"]["cancellation_reason"] == "manual_cancel"
     assert conversations.conversations[0].request_id == "req-123"
     assert conversations.conversations[0].subprocess_pid == 4321
+
+
+def test_management_service_lists_reconciled_terminal_conversation_status(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+
+    provider_usage.record_conversation(
+        request_id="req-terminal",
+        attempt=1,
+        task_name="ingest-system1",
+        task_id="task-terminal",
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=2222,
+        prompt_text="prompt text",
+        response_text="",
+        parsed=None,
+        status="running",
+        error_text=None,
+        started_at=10.0,
+        completed_at=10.0,
+    )
+    provider_usage.reconcile_running_task_conversations(
+        task_id="task-terminal",
+        status="error",
+        error_text="Provider subprocess 2222 exited unexpectedly",
+        completed_at=15.0,
+    )
+
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        repository=repository,
+        task_queue=task_queue,
+    )
+    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+
+    conversations = service.list_ai_conversations(task_name="ingest-system1")
+
+    assert conversations.conversations[0].request_id == "req-terminal"
+    assert conversations.conversations[0].status == "error"
+    assert conversations.conversations[0].error_text == "Provider subprocess 2222 exited unexpectedly"
 
 
 def test_management_service_ignores_scheduled_tasks_for_oldest_runnable_age(db_manager) -> None:

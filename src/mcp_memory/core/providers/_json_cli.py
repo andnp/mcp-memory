@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
+PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS = 20.0
 _RETRY_DELAY_MS_RE = re.compile(r"retryDelayMs:\s*([0-9]+(?:\.[0-9]+)?)")
 _RESET_AFTER_RE = re.compile(
     r"reset after\s*(?:(?P<hours>\d+)h)?\s*(?:(?P<minutes>\d+)m)?\s*(?:(?P<seconds>\d+)s)?",
@@ -119,14 +120,40 @@ class JSONCLIProvider:
                     "started_at": started_at,
                 }
             )
+            communicate_task = asyncio.create_task(proc.communicate())
+            deadline = time.monotonic() + self._timeout_seconds
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self._timeout_seconds,
-                )
+                while True:
+                    remaining_seconds = deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise asyncio.TimeoutError
+                    try:
+                        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                            asyncio.shield(communicate_task),
+                            timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        if communicate_task.done():
+                            stdout_bytes, stderr_bytes = await communicate_task
+                            break
+                        heartbeat_at = time.time()
+                        self._notify(
+                            {
+                                "event": "heartbeat",
+                                "attempt": attempt,
+                                "prompt": prompt,
+                                "subprocess_pid": proc.pid,
+                                "started_at": started_at,
+                                "heartbeat_at": heartbeat_at,
+                                "elapsed_seconds": max(heartbeat_at - started_at, 0.0),
+                            }
+                        )
             except asyncio.CancelledError:
+                communicate_task.cancel()
                 proc.kill()
                 await proc.wait()
+                await asyncio.gather(communicate_task, return_exceptions=True)
                 completed_at = time.time()
                 self._notify(
                     {
@@ -146,8 +173,10 @@ class JSONCLIProvider:
                 )
                 raise
             except asyncio.TimeoutError:
+                communicate_task.cancel()
                 proc.kill()
                 await proc.wait()
+                await asyncio.gather(communicate_task, return_exceptions=True)
                 completed_at = time.time()
                 response = AIResponse(raw_text="", parsed=None, error="Command timed out", subprocess_pid=proc.pid)
                 self._notify(
@@ -170,17 +199,18 @@ class JSONCLIProvider:
 
             stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
             stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-            if proc.returncode != 0:
+            returncode = proc.returncode if proc.returncode is not None else 0
+            if returncode != 0:
                 response = AIResponse(
                     raw_text=stdout_text,
                     parsed=None,
                     error=_format_subprocess_failure(
-                        proc.returncode,
+                        returncode,
                         stderr_text=stderr_text,
                         stdout_text=stdout_text,
                     ),
                     subprocess_pid=proc.pid,
-                    returncode=proc.returncode,
+                    returncode=returncode,
                 )
                 completed_at = time.time()
                 self._notify(
@@ -190,7 +220,7 @@ class JSONCLIProvider:
                         "status": "error",
                         "prompt": prompt,
                         "subprocess_pid": proc.pid,
-                        "returncode": proc.returncode,
+                        "returncode": returncode,
                         "raw_text": response.raw_text,
                         "parsed": response.parsed,
                         "error": response.error,
@@ -202,7 +232,7 @@ class JSONCLIProvider:
                 return response
             response = self._parse_response(stdout_text)
             response.subprocess_pid = proc.pid
-            response.returncode = proc.returncode
+            response.returncode = returncode
             completed_at = time.time()
             self._notify(
                 {
@@ -211,7 +241,7 @@ class JSONCLIProvider:
                     "status": "success" if response.success else "parse_error",
                     "prompt": prompt,
                     "subprocess_pid": proc.pid,
-                    "returncode": proc.returncode,
+                    "returncode": returncode,
                     "raw_text": response.raw_text,
                     "parsed": response.parsed,
                     "error": response.error,

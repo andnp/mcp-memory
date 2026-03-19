@@ -9,9 +9,14 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
-from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY
+from mcp_memory.core.task_handlers import (
+    SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
+    SYSTEM1_INGEST_PRIORITY,
+    SYSTEM1_INGEST_TASK_NAME,
+)
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
 pytestmark = pytest.mark.small
@@ -182,6 +187,17 @@ def test_sqlite_task_queue_tracks_running_subprocess_and_finalizes_cancellation(
     assert cancelled.last_error == "timeout triage"
 
 
+def test_sqlite_task_queue_touch_running_task_refreshes_updated_at(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("touch-me", task_id="touch-me", available_at=0.0)
+
+    assert queue.claim_next(now=5.0) is not None
+    touched = queue.touch_running_task(task.id, updated_at=7.5)
+
+    assert touched.status == "running"
+    assert touched.updated_at == pytest.approx(7.5)
+
+
 def test_sqlite_task_queue_does_not_recover_dead_subprocess_before_stale_threshold(
     db_manager,
     monkeypatch,
@@ -216,6 +232,26 @@ def test_sqlite_task_queue_fails_dead_stale_subprocess_task(db_manager, monkeypa
     failed = queue.get_task(task.id)
     assert failed.status == "failed"
     assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+
+
+def test_sqlite_task_queue_recent_progress_prevents_dead_subprocess_recovery(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("pid-dead-task", task_id="pid-heartbeat-task", available_at=0.0)
+
+    assert queue.claim_next(now=10.0) is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-live", updated_at=12.0)
+    queue.touch_running_task(task.id, updated_at=950.0)
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=100.0)
+
+    assert recovered == []
+    running = queue.get_task(task.id)
+    assert running.status == "running"
+    assert running.updated_at == pytest.approx(950.0)
 
 
 def test_sqlite_task_queue_cancels_dead_stale_subprocess_when_cancellation_requested(
@@ -322,6 +358,146 @@ def test_schedule_system1_ingest_debounces_then_pulls_forward_at_threshold(
     assert accelerated.task.id == scheduled.task.id
     assert accelerated.task.available_at == now
     assert accelerated.task.priority == SYSTEM1_INGEST_PRIORITY
+
+
+def test_schedule_system1_ingest_resets_debounce_on_new_activity_below_threshold(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    now = 100.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("note 0", workspace_id="workspace-a")
+
+    initial = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert initial is not None
+    assert initial.trigger == "system1_debounce"
+    assert initial.task.available_at == 3700.0
+
+    now = 160.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("note 1", workspace_id="workspace-a")
+
+    rescheduled = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert rescheduled is not None
+    assert rescheduled.created is False
+    assert rescheduled.task.id == initial.task.id
+    assert rescheduled.trigger == "system1_debounce"
+    assert rescheduled.task.available_at == 3760.0
+
+
+def test_schedule_system1_ingest_threshold_respects_rate_limit_boundary(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    recent_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="recent-completed-ingest",
+    )
+    assert queue.claim_next(now=90.0) is not None
+    queue.complete(recent_task.id, completed_at=100.0)
+
+    now = 1000.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("note 0", workspace_id="workspace-a")
+
+    initial = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert initial is not None
+    assert initial.trigger == "system1_debounce"
+    assert initial.task.available_at == 4600.0
+
+    for index in range(1, 40):
+        now += 1.0
+        monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda current=now: current)
+        journal.record(f"note {index}", workspace_id="workspace-a")
+
+    accelerated = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert accelerated is not None
+    assert accelerated.created is False
+    assert accelerated.task.id == initial.task.id
+    assert accelerated.trigger == "system1_threshold_rate_limited"
+    assert accelerated.task.available_at == 100.0 + SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS
+
+
+def test_schedule_system1_ingest_does_not_delay_pending_manual_task(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    recent_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="recent-manual-success",
+    )
+    assert queue.claim_next(now=90.0) is not None
+    queue.complete(recent_task.id, completed_at=100.0)
+
+    manual_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        data={"workspace_id": "workspace-a"},
+        available_at=150.0,
+        task_id="manual-pending-ingest",
+    )
+
+    now = 200.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("note 0", workspace_id="workspace-a")
+
+    scheduled = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert scheduled is not None
+    assert scheduled.created is False
+    assert scheduled.task.id == manual_task.id
+    assert scheduled.task.available_at == 150.0
+    assert scheduled.task.data == {"workspace_id": "workspace-a"}
+
+
+def test_schedule_system1_ingest_uses_manual_success_as_cooldown_anchor(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    manual_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="manual-success-anchor",
+    )
+    assert queue.claim_next(now=490.0) is not None
+    queue.complete(manual_task.id, completed_at=500.0)
+
+    now = 550.0
+    for index in range(40):
+        entry_time = now + index
+        monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda current=entry_time: current)
+        journal.record(f"note {index}", workspace_id="workspace-a")
+
+    scheduled = schedule_system1_ingest(queue, journal, "workspace-a", now=now + 39.0)
+
+    assert scheduled is not None
+    assert scheduled.created is True
+    assert scheduled.trigger == "system1_threshold_rate_limited"
+    assert scheduled.task.available_at == 500.0 + SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS
 
 
 def test_schedule_system1_ingest_respects_active_suppression_window(
@@ -643,6 +819,71 @@ async def test_runtime_task_worker_releases_orphaned_journal_claims_on_start(db_
 
     assert queue.get_task(task.id).status == "failed"
     assert [pending.id for pending in journal.get_pending(workspace_id="workspace-a")] == [entry.id]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_reconciles_running_conversation_for_recovered_dead_subprocess_task(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "ingest-system1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="orphaned-provider-task",
+    )
+    assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-orphaned", updated_at=2.0)
+    repository.record_conversation(
+        request_id="req-orphaned",
+        attempt=1,
+        task_name="ingest-system1",
+        task_id=task.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=9999,
+        prompt_text="ingest pending thoughts",
+        response_text="",
+        parsed=None,
+        status="running",
+        error_text=None,
+        started_at=1.0,
+        completed_at=1.0,
+    )
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"ingest-system1": lambda ctx, task: None},
+        poll_interval_seconds=0.01,
+    )
+
+    original = SQLiteTaskQueue.recover_abandoned_running_tasks
+
+    def recover(self, **kwargs):
+        return original(self, stale_after_seconds=0.0, now=5.0, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
+    try:
+        await worker.start()
+        for _ in range(20):
+            if queue.get_task(task.id).status == "failed":
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop(0.05)
+    finally:
+        monkeypatch.undo()
+
+    failed = queue.get_task(task.id)
+    conversation = repository.get_conversation("req-orphaned")[0]
+
+    assert failed.status == "failed"
+    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert conversation.status == "error"
+    assert conversation.task_id == task.id
+    assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
 
 
 @pytest.mark.asyncio

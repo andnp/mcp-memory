@@ -29,6 +29,16 @@ from tests.sdk.providers import FakeAsyncProcess
 pytestmark = pytest.mark.medium
 
 
+class _DelayedFakeProcess(FakeAsyncProcess):
+    def __init__(self, *, delay_seconds: float, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.delay_seconds = delay_seconds
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.sleep(self.delay_seconds)
+        return await super().communicate()
+
+
 @pytest.mark.asyncio
 async def test_gemini_cli_provider_returns_parsed_json(
     install_fake_subprocess,
@@ -164,6 +174,33 @@ async def test_gemini_cli_provider_raises_backoff_error_for_quota_exhaustion(
         await provider.ask("retry this request")
 
     assert exc_info.value.retry_delay_seconds == pytest.approx(13847.179189666)
+
+
+@pytest.mark.asyncio
+async def test_gemini_cli_provider_emits_heartbeat_while_waiting(
+    install_fake_subprocess,
+    monkeypatch,
+) -> None:
+    install_fake_subprocess.add(
+        _DelayedFakeProcess(delay_seconds=0.03, pid=8888, stdout_text='{"actions": []}')
+    )
+    monkeypatch.setattr(
+        "mcp_memory.core.providers._json_cli.PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS",
+        0.01,
+    )
+    events: list[dict[str, object]] = []
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0).with_observer(events.append)
+
+    result = await provider.ask("wait for heartbeat")
+
+    heartbeat_events = [event for event in events if event.get("event") == "heartbeat"]
+    assert result == {"actions": []}
+    assert heartbeat_events
+    assert heartbeat_events[0]["subprocess_pid"] == 8888
+    elapsed_seconds = heartbeat_events[0]["elapsed_seconds"]
+    assert isinstance(elapsed_seconds, int | float)
+    assert float(elapsed_seconds) >= 0.0
 
 
 @pytest.mark.asyncio
@@ -677,6 +714,192 @@ async def test_instrumented_provider_persists_running_conversation_before_finish
     assert result == {"ok": True}
     assert len(finished_rows) == 1
     assert finished_rows[0].response_text == '{"ok": true}'
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conversation(db_manager) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    started_at = 3_000_000_000.0
+    heartbeat_at = started_at + 2.5
+    completed_at = started_at + 4.0
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "started_at": started_at,
+                }
+            )
+            started.set()
+            await asyncio.sleep(0)
+            self._observer(
+                {
+                    "event": "heartbeat",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "started_at": started_at,
+                    "heartbeat_at": heartbeat_at,
+                    "elapsed_seconds": 2.5,
+                }
+            )
+            await release.wait()
+            self._observer(
+                {
+                    "event": "finished",
+                    "attempt": 1,
+                    "status": "success",
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "raw_text": '{"ok": true}',
+                    "parsed": {"ok": True},
+                    "error": None,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": 4.0,
+                }
+            )
+            return {"ok": True}
+
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("memory-curator", available_at=0.0, task_id="heartbeat-task")
+    assert queue.claim_next(now=1.0) is not None
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        task_queue=queue,
+    ).with_usage_context(task_name="memory-curator", task_id=task.id, workspace_id="workspace-a")
+
+    provider_task = asyncio.create_task(provider.ask("keep going"))
+    await started.wait()
+
+    for _ in range(20):
+        if queue.get_task(task.id).updated_at == heartbeat_at:
+            break
+        await asyncio.sleep(0)
+
+    refreshed_task = queue.get_task(task.id)
+    running_conversation = repository.list_conversations(status="running", limit=1)[0]
+    assert refreshed_task.updated_at == pytest.approx(heartbeat_at)
+    assert running_conversation.completed_at == pytest.approx(heartbeat_at)
+    assert running_conversation.duration_seconds == pytest.approx(2.5)
+
+    release.set()
+    result = await provider_task
+
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_finalizes_running_conversation_on_error(db_manager) -> None:
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 4242,
+                    "started_at": 10.0,
+                }
+            )
+            raise RuntimeError("Provider subprocess 4242 exited unexpectedly")
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="ingest-system1", task_id="task-error", workspace_id="workspace-a")
+
+    with pytest.raises(RuntimeError, match="exited unexpectedly"):
+        await provider.ask("recover from this")
+
+    conversations = repository.get_conversation(
+        db_manager.get_connection().execute(
+            "SELECT request_id FROM ai_conversations WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            ("task-error",),
+        ).fetchone()["request_id"]
+    )
+
+    assert len(conversations) == 1
+    assert conversations[0].status == "error"
+    assert conversations[0].task_id == "task-error"
+    assert conversations[0].error_text == "Provider subprocess 4242 exited unexpectedly"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_finalizes_running_conversation_on_cancellation(db_manager) -> None:
+    started = asyncio.Event()
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 5151,
+                    "started_at": 20.0,
+                }
+            )
+            started.set()
+            await asyncio.sleep(60.0)
+            return {"ok": True}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="memory-curator", task_id="task-cancel", workspace_id="workspace-a")
+
+    provider_task = asyncio.create_task(provider.ask("cancel me"))
+    await started.wait()
+    provider_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider_task
+
+    conversation = repository.list_conversations(task_name="memory-curator", limit=1)[0]
+    assert conversation.task_id == "task-cancel"
+    assert conversation.status == "cancelled"
+    assert conversation.error_text == "Command cancelled"
 
 
 @pytest.mark.asyncio

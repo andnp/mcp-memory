@@ -10,6 +10,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class RuntimeTaskWorker:
         self._retry_delay_seconds = retry_delay_seconds
         self._stop_event = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
+        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
 
     async def start(self) -> None:
         if self._runner is not None and not self._runner.done():
@@ -66,9 +68,11 @@ class RuntimeTaskWorker:
         if task_queue is None:
             return
 
-        await asyncio.to_thread(
+        recovered_tasks = await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
         )
+        for recovered_task in recovered_tasks:
+            await asyncio.to_thread(self._reconcile_task_conversations, recovered_task)
         journal = getattr(self._ctx, "journal", None)
         if journal is not None:
             await asyncio.to_thread(journal.release_orphaned_claims)
@@ -118,17 +122,20 @@ class RuntimeTaskWorker:
                 result = await result
         except asyncio.CancelledError:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-                await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
             else:
-                await asyncio.to_thread(
+                failed_task = await asyncio.to_thread(
                     task_queue.fail_permanently,
                     task.id,
                     "Task interrupted during worker shutdown",
                 )
+                await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
             raise
         except Exception as exc:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-                await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
                 return
             retry_delay_seconds = self._retry_delay_seconds
             requested_retry_delay = getattr(exc, "retry_delay_seconds", None)
@@ -140,16 +147,29 @@ class RuntimeTaskWorker:
                 str(exc),
                 retry_delay_seconds,
             )
+            await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
             await self._schedule_follow_up(task, failed_task)
             return
 
         normalized_result = result if isinstance(result, dict) else {}
         if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
             cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+            await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
             await self._schedule_follow_up(task, cancelled_task)
             return
         completed_task = await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
         await self._schedule_follow_up(task, completed_task)
+
+    def _reconcile_task_conversations(self, task: TaskRecord) -> None:
+        if task.status not in {"failed", "cancelled"}:
+            return
+        conversation_status = "cancelled" if task.status == "cancelled" else "error"
+        self._provider_usage.reconcile_running_task_conversations(
+            task_id=task.id,
+            status=conversation_status,
+            error_text=task.last_error,
+            completed_at=task.completed_at or task.updated_at,
+        )
 
     async def _schedule_follow_up(self, task: TaskRecord, terminal_task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)

@@ -28,6 +28,7 @@ def schedule_system1_ingest(
     suppression_config=None,
 ):
     from mcp_memory.core.task_handlers.constants import (
+        SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
         SYSTEM1_INGEST_DEBOUNCE_SECONDS,
         SYSTEM1_INGEST_PRIORITY,
         SYSTEM1_INGEST_TASK_NAME,
@@ -48,10 +49,19 @@ def schedule_system1_ingest(
     available_at = scheduled_at
     if pending_count < SYSTEM1_INGEST_THRESHOLD:
         trigger = "system1_debounce"
-        available_at = max(oldest_pending_timestamp + SYSTEM1_INGEST_DEBOUNCE_SECONDS, scheduled_at)
+        available_at = scheduled_at + SYSTEM1_INGEST_DEBOUNCE_SECONDS
+
+    rate_limited_until = _resolve_auto_ingest_rate_limit_until(
+        task_queue,
+        task_name=SYSTEM1_INGEST_TASK_NAME,
+        cooldown_seconds=SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
+    )
+    if rate_limited_until is not None and available_at < rate_limited_until:
+        available_at = rate_limited_until
+        trigger = f"{trigger}_rate_limited"
 
     suppressed_until = _resolve_ingest_suppression_until(scheduled_at, suppression_config)
-    if suppressed_until is not None:
+    if suppressed_until is not None and available_at < suppressed_until:
         available_at = max(available_at, suppressed_until)
         trigger = f"{trigger}_suppressed"
 
@@ -62,6 +72,8 @@ def schedule_system1_ingest(
         "pending_count": pending_count,
         "oldest_pending_timestamp": oldest_pending_timestamp,
     }
+    if rate_limited_until is not None:
+        task_data["rate_limited_until"] = rate_limited_until
     if suppressed_until is not None:
         task_data["suppressed_until"] = suppressed_until
     task, created = task_queue.enqueue_unique(
@@ -71,8 +83,15 @@ def schedule_system1_ingest(
         priority=SYSTEM1_INGEST_PRIORITY,
         available_at=available_at,
     )
-    if not created and task.status == "pending" and (
-        available_at < task.available_at or task.priority != SYSTEM1_INGEST_PRIORITY
+    if (
+        not created
+        and task.status == "pending"
+        and _is_auto_scheduled_ingest_task(task)
+        and (
+            abs(available_at - task.available_at) > 1e-6
+            or task.priority != SYSTEM1_INGEST_PRIORITY
+            or task.data != task_data
+        )
     ):
         task = task_queue.update_pending_task(
             task.id,
@@ -143,3 +162,20 @@ def _resolve_ingest_suppression_until(now: float, suppression_config) -> float |
             candidate_end_times.append(end_dt.timestamp())
 
     return min(candidate_end_times) if candidate_end_times else None
+
+
+def _resolve_auto_ingest_rate_limit_until(
+    task_queue: SQLiteTaskQueue,
+    *,
+    task_name: str,
+    cooldown_seconds: float,
+) -> float | None:
+    latest_completed_at = task_queue.get_latest_successful_task_completion(task_name)
+    if latest_completed_at is None:
+        return None
+    return latest_completed_at + cooldown_seconds
+
+
+def _is_auto_scheduled_ingest_task(task: TaskRecord) -> bool:
+    trigger = task.data.get("trigger")
+    return isinstance(trigger, str) and trigger.startswith("system1_")

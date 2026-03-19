@@ -8,6 +8,7 @@ from mcp_memory.utils.db import DatabaseManager
 
 
 _ALL_WORKSPACES = object()
+_UNCHANGED = object()
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,120 @@ class ProviderUsageRepository:
 
     def get_conversation(self, request_id: str) -> list[AIConversationRecord]:
         return self.list_conversations(request_id=request_id, limit=200)
+
+    def finalize_running_conversation(
+        self,
+        *,
+        request_id: str,
+        status: str,
+        error_text: str | None,
+        completed_at: float | None = None,
+        response_text: str | object = _UNCHANGED,
+        parsed: dict | None | object = _UNCHANGED,
+    ) -> int:
+        return self._finalize_running_conversations(
+            where_clause="request_id = ?",
+            where_params=[request_id],
+            status=status,
+            error_text=error_text,
+            completed_at=completed_at,
+            response_text=response_text,
+            parsed=parsed,
+        )
+
+    def reconcile_running_task_conversations(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        error_text: str | None,
+        completed_at: float | None = None,
+    ) -> int:
+        return self._finalize_running_conversations(
+            where_clause="task_id = ?",
+            where_params=[task_id],
+            status=status,
+            error_text=error_text,
+            completed_at=completed_at,
+        )
+
+    def touch_running_conversation(
+        self,
+        *,
+        request_id: str,
+        completed_at: float | None = None,
+        subprocess_pid: int | None | object = _UNCHANGED,
+    ) -> int:
+        if self._db_manager is None:
+            return 0
+        heartbeat_at = time.time() if completed_at is None else completed_at
+        keep_subprocess_pid = subprocess_pid is _UNCHANGED
+        next_subprocess_pid = None if keep_subprocess_pid else subprocess_pid
+        cursor = self._db_manager.get_connection().execute(
+            (
+                "UPDATE ai_conversations "
+                "SET completed_at = ?, "
+                "duration_seconds = MAX(? - started_at, 0.0), "
+                "subprocess_pid = CASE WHEN ? THEN subprocess_pid ELSE ? END "
+                "WHERE request_id = ? AND status = 'running'"
+            ),
+            (
+                heartbeat_at,
+                heartbeat_at,
+                1 if keep_subprocess_pid else 0,
+                next_subprocess_pid,
+                request_id,
+            ),
+        )
+        self._db_manager.get_connection().commit()
+        return int(cursor.rowcount or 0)
+
+    def _finalize_running_conversations(
+        self,
+        *,
+        where_clause: str,
+        where_params: list[object],
+        status: str,
+        error_text: str | None,
+        completed_at: float | None,
+        response_text: str | object = _UNCHANGED,
+        parsed: dict | None | object = _UNCHANGED,
+    ) -> int:
+        if self._db_manager is None:
+            return 0
+        finalized_at = time.time() if completed_at is None else completed_at
+        keep_response_text = response_text is _UNCHANGED
+        next_response_text = "" if keep_response_text else str(response_text)
+        keep_parsed = parsed is _UNCHANGED
+        next_parsed_json = None
+        if not keep_parsed and parsed is not None:
+            next_parsed_json = json.dumps(parsed, sort_keys=True)
+
+        cursor = self._db_manager.get_connection().execute(
+            (
+                "UPDATE ai_conversations "
+                "SET status = ?, "
+                "error_text = COALESCE(?, error_text), "
+                "completed_at = ?, "
+                "duration_seconds = MAX(? - started_at, 0.0), "
+                "response_text = CASE WHEN ? THEN response_text ELSE ? END, "
+                "parsed_json = CASE WHEN ? THEN parsed_json ELSE ? END "
+                f"WHERE {where_clause} AND status = 'running'"
+            ),
+            (
+                status,
+                error_text,
+                finalized_at,
+                finalized_at,
+                1 if keep_response_text else 0,
+                next_response_text,
+                1 if keep_parsed else 0,
+                next_parsed_json,
+                *where_params,
+            ),
+        )
+        self._db_manager.get_connection().commit()
+        return int(cursor.rowcount or 0)
 
     def _row_to_conversation(self, row) -> AIConversationRecord:
         parsed = None

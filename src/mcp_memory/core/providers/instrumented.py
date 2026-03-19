@@ -113,6 +113,16 @@ class InstrumentedAIProvider:
                     completed_at=started_value,
                 )
                 return
+            if payload.get("event") == "heartbeat":
+                heartbeat_at = float(payload.get("heartbeat_at", time.time()))
+                if self._task_queue is not None and self._task_id is not None:
+                    self._task_queue.touch_running_task(self._task_id, updated_at=heartbeat_at)
+                self._usage_repository.touch_running_conversation(
+                    request_id=request_id,
+                    completed_at=heartbeat_at,
+                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                )
+                return
             if payload.get("event") != "finished":
                 return
             self._usage_repository.record_conversation(
@@ -146,6 +156,7 @@ class InstrumentedAIProvider:
             else:
                 response = await cast(Callable[[str], Awaitable[dict[str, Any]]], getattr(provider, "ask"))(prompt)
         except asyncio.CancelledError:
+            completed_at = time.time()
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -155,14 +166,21 @@ class InstrumentedAIProvider:
                 provider_name=self._provider_name,
                 model_name=self._model_name,
                 status=_extract_status(last_event, fallback="cancelled"),
-                duration_seconds=max(time.time() - started_at, 0.0),
-                created_at=time.time(),
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
                 error_text="Command cancelled",
+            )
+            self._usage_repository.finalize_running_conversation(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="cancelled"),
+                error_text="Command cancelled",
+                completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
             raise
         except Exception as exc:
+            completed_at = time.time()
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -172,9 +190,15 @@ class InstrumentedAIProvider:
                 provider_name=self._provider_name,
                 model_name=self._model_name,
                 status=_extract_status(last_event, fallback="error"),
-                duration_seconds=max(time.time() - started_at, 0.0),
-                created_at=time.time(),
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
                 error_text=str(exc),
+            )
+            self._usage_repository.finalize_running_conversation(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="error"),
+                error_text=str(exc),
+                completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
@@ -234,6 +258,16 @@ class InstrumentedAIProvider:
                     completed_at=started_value,
                 )
                 return
+            if payload.get("event") == "heartbeat":
+                heartbeat_at = float(payload.get("heartbeat_at", time.time()))
+                if self._task_queue is not None and self._task_id is not None:
+                    self._task_queue.touch_running_task(self._task_id, updated_at=heartbeat_at)
+                self._usage_repository.touch_running_conversation(
+                    request_id=request_id,
+                    completed_at=heartbeat_at,
+                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                )
+                return
             if payload.get("event") != "finished":
                 return
             self._usage_repository.record_conversation(
@@ -266,6 +300,7 @@ class InstrumentedAIProvider:
         try:
             result = await cast(Callable[[str], Awaitable[AgenticRunResult]], run_agent)(prompt)
         except asyncio.CancelledError:
+            completed_at = time.time()
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -275,14 +310,21 @@ class InstrumentedAIProvider:
                 provider_name=self._provider_name,
                 model_name=self._model_name,
                 status=_extract_status(last_event, fallback="cancelled"),
-                duration_seconds=max(time.time() - started_at, 0.0),
-                created_at=time.time(),
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
                 error_text="Command cancelled",
+            )
+            self._usage_repository.finalize_running_conversation(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="cancelled"),
+                error_text="Command cancelled",
+                completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
             raise
         except Exception as exc:
+            completed_at = time.time()
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -292,9 +334,15 @@ class InstrumentedAIProvider:
                 provider_name=self._provider_name,
                 model_name=self._model_name,
                 status=_extract_status(last_event, fallback="error"),
-                duration_seconds=max(time.time() - started_at, 0.0),
-                created_at=time.time(),
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
                 error_text=str(exc),
+            )
+            self._usage_repository.finalize_running_conversation(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="error"),
+                error_text=str(exc),
+                completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
