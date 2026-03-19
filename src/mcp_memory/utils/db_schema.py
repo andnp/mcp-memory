@@ -7,6 +7,12 @@ SCHEMA_VERSION = 12
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
+    create_current_schema(conn)
+    apply_legacy_additive_migrations(conn)
+    finalize_schema_setup(conn)
+
+
+def create_current_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS tasks (
@@ -33,9 +39,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             cancelled_by TEXT
         );
 
-        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-        CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, available_at, priority, created_at);
-
         CREATE TABLE IF NOT EXISTS task_runs (
             id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -49,11 +52,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             error_text TEXT
         );
 
-        CREATE INDEX IF NOT EXISTS idx_task_runs_task_name_completed_at
-            ON task_runs(task_name, completed_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_task_runs_workspace_task_name_completed_at
-            ON task_runs(workspace_id, task_name, completed_at DESC);
-
         CREATE TABLE IF NOT EXISTS system1_journal (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT NOT NULL,
@@ -65,8 +63,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             claimed_at REAL,
             recoverable_until REAL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_system1_journal_status ON system1_journal(status);
 
         CREATE TABLE IF NOT EXISTS schema_metadata (
             key TEXT PRIMARY KEY,
@@ -89,20 +85,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             metadata TEXT NOT NULL DEFAULT '{}'
         );
 
-        CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
-        CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
-        CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at);
-        CREATE INDEX IF NOT EXISTS idx_memories_last_accessed_at ON memories(last_accessed_at);
-        CREATE INDEX IF NOT EXISTS idx_memories_last_surfaced_at ON memories(last_surfaced_at);
-
         CREATE TABLE IF NOT EXISTS memory_workspaces (
             memory_id TEXT NOT NULL,
             workspace_id TEXT NOT NULL,
             PRIMARY KEY (memory_id, workspace_id),
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
         );
-
-        CREATE INDEX IF NOT EXISTS idx_memory_workspaces_workspace_id ON memory_workspaces(workspace_id);
 
         CREATE TABLE IF NOT EXISTS tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,8 +105,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
         );
 
-        CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_id ON memory_tags(tag_id);
-
         CREATE TABLE IF NOT EXISTS links (
             source_id TEXT NOT NULL,
             target_id TEXT NOT NULL,
@@ -127,10 +113,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (source_id, target_id, type),
             FOREIGN KEY (source_id) REFERENCES memories(id) ON DELETE CASCADE
         );
-
-        CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_id);
-        CREATE INDEX IF NOT EXISTS idx_links_target_id ON links(target_id);
-        CREATE INDEX IF NOT EXISTS idx_links_type ON links(type);
 
         CREATE TABLE IF NOT EXISTS embeddings (
             source_kind TEXT NOT NULL,
@@ -141,11 +123,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             updated_at REAL NOT NULL,
             PRIMARY KEY (source_kind, source_id, model_name)
         );
-
-        CREATE INDEX IF NOT EXISTS idx_embeddings_source_kind_id
-            ON embeddings(source_kind, source_id);
-        CREATE INDEX IF NOT EXISTS idx_embeddings_workspace_kind
-            ON embeddings(workspace_id, source_kind);
 
         CREATE TABLE IF NOT EXISTS hook_conversations (
             conversation_id TEXT PRIMARY KEY,
@@ -159,9 +136,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             ended_at REAL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_hook_conversations_workspace_id
-            ON hook_conversations(workspace_id);
-
         CREATE TABLE IF NOT EXISTS runtime_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id TEXT,
@@ -172,11 +146,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL,
             data_json TEXT NOT NULL DEFAULT '{}'
         );
-
-        CREATE INDEX IF NOT EXISTS idx_runtime_logs_workspace_created_at
-            ON runtime_logs(workspace_id, created_at DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_runtime_logs_level_created_at
-            ON runtime_logs(level, created_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS provider_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,11 +162,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL,
             error_text TEXT
         );
-
-        CREATE INDEX IF NOT EXISTS idx_provider_usage_workspace_created_at
-            ON provider_usage(workspace_id, created_at DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
-            ON provider_usage(provider_key, created_at DESC, id DESC);
 
         CREATE TABLE IF NOT EXISTS ai_conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -221,13 +185,6 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(request_id, attempt)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_ai_conversations_request_id
-            ON ai_conversations(request_id);
-        CREATE INDEX IF NOT EXISTS idx_ai_conversations_workspace_created_at
-            ON ai_conversations(workspace_id, completed_at DESC, id DESC);
-        CREATE INDEX IF NOT EXISTS idx_ai_conversations_task_created_at
-            ON ai_conversations(task_name, completed_at DESC, id DESC);
-
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
             title,
@@ -238,6 +195,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "system1_journal", "workspace_id", "TEXT")
     ensure_column(conn, "system1_journal", "author", "TEXT")
     ensure_column(conn, "system1_journal", "claim_task_id", "TEXT")
@@ -305,6 +265,62 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "duration_seconds", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "provider_usage", "created_at", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "provider_usage", "error_text", "TEXT")
+
+
+def finalize_schema_setup(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, available_at, priority, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_task_runs_task_name_completed_at
+            ON task_runs(task_name, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_runs_workspace_task_name_completed_at
+            ON task_runs(workspace_id, task_name, completed_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_system1_journal_status ON system1_journal(status);
+        CREATE INDEX IF NOT EXISTS idx_system1_journal_claim_task_id ON system1_journal(claim_task_id);
+        CREATE INDEX IF NOT EXISTS idx_system1_journal_recoverable_until ON system1_journal(status, recoverable_until);
+
+        CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
+        CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
+        CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_last_accessed_at ON memories(last_accessed_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_last_surfaced_at ON memories(last_surfaced_at);
+
+        CREATE INDEX IF NOT EXISTS idx_memory_workspaces_workspace_id ON memory_workspaces(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_id ON memory_tags(tag_id);
+
+        CREATE INDEX IF NOT EXISTS idx_links_source_id ON links(source_id);
+        CREATE INDEX IF NOT EXISTS idx_links_target_id ON links(target_id);
+        CREATE INDEX IF NOT EXISTS idx_links_type ON links(type);
+
+        CREATE INDEX IF NOT EXISTS idx_embeddings_source_kind_id
+            ON embeddings(source_kind, source_id);
+        CREATE INDEX IF NOT EXISTS idx_embeddings_workspace_kind
+            ON embeddings(workspace_id, source_kind);
+
+        CREATE INDEX IF NOT EXISTS idx_hook_conversations_workspace_id
+            ON hook_conversations(workspace_id);
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_logs_workspace_created_at
+            ON runtime_logs(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_runtime_logs_level_created_at
+            ON runtime_logs(level, created_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_provider_usage_workspace_created_at
+            ON provider_usage(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
+            ON provider_usage(provider_key, created_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_request_id
+            ON ai_conversations(request_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_workspace_created_at
+            ON ai_conversations(workspace_id, completed_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_conversations_task_created_at
+            ON ai_conversations(task_name, completed_at DESC, id DESC);
+        """
+    )
     conn.execute(
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),

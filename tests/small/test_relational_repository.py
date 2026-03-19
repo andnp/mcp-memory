@@ -7,6 +7,7 @@ import pytest
 
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
+from mcp_memory.utils.db_schema import create_current_schema, finalize_schema_setup
 
 
 pytestmark = pytest.mark.small
@@ -45,6 +46,34 @@ def test_database_manager_initializes_relational_memory_schema(db_manager):
     }
     assert {"workspace_id", "author", "claim_task_id", "claimed_at"} <= journal_columns
     assert db_manager.get_schema_version() == SCHEMA_VERSION
+
+
+def test_current_schema_creation_bootstraps_fresh_db_without_legacy_migration(tmp_path: Path) -> None:
+    db_path = tmp_path / "fresh-memory.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        create_current_schema(conn)
+        finalize_schema_setup(conn)
+
+        table_names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+            ).fetchall()
+        }
+        journal_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(system1_journal)").fetchall()
+        }
+        schema_version = conn.execute(
+            "SELECT value FROM schema_metadata WHERE key = ?",
+            ("schema_version",),
+        ).fetchone()
+
+        assert {"memories", "memories_fts", "idx_system1_journal_claim_task_id"} <= table_names
+        assert {"claim_task_id", "claimed_at", "recoverable_until"} <= journal_columns
+        assert schema_version == (str(SCHEMA_VERSION),)
+    finally:
+        conn.close()
 
 
 def test_database_manager_migrates_legacy_journal_schema_without_claim_columns(tmp_path: Path) -> None:
