@@ -908,6 +908,51 @@ async def test_ingest_handler_falls_back_when_agentic_provider_uses_no_tools_whi
 
 
 @pytest.mark.asyncio
+async def test_ingest_handler_releases_claims_when_agentic_provider_raises_after_claiming_entries(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+
+    try:
+        entry = runtime.journal.record(
+            "This claimed thought should be released if the agentic path crashes.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-exception-release",
+        )
+
+        class _ExplodingAgenticProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await handle_ingest_system1_task(runtime, task, _ExplodingAgenticProvider())
+
+        assert [pending.id for pending in runtime.journal.get_pending(workspace_id=runtime.workspace_id)] == [entry.id]
+        assert runtime.journal.count_by_status() == {"pending": 1}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_ingest_handler_skips_provider_when_no_pending_entries(
     monkeypatch,
     tmp_path: Path,
