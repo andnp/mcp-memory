@@ -600,6 +600,24 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     assert missing_asset.status_code == 404
 
 
+def test_management_api_accepts_30_day_nerd_metrics_window(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/metrics/nerd",
+            params={"window_hours": 24 * 30, "bucket_minutes": 60},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["window_hours"] == 24 * 30
+
+
 @pytest.mark.asyncio
 async def test_daemon_zmq_dispatch_rejects_invalid_transport_payload_shapes(tmp_path: Path) -> None:
     socket_path = tmp_path / "daemon.sock"

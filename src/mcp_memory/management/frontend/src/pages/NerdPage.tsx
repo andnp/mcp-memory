@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 
@@ -281,10 +281,23 @@ function CountBreakdownTable({
   );
 }
 
+type NerdWindow = '24h' | '7d' | '30d';
+
+const NERD_WINDOW_OPTIONS: Record<NerdWindow, { label: string; window_hours: number; bucket_minutes: number }> = {
+  '24h': { label: '24h', window_hours: 24, bucket_minutes: 60 },
+  '7d': { label: '7d', window_hours: 24 * 7, bucket_minutes: 240 },
+  '30d': { label: '30d', window_hours: 24 * 30, bucket_minutes: 24 * 60 },
+};
+
+const NERD_WINDOW_ORDER: NerdWindow[] = ['24h', '7d', '30d'];
+
 export function NerdPage() {
+  const [selectedWindow, setSelectedWindow] = useState<NerdWindow>('24h');
+  const selectedWindowConfig = NERD_WINDOW_OPTIONS[selectedWindow];
+
   const nerdQuery = useQuery({
-    queryKey: ['nerd-metrics'],
-    queryFn: () => fetchNerdMetrics({ window_hours: 24, bucket_minutes: 60 }),
+    queryKey: ['nerd-metrics', selectedWindow],
+    queryFn: () => fetchNerdMetrics(selectedWindowConfig),
     refetchInterval: 5000,
     retry: false,
   });
@@ -615,11 +628,33 @@ export function NerdPage() {
   return (
     <div className="space-y-6">
       <section className="space-y-3">
-        <SectionHeading
-          eyebrow="Pulse"
-          title="Operational baseline"
-          description="High-signal runtime pulse: headline stats, active alerts, queue health, and provider throughput telemetry."
-        />
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <SectionHeading
+            eyebrow="Pulse"
+            title="Operational baseline"
+            description="High-signal runtime pulse: headline stats, active alerts, queue health, and provider throughput telemetry."
+          />
+
+          <section className="panel flex items-center gap-1 self-start p-1">
+            <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Window</span>
+            {NERD_WINDOW_ORDER.map((windowKey) => {
+              const isSelected = windowKey === selectedWindow;
+              return (
+                <button
+                  key={windowKey}
+                  type="button"
+                  onClick={() => setSelectedWindow(windowKey)}
+                  className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${isSelected
+                    ? 'border-accent bg-accent text-ink'
+                    : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
+                  }`}
+                >
+                  {NERD_WINDOW_OPTIONS[windowKey].label}
+                </button>
+              );
+            })}
+          </section>
+        </div>
 
         <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
         {nerdQuery.data.stats.map((stat) => (

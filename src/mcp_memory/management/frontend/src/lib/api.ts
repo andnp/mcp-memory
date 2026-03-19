@@ -453,6 +453,18 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+function withQueryParams(path: string, params: Record<string, string | number | boolean | undefined>): string {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) {
+      continue;
+    }
+    searchParams.set(key, String(value));
+  }
+  const query = searchParams.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 export function fetchOverview(): Promise<OverviewResponse> {
   return requestJson<OverviewResponse>('/api/overview');
 }
@@ -527,8 +539,7 @@ export function fetchLogSummary(params: {
 }
 
 export function fetchNerdMetrics(params: { window_hours?: number; bucket_minutes?: number } = {}): Promise<NerdMetricsResponse> {
-  return requestJson<NerdMetricsResponse>('/api/metrics/nerd', {
+  return requestJson<NerdMetricsResponse>(withQueryParams('/api/metrics/nerd', params), {
     method: 'POST',
-    body: JSON.stringify(params),
   });
 }
