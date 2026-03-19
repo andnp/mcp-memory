@@ -317,6 +317,85 @@ def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, t
     assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9005)]
 
 
+def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    config = Config()
+    config.daemon.auto_start_timeout_seconds = 0.2
+    config.daemon.healthcheck_interval_seconds = 0.05
+    spec = _Spec(
+        memory_path=tmp_path / 'memories',
+        config=config,
+        workspace_id='workspace-start',
+        workspace_root=tmp_path / 'workspace',
+        lock_path=tmp_path / 'workspace.lock',
+    )
+    stale_metadata = DaemonMetadata(
+        host='127.0.0.1',
+        port=8125,
+        pid=1111,
+        started_at=1.0,
+        status='ready',
+    )
+    ready_metadata = DaemonMetadata(
+        host='127.0.0.1',
+        port=9008,
+        pid=2222,
+        started_at=2.0,
+        status='ready',
+    )
+
+    read_count = {'count': 0}
+    acquired_timeouts: list[float] = []
+    cleanup_deadlines: list[float] = []
+    spawned: list[tuple[Path, str, int]] = []
+    monotonic_values = iter([0.0, 0.19, 0.2, 0.25])
+
+    class _FakeLock:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        def acquire(self, *, timeout_seconds: float) -> None:
+            acquired_timeouts.append(timeout_seconds)
+
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr('mcp_memory.daemon.FilesystemLock', _FakeLock)
+    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+
+    def _fake_read(_path):
+        read_count['count'] += 1
+        if read_count['count'] == 1:
+            return stale_metadata
+        if read_count['count'] == 2:
+            return None
+        return ready_metadata
+
+    monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', _fake_read)
+    monkeypatch.setattr('mcp_memory.daemon._is_daemon_healthy', lambda current: current.pid == ready_metadata.pid)
+    monkeypatch.setattr('mcp_memory.daemon._is_process_running', lambda pid: False)
+    monkeypatch.setattr('mcp_memory.daemon.remove_metadata', lambda path: None)
+    monkeypatch.setattr(
+        'mcp_memory.daemon._terminate_orphaned_daemon_processes',
+        lambda **kwargs: cleanup_deadlines.append(kwargs['deadline']),
+    )
+    monkeypatch.setattr('mcp_memory.daemon._cleanup_stale_daemon_socket', lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        'mcp_memory.daemon._spawn_daemon_process',
+        lambda workspace_root, host, port: spawned.append((workspace_root, host, port)),
+    )
+    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9008)
+    monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
+    monkeypatch.setattr('mcp_memory.daemon.time.monotonic', lambda: next(monotonic_values))
+
+    current = ensure_daemon_started()
+
+    assert current.pid == ready_metadata.pid
+    assert acquired_timeouts == [0.2]
+    assert cleanup_deadlines == [0.2]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9008)]
+
+
 def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     spec = _Spec(
@@ -460,20 +539,70 @@ def test_stop_daemon_reports_sigkill_escalation(monkeypatch, tmp_path: Path) -> 
     assert sent_signals == [15, 9]
 
 
-def test_signal_daemon_process_prefers_process_group(monkeypatch) -> None:
-    sent_group_signals: list[tuple[int, signal.Signals]] = []
+def test_signal_daemon_process_uses_pid_scope_for_sigterm(monkeypatch) -> None:
+    sent_pid_signals: list[tuple[int, signal.Signals]] = []
 
-    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: 777)
-    monkeypatch.setattr("mcp_memory.daemon.os.killpg", lambda pgid, sig: sent_group_signals.append((pgid, sig)))
     monkeypatch.setattr(
-        "mcp_memory.daemon.os.kill",
-        lambda pid, sig: (_ for _ in ()).throw(AssertionError("pid-scoped kill should not be used when pgid exists")),
+        "mcp_memory.daemon.os.killpg",
+        lambda pgid, sig: (_ for _ in ()).throw(AssertionError("process-group kill should not be used for graceful SIGTERM")),
     )
+    monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_pid_signals.append((pid, sig)))
 
     process_group_id = daemon_module._signal_daemon_process(3456, signal.SIGTERM)
 
-    assert process_group_id == 777
-    assert sent_group_signals == [(777, signal.SIGTERM)]
+    assert process_group_id is None
+    assert sent_pid_signals == [(3456, signal.SIGTERM)]
+
+
+def test_stop_daemon_escalates_to_process_group_for_sigkill(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.shutdown_grace_seconds = 0.1
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-stop",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8124,
+        pid=3456,
+        started_at=1.0,
+        status="ready",
+    )
+    metadata_path = resolve_daemon_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
+
+    sent_signals: list[tuple[str, int, signal.Signals]] = []
+    process_states = iter([True, True, True, False])
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: 777)
+    monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(("pid", pid, sig)))
+    monkeypatch.setattr("mcp_memory.daemon.os.killpg", lambda pgid, sig: sent_signals.append(("pg", pgid, sig)))
+    wait_calls = iter([RuntimeError("timeout"), None])
+
+    def _fake_wait(pid: int, deadline: float, poll_interval_seconds: float) -> None:
+        result = next(wait_calls)
+        if isinstance(result, Exception):
+            raise result
+
+    monkeypatch.setattr("mcp_memory.daemon._wait_for_process_exit", _fake_wait)
+
+    stopped = stop_daemon()
+
+    assert stopped is not None
+    assert stopped.signal_sequence == ("SIGTERM", "SIGKILL")
+    assert stopped.process_group_id == 777
+    assert stopped.escalated_to_sigkill is True
+    assert sent_signals == [
+        ("pid", 3456, signal.SIGTERM),
+        ("pg", 777, signal.SIGKILL),
+    ]
 
 
 def test_terminate_daemon_process_uses_fresh_deadline_after_sigkill(monkeypatch) -> None:

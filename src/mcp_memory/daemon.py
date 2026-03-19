@@ -75,13 +75,14 @@ def ensure_daemon_started(
             return existing
 
         probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
+        cleanup_deadline = time.monotonic() + timeout_seconds
         if existing is None or not _is_process_running(existing.pid):
             if existing is not None:
                 logger.warning("Removing stale global daemon metadata: pid=%s", existing.pid)
                 remove_metadata(metadata_path)
             _terminate_orphaned_daemon_processes(
                 current_pid=os.getpid(),
-                deadline=time.monotonic() + timeout_seconds,
+                deadline=cleanup_deadline,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
             _cleanup_stale_daemon_socket(
@@ -93,7 +94,7 @@ def ensure_daemon_started(
             logger.warning("Stopping unhealthy global daemon before recovery: pid=%s", existing.pid)
             _terminate_daemon_process(
                 existing.pid,
-                deadline=time.monotonic() + timeout_seconds,
+                deadline=cleanup_deadline,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
             remove_metadata(metadata_path)
@@ -106,9 +107,9 @@ def ensure_daemon_started(
         daemon_port = _find_free_port()
         spawn_details = _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
         poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
-        deadline = time.monotonic() + timeout_seconds
+        readiness_deadline = time.monotonic() + timeout_seconds
         current = None
-        while time.monotonic() < deadline:
+        while time.monotonic() < readiness_deadline:
             current = _read_daemon_metadata(metadata_path)
             if current is not None and _is_daemon_healthy(current):
                 return current
@@ -312,7 +313,8 @@ def _terminate_daemon_process(
 
 
 def _signal_daemon_process(pid: int, sig: signal.Signals) -> int | None:
-    process_group_id, _ = _send_process_signal(pid, sig, scope="process_group")
+    scope = "pid" if sig == signal.SIGTERM else "process_group"
+    process_group_id, _ = _send_process_signal(pid, sig, scope=scope)
     return process_group_id
 
 

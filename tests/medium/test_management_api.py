@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
+import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
 from mcp_memory.daemon_transport import request_daemon_json
@@ -360,59 +362,92 @@ async def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconne
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True)
+    monkeypatch.setattr("mcp_memory.daemon_app._IDLE_SHUTDOWN_DELAY_SECONDS", 0.01)
     shutdown_calls: list[tuple[int, int]] = []
 
+    monkeypatch.setattr("mcp_memory.daemon_app._count_running_background_tasks", lambda _app: 0)
+
+    monkeypatch.setattr("mcp_memory.daemon_app.os.getpid", lambda: 4321)
     monkeypatch.setattr("mcp_memory.daemon_app.os.kill", lambda pid, sig: shutdown_calls.append((pid, sig)))
 
-    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
-    runtime.embedder = None
-    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
+    idle_app = SimpleNamespace(
+        state=SimpleNamespace(
+            idle_shutdown_task=None,
+            routes=SimpleNamespace(
+                hook_service=SimpleNamespace(get_active_client_count=lambda: 0),
+            ),
+        ),
+    )
 
-    try:
-        async with app.router.lifespan_context(app):
-            metadata = app.state.metadata
-            start = await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-1", "timestamp": 100.0})
-            health = await _request_json(metadata, "/api/health")
-            end = await _request_json(metadata, "/api/hooks/session-end", {"sessionId": "conv-1", "timestamp": 101.0})
+    idle_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(idle_app))
+    idle_app.state.idle_shutdown_task = idle_task
+    await asyncio.wait_for(idle_task, timeout=0.2)
 
-            assert start["active_client_count"] == 1
-            assert health["client_count"] == 1
-            assert end["active_client_count"] == 0
-            assert end["shutdown_scheduled"] is True
-
-            await asyncio.sleep(0.35)
-            assert len(shutdown_calls) == 1
-    finally:
-        runtime.close()
+    assert shutdown_calls == [(4321, 15)]
+    assert idle_app.state.idle_shutdown_task is None
 
     shutdown_calls.clear()
 
-    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
-    runtime.embedder = None
-    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace, enable_idle_shutdown=True)
+    reconnect_app = SimpleNamespace(
+        state=SimpleNamespace(
+            idle_shutdown_task=None,
+            routes=SimpleNamespace(
+                hook_service=SimpleNamespace(get_active_client_count=lambda: 1),
+            ),
+        ),
+    )
 
-    try:
-        async with app.router.lifespan_context(app):
-            metadata = app.state.metadata
-            await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-2", "timestamp": 200.0})
-            end = await _request_json(metadata, "/api/hooks/session-end", {"sessionId": "conv-2", "timestamp": 201.0})
-            reconnect = await _request_json(metadata, "/api/hooks/session-start", {"sessionId": "conv-3", "timestamp": 202.0})
+    reconnect_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(reconnect_app))
+    reconnect_app.state.idle_shutdown_task = reconnect_task
+    await asyncio.wait_for(reconnect_task, timeout=0.2)
 
-            assert end["shutdown_scheduled"] is True
-            assert reconnect["active_client_count"] == 1
+    assert shutdown_calls == []
+    assert reconnect_app.state.idle_shutdown_task is None
 
-            await asyncio.sleep(0.35)
-            assert shutdown_calls == []
-            assert (await _request_json(metadata, "/api/health"))["client_count"] == 1
-    finally:
-        runtime.close()
+
+@pytest.mark.asyncio
+async def test_daemon_idle_shutdown_defers_while_background_tasks_are_running(monkeypatch) -> None:
+    monkeypatch.setattr("mcp_memory.daemon_app._IDLE_SHUTDOWN_DELAY_SECONDS", 0.01)
+
+    shutdown_calls: list[tuple[int, int]] = []
+    running_counts_seen: list[int] = []
+    deferred_check = asyncio.Event()
+    running_counts = iter([1, 1, 0])
+
+    def _fake_count_running_background_tasks(_app) -> int:
+        count = next(running_counts, 0)
+        running_counts_seen.append(count)
+        if count > 0:
+            deferred_check.set()
+        return count
+
+    monkeypatch.setattr(
+        "mcp_memory.daemon_app._count_running_background_tasks",
+        _fake_count_running_background_tasks,
+    )
+    monkeypatch.setattr("mcp_memory.daemon_app.os.getpid", lambda: 2468)
+    monkeypatch.setattr("mcp_memory.daemon_app.os.kill", lambda pid, sig: shutdown_calls.append((pid, sig)))
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            idle_shutdown_task=None,
+            routes=SimpleNamespace(
+                hook_service=SimpleNamespace(get_active_client_count=lambda: 0),
+            ),
+        ),
+    )
+
+    shutdown_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(app))
+    app.state.idle_shutdown_task = shutdown_task
+
+    await asyncio.wait_for(deferred_check.wait(), timeout=0.2)
+    assert shutdown_calls == []
+
+    await asyncio.wait_for(shutdown_task, timeout=0.2)
+    assert shutdown_calls == [(2468, 15)]
+    assert running_counts_seen[:2] == [1, 1]
+    assert 0 in running_counts_seen
+    assert app.state.idle_shutdown_task is None
 
 
 @pytest.mark.asyncio

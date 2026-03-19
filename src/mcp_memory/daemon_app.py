@@ -54,15 +54,32 @@ async def _cancel_idle_shutdown_task(app: FastAPI) -> None:
     app.state.idle_shutdown_task = None
 
 
+def _count_running_background_tasks(app: FastAPI) -> int:
+    routes = getattr(app.state, "routes", None)
+    if routes is None:
+        return 0
+    ctx = getattr(routes, "ctx", None)
+    task_queue = getattr(ctx, "task_queue", None)
+    if task_queue is None:
+        return 0
+    return int(task_queue.count_by_status().get("running", 0))
+
+
 async def _shutdown_daemon_when_idle(app: FastAPI) -> None:
     try:
-        await asyncio.sleep(_IDLE_SHUTDOWN_DELAY_SECONDS)
-        active_clients = app.state.routes.hook_service.get_active_client_count()
-        if active_clients > 0:
-            logger.debug("Skipping idle daemon shutdown; %s client(s) remain active", active_clients)
+        while True:
+            await asyncio.sleep(_IDLE_SHUTDOWN_DELAY_SECONDS)
+            active_clients = app.state.routes.hook_service.get_active_client_count()
+            if active_clients > 0:
+                logger.debug("Skipping idle daemon shutdown; %s client(s) remain active", active_clients)
+                return
+            running_tasks = _count_running_background_tasks(app)
+            if running_tasks > 0:
+                logger.debug("Deferring idle daemon shutdown; %s background task(s) still running", running_tasks)
+                continue
+            logger.info("Stopping daemon after last MCP client exited")
+            os.kill(os.getpid(), signal.SIGTERM)
             return
-        logger.info("Stopping daemon after last MCP client exited")
-        os.kill(os.getpid(), signal.SIGTERM)
     finally:
         app.state.idle_shutdown_task = None
 
