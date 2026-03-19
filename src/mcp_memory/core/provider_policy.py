@@ -19,6 +19,13 @@ class ProviderSelectionInputs:
     ai_provider_registry: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class ProviderSelectionRequest:
+    task_name: str
+    task_id: str | None = None
+    workspace_id: str | None = None
+
+
 class AgenticRouteFailoverProvider:
     def __init__(self, providers: list[Any], *, route_keys: list[str], task_name: str) -> None:
         self._providers = list(providers)
@@ -86,15 +93,15 @@ def select_provider_for_task(
     )
 
 
-def select_provider_for_inputs(
+def select_provider_for_request(
     inputs: ProviderSelectionInputs,
     provider: Any,
     agentic_provider: Any,
-    task_name: str,
-    task: TaskRecord,
+    request: ProviderSelectionRequest,
     *,
     agentic_task_names: set[str],
 ):
+    task_name = request.task_name
     if is_deterministic_task(inputs.config, task_name):
         return None
 
@@ -134,7 +141,7 @@ def select_provider_for_inputs(
                     extra={"task_name": task_name, "route_key": route_key},
                 )
                 continue
-            bound_provider = bind_provider_context(selected_provider, task_name=task_name, task=task)
+            bound_provider = bind_provider_context(selected_provider, request=request)
             if first_routed_provider is None:
                 first_routed_provider = bound_provider
                 if not prefer_agentic or not _supports_agentic_execution(bound_provider):
@@ -175,7 +182,29 @@ def select_provider_for_inputs(
             extra={"task_name": task_name},
         )
         return None
-    return bind_provider_context(selected_provider, task_name=task_name, task=task)
+    return bind_provider_context(selected_provider, request=request)
+
+
+def select_provider_for_inputs(
+    inputs: ProviderSelectionInputs,
+    provider: Any,
+    agentic_provider: Any,
+    task_name: str,
+    task: TaskRecord,
+    *,
+    agentic_task_names: set[str],
+):
+    return select_provider_for_request(
+        inputs,
+        provider,
+        agentic_provider,
+        ProviderSelectionRequest(
+            task_name=task_name,
+            task_id=task.id,
+            workspace_id=task.workspace_id,
+        ),
+        agentic_task_names=agentic_task_names,
+    )
 
 
 def _budget_available(provider: Any) -> bool:
@@ -204,8 +233,8 @@ def _is_same_run_failover_eligible_error(exc: Exception) -> bool:
     return not isinstance(retry_delay_seconds, (int, float))
 
 
-def bind_provider_context(selected_provider: Any, *, task_name: str, task: TaskRecord):
+def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionRequest):
     binder = getattr(selected_provider, "with_usage_context", None)
     if not callable(binder):
         return selected_provider
-    return binder(task_name=task_name, task_id=task.id, workspace_id=task.workspace_id)
+    return binder(task_name=request.task_name, task_id=request.task_id, workspace_id=request.workspace_id)

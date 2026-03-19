@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
-from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES, task_priority
+from mcp_memory.core.provider_policy import ProviderSelectionInputs, ProviderSelectionRequest, select_provider_for_request
+from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES, DEFAULT_LOW_PRIORITY_TASK_NAMES, task_class_for_task
-from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.models import TaskRouteAuditPayload
 
 
@@ -110,31 +109,17 @@ def _select_provider_for_audit(
     ai_agent_provider,
     task_name: str,
 ):
-    task = TaskRecord(
-        id=f"audit:{task_name}",
-        task_name=task_name,
-        data={"workspace_id": workspace_id},
-        workspace_id=workspace_id,
-        status="pending",
-        priority=task_priority(task_name),
-        retries_count=0,
-        max_retries=0,
-        created_at=0.0,
-        updated_at=0.0,
-        available_at=0.0,
-        claimed_at=None,
-        started_at=None,
-        completed_at=None,
-        last_error=None,
-    )
-    return select_provider_for_inputs(
+    return select_provider_for_request(
         ProviderSelectionInputs(
             config=config,
             ai_provider_registry=ai_provider_registry,
         ),
         ai_json_provider,
         ai_agent_provider,
-        task_name,
-        task,
+        ProviderSelectionRequest(
+            task_name=task_name,
+            task_id=f"audit:{task_name}",
+            workspace_id=workspace_id,
+        ),
         agentic_task_names=set(DEFAULT_AGENTIC_TASK_NAMES),
     )
