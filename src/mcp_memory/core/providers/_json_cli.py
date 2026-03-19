@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import re
+import signal
 from dataclasses import dataclass
 import time
 from typing import Any, Callable
@@ -173,7 +174,11 @@ class JSONCLIProvider:
                 response = AIResponse(
                     raw_text=stdout_text,
                     parsed=None,
-                    error=f"Exit code {proc.returncode}: {stderr_text or stdout_text}",
+                    error=_format_subprocess_failure(
+                        proc.returncode,
+                        stderr_text=stderr_text,
+                        stdout_text=stdout_text,
+                    ),
                     subprocess_pid=proc.pid,
                     returncode=proc.returncode,
                 )
@@ -297,6 +302,25 @@ def _chain_observers(*observers: Callable[[dict[str, Any]], None]):
             observer(payload)
 
     return _notify
+
+
+def _format_subprocess_failure(
+    returncode: int,
+    *,
+    stderr_text: str,
+    stdout_text: str,
+) -> str:
+    output = stderr_text or stdout_text
+    if returncode < 0:
+        signal_number = -returncode
+        try:
+            signal_label = f"signal {signal.Signals(signal_number).name} ({signal_number})"
+        except ValueError:
+            signal_label = f"signal {signal_number}"
+        prefix = f"Terminated by {signal_label}"
+        return f"{prefix}: {output}" if output else prefix
+    prefix = f"Exit code {returncode}"
+    return f"{prefix}: {output}" if output else prefix
 
 
 def build_cli_failure_exception(

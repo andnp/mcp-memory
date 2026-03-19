@@ -1,5 +1,6 @@
 import asyncio
 import json
+import signal
 import time
 
 import pytest
@@ -103,6 +104,44 @@ async def test_gemini_cli_provider_retries_after_failed_process(
 
     assert result == {"actions": []}
     assert len(install_fake_subprocess.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_gemini_cli_provider_reports_signal_name_for_negative_exit(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(stderr_text="terminated externally", returncode=-signal.SIGTERM)
+    )
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+
+    with pytest.raises(RuntimeError, match="failed after 1 attempts") as exc_info:
+        await provider.ask("retry this request")
+
+    assert str(exc_info.value) == (
+        "Gemini CLI failed after 1 attempts: "
+        "Terminated by signal SIGTERM (15): terminated externally"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_cli_provider_reports_unknown_negative_exit_signal_number(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(stderr_text="terminated externally", returncode=-999)
+    )
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+
+    with pytest.raises(RuntimeError, match="failed after 1 attempts") as exc_info:
+        await provider.ask("retry this request")
+
+    assert str(exc_info.value) == (
+        "Gemini CLI failed after 1 attempts: "
+        "Terminated by signal 999: terminated externally"
+    )
 
 
 @pytest.mark.asyncio
