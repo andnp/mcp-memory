@@ -5,6 +5,7 @@ import logging
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import _provider_for_task
+from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -221,3 +222,51 @@ def test_provider_for_deterministic_task_never_selects_provider() -> None:
     selected = _provider_for_task(ctx, default_provider, None, "summarize-memory", task)
 
     assert selected is None
+
+
+def test_select_provider_for_inputs_matches_context_wrapper_for_route_selection() -> None:
+    config = Config(
+        ai=AIConfig(provider="none"),
+        provider_routing=ProviderRoutingConfig(
+            task_routes={"deduplicator": ["gemini-cheap"]},
+            profiles={
+                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            },
+        ),
+    )
+    registry = {
+        "gemini-cheap": {"agentic": _FakeProvider("gemini-cheap-agentic", available=True)},
+    }
+    task = TaskRecord(
+        id="dedup-task",
+        task_name="deduplicator",
+        data={},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    selected = select_provider_for_inputs(
+        ProviderSelectionInputs(config=config, ai_provider_registry=registry),
+        None,
+        None,
+        "deduplicator",
+        task,
+        agentic_task_names={"deduplicator"},
+    )
+
+    assert selected == {
+        "provider": "gemini-cheap-agentic",
+        "task_name": "deduplicator",
+        "task_id": "dedup-task",
+        "workspace_id": "workspace-a",
+    }

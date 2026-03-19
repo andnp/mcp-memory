@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.context import ApplicationContext
-from mcp_memory.core.provider_policy import select_provider_for_task
+from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES, task_priority
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES, DEFAULT_LOW_PRIORITY_TASK_NAMES, task_class_for_task
 from mcp_memory.core.tasks import TaskRecord
@@ -128,13 +127,11 @@ def _select_provider_for_audit(
         completed_at=None,
         last_error=None,
     )
-    audit_ctx = ApplicationContext(
-        config=config,
-        workspace_id=workspace_id,
-        ai_provider_registry=ai_provider_registry,
-    )
-    return select_provider_for_task(
-        audit_ctx,
+    return select_provider_for_inputs(
+        ProviderSelectionInputs(
+            config=config,
+            ai_provider_registry=ai_provider_registry,
+        ),
         ai_json_provider,
         ai_agent_provider,
         task_name,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -11,6 +12,14 @@ from mcp_memory.core.tasks import TaskRecord
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ProviderSelectionInputs:
+    config: Any = None
+    ai_provider_registry: dict[str, Any] | None = None
+
+
+
+
 def select_provider_for_task(
     ctx: ApplicationContext,
     provider: Any,
@@ -20,11 +29,33 @@ def select_provider_for_task(
     *,
     agentic_task_names: set[str],
 ):
-    if is_deterministic_task(ctx.config, task_name):
+    return select_provider_for_inputs(
+        ProviderSelectionInputs(
+            config=ctx.config,
+            ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
+        ),
+        provider,
+        agentic_provider,
+        task_name,
+        task,
+        agentic_task_names=agentic_task_names,
+    )
+
+
+def select_provider_for_inputs(
+    inputs: ProviderSelectionInputs,
+    provider: Any,
+    agentic_provider: Any,
+    task_name: str,
+    task: TaskRecord,
+    *,
+    agentic_task_names: set[str],
+):
+    if is_deterministic_task(inputs.config, task_name):
         return None
 
-    registry = getattr(ctx, "ai_provider_registry", None) or {}
-    routing = None if ctx.config is None else ctx.config.provider_routing
+    registry = inputs.ai_provider_registry or {}
+    routing = None if inputs.config is None else inputs.config.provider_routing
     prefer_agentic = task_name in agentic_task_names
 
     candidate_route_keys: list[str] = []
