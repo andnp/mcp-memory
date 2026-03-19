@@ -27,7 +27,11 @@ class SQLiteStructuredLogHandler(logging.Handler):
         super().__init__()
         if db_manager is None and db_path is None:
             raise ValueError("db_manager_or_db_path_required")
-        self._db_manager = db_manager if db_manager is not None else DatabaseManager(db_path)
+        if db_manager is not None:
+            self._db_manager = db_manager
+        else:
+            assert db_path is not None
+            self._db_manager = DatabaseManager(db_path)
         self._owns_db_manager = db_manager is None
         self._source = source
         self._repository = RuntimeLogRepository(self._db_manager, workspace_id=workspace_id)

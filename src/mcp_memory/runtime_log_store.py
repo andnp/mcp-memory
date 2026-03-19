@@ -11,6 +11,13 @@ from mcp_memory.utils.db import DatabaseManager
 _ALL_WORKSPACES = object()
 
 
+class _AllWorkspacesSentinel:
+    pass
+
+
+_ALL_WORKSPACES = _AllWorkspacesSentinel()
+
+
 @dataclass(frozen=True)
 class RuntimeLogRecord:
     id: int
@@ -77,7 +84,7 @@ class RuntimeLogRepository:
     def list_logs(
         self,
         *,
-        workspace_id: str | None | object = _ALL_WORKSPACES,
+        workspace_id: str | None | _AllWorkspacesSentinel = _ALL_WORKSPACES,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -119,7 +126,7 @@ class RuntimeLogRepository:
     def summarize_logs(
         self,
         *,
-        workspace_id: str | None | object = _ALL_WORKSPACES,
+        workspace_id: str | None | _AllWorkspacesSentinel = _ALL_WORKSPACES,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -177,7 +184,7 @@ class RuntimeLogRepository:
     def prune_logs(
         self,
         *,
-        workspace_id: str | None | object = _ALL_WORKSPACES,
+        workspace_id: str | None | _AllWorkspacesSentinel = _ALL_WORKSPACES,
         max_runtime_logs: int | None = None,
         max_age_days: int | None = None,
         now: float | None = None,

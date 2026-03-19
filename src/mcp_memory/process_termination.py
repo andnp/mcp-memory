@@ -53,12 +53,12 @@ def send_process_signal(
             try:
                 os.killpg(process_group_id, sig)
                 return process_group_id, True
-            except (AttributeError, ProcessLookupError, OSError):
-                pass
             except PermissionError:
                 if suppress_permission_errors:
                     return process_group_id, False
                 raise
+            except (AttributeError, ProcessLookupError, OSError):
+                pass
 
     try:
         os.kill(pid, sig)
