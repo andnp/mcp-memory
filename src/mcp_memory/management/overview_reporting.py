@@ -9,28 +9,23 @@ from mcp_memory.management.models import (
     OverviewCounts,
     OverviewPayload,
     ProviderUsagePayload,
-    QueueDiagnosticPayload,
     RuntimeLogPayload,
     StorageSummary,
     TaskStatusSummary,
+)
+from mcp_memory.management.reporting_queries import (
+    build_queue_diagnostics,
+    fetch_memory_count_rows,
+    fetch_memory_metrics_row,
+    fetch_pending_journal_metrics_row,
+    fetch_task_count_rows,
+    row_int,
 )
 from mcp_memory.serialization import compact_memory_record_payload, task_payload
 
 
 def build_memory_counts(db_manager, workspace_id: str | None) -> tuple[dict[str, int], dict[str, int], int]:
-    if db_manager is None:
-        return {}, {}, 0
-    conn = db_manager.get_connection()
-    query = (
-        "SELECT memories.type, memories.status, COUNT(*) AS count "
-        "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
-    )
-    params: list[object] = []
-    if workspace_id is not None:
-        query += " WHERE memory_workspaces.workspace_id = ?"
-        params.append(workspace_id)
-    query += " GROUP BY memories.type, memories.status"
-    rows = conn.execute(query, params).fetchall()
+    rows = fetch_memory_count_rows(db_manager, workspace_id)
     by_type: dict[str, int] = {}
     by_status: dict[str, int] = {}
     total = 0
@@ -43,16 +38,7 @@ def build_memory_counts(db_manager, workspace_id: str | None) -> tuple[dict[str,
 
 
 def build_task_counts(db_manager, workspace_id: str | None) -> dict[str, int]:
-    if db_manager is None:
-        return {}
-    conn = db_manager.get_connection()
-    query = "SELECT status, COUNT(*) AS count FROM tasks"
-    params: list[object] = []
-    if workspace_id is not None:
-        query += " WHERE workspace_id = ?"
-        params.append(workspace_id)
-    query += " GROUP BY status"
-    rows = conn.execute(query, params).fetchall()
+    rows = fetch_task_count_rows(db_manager, workspace_id)
     return {str(row["status"]): int(row["count"]) for row in rows}
 
 
@@ -67,31 +53,8 @@ def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> Me
             thought_buffer_lines=0,
         )
 
-    conn = db_manager.get_connection()
-    memory_query = (
-        "SELECT "
-        "COUNT(*) AS total_memories, "
-        "COALESCE(SUM(CASE WHEN memories.content = '' THEN 0 ELSE 1 + LENGTH(memories.content) - LENGTH(REPLACE(memories.content, CHAR(10), '')) END), 0) AS total_memory_lines, "
-        "COALESCE(SUM(CASE WHEN memories.summary IS NULL OR memories.summary = '' THEN 0 ELSE 1 + LENGTH(memories.summary) - LENGTH(REPLACE(memories.summary, CHAR(10), '')) END), 0) AS total_summary_lines "
-        "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
-    )
-    memory_params: list[object] = []
-    if workspace_id is not None:
-        memory_query += " WHERE memory_workspaces.workspace_id = ?"
-        memory_params.append(workspace_id)
-    memory_row = conn.execute(memory_query, memory_params).fetchone()
-
-    journal_query = (
-        "SELECT "
-        "COUNT(*) AS thought_buffer_entries, "
-        "COALESCE(SUM(CASE WHEN content = '' THEN 0 ELSE 1 + LENGTH(content) - LENGTH(REPLACE(content, CHAR(10), '')) END), 0) AS thought_buffer_lines "
-        "FROM system1_journal WHERE status = 'pending'"
-    )
-    journal_params: list[object] = []
-    if workspace_id is not None:
-        journal_query += " AND workspace_id = ?"
-        journal_params.append(workspace_id)
-    journal_row = conn.execute(journal_query, journal_params).fetchone()
+    memory_row = fetch_memory_metrics_row(db_manager, workspace_id)
+    journal_row = fetch_pending_journal_metrics_row(db_manager, workspace_id)
 
     total_lines_compressed = sum(
         max(agent_run.total_lines_compressed, 0)
@@ -101,50 +64,13 @@ def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> Me
         )
     )
     return MemoryMetricsPayload(
-        total_memories=0 if memory_row is None else int(memory_row["total_memories"]),
-        total_memory_lines=0 if memory_row is None else int(memory_row["total_memory_lines"]),
-        total_summary_lines=0 if memory_row is None else int(memory_row["total_summary_lines"]),
+        total_memories=row_int(memory_row, "total_memories"),
+        total_memory_lines=row_int(memory_row, "total_memory_lines"),
+        total_summary_lines=row_int(memory_row, "total_summary_lines"),
         total_lines_compressed=total_lines_compressed,
-        thought_buffer_entries=0 if journal_row is None else int(journal_row["thought_buffer_entries"]),
-        thought_buffer_lines=0 if journal_row is None else int(journal_row["thought_buffer_lines"]),
+        thought_buffer_entries=row_int(journal_row, "thought_buffer_entries"),
+        thought_buffer_lines=row_int(journal_row, "thought_buffer_lines"),
     )
-
-
-def build_queue_diagnostics(task_queue, workspace_id: str | None, limit: int = 8, now: float | None = None) -> list[QueueDiagnosticPayload]:
-    current_time = now if now is not None else __import__('time').time()
-    pending_tasks = task_queue.list_tasks(
-        status="pending",
-        workspace_id=workspace_id,
-        limit=200,
-    )
-    ordered = sorted(
-        pending_tasks,
-        key=lambda task: (
-            0 if task.available_at <= current_time else 1,
-            task.priority,
-            task.available_at,
-            task.created_at,
-        ),
-    )
-    diagnostics: list[QueueDiagnosticPayload] = []
-    for task in ordered[:limit]:
-        runnable = task.available_at <= current_time
-        diagnostics.append(
-            QueueDiagnosticPayload(
-                task_id=task.id,
-                task_name=task.task_name,
-                workspace_id=task.workspace_id,
-                priority=task.priority,
-                pending_state="runnable" if runnable else "scheduled",
-                trigger=task.data.get("trigger") if isinstance(task.data.get("trigger"), str) else None,
-                created_at=task.created_at,
-                available_at=task.available_at,
-                age_seconds=max(current_time - task.created_at, 0.0),
-                ready_in_seconds=0.0 if runnable else max(task.available_at - current_time, 0.0),
-                overdue_seconds=max(current_time - task.available_at, 0.0) if runnable else 0.0,
-            )
-        )
-    return diagnostics
 
 
 def build_provider_usage(provider_usage_repo, workspace_id: str | None) -> list[ProviderUsagePayload]:

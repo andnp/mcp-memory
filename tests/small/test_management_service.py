@@ -16,6 +16,244 @@ from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 pytestmark = pytest.mark.small
 
 
+def _build_management_service(
+    db_manager,
+    *,
+    workspace_id: str | None,
+    repository: RelationalMemoryRepository | None = None,
+    task_queue: SQLiteTaskQueue | None = None,
+) -> ManagementService:
+    return ManagementService(
+        ApplicationContext(
+            workspace_id=workspace_id,
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+
+def test_management_service_reporting_handles_empty_store(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    overview = service.get_overview()
+    nerd_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+
+    assert overview.memories.total == 0
+    assert overview.memories.by_type == {}
+    assert overview.memories.by_status == {}
+    assert overview.memory_metrics.total_memories == 0
+    assert overview.memory_metrics.total_memory_lines == 0
+    assert overview.memory_metrics.total_summary_lines == 0
+    assert overview.memory_metrics.thought_buffer_entries == 0
+    assert overview.queue_diagnostics == []
+    assert overview.failed_tasks == []
+    assert overview.provider_usage == []
+    assert overview.recent_logs == []
+    assert overview.top_read_memories == []
+    assert overview.top_read_memories_active == []
+    assert overview.tasks.by_status == {}
+    assert overview.tasks.failed_count == 0
+    assert nerd_metrics.graph_topology.total_memories == 0
+    assert nerd_metrics.graph_topology.total_links == 0
+    assert nerd_metrics.memory_lifecycle.by_status == {}
+    assert nerd_metrics.agent_throughput == []
+    assert nerd_metrics.provider_latency == []
+
+
+def test_management_service_overview_respects_workspace_and_global_scopes(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    memory_a = repository.create_memory(
+        title="Workspace A fact",
+        content="Only workspace A should see this by default.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    memory_b = repository.create_memory(
+        title="Workspace B fact",
+        content="Only global scope or workspace B should see this.",
+        workspace_ids=["workspace-b"],
+        memory_type="fact",
+    )
+    assert memory_a is not None and memory_b is not None
+
+    db_manager.get_connection().executemany(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, 10.0, None),
+            ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, 20.0, None),
+        ],
+    )
+    db_manager.get_connection().executemany(
+        "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("workspace-a", "daemon", "mcp_memory.tests", "INFO", "workspace-a log", 11.0, "{}"),
+            ("workspace-b", "daemon", "mcp_memory.tests", "INFO", "workspace-b log", 21.0, "{}"),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    scoped_service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+    global_service = _build_management_service(
+        db_manager,
+        workspace_id=None,
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    scoped_overview = scoped_service.get_overview()
+    global_overview = global_service.get_overview()
+
+    assert scoped_overview.memories.total == 1
+    assert scoped_overview.memory_metrics.total_memories == 1
+    assert [record.title for record in scoped_overview.recent_memories] == ["Workspace A fact"]
+    assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
+
+    assert global_overview.memories.total == 2
+    assert global_overview.memory_metrics.total_memories == 2
+    assert {record.title for record in global_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
+    assert {item.provider_key for item in global_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
+
+
+def test_management_service_graph_topology_counts_cross_workspace_links(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    source = repository.create_memory(
+        title="Workspace A dependency",
+        content="Depends on a global/shared fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    target = repository.create_memory(
+        title="Workspace B dependency target",
+        content="Target memory in another workspace.",
+        workspace_ids=["workspace-b"],
+        memory_type="fact",
+    )
+    assert source is not None and target is not None
+    repository.add_link(source.id, target.id, "DEPENDS_ON", "Cross-workspace dependency")
+
+    scoped_a = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    ).get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+    scoped_b = _build_management_service(
+        db_manager,
+        workspace_id="workspace-b",
+        repository=repository,
+        task_queue=task_queue,
+    ).get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+    global_metrics = _build_management_service(
+        db_manager,
+        workspace_id=None,
+        repository=repository,
+        task_queue=task_queue,
+    ).get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+
+    assert scoped_a.graph_topology.total_memories == 1
+    assert scoped_a.graph_topology.total_links == 1
+    assert scoped_a.graph_topology.average_degree == 1.0
+    assert scoped_a.graph_topology.orphan_count == 0
+    assert scoped_a.graph_topology.link_type_counts == {"DEPENDS_ON": 1}
+
+    assert scoped_b.graph_topology.total_memories == 1
+    assert scoped_b.graph_topology.total_links == 1
+    assert scoped_b.graph_topology.average_degree == 1.0
+    assert scoped_b.graph_topology.orphan_count == 0
+    assert scoped_b.graph_topology.link_type_counts == {"DEPENDS_ON": 1}
+
+    assert global_metrics.graph_topology.total_memories == 2
+    assert global_metrics.graph_topology.total_links == 1
+    assert global_metrics.graph_topology.average_degree == 1.0
+    assert global_metrics.graph_topology.graph_supported_count == 1
+    assert global_metrics.graph_topology.link_type_counts == {"DEPENDS_ON": 1}
+
+
+def test_management_service_analytics_handles_zero_duration_rows_and_zero_window(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    completed = task_queue.enqueue(
+        "graph-linker",
+        task_id="analytics-completed",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    retried = task_queue.enqueue(
+        "fact-checker",
+        task_id="analytics-retried",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=100.0) is not None
+    task_queue.complete(completed.id, completed_at=100.0, run_result={})
+    assert task_queue.claim_next(now=101.0) is not None
+    task_queue.fail(retried.id, "retry me", retry_delay_seconds=0.0, failed_at=101.0)
+    claimed_retry = task_queue.claim_next(now=102.0)
+    assert claimed_retry is not None
+    task_queue.fail_permanently(claimed_retry.id, "boom", failed_at=102.0)
+
+    db_manager.get_connection().executemany(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("workspace-a", "graph-linker", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.0, 100.0, None),
+            ("workspace-a", "fact-checker", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "error", 0.0, 101.0, "timeout"),
+            ("workspace-b", "graph-linker", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.9, 101.0, None),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=1, bucket_minutes=0, now=102.0)
+    zero_window_metrics = service.get_nerd_metrics(window_hours=0, bucket_minutes=0, now=200.0)
+
+    assert nerd_metrics.window_hours == 1
+    assert nerd_metrics.bucket_minutes == 0
+    assert len(nerd_metrics.agent_throughput) == 1
+    assert nerd_metrics.agent_throughput[0].total_runs == 3
+    assert nerd_metrics.agent_throughput[0].completed_runs == 1
+    assert nerd_metrics.agent_throughput[0].failed_runs == 1
+    assert nerd_metrics.agent_throughput[0].retry_runs == 1
+    assert nerd_metrics.agent_throughput[0].avg_duration_seconds == 0.0
+    assert len(nerd_metrics.provider_latency) == 1
+    assert nerd_metrics.provider_latency[0].call_count == 2
+    assert nerd_metrics.provider_latency[0].failure_count == 1
+    assert nerd_metrics.provider_latency[0].avg_duration_seconds == 0.0
+    assert nerd_metrics.provider_latency[0].p95_duration_seconds == 0.0
+    assert any(stat.key == "provider_failure_rate" and stat.value == 0.5 for stat in nerd_metrics.stats)
+    assert any(alert.key == "provider_failure_rate" for alert in nerd_metrics.alerts)
+
+    assert zero_window_metrics.agent_throughput == []
+    assert zero_window_metrics.provider_latency == []
+    assert any(stat.key == "runs_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
+    assert any(stat.key == "provider_calls_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
+
+
 def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

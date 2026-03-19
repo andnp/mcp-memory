@@ -17,7 +17,13 @@ from mcp_memory.management.models import (
     QueueSnapshotPayload,
     SearchQualityPayload,
 )
-from mcp_memory.management.overview_reporting import build_queue_diagnostics
+from mcp_memory.management.reporting_queries import (
+    build_queue_diagnostics,
+    list_provider_usage_rows_since,
+    list_scoped_link_rows,
+    list_scoped_memory_rows,
+    list_task_run_rows_since,
+)
 from mcp_memory.management.route_audit import build_task_route_audit
 
 
@@ -62,23 +68,8 @@ def build_nerd_metrics(
     generated_at = time.time() if now is None else now
     bucket_seconds = max(bucket_minutes * 60, 60)
     cutoff = generated_at - (window_hours * 3600)
-    conn = db_manager.get_connection()
-
-    task_run_query = "SELECT status, completed_at, duration_seconds FROM task_runs WHERE completed_at >= ?"
-    provider_query = (
-        "SELECT provider_key, provider_name, model_name, status, duration_seconds, created_at "
-        "FROM provider_usage WHERE created_at >= ?"
-    )
-    task_params: list[object] = [cutoff]
-    provider_params: list[object] = [cutoff]
-    if workspace_id is not None:
-        task_run_query += " AND workspace_id = ?"
-        provider_query += " AND workspace_id = ?"
-        task_params.append(workspace_id)
-        provider_params.append(workspace_id)
-
-    task_rows = conn.execute(task_run_query, task_params).fetchall()
-    provider_rows = conn.execute(provider_query, provider_params).fetchall()
+    task_rows = list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
+    provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
 
     task_buckets: dict[float, _TaskBucketAccumulator] = {}
     for row in task_rows:
@@ -203,12 +194,12 @@ def build_nerd_metrics(
 
 
 def build_graph_topology(db_manager, workspace_id: str | None) -> GraphTopologyPayload:
-    memory_rows = _list_scoped_memories(db_manager, workspace_id)
+    memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
     memory_ids = {str(row["id"]) for row in memory_rows}
     if not memory_ids:
         return GraphTopologyPayload()
 
-    link_rows = _list_scoped_links(db_manager, workspace_id, memory_ids)
+    link_rows = list_scoped_link_rows(db_manager, workspace_id, memory_ids)
     degree_by_memory = {memory_id: 0 for memory_id in memory_ids}
     support_by_memory: set[str] = set()
     link_type_counts: dict[str, int] = {}
@@ -242,7 +233,7 @@ def build_graph_topology(db_manager, workspace_id: str | None) -> GraphTopologyP
 
 
 def build_memory_lifecycle(db_manager, workspace_id: str | None) -> MemoryLifecyclePayload:
-    memory_rows = _list_scoped_memories(db_manager, workspace_id)
+    memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
     if not memory_rows:
         return MemoryLifecyclePayload()
 
@@ -387,39 +378,6 @@ def build_nerd_alerts(
             )
         )
     return alerts
-
-
-def _list_scoped_memories(db_manager, workspace_id: str | None):
-    if db_manager is None:
-        return []
-    conn = db_manager.get_connection()
-    query = (
-        "SELECT memories.id, memories.type, memories.status, memories.last_accessed_at, memories.last_surfaced_at, "
-        "LENGTH(COALESCE(memories.content, '')) AS content_bytes FROM memories"
-    )
-    params: list[object] = []
-    if workspace_id is not None:
-        query += (
-            " WHERE EXISTS (SELECT 1 FROM memory_workspaces WHERE memory_workspaces.memory_id = memories.id "
-            "AND memory_workspaces.workspace_id = ?)"
-        )
-        params.append(workspace_id)
-    return conn.execute(query, params).fetchall()
-
-
-def _list_scoped_links(db_manager, workspace_id: str | None, memory_ids: set[str]):
-    if db_manager is None or not memory_ids:
-        return []
-    conn = db_manager.get_connection()
-    if workspace_id is None:
-        return conn.execute("SELECT source_id, target_id, type FROM links").fetchall()
-
-    placeholders = ",".join("?" for _ in memory_ids)
-    params = [*memory_ids, *memory_ids]
-    query = (
-        f"SELECT source_id, target_id, type FROM links WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})"
-    )
-    return conn.execute(query, params).fetchall()
 
 
 def _percentile(values: list[float], ratio: float) -> float:
