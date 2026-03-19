@@ -41,6 +41,7 @@ def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> None:
     ]
     subprocess.Popen(
         command,
+        cwd=str(workspace_root),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
@@ -71,7 +72,7 @@ def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
     if metadata.transport in {"zmq", "hybrid"} and not expected_socket_path:
         return False
     try:
-        payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=1)
+        payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=3)
         if payload.get("daemon_scope", "global") != metadata.daemon_scope:
             return False
         if payload.get("status") != "ready":

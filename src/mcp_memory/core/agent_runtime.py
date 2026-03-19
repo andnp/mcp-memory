@@ -159,26 +159,54 @@ def _ensure_recurring_task_scheduled(
     workspace_id: str | None,
     interval_seconds: float,
 ) -> None:
+    summary = task_queue.summarize_task_runs([task_name], workspace_id=workspace_id)[0]
+    expected_available_at = None
+    if summary.last_completed_at is not None:
+        expected_available_at = max(summary.last_completed_at + interval_seconds, time.time())
+
     existing = task_queue.find_open_task(task_name, workspace_id)
     if existing is not None:
         priority = task_priority(task_name)
-        if existing.status == "pending" and existing.priority != priority:
-            task_queue.update_pending_task(existing.id, priority=priority)
+        if existing.status == "pending":
+            next_data = dict(existing.data)
+            next_available_at = None
+            needs_update = False
+            if existing.priority != priority:
+                needs_update = True
+            if _is_recurring_task(existing.data):
+                if next_data.get("workspace_id") != workspace_id:
+                    next_data["workspace_id"] = workspace_id
+                    needs_update = True
+                if next_data.get("interval_seconds") != interval_seconds:
+                    next_data["interval_seconds"] = interval_seconds
+                    needs_update = True
+                if expected_available_at is not None and abs(existing.available_at - expected_available_at) > 1e-6:
+                    next_available_at = expected_available_at
+                    needs_update = True
+            if needs_update:
+                task_queue.update_pending_task(
+                    existing.id,
+                    data=next_data,
+                    available_at=next_available_at,
+                    priority=priority,
+                )
         return
-
-    summary = task_queue.summarize_task_runs([task_name], workspace_id=workspace_id)[0]
-    available_at = None
-    if summary.last_completed_at is not None:
-        available_at = max(summary.last_completed_at + interval_seconds, time.time())
 
     task_queue.enqueue_unique(
         task_name=task_name,
         workspace_id=workspace_id,
         priority=task_priority(task_name),
-        available_at=available_at,
+        available_at=expected_available_at,
         data={
             "workspace_id": workspace_id,
             "trigger": "recurring_schedule",
             "interval_seconds": interval_seconds,
         },
     )
+
+
+def _is_recurring_task(data: dict[str, object] | None) -> bool:
+    if not isinstance(data, dict):
+        return False
+    trigger = data.get("trigger")
+    return trigger in {"recurring_schedule", "recurring_follow_up"}

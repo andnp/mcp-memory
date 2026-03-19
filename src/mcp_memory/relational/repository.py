@@ -403,16 +403,24 @@ class RelationalMemoryRepository:
             return None
         return self.get_memory(memory_id)
 
-    def list_most_read_memories(self, workspace_id: str | None = None, limit: int = 10):
+    def list_most_read_memories(
+        self,
+        workspace_id: str | None = None,
+        limit: int = 10,
+        status: str | None = None,
+    ):
         conn = self._db.get_connection()
         params: list[object] = []
         query = "SELECT DISTINCT memories.* FROM memories"
+        where_clauses = ["memories.read_count > 0"]
         if workspace_id is not None:
             query += " JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
             params.append(workspace_id)
-            query += " WHERE memory_workspaces.workspace_id = ? AND memories.read_count > 0"
-        else:
-            query += " WHERE memories.read_count > 0"
+            where_clauses.insert(0, "memory_workspaces.workspace_id = ?")
+        if status is not None:
+            params.append(status)
+            where_clauses.append("memories.status = ?")
+        query += " WHERE " + " AND ".join(where_clauses)
         query += " ORDER BY memories.read_count DESC, memories.last_accessed_at DESC, memories.updated_at DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(query, params).fetchall()

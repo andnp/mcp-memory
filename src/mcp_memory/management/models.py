@@ -339,6 +339,7 @@ class OverviewPayload(BaseModel):
     recent_logs: list[RuntimeLogPayload] = Field(default_factory=list)
     recent_memories: list[CompactMemoryRecord] = Field(default_factory=list)
     top_read_memories: list[CompactMemoryRecord] = Field(default_factory=list)
+    top_read_memories_active: list[CompactMemoryRecord] = Field(default_factory=list)
     tasks: TaskStatusSummary
     failed_tasks: list[dict] = Field(default_factory=list)
     journal: JournalSummary

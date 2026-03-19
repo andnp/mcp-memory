@@ -93,6 +93,17 @@
     </section>
 
     <section class="panel" style="margin-top: 16px;">
+      <h2>Active Top Read Memories</h2>
+      <p class="muted">Active-only hotspots so archived lineage parents do not hog the spotlight.</p>
+      <table>
+        <thead>
+          <tr><th>Reads</th><th>Type</th><th>Title</th></tr>
+        </thead>
+        <tbody id="top-read-memories-active"></tbody>
+      </table>
+    </section>
+
+    <section class="panel" style="margin-top: 16px;">
       <h2>Failed Tasks</h2>
       <table>
         <thead>
@@ -345,6 +356,14 @@
           <td>${record.tags.join(', ')}</td>
         </tr>
       `).join('') || '<tr><td colspan="5" class="muted">No memories found.</td></tr>';
+
+      document.getElementById('top-read-memories-active').innerHTML = payload.top_read_memories_active.map((record) => `
+        <tr>
+          <td>${record.read_count}</td>
+          <td>${record.type}</td>
+          <td><a href="/api/memories/${record.id}" target="_blank" rel="noreferrer">${record.title}</a></td>
+        </tr>
+      `).join('') || '<tr><td colspan="3" class="muted">No active read hotspots yet.</td></tr>';
 
       document.getElementById('failed-tasks').innerHTML = payload.failed_tasks.map((task) => `
         <tr>

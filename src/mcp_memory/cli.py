@@ -399,13 +399,15 @@ def _render_top_reads_table(overview) -> None:
     top_reads_table = Table(title="Top Read Memories")
     top_reads_table.add_column("Reads", justify="right", no_wrap=True)
     top_reads_table.add_column("Type", no_wrap=True)
+    top_reads_table.add_column("Status", no_wrap=True)
     top_reads_table.add_column("Title")
     if not overview.top_read_memories:
-        top_reads_table.add_row("0", "-", "No memories have been read yet")
+        top_reads_table.add_row("0", "-", "-", "No memories have been read yet")
     for record in overview.top_read_memories:
         top_reads_table.add_row(
             str(record.read_count),
             record.type,
+            record.status,
             record.title,
         )
     console.print(top_reads_table)

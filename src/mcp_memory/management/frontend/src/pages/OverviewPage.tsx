@@ -314,8 +314,9 @@ export function OverviewPage() {
 
             <div className="table-shell">
               <div className="border-b border-border px-4 py-4">
-                <p className="panel-title">Top read memories</p>
-                <h2 className="mt-2 text-lg font-semibold text-text">What the system keeps revisiting</h2>
+                <p className="panel-title">Active top read memories</p>
+                <h2 className="mt-2 text-lg font-semibold text-text">What the system keeps revisiting right now</h2>
+                <p className="mt-2 text-sm text-muted">Active memories only, so archived lineage parents stay out of the limelight.</p>
               </div>
               <table>
                 <thead>
@@ -326,7 +327,7 @@ export function OverviewPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {overviewQuery.data.top_read_memories.length ? overviewQuery.data.top_read_memories.slice(0, 8).map((record) => (
+                  {overviewQuery.data.top_read_memories_active.length ? overviewQuery.data.top_read_memories_active.slice(0, 8).map((record) => (
                     <tr key={record.id}>
                       <td>{record.read_count}</td>
                       <td className="hidden md:table-cell">{record.type}</td>

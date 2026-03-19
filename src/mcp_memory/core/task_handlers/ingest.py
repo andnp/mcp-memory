@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, cast
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
+from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
     SUMMARIZE_MEMORY_TASK_NAME,
@@ -243,6 +244,7 @@ async def _analyze_ingest_actions(
         "Analyze these system1 journal entries and return JSON with actions.\n"
         'Allowed actions: {"type": "create"|"ignore"|"append", "entry_indices": [...], '
         '"target_memory_id": "...", "title": "...", "content": "...", "summary": "..."}.\n'
+        f"{build_ingest_guardrails()}\n"
         f"Active workspace_id: {workspace_id}. "
         "If a thought clearly belongs in an existing canonical memory, prefer append and identify the target_memory_id. "
         "When you already understand the resulting memory well, include a concise summary so the handler can update it without another background task. "
@@ -388,6 +390,7 @@ def _build_ingest_agent_prompt(
         "You are the ingest-system1 maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
         f"Start with internal_get_next_ingest_batch using task_id='{task.id}', batch_size={batch_size}, and grouping_strategy='{grouping_strategy}'.\n"
+        f"{build_ingest_guardrails()}\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
         f"When a thought clearly belongs in an existing canonical memory, prefer {INGEST_APPEND_TOOL_NAME} with task_id='{task.id}', the claimed entry_ids, relevant workspace_ids, the content to append, and a concise summary when you already understand the updated memory.\n"

@@ -667,6 +667,49 @@ def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Pat
     assert "Recent Agent Runs" not in result.output
 
 
+def test_stats_command_top_reads_show_memory_status(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.workspace_id is not None
+        active = runtime.repository.create_memory(
+            title="Active top read",
+            content="Active record.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        archived = runtime.repository.create_memory(
+            title="Archived top read",
+            content="Archived record.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        assert active is not None and archived is not None
+        runtime.repository.record_access(active.id, 1.0, "2026-03-15T10:00:00+00:00", increment_read_count=True)
+        runtime.repository.record_access(archived.id, 1.0, "2026-03-15T10:00:00+00:00", increment_read_count=True)
+        runtime.repository.record_access(archived.id, 2.0, "2026-03-15T10:05:00+00:00", increment_read_count=True)
+        runtime.repository.update_memory(archived.id, status="archived")
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Top Read Memories" in result.output
+    assert "Status" in result.output
+    assert "Archived top read" in result.output
+    assert "archived" in result.output
+    assert "Active top read" in result.output
+    assert "active" in result.output
+
+
 def test_search_health_and_repair_commands_surface_resilience_state(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 

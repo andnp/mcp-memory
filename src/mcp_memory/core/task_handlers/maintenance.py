@@ -35,6 +35,11 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
+from mcp_memory.core.task_handlers.agentic_guardrails import (
+    build_curator_guardrails,
+    build_deduplicator_guardrails,
+    build_reflection_synthesis_guardrails,
+)
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 
@@ -42,6 +47,7 @@ from mcp_memory.core.tasks import TaskRecord
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 FACT_DEDUPLICATION_THRESHOLD = 0.72
 OBSERVATION_ABSORPTION_THRESHOLD = 0.62
+DEFRAGMENTER_GROUP_SIMILARITY_THRESHOLD = 0.45
 GRAPH_LINKER_AI_MIN_CANDIDATES = 12
 GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
 CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
@@ -59,6 +65,58 @@ CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
 CURATOR_MAX_TAGS = 6
+LOW_SIGNAL_GROUPING_TAGS = {
+    "anomaly-sample",
+    "architecture",
+    "audit",
+    "auto-defragmented",
+    "auto-ingested",
+    "background-agent",
+    "deduplicator",
+    "maintenance",
+    "memory-curator",
+    "system1",
+    "system1-appended",
+    "system-design",
+    "task-complete",
+}
+LOW_SIGNAL_TOPIC_TOKENS = {
+    "agent",
+    "agents",
+    "architecture",
+    "background",
+    "cli",
+    "complete",
+    "completed",
+    "daemon",
+    "design",
+    "implementation",
+    "implementations",
+    "infra",
+    "infrastructure",
+    "lifecycle",
+    "maintenance",
+    "migration",
+    "migrations",
+    "observability",
+    "overview",
+    "project",
+    "projects",
+    "repo",
+    "repository",
+    "roadmap",
+    "runtime",
+    "service",
+    "services",
+    "system",
+    "systems",
+    "task",
+    "tasks",
+    "testing",
+    "tool",
+    "tools",
+    "transport",
+}
 DEDUPLICATOR_ALLOWED_STRATEGIES = (
     SEMANTIC_STRATEGY,
     ANOMALY_STRATEGY,
@@ -551,6 +609,7 @@ async def handle_memory_curator_task(
         f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
         "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
+        f"{build_curator_guardrails()}\n"
         f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting oversized memories into smaller focused records with links such as DEPENDS_ON or AMENDS instead of continuing to append or merge them into one blob.\n"
         f"Avoid creating or growing memories past {CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
@@ -566,6 +625,7 @@ async def handle_memory_curator_task(
                 "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
                 "Search, read, list, split, merge, archive, create, update, delete, and link records as needed.\n"
                 "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
+                f"{build_curator_guardrails()}\n"
                 f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
                 "When you create, merge, or materially rewrite a memory and you already understand it, include or refresh a concise summary in the same tool call instead of relying on a later standalone summarizer.\n"
                 "Do not claim work you did not actually execute through MCP tools.\n"
@@ -755,9 +815,9 @@ def _collect_defragment_groups(candidates: list) -> list[list]:
         for other in candidates:
             if other.id in used or other.id == record.id:
                 continue
-            shared_tags = set(record.tags) & set(other.tags)
-            similarity = _token_overlap(record.title + " " + record.content, other.title + " " + other.content)
-            if shared_tags or similarity >= 0.3:
+            shared_tags = _shared_meaningful_tags(record.tags, other.tags)
+            similarity = _topic_token_overlap(record.title + " " + record.content, other.title + " " + other.content)
+            if shared_tags or similarity >= DEFRAGMENTER_GROUP_SIMILARITY_THRESHOLD:
                 related.append(other)
                 used.add(other.id)
         if len(related) >= 2:
@@ -768,7 +828,8 @@ def _collect_defragment_groups(candidates: list) -> list[list]:
 async def _build_defragmented_memory(group: list, provider: Any = None) -> tuple[str, str]:
     if provider is not None:
         prompt = (
-            "Summarize these memories into one reflection. Return JSON with title and content.\n\n"
+            "Summarize these memories into one reflection. Return JSON with title and content.\n"
+            f"{build_reflection_synthesis_guardrails()}\n\n"
             + "\n".join(f"- {item.title}: {item.content}" for item in group)
         )
         response = provider.ask(prompt)
@@ -1022,6 +1083,7 @@ def _build_deduplicator_agent_prompt(task: TaskRecord, seed_records: list, *, st
         "You are the deduplicator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
         f"Start with internal_get_next_dedup_batch using task_id='{task.id}' to confirm the current seed batch before making changes.\n"
+        f"{build_deduplicator_guardrails()}\n"
         "Merge highly similar fact memories into canonical records, preserve lineage with SUPERSEDES links, and absorb matching observations into the most appropriate fact when justified.\n"
         "Prefer internal_merge_memory_into_canonical for every merge or observation absorption so canonical metadata, archived sources, and lineage stay consistent.\n"
         f"When using internal_merge_memory_into_canonical, include metadata with deduplicator_task_id='{task.id}' and preserve merged_source_ids.\n"
@@ -1236,6 +1298,7 @@ async def _build_merged_fact_content(canonical, source, provider: Any = None) ->
     if provider is not None:
         prompt = (
             "Merge these two memories into one canonical fact. Return JSON with title and content.\n"
+            f"{build_deduplicator_guardrails()}\n"
             'Return only: {"title": "...", "content": "..."}\n\n'
             f"Canonical title: {canonical.title}\nCanonical content:\n{canonical.content}\n\n"
             f"Incoming title: {source.title}\nIncoming content:\n{source.content}"
@@ -1259,11 +1322,13 @@ async def _build_merged_fact_content(canonical, source, provider: Any = None) ->
 
 
 def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> float:
-    shared_tags = set(left.tags) & set(right.tags)
-    lexical_similarity = _token_overlap(left.title + " " + left.content, right.title + " " + right.content)
+    shared_tags = _shared_meaningful_tags(left.tags, right.tags)
+    lexical_similarity = _topic_token_overlap(left.title + " " + left.content, right.title + " " + right.content)
     semantic_similarity = 0.0
     if left.id in embedding_by_id and right.id in embedding_by_id:
         semantic_similarity = cosine_similarity(embedding_by_id[left.id], embedding_by_id[right.id])
+    if not shared_tags and lexical_similarity < 0.12:
+        semantic_similarity = 0.0
     tag_bonus = 0.15 if shared_tags else 0.0
     return max(lexical_similarity, semantic_similarity + tag_bonus)
 
@@ -1313,6 +1378,41 @@ def _token_overlap(left: str, right: str) -> float:
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _topic_token_overlap(left: str, right: str) -> float:
+    left_tokens = _topic_tokens(left)
+    right_tokens = _topic_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _topic_tokens(value: str) -> set[str]:
+    return {
+        token.lower()
+        for token in TOKEN_PATTERN.findall(value)
+        if token.lower() not in LOW_SIGNAL_TOPIC_TOKENS
+    }
+
+
+def _shared_meaningful_tags(left_tags: list[str], right_tags: list[str]) -> set[str]:
+    return _meaningful_tag_set(left_tags) & _meaningful_tag_set(right_tags)
+
+
+def _meaningful_tag_set(tags: list[str]) -> set[str]:
+    meaningful: set[str] = set()
+    for tag in tags:
+        normalized = tag.strip().lower()
+        if (
+            not normalized
+            or normalized in LOW_SIGNAL_GROUPING_TAGS
+            or normalized.endswith("-task")
+            or "-task-" in normalized
+        ):
+            continue
+        meaningful.add(normalized)
+    return meaningful
 
 
 def _normalize_tag_values(tags: list[str]) -> list[str]:

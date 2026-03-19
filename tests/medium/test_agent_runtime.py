@@ -270,6 +270,8 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "internal_get_next_ingest_batch" in provider.prompts[0]
         assert INGEST_APPEND_TOOL_NAME in provider.prompts[0]
         assert INGEST_CREATE_TOOL_NAME in provider.prompts[0]
+        assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
+        assert "Do not merge, append, or rewrite across different projects, products, or repositories" in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
     finally:
         runtime.close()
@@ -682,8 +684,12 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     deduplicator_task = queue.find_open_task(DEDUPLICATOR_TASK_NAME, None)
     assert project_manager_task is not None
     assert deduplicator_task is not None
+    curator_task = queue.find_open_task(CURATOR_TASK_NAME, None)
     assert project_manager_task.priority == task_priority(PROJECT_MANAGER_TASK_NAME)
     assert deduplicator_task.priority == task_priority(DEDUPLICATOR_TASK_NAME)
+    assert curator_task is not None
+    assert curator_task.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
+    assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 10800.0
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -753,6 +759,68 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
     assert scheduled is not None
     assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
+
+
+def test_bootstrap_background_tasks_uses_three_hour_curator_cadence(monkeypatch, db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 20000.0)
+
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="curator-seed",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+    queue.complete(task.id, completed_at=1200.0, run_result={"mutations": 1})
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    bootstrap_background_tasks(ctx)
+
+    scheduled = queue.find_open_task(CURATOR_TASK_NAME, None)
+    assert scheduled is not None
+    assert scheduled.available_at == pytest.approx(max(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME], 20000.0))
+    assert scheduled.data["interval_seconds"] == 10800.0
+
+
+def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatch, db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 1500.0)
+
+    completed = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="curator-completed-seed",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+    queue.complete(completed.id, completed_at=1200.0, run_result={"mutations": 1})
+
+    stale = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        available_at=22800.0,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": 21600.0,
+        },
+        task_id="curator-stale-recurring",
+    )
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    bootstrap_background_tasks(ctx)
+
+    refreshed = queue.get_task(stale.id)
+    assert refreshed.status == "pending"
+    assert refreshed.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
+    assert refreshed.available_at == pytest.approx(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME])
 
 
 def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
@@ -1473,6 +1541,67 @@ async def test_defragmenter_skips_provider_for_small_groups(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_defragmenter_does_not_group_records_from_generic_system_tags_alone(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="CLI cleanup note",
+            content="Add a visible log command group for the CLI.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auto-ingested", "system1"],
+        )
+        second = runtime.repository.create_memory(
+            title="Task queue note",
+            content="SQLiteTaskQueue claim_next is currently global and not workspace-scoped.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auto-ingested", "system1"],
+        )
+        assert first is not None and second is not None
+
+        result = await handle_defragmenter_task(
+            runtime,
+            TaskRecord(
+                id="defragmenter-generic-tags-task",
+                task_name=DEFRAGMENTER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        reflections = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="reflection",
+            limit=10,
+        )
+
+        assert result["created"] == 0
+        assert result["archived"] == 0
+        assert reflections == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_taxonomist_skips_provider_when_deterministic_normalization_suffices(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -2021,9 +2150,76 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "internal_get_next_dedup_batch" in provider.prompts[0]
         assert "internal_merge_memory_into_canonical" in provider.prompts[0]
+        assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
+        assert "Merge only when the records describe the same durable concept" in provider.prompts[0]
         assert "deduplicator_task_id='deduplicator-agentic-task'" in provider.prompts[0]
         assert canonical.id in provider.prompts[0]
         assert duplicate.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deduplicator_does_not_merge_cross_project_generic_architecture_facts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="CoreRL architecture overview",
+            content="CoreRL architecture. Daemon lifecycle. CLI infrastructure.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture"],
+        )
+        second = runtime.repository.create_memory(
+            title="mcp-memory architecture overview",
+            content="mcp-memory architecture. Daemon lifecycle. CLI infrastructure.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture"],
+        )
+        assert first is not None and second is not None
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-cross-project-generic-task",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        active_facts = runtime.repository.list_memories(
+            workspace_id=runtime.workspace_id,
+            memory_type="fact",
+            status="active",
+            limit=10,
+        )
+
+        assert result["merged"] == 0
+        assert result["archived"] == 0
+        assert len(active_facts) == 2
     finally:
         runtime.close()
 
@@ -2504,6 +2700,8 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["execution_mode"] == "agentic_mcp"
         assert provider.prompts
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
+        assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
+        assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
         assert record.id in provider.prompts[0]
     finally:
         runtime.close()
@@ -2630,7 +2828,7 @@ async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch,
         assert "Very long architecture reflection title that should be shortened before being s" in prompt
         assert "Very long architecture reflection title that should be shortened before being sent to Gemini for curator work" not in prompt
         assert "…" in prompt
-        assert len(prompt) < 5000
+        assert len(prompt) < 6000
     finally:
         runtime.close()
 
@@ -2689,6 +2887,8 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         seed_payload = json.loads(prompt[start:end])
 
         assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized." in prompt
+        assert "Do not merge, append, or rewrite across different projects, products, or repositories" in prompt
+        assert "No-op is acceptable when no change adds clear value." in prompt
         assert seed_payload[0]["id"] == record.id
         assert seed_payload[0]["oversized_for_curator"] is True
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from inspect import isawaitable
+from inspect import isawaitable, iscoroutinefunction
 import logging
 from typing import Any
 
@@ -110,7 +110,10 @@ class RuntimeTaskWorker:
             return
 
         try:
-            result = handler(self._ctx, task)
+            if iscoroutinefunction(handler):
+                result = handler(self._ctx, task)
+            else:
+                result = await asyncio.to_thread(handler, self._ctx, task)
             if isawaitable(result):
                 result = await result
         except asyncio.CancelledError:

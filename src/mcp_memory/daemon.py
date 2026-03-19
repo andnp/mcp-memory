@@ -66,7 +66,7 @@ def ensure_daemon_started(
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
-    timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
+    timeout_seconds = max(spec.config.daemon.auto_start_timeout_seconds, 60.0)
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
         existing = _read_daemon_metadata(metadata_path)
@@ -105,12 +105,37 @@ def ensure_daemon_started(
 
         daemon_port = _find_free_port()
         _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
+        poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
         deadline = time.monotonic() + timeout_seconds
+        current = None
         while time.monotonic() < deadline:
             current = _read_daemon_metadata(metadata_path)
             if current is not None and _is_daemon_healthy(current):
                 return current
-            time.sleep(spec.config.daemon.healthcheck_interval_seconds)
+            time.sleep(poll_interval_seconds)
+
+        if current is None:
+            metadata_grace_deadline = time.monotonic() + max(20.0, timeout_seconds)
+            while time.monotonic() < metadata_grace_deadline:
+                current = _read_daemon_metadata(metadata_path)
+                if current is not None:
+                    break
+                time.sleep(poll_interval_seconds)
+
+        if current is not None and _is_process_running(current.pid):
+            grace_seconds = max(5.0, timeout_seconds * 2)
+            grace_deadline = time.monotonic() + grace_seconds
+            while time.monotonic() < grace_deadline:
+                latest = _read_daemon_metadata(metadata_path)
+                if latest is not None and _is_daemon_healthy(latest):
+                    return latest
+                time.sleep(poll_interval_seconds)
+            latest = _read_daemon_metadata(metadata_path)
+            if latest is not None and _is_process_running(latest.pid):
+                raise RuntimeError(
+                    "Timed out waiting for global daemon startup "
+                    f"(metadata_present pid={latest.pid} endpoint={latest.transport_endpoint})"
+                )
         raise RuntimeError("Timed out waiting for global daemon startup")
     finally:
         lock.release()
@@ -198,6 +223,8 @@ __all__ = [
 def _is_process_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if _read_process_state(pid) == 'Z':
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -205,6 +232,20 @@ def _is_process_running(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _read_process_state(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    stat_path = Path('/proc') / str(pid) / 'stat'
+    try:
+        raw = stat_path.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    fields = raw.split()
+    if len(fields) < 3:
+        return None
+    return fields[2]
 
 
 def _wait_for_process_exit(

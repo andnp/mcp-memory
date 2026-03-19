@@ -120,9 +120,15 @@ class ManagementService:
             workspace_id=self._workspace_id,
             limit=10,
         )
+        top_read_active_records = [] if self._repository is None else self._repository.list_most_read_memories(
+            workspace_id=self._workspace_id,
+            limit=10,
+            status="active",
+        )
         by_type, by_status, total_memories = self._build_memory_counts()
         recent_records = [compact_memory_record_payload(record) for record in records]
         top_read_payloads = [compact_memory_record_payload(record) for record in top_read_records]
+        top_read_active_payloads = [compact_memory_record_payload(record) for record in top_read_active_records]
         task_counts = self._build_task_counts()
         failed_tasks = [
             task_payload(task)
@@ -156,6 +162,7 @@ class ManagementService:
             recent_logs=recent_logs,
             recent_memories=recent_records,
             top_read_memories=top_read_payloads,
+            top_read_memories_active=top_read_active_payloads,
             tasks=TaskStatusSummary(
                 by_status=task_counts,
                 failed_count=task_counts.get("failed", 0),

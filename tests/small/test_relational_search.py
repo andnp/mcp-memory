@@ -346,6 +346,10 @@ def test_list_most_read_memories_orders_by_explicit_read_count(db_manager) -> No
 
     workspace_results = repository.list_most_read_memories(workspace_id="workspace-alpha", limit=10)
     global_results = repository.list_most_read_memories(limit=10)
+    active_results = repository.list_most_read_memories(limit=10, status="active")
+
+    repository.update_memory(gamma.id, status="archived")
+    active_results_after_archive = repository.list_most_read_memories(limit=10, status="active")
 
     assert [record.id for record in workspace_results] == [alpha.id, beta.id]
     assert [record.read_count for record in workspace_results] == [2, 1]
@@ -353,6 +357,8 @@ def test_list_most_read_memories_orders_by_explicit_read_count(db_manager) -> No
     assert global_results[0].read_count == 2
     assert {record.id for record in global_results[1:3]} == {beta.id, gamma.id}
     assert {record.read_count for record in global_results[1:3]} == {1}
+    assert {record.id for record in active_results} == {alpha.id, beta.id, gamma.id}
+    assert [record.id for record in active_results_after_archive] == [alpha.id, beta.id]
 
 
 def test_search_memories_penalizes_stale_records_and_updates_last_surfaced(db_manager) -> None:

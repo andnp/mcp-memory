@@ -44,6 +44,14 @@ All maintenance agents (Linker, Conflict Detector, Defragmenter, Taxonomist) mus
 
 ## 5. Agent-Specific Logic
 
+### 5.0 Shared Guardrails For Agentic Memory Mutations
+- Prefer focused, durable memories. Small-to-medium records are the default target shape.
+- Do not merge, append, or rewrite across different projects, products, or repositories unless the memory is explicitly about their relationship.
+- Shared generic vocabulary like `architecture`, `daemon`, `infra`, `testing`, `observability`, `roadmap`, or `migration` is not sufficient evidence for combining records.
+- Treat transient progress notes, debugging chatter, and one-off execution state as temporal context. Promote them only when they clearly encode reusable long-term knowledge.
+- Mutations are value-driven, not quota-driven. A no-op is correct when a change would reduce coherence or search quality.
+- When uncertain, prefer reading more context, splitting, or linking over forcing a canonical merged record.
+
 ### 5.1 The Taxonomist (Empowered)
 Unlike other agents, the Taxonomist is explicitly empowered to **delete** and **modify** the global `tags` table to collapse synonyms (e.g., `testing` + `tests` → `pytest`).
 

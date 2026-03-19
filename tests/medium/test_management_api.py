@@ -253,6 +253,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["provider_usage"][0]["calls_last_day"] == 1
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
         assert overview["top_read_memories"] == []
+        assert overview["top_read_memories_active"] == []
         assert overview["tasks"]["failed_count"] == 1
         assert record_thought["status"] == "recorded"
         assert overview_after_thought["journal"]["pending_count"] >= overview["journal"]["pending_count"] + 1
@@ -437,6 +438,7 @@ async def test_management_api_overview_includes_top_read_memories(monkeypatch, t
             content="Beta details.",
             workspace_ids=[runtime.workspace_id],
             memory_type="fact",
+            status="archived",
         )
         assert alpha is not None and beta is not None
         runtime.repository.record_access(alpha.id, 1.0, "2026-03-15T10:00:00+00:00", increment_read_count=True)
@@ -454,6 +456,10 @@ async def test_management_api_overview_includes_top_read_memories(monkeypatch, t
             "Beta read memory",
         ]
         assert [record["read_count"] for record in overview["top_read_memories"]] == [2, 1]
+        assert [record["title"] for record in overview["top_read_memories_active"]] == [
+            "Alpha read memory",
+        ]
+        assert [record["status"] for record in overview["top_read_memories_active"]] == ["active"]
 
 
 def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> None:

@@ -133,6 +133,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.recent_logs[0].source == "daemon"
     assert [record.id for record in overview.top_read_memories] == [primary.id, secondary.id]
     assert [record.read_count for record in overview.top_read_memories] == [2, 1]
+    assert [record.id for record in overview.top_read_memories_active] == [primary.id]
+    assert [record.read_count for record in overview.top_read_memories_active] == [2]
     assert filtered_logs.logs[0].logger_name == "mcp_memory.tests"
     assert summary.total == 1
     assert summary.by_level == {"WARNING": 1}

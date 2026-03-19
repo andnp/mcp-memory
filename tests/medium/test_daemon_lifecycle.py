@@ -7,7 +7,7 @@ import pytest
 
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
-from mcp_memory.daemon_process import is_daemon_healthy
+from mcp_memory.daemon_process import is_daemon_healthy, spawn_daemon_process
 
 
 pytestmark = pytest.mark.medium
@@ -54,6 +54,84 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
 
 def test_read_daemon_metadata_returns_none_for_missing_file(tmp_path: Path) -> None:
     assert read_daemon_metadata(tmp_path / "missing.json") is None
+
+
+def test_is_process_running_treats_zombies_as_stopped(monkeypatch) -> None:
+    monkeypatch.setattr('mcp_memory.daemon._read_process_state', lambda pid: 'Z')
+    monkeypatch.setattr('mcp_memory.daemon.os.kill', lambda pid, sig: (_ for _ in ()).throw(AssertionError('os.kill should not be called for zombies')))
+
+    assert __import__('mcp_memory.daemon').daemon._is_process_running(1234) is False
+
+
+def test_spawn_daemon_process_uses_workspace_root_as_cwd(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_popen(command, **kwargs):
+        captured['command'] = command
+        captured.update(kwargs)
+        class _DummyProcess:
+            pass
+        return _DummyProcess()
+
+    monkeypatch.setattr('mcp_memory.daemon_process.subprocess.Popen', _fake_popen)
+
+    spawn_daemon_process(tmp_path / 'workspace', '127.0.0.1', 8123)
+
+    assert captured['cwd'] == str(tmp_path / 'workspace')
+    assert captured['stdin'] is not None
+    assert captured['start_new_session'] is True
+
+
+def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    config = Config()
+    config.daemon.auto_start_timeout_seconds = 0.2
+    config.daemon.healthcheck_interval_seconds = 0.05
+    spec = _Spec(
+        memory_path=tmp_path / 'memories',
+        config=config,
+        workspace_id='workspace-start',
+        workspace_root=tmp_path / 'workspace',
+        lock_path=tmp_path / 'workspace.lock',
+    )
+    metadata = DaemonMetadata(
+        host='127.0.0.1',
+        port=9005,
+        pid=2468,
+        started_at=2.0,
+        status='ready',
+        transport='zmq',
+        socket_path=str(tmp_path / 'daemon.sock'),
+    )
+
+    read_count = {'count': 0}
+    health_count = {'count': 0}
+    spawned: list[tuple[Path, str, int]] = []
+    monotonic_values = iter([value * 0.05 for value in range(80)])
+
+    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+
+    def _fake_read(_path):
+        read_count['count'] += 1
+        return None if read_count['count'] <= 4 else metadata
+
+    def _fake_health(current):
+        health_count['count'] += 1
+        return health_count['count'] >= 2 and current.pid == metadata.pid
+
+    monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', _fake_read)
+    monkeypatch.setattr('mcp_memory.daemon._is_daemon_healthy', _fake_health)
+    monkeypatch.setattr('mcp_memory.daemon._is_process_running', lambda pid: True)
+    monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
+    monkeypatch.setattr('mcp_memory.daemon._spawn_daemon_process', lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
+    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9005)
+    monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
+    monkeypatch.setattr('mcp_memory.daemon.time.monotonic', lambda: next(monotonic_values))
+
+    current = ensure_daemon_started()
+
+    assert current.pid == metadata.pid
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9005)]
 
 
 def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch, tmp_path: Path) -> None:

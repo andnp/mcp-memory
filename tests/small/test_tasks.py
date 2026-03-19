@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import threading
 
 import pytest
 
@@ -334,7 +335,7 @@ async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     )
 
     await worker.start()
-    for _ in range(20):
+    for _ in range(100):
         if queue.get_task(task.id).status == "completed":
             break
         await asyncio.sleep(0.01)
@@ -346,6 +347,38 @@ async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     task_runs = queue.list_task_runs(task_name="ingest-system1")
     assert len(task_runs) == 1
     assert task_runs[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_runs_sync_handlers_off_loop(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    thread_ids: list[int] = []
+    main_thread_id = threading.get_ident()
+
+    def sync_handler(ctx: ApplicationContext, task) -> None:
+        thread_ids.append(threading.get_ident())
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        'sync-task',
+        available_at=0.0,
+        task_id='sync-task',
+    )
+    claimed = queue.claim_next(now=1.0)
+    assert claimed is not None
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={'sync-task': sync_handler},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    assert completed.status == 'completed'
+    assert thread_ids
+    assert thread_ids[0] != main_thread_id
 
 
 @pytest.mark.asyncio

@@ -75,6 +75,7 @@ export interface TopReadMemory {
   id: string;
   title: string;
   type: string;
+  status: string;
   read_count: number;
 }
 
@@ -97,6 +98,7 @@ export interface OverviewResponse {
   recent_logs: RecentLog[];
   queue_diagnostics: QueueDiagnostic[];
   top_read_memories: TopReadMemory[];
+  top_read_memories_active: TopReadMemory[];
 }
 
 export interface MemorySearchResult {
