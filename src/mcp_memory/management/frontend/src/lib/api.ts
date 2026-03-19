@@ -256,8 +256,32 @@ export interface MemoryTimelineBucket {
   total_content_bytes: number;
 }
 
+export interface MaintenanceEvent {
+  task_id: string;
+  task_name: string;
+  status: string;
+  completed_at: number;
+  bucket_start: number;
+  duration_seconds: number;
+  result_summary: string | null;
+  strategy_used: string | null;
+  impact_summary: string | null;
+  candidate_count: number | null;
+  group_count: number | null;
+  created_count: number | null;
+  merged_count: number | null;
+  updated_count: number | null;
+  archived_count: number | null;
+  lines_compressed: number | null;
+  meaningful_actions: number | null;
+}
+
 export interface Timelines {
   memory_activity: MemoryTimelineBucket[];
+}
+
+export interface MaintenanceMetrics {
+  events: MaintenanceEvent[];
 }
 
 export interface NerdAlert {
@@ -304,6 +328,7 @@ export interface NerdMetricsResponse {
   composition: Composition;
   distributions: Distributions;
   timelines: Timelines;
+  maintenance: MaintenanceMetrics;
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];
   alerts: NerdAlert[];

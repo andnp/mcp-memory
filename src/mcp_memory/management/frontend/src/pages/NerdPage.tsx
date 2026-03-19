@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 
-import { ApiError, fetchNerdMetrics, type CountBucket } from '../lib/api';
+import { ApiError, fetchNerdMetrics, type CountBucket, type MaintenanceEvent } from '../lib/api';
 
 function PlotFigure({ chart }: { chart: HTMLElement | SVGElement | null }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -72,6 +72,68 @@ function formatShare(value: number, total: number): string {
     return '0.0%';
   }
   return `${((value / total) * 100).toFixed(1)}%`;
+}
+
+function formatTimestamp(value: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value * 1000));
+}
+
+function formatTaskName(taskName: string): string {
+  return taskName.split('-').join(' ');
+}
+
+function maintenanceStatusClass(status: string): string {
+  if (status === 'failed') {
+    return 'border-danger/40 bg-danger/10 text-danger';
+  }
+  if (status === 'retry') {
+    return 'border-yellow-500/40 bg-yellow-500/10 text-yellow-200';
+  }
+  if (status === 'cancelled') {
+    return 'border-border bg-border/40 text-muted';
+  }
+  return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+}
+
+function maintenanceStatusColor(status: string): string {
+  if (status === 'failed') {
+    return '#f85149';
+  }
+  if (status === 'retry') {
+    return '#d29922';
+  }
+  if (status === 'cancelled') {
+    return '#8b949e';
+  }
+  return '#3fb950';
+}
+
+function formatMaintenanceImpact(event: MaintenanceEvent): string {
+  if (event.impact_summary) {
+    return event.impact_summary;
+  }
+  if (event.result_summary) {
+    return event.result_summary;
+  }
+  return '—';
+}
+
+function formatMaintenanceTitle(event: MaintenanceEvent): string {
+  const parts = [formatTimestamp(event.completed_at), event.task_name, event.status];
+  if (event.strategy_used) {
+    parts.push(`strategy=${event.strategy_used}`);
+  }
+  if (event.impact_summary) {
+    parts.push(event.impact_summary);
+  } else if (event.result_summary) {
+    parts.push(event.result_summary);
+  }
+  return parts.join(' • ');
 }
 
 function KeyValueTable({
@@ -190,6 +252,15 @@ export function NerdPage() {
     });
   }, [nerdQuery.data]);
 
+  const maintenanceEvents = nerdQuery.data?.maintenance.events ?? [];
+
+  const maintenanceOverlayEvents = useMemo(
+    () => maintenanceEvents.filter((event) => event.status !== 'completed' || event.impact_summary || event.strategy_used).slice(0, 16),
+    [maintenanceEvents],
+  );
+
+  const recentMaintenanceEvents = useMemo(() => maintenanceEvents.slice(0, 12), [maintenanceEvents]);
+
   const latencyChart = useMemo(() => {
     if (!nerdQuery.data?.provider_latency.length) {
       return null;
@@ -243,9 +314,16 @@ export function NerdPage() {
           stroke: () => 'updated',
           strokeWidth: 2,
         }),
+        Plot.ruleX(maintenanceOverlayEvents, {
+          x: (d) => new Date(d.completed_at * 1000),
+          stroke: (d) => maintenanceStatusColor(d.status),
+          strokeOpacity: 0.3,
+          strokeWidth: 1.5,
+          title: (d) => formatMaintenanceTitle(d),
+        }),
       ],
     });
-  }, [nerdQuery.data]);
+  }, [maintenanceOverlayEvents, nerdQuery.data]);
 
   const contentBytesChart = useMemo(() => {
     const rows = nerdQuery.data?.timelines.memory_activity ?? [];
@@ -271,9 +349,16 @@ export function NerdPage() {
           stroke: '#79c0ff',
           strokeWidth: 2,
         }),
+        Plot.ruleX(maintenanceOverlayEvents, {
+          x: (d) => new Date(d.completed_at * 1000),
+          stroke: (d) => maintenanceStatusColor(d.status),
+          strokeOpacity: 0.28,
+          strokeWidth: 1.5,
+          title: (d) => formatMaintenanceTitle(d),
+        }),
       ],
     });
-  }, [nerdQuery.data]);
+  }, [maintenanceOverlayEvents, nerdQuery.data]);
 
   const linkTypeChart = useMemo(() => {
     if (!nerdQuery.data) {
@@ -483,15 +568,63 @@ export function NerdPage() {
           <section className="panel p-3">
             <p className="panel-title">Memory activity</p>
             <h3 className="mt-1 text-base font-semibold text-text">Created vs updated counts</h3>
+            <p className="mt-1 text-[11px] text-muted">Subtle vertical rules mark the most recent maintenance runs in the selected window.</p>
             <div className="mt-3">{memoryActivityChart ? <PlotFigure chart={memoryActivityChart} /> : <p className="text-xs text-muted">No timeline activity yet.</p>}</div>
           </section>
 
           <section className="panel p-3">
             <p className="panel-title">Content volume</p>
             <h3 className="mt-1 text-base font-semibold text-text">Cumulative visible content bytes</h3>
+            <p className="mt-1 text-[11px] text-muted">Overlay markers share the same event stream, so spikes line up with concrete maintenance evidence.</p>
             <div className="mt-3">{contentBytesChart ? <PlotFigure chart={contentBytesChart} /> : <p className="text-xs text-muted">No content-volume timeline yet.</p>}</div>
           </section>
         </div>
+
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">Maintenance evidence</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Recent task runs behind the timeline markers</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Task</th>
+                <th>Status</th>
+                <th>Strategy</th>
+                <th>Impact</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentMaintenanceEvents.length ? (
+                recentMaintenanceEvents.map((event) => (
+                  <tr key={`${event.task_id}-${event.completed_at}`}>
+                    <td className="whitespace-nowrap text-xs text-muted">{formatTimestamp(event.completed_at)}</td>
+                    <td>
+                      <div className="font-medium text-text">{formatTaskName(event.task_name)}</div>
+                      <div className="text-[11px] text-muted" title={event.task_id}>{event.task_id}</div>
+                    </td>
+                    <td>
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${maintenanceStatusClass(event.status)}`}>
+                        {event.status}
+                      </span>
+                    </td>
+                    <td className="text-xs text-muted">{event.strategy_used ?? '—'}</td>
+                    <td className="text-xs text-muted">{formatMaintenanceImpact(event)}</td>
+                    <td className="text-xs text-muted">{event.result_summary ?? '—'}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} className="text-xs text-muted">
+                    No maintenance task evidence in the selected window yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
       </section>
 
       <section className="space-y-3">

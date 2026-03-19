@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 import time
 
+from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.management.models import QueueDiagnosticPayload
 
 
@@ -79,6 +80,23 @@ def list_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | N
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
+    return conn.execute(query, params).fetchall()
+
+
+def list_maintenance_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    placeholders = ",".join("?" for _ in MAINTENANCE_TASK_NAMES)
+    query = (
+        f"SELECT task_id, task_name, status, completed_at, duration_seconds, result_json, error_text "
+        f"FROM task_runs WHERE task_name IN ({placeholders}) AND completed_at >= ?"
+    )
+    params: list[object] = [*MAINTENANCE_TASK_NAMES, cutoff]
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    query += " ORDER BY completed_at DESC, started_at DESC"
     return conn.execute(query, params).fetchall()
 
 

@@ -134,6 +134,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             completed_at=base_time + 13.0,
             run_result={
                 "merged": 1,
+                "lines_compressed": 12,
                 "requested_strategy": "semantic",
                 "strategy_used": "semantic",
                 "candidate_count": 6,
@@ -286,6 +287,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "composition" in nerd_metrics
         assert "distributions" in nerd_metrics
         assert "timelines" in nerd_metrics
+        assert "maintenance" in nerd_metrics
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
@@ -311,6 +313,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         ]
         assert sum(bucket["created_count"] for bucket in nerd_metrics["timelines"]["memory_activity"]) == 2
         assert nerd_metrics["timelines"]["memory_activity"][-1]["total_content_bytes"] > 0
+        deduplicator_event = next(item for item in nerd_metrics["maintenance"]["events"] if item["task_name"] == "deduplicator")
+        assert deduplicator_event["strategy_used"] == "semantic"
+        assert deduplicator_event["merged_count"] == 1
+        assert deduplicator_event["candidate_count"] == 6
+        assert deduplicator_event["lines_compressed"] == 12
+        assert deduplicator_event["impact_summary"] == "merged=1, lines=12"
         assert nerd_metrics["search_quality"]["semantic_enabled"] is True
         assert any(item["task_name"] == "memory-curator" for item in nerd_metrics["route_audit"])
         summarize_route = next(item for item in nerd_metrics["route_audit"] if item["task_name"] == "summarize-memory")

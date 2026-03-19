@@ -75,6 +75,7 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert [bucket.count for bucket in nerd_metrics.distributions.updated_age_buckets] == [0, 0, 0, 0, 0]
     assert [bucket.count for bucket in nerd_metrics.distributions.content_size_buckets] == [0, 0, 0, 0, 0]
     assert nerd_metrics.timelines.memory_activity == []
+    assert nerd_metrics.maintenance.events == []
     assert nerd_metrics.agent_throughput == []
     assert nerd_metrics.provider_latency == []
 
@@ -111,6 +112,22 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
             ("workspace-b", "daemon", "mcp_memory.tests", "INFO", "workspace-b log", 21.0, "{}"),
         ],
     )
+    task_a = task_queue.enqueue(
+        "graph-linker",
+        task_id="workspace-a-maintenance",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_b = task_queue.enqueue(
+        "graph-linker",
+        task_id="workspace-b-maintenance",
+        workspace_id="workspace-b",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=30.0) is not None
+    task_queue.complete(task_a.id, completed_at=31.0, run_result={"updated": 1})
+    assert task_queue.claim_next(now=32.0) is not None
+    task_queue.complete(task_b.id, completed_at=33.0, run_result={"updated": 2})
     db_manager.get_connection().commit()
 
     scoped_service = _build_management_service(
@@ -136,6 +153,7 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
     assert [record.title for record in scoped_overview.recent_memories] == ["Workspace A fact"]
     assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
     assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
+    assert [item.task_id for item in scoped_nerd.maintenance.events] == [task_a.id]
 
     assert global_overview.memories.total == 2
     assert global_overview.memory_metrics.total_memories == 2
@@ -145,6 +163,7 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
         ("workspace-a", 1),
         ("workspace-b", 1),
     ]
+    assert [item.task_id for item in global_nerd.maintenance.events] == [task_b.id, task_a.id]
 
 
 def test_management_service_nerd_metrics_composition_distributions_and_timelines(db_manager) -> None:
@@ -321,7 +340,17 @@ def test_management_service_analytics_handles_zero_duration_rows_and_zero_window
         available_at=0.0,
     )
     assert task_queue.claim_next(now=100.0) is not None
-    task_queue.complete(completed.id, completed_at=100.0, run_result={})
+    task_queue.complete(
+        completed.id,
+        completed_at=100.0,
+        run_result={
+            "merged": 2,
+            "requested_strategy": "semantic",
+            "strategy_used": "semantic",
+            "candidate_count": 5,
+            "lines_compressed": 7,
+        },
+    )
     assert task_queue.claim_next(now=101.0) is not None
     task_queue.fail(retried.id, "retry me", retry_delay_seconds=0.0, failed_at=101.0)
     claimed_retry = task_queue.claim_next(now=102.0)
@@ -361,11 +390,19 @@ def test_management_service_analytics_handles_zero_duration_rows_and_zero_window
     assert nerd_metrics.provider_latency[0].failure_count == 1
     assert nerd_metrics.provider_latency[0].avg_duration_seconds == 0.0
     assert nerd_metrics.provider_latency[0].p95_duration_seconds == 0.0
+    assert [event.status for event in nerd_metrics.maintenance.events] == ["failed", "retry", "completed"]
+    graph_linker_event = next(event for event in nerd_metrics.maintenance.events if event.task_name == "graph-linker")
+    assert graph_linker_event.strategy_used == "semantic"
+    assert graph_linker_event.candidate_count == 5
+    assert graph_linker_event.merged_count == 2
+    assert graph_linker_event.lines_compressed == 7
+    assert graph_linker_event.impact_summary == "merged=2, lines=7"
     assert any(stat.key == "provider_failure_rate" and stat.value == 0.5 for stat in nerd_metrics.stats)
     assert any(alert.key == "provider_failure_rate" for alert in nerd_metrics.alerts)
 
     assert zero_window_metrics.agent_throughput == []
     assert zero_window_metrics.provider_latency == []
+    assert zero_window_metrics.maintenance.events == []
     assert any(stat.key == "runs_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
     assert any(stat.key == "provider_calls_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
 

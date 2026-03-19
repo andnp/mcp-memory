@@ -7,16 +7,24 @@ import math
 from statistics import mean, median
 import time
 
+from mcp_memory.management.agent_run_reporting import (
+    decode_run_result,
+    extract_ingest_audit,
+    extract_run_result_metadata,
+    format_result_summary,
+)
 from mcp_memory.management.health_reporting import build_search_health
 from mcp_memory.management.models import (
     AgentThroughputBucketPayload,
     GraphTopologyPayload,
+    MaintenanceEventPayload,
     MemoryTimelineBucketPayload,
     MemoryLifecyclePayload,
     NerdAlertPayload,
     NerdCompositionPayload,
     NerdCountBucketPayload,
     NerdDistributionsPayload,
+    NerdMaintenancePayload,
     NerdMetricsPayload,
     NerdStatPayload,
     NerdTimelinesPayload,
@@ -26,6 +34,7 @@ from mcp_memory.management.models import (
 )
 from mcp_memory.management.reporting_queries import (
     build_queue_diagnostics,
+    list_maintenance_task_run_rows_since,
     list_provider_usage_rows_since,
     list_scoped_link_rows,
     list_scoped_memory_rows,
@@ -94,6 +103,7 @@ def build_nerd_metrics(
     bucket_seconds = max(bucket_minutes * 60, 60)
     cutoff = generated_at - (window_hours * 3600)
     task_rows = list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
+    maintenance_rows = list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
 
@@ -175,6 +185,12 @@ def build_nerd_metrics(
         generated_at=generated_at,
         bucket_seconds=bucket_seconds,
     )
+    maintenance = build_maintenance_events(
+        maintenance_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
     search_quality = build_search_quality(
         search_health=build_search_health(relational_search),
         graph_topology=graph_topology,
@@ -212,6 +228,7 @@ def build_nerd_metrics(
         composition=composition,
         distributions=distributions,
         timelines=timelines,
+        maintenance=maintenance,
         queue_snapshot=queue_snapshot,
         graph_topology=graph_topology,
         memory_lifecycle=memory_lifecycle,
@@ -410,6 +427,52 @@ def build_timelines(
     return NerdTimelinesPayload(memory_activity=memory_activity)
 
 
+def build_maintenance_events(
+    maintenance_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdMaintenancePayload:
+    if not maintenance_rows or generated_at < cutoff:
+        return NerdMaintenancePayload()
+
+    events: list[MaintenanceEventPayload] = []
+    for row in maintenance_rows:
+        completed_at = float(row["completed_at"] or 0.0)
+        if completed_at < cutoff or completed_at > generated_at:
+            continue
+
+        result = decode_run_result(row["result_json"])
+        result_metadata = extract_run_result_metadata(result)
+        ingest_audit = extract_ingest_audit(result)
+        events.append(
+            MaintenanceEventPayload(
+                task_id=str(row["task_id"]),
+                task_name=str(row["task_name"]),
+                status=str(row["status"]),
+                completed_at=completed_at,
+                bucket_start=float(int(completed_at // bucket_seconds) * bucket_seconds),
+                duration_seconds=float(row["duration_seconds"] or 0.0),
+                result_summary=format_result_summary(result) or _coerce_row_str(row["error_text"]),
+                strategy_used=result_metadata.strategy_used,
+                impact_summary=_build_maintenance_impact_summary(result, ingest_audit=ingest_audit),
+                candidate_count=result_metadata.candidate_count,
+                group_count=result_metadata.group_count,
+                created_count=_prefer_nonzero_int(_result_int(result, "created"), ingest_audit.created_count),
+                merged_count=_result_int(result, "merged"),
+                updated_count=_result_int(result, "updated"),
+                archived_count=_result_int(result, "archived"),
+                lines_compressed=_result_int(result, "lines_compressed"),
+                meaningful_actions=_prefer_nonzero_int(
+                    _result_int(result, "meaningful_actions"),
+                    ingest_audit.meaningful_actions,
+                ),
+            )
+        )
+    return NerdMaintenancePayload(events=events)
+
+
 def build_search_quality(*, search_health, graph_topology: GraphTopologyPayload, memory_lifecycle: MemoryLifecyclePayload) -> SearchQualityPayload:
     return SearchQualityPayload(
         semantic_enabled=search_health.semantic_enabled,
@@ -549,6 +612,34 @@ def _materialize_bucket_counts(bucket_defs, counts: dict[str, int]) -> list[Nerd
     ]
 
 
+def _build_maintenance_impact_summary(result: dict[str, object], *, ingest_audit) -> str | None:
+    parts: list[str] = []
+    for key, label in (
+        ("created", "created"),
+        ("merged", "merged"),
+        ("updated", "updated"),
+        ("archived", "archived"),
+        ("restored", "restored"),
+        ("degraded", "degraded"),
+        ("lines_compressed", "lines"),
+        ("meaningful_actions", "actions"),
+    ):
+        value = _result_int(result, key)
+        if value is not None and value > 0:
+            parts.append(f"{label}={value}")
+
+    for label, value in (
+        ("created_memories", ingest_audit.created_count),
+        ("touched", ingest_audit.touched_count),
+        ("appended", ingest_audit.appended_count),
+        ("matched", ingest_audit.matched_count),
+    ):
+        if value > 0 and all(not part.startswith(f"{label}=") for part in parts):
+            parts.append(f"{label}={value}")
+
+    return ", ".join(parts[:6]) if parts else None
+
+
 def _bucket_key_for_value(value: float, bucket_defs) -> str:
     for key, _label, minimum, maximum in bucket_defs:
         if value < minimum:
@@ -556,6 +647,23 @@ def _bucket_key_for_value(value: float, bucket_defs) -> str:
         if maximum is None or value < maximum:
             return key
     return str(bucket_defs[-1][0])
+
+
+def _coerce_row_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _result_int(result: dict[str, object], key: str) -> int | None:
+    value = result.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _prefer_nonzero_int(primary: int | None, fallback: int | None) -> int | None:
+    if primary is not None and primary > 0:
+        return primary
+    if fallback is not None and fallback > 0:
+        return fallback
+    return primary if primary is not None else fallback
 
 
 def _iso_to_timestamp(value: str | None) -> float | None:

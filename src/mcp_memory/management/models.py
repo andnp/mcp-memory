@@ -251,6 +251,30 @@ class MemoryTimelineBucketPayload(BaseModel):
     total_content_bytes: int = 0
 
 
+class MaintenanceEventPayload(BaseModel):
+    task_id: str
+    task_name: str
+    status: str
+    completed_at: float
+    bucket_start: float
+    duration_seconds: float = 0.0
+    result_summary: str | None = None
+    strategy_used: str | None = None
+    impact_summary: str | None = None
+    candidate_count: int | None = None
+    group_count: int | None = None
+    created_count: int | None = None
+    merged_count: int | None = None
+    updated_count: int | None = None
+    archived_count: int | None = None
+    lines_compressed: int | None = None
+    meaningful_actions: int | None = None
+
+
+class NerdMaintenancePayload(BaseModel):
+    events: list[MaintenanceEventPayload] = Field(default_factory=list)
+
+
 class NerdTimelinesPayload(BaseModel):
     memory_activity: list[MemoryTimelineBucketPayload] = Field(default_factory=list)
 
@@ -352,6 +376,7 @@ class NerdMetricsPayload(BaseModel):
     composition: NerdCompositionPayload = Field(default_factory=NerdCompositionPayload)
     distributions: NerdDistributionsPayload = Field(default_factory=NerdDistributionsPayload)
     timelines: NerdTimelinesPayload = Field(default_factory=NerdTimelinesPayload)
+    maintenance: NerdMaintenancePayload = Field(default_factory=NerdMaintenancePayload)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
     graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
     memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)
