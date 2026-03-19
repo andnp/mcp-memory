@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import math
 from statistics import mean, median
 import time
@@ -9,10 +11,15 @@ from mcp_memory.management.health_reporting import build_search_health
 from mcp_memory.management.models import (
     AgentThroughputBucketPayload,
     GraphTopologyPayload,
+    MemoryTimelineBucketPayload,
     MemoryLifecyclePayload,
     NerdAlertPayload,
+    NerdCompositionPayload,
+    NerdCountBucketPayload,
+    NerdDistributionsPayload,
     NerdMetricsPayload,
     NerdStatPayload,
+    NerdTimelinesPayload,
     ProviderLatencyBucketPayload,
     QueueSnapshotPayload,
     SearchQualityPayload,
@@ -23,8 +30,26 @@ from mcp_memory.management.reporting_queries import (
     list_scoped_link_rows,
     list_scoped_memory_rows,
     list_task_run_rows_since,
+    split_csv_values,
 )
 from mcp_memory.management.route_audit import build_task_route_audit
+
+
+_TAG_LIMIT = 10
+_AGE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
+    ("lt_1d", "< 1 day", 0, 86_400),
+    ("1d_to_7d", "1-7 days", 86_400, 7 * 86_400),
+    ("7d_to_30d", "7-30 days", 7 * 86_400, 30 * 86_400),
+    ("30d_to_90d", "30-90 days", 30 * 86_400, 90 * 86_400),
+    ("gte_90d", ">= 90 days", 90 * 86_400, None),
+)
+_SIZE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
+    ("0b_to_255b", "0-255 B", 0, 256),
+    ("256b_to_1kb", "256 B-1 KiB", 256, 1_024),
+    ("1kb_to_4kb", "1-4 KiB", 1_024, 4_096),
+    ("4kb_to_16kb", "4-16 KiB", 4_096, 16_384),
+    ("gte_16kb", ">= 16 KiB", 16_384, None),
+)
 
 
 @dataclass
@@ -70,6 +95,7 @@ def build_nerd_metrics(
     cutoff = generated_at - (window_hours * 3600)
     task_rows = list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
+    memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
 
     task_buckets: dict[float, _TaskBucketAccumulator] = {}
     for row in task_rows:
@@ -139,8 +165,16 @@ def build_nerd_metrics(
         oldest_age_seconds=round(max((row.age_seconds for row in runnable_queue_rows), default=0.0), 4),
     )
 
-    graph_topology = build_graph_topology(db_manager, workspace_id)
-    memory_lifecycle = build_memory_lifecycle(db_manager, workspace_id)
+    graph_topology = build_graph_topology(db_manager, workspace_id, memory_rows=memory_rows)
+    memory_lifecycle = build_memory_lifecycle(db_manager, workspace_id, memory_rows=memory_rows)
+    composition = build_composition(memory_rows)
+    distributions = build_distributions(memory_rows, generated_at=generated_at)
+    timelines = build_timelines(
+        memory_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
     search_quality = build_search_quality(
         search_health=build_search_health(relational_search),
         graph_topology=graph_topology,
@@ -175,6 +209,9 @@ def build_nerd_metrics(
         window_hours=window_hours,
         bucket_minutes=bucket_minutes,
         stats=stats,
+        composition=composition,
+        distributions=distributions,
+        timelines=timelines,
         queue_snapshot=queue_snapshot,
         graph_topology=graph_topology,
         memory_lifecycle=memory_lifecycle,
@@ -193,8 +230,9 @@ def build_nerd_metrics(
     )
 
 
-def build_graph_topology(db_manager, workspace_id: str | None) -> GraphTopologyPayload:
-    memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
+def build_graph_topology(db_manager, workspace_id: str | None, *, memory_rows=None) -> GraphTopologyPayload:
+    if memory_rows is None:
+        memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
     memory_ids = {str(row["id"]) for row in memory_rows}
     if not memory_ids:
         return GraphTopologyPayload()
@@ -232,8 +270,9 @@ def build_graph_topology(db_manager, workspace_id: str | None) -> GraphTopologyP
     )
 
 
-def build_memory_lifecycle(db_manager, workspace_id: str | None) -> MemoryLifecyclePayload:
-    memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
+def build_memory_lifecycle(db_manager, workspace_id: str | None, *, memory_rows=None) -> MemoryLifecyclePayload:
+    if memory_rows is None:
+        memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
     if not memory_rows:
         return MemoryLifecyclePayload()
 
@@ -274,6 +313,101 @@ def build_memory_lifecycle(db_manager, workspace_id: str | None) -> MemoryLifecy
         stale_count=stale_count,
         degraded_count=degraded_count,
     )
+
+
+def build_composition(memory_rows) -> NerdCompositionPayload:
+    if not memory_rows:
+        return NerdCompositionPayload()
+
+    workspace_counts: Counter[str] = Counter()
+    tag_counts: Counter[str] = Counter()
+    type_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+
+    for row in memory_rows:
+        type_counts[str(row["type"])] += 1
+        status_counts[str(row["status"])] += 1
+        workspace_counts.update(split_csv_values(row["workspace_ids_csv"]))
+        tag_counts.update(split_csv_values(row["tags_csv"]))
+
+    return NerdCompositionPayload(
+        by_workspace=_count_buckets(workspace_counts),
+        by_tag=_count_buckets(tag_counts, limit=_TAG_LIMIT, other_key="other", other_label="Other"),
+        by_type=_count_buckets(type_counts),
+        by_status=_count_buckets(status_counts),
+    )
+
+
+def build_distributions(memory_rows, *, generated_at: float) -> NerdDistributionsPayload:
+    created_counts = {key: 0 for key, _, _, _ in _AGE_BUCKETS}
+    updated_counts = {key: 0 for key, _, _, _ in _AGE_BUCKETS}
+    size_counts = {key: 0 for key, _, _, _ in _SIZE_BUCKETS}
+
+    for row in memory_rows:
+        created_at = _iso_to_timestamp(row["created_at"])
+        updated_at = _iso_to_timestamp(row["updated_at"])
+        content_bytes = int(row["content_bytes"] or 0)
+        if created_at is not None:
+            created_counts[_bucket_key_for_value(max(generated_at - created_at, 0.0), _AGE_BUCKETS)] += 1
+        if updated_at is not None:
+            updated_counts[_bucket_key_for_value(max(generated_at - updated_at, 0.0), _AGE_BUCKETS)] += 1
+        size_counts[_bucket_key_for_value(float(content_bytes), _SIZE_BUCKETS)] += 1
+
+    return NerdDistributionsPayload(
+        created_age_buckets=_materialize_bucket_counts(_AGE_BUCKETS, created_counts),
+        updated_age_buckets=_materialize_bucket_counts(_AGE_BUCKETS, updated_counts),
+        content_size_buckets=_materialize_bucket_counts(_SIZE_BUCKETS, size_counts),
+    )
+
+
+def build_timelines(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdTimelinesPayload:
+    if not memory_rows or generated_at < cutoff:
+        return NerdTimelinesPayload()
+
+    start_bucket = int(cutoff // bucket_seconds) * bucket_seconds
+    end_bucket = int(generated_at // bucket_seconds) * bucket_seconds
+    if end_bucket < start_bucket:
+        return NerdTimelinesPayload()
+
+    created_counts: Counter[int] = Counter()
+    updated_counts: Counter[int] = Counter()
+    created_bytes: Counter[int] = Counter()
+    baseline_bytes = 0
+
+    for row in memory_rows:
+        content_bytes = int(row["content_bytes"] or 0)
+        created_at = _iso_to_timestamp(row["created_at"])
+        updated_at = _iso_to_timestamp(row["updated_at"])
+        if created_at is not None:
+            if created_at < cutoff:
+                baseline_bytes += content_bytes
+            elif created_at <= generated_at:
+                created_bucket = int(created_at // bucket_seconds) * bucket_seconds
+                created_counts[created_bucket] += 1
+                created_bytes[created_bucket] += content_bytes
+        if updated_at is not None and cutoff <= updated_at <= generated_at:
+            updated_bucket = int(updated_at // bucket_seconds) * bucket_seconds
+            updated_counts[updated_bucket] += 1
+
+    running_bytes = baseline_bytes
+    memory_activity: list[MemoryTimelineBucketPayload] = []
+    for bucket_start in range(start_bucket, end_bucket + bucket_seconds, bucket_seconds):
+        running_bytes += created_bytes.get(bucket_start, 0)
+        memory_activity.append(
+            MemoryTimelineBucketPayload(
+                bucket_start=float(bucket_start),
+                created_count=created_counts.get(bucket_start, 0),
+                updated_count=updated_counts.get(bucket_start, 0),
+                total_content_bytes=running_bytes,
+            )
+        )
+    return NerdTimelinesPayload(memory_activity=memory_activity)
 
 
 def build_search_quality(*, search_health, graph_topology: GraphTopologyPayload, memory_lifecycle: MemoryLifecyclePayload) -> SearchQualityPayload:
@@ -386,3 +520,48 @@ def _percentile(values: list[float], ratio: float) -> float:
     sorted_values = sorted(values)
     index = max(math.ceil(len(sorted_values) * ratio) - 1, 0)
     return float(sorted_values[index])
+
+
+def _count_buckets(
+    counts: Counter[str],
+    *,
+    limit: int | None = None,
+    other_key: str | None = None,
+    other_label: str | None = None,
+) -> list[NerdCountBucketPayload]:
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    if limit is not None and len(ordered) > limit:
+        kept = ordered[:limit]
+        other_count = sum(count for _, count in ordered[limit:])
+        ordered = kept
+        if other_count > 0 and other_key is not None and other_label is not None:
+            return [
+                *[NerdCountBucketPayload(key=key, label=key, count=count) for key, count in ordered],
+                NerdCountBucketPayload(key=other_key, label=other_label, count=other_count),
+            ]
+    return [NerdCountBucketPayload(key=key, label=key, count=count) for key, count in ordered]
+
+
+def _materialize_bucket_counts(bucket_defs, counts: dict[str, int]) -> list[NerdCountBucketPayload]:
+    return [
+        NerdCountBucketPayload(key=key, label=label, count=counts.get(key, 0))
+        for key, label, _, _ in bucket_defs
+    ]
+
+
+def _bucket_key_for_value(value: float, bucket_defs) -> str:
+    for key, _label, minimum, maximum in bucket_defs:
+        if value < minimum:
+            continue
+        if maximum is None or value < maximum:
+            return key
+    return str(bucket_defs[-1][0])
+
+
+def _iso_to_timestamp(value: str | None) -> float | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()

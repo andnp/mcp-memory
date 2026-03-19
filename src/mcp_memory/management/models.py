@@ -225,6 +225,36 @@ class NerdStatPayload(BaseModel):
     unit: str | None = None
 
 
+class NerdCountBucketPayload(BaseModel):
+    key: str
+    label: str
+    count: int = 0
+
+
+class NerdCompositionPayload(BaseModel):
+    by_workspace: list[NerdCountBucketPayload] = Field(default_factory=list)
+    by_tag: list[NerdCountBucketPayload] = Field(default_factory=list)
+    by_type: list[NerdCountBucketPayload] = Field(default_factory=list)
+    by_status: list[NerdCountBucketPayload] = Field(default_factory=list)
+
+
+class NerdDistributionsPayload(BaseModel):
+    created_age_buckets: list[NerdCountBucketPayload] = Field(default_factory=list)
+    updated_age_buckets: list[NerdCountBucketPayload] = Field(default_factory=list)
+    content_size_buckets: list[NerdCountBucketPayload] = Field(default_factory=list)
+
+
+class MemoryTimelineBucketPayload(BaseModel):
+    bucket_start: float
+    created_count: int = 0
+    updated_count: int = 0
+    total_content_bytes: int = 0
+
+
+class NerdTimelinesPayload(BaseModel):
+    memory_activity: list[MemoryTimelineBucketPayload] = Field(default_factory=list)
+
+
 class AgentThroughputBucketPayload(BaseModel):
     bucket_start: float
     total_runs: int
@@ -319,6 +349,9 @@ class NerdMetricsPayload(BaseModel):
     window_hours: int
     bucket_minutes: int
     stats: list[NerdStatPayload] = Field(default_factory=list)
+    composition: NerdCompositionPayload = Field(default_factory=NerdCompositionPayload)
+    distributions: NerdDistributionsPayload = Field(default_factory=NerdDistributionsPayload)
+    timelines: NerdTimelinesPayload = Field(default_factory=NerdTimelinesPayload)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
     graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
     memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)

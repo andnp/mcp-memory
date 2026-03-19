@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 import logging
 import time
@@ -66,6 +67,14 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.graph_topology.total_memories == 0
     assert nerd_metrics.graph_topology.total_links == 0
     assert nerd_metrics.memory_lifecycle.by_status == {}
+    assert nerd_metrics.composition.by_workspace == []
+    assert nerd_metrics.composition.by_tag == []
+    assert nerd_metrics.composition.by_type == []
+    assert nerd_metrics.composition.by_status == []
+    assert [bucket.count for bucket in nerd_metrics.distributions.created_age_buckets] == [0, 0, 0, 0, 0]
+    assert [bucket.count for bucket in nerd_metrics.distributions.updated_age_buckets] == [0, 0, 0, 0, 0]
+    assert [bucket.count for bucket in nerd_metrics.distributions.content_size_buckets] == [0, 0, 0, 0, 0]
+    assert nerd_metrics.timelines.memory_activity == []
     assert nerd_metrics.agent_throughput == []
     assert nerd_metrics.provider_latency == []
 
@@ -119,16 +128,123 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
 
     scoped_overview = scoped_service.get_overview()
     global_overview = global_service.get_overview()
+    scoped_nerd = scoped_service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+    global_nerd = global_service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
 
     assert scoped_overview.memories.total == 1
     assert scoped_overview.memory_metrics.total_memories == 1
     assert [record.title for record in scoped_overview.recent_memories] == ["Workspace A fact"]
     assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
+    assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
 
     assert global_overview.memories.total == 2
     assert global_overview.memory_metrics.total_memories == 2
     assert {record.title for record in global_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
     assert {item.provider_key for item in global_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
+    assert [(item.key, item.count) for item in global_nerd.composition.by_workspace] == [
+        ("workspace-a", 1),
+        ("workspace-b", 1),
+    ]
+
+
+def test_management_service_nerd_metrics_composition_distributions_and_timelines(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    now = datetime(2026, 3, 19, 12, 0, tzinfo=UTC)
+
+    repository.create_memory(
+        title="Fresh fact",
+        content="a" * 120,
+        workspace_ids=["workspace-a"],
+        tags=["alpha", "shared"],
+        memory_type="fact",
+        status="active",
+        created_at=(now - timedelta(hours=6)).isoformat(),
+        updated_at=(now - timedelta(hours=2)).isoformat(),
+    )
+    repository.create_memory(
+        title="Recent plan",
+        content="b" * 2_000,
+        workspace_ids=["workspace-a"],
+        tags=["beta", "shared"],
+        memory_type="plan",
+        status="stale",
+        created_at=(now - timedelta(days=2)).isoformat(),
+        updated_at=(now - timedelta(hours=20)).isoformat(),
+    )
+    repository.create_memory(
+        title="Older reflection",
+        content="c" * 7_000,
+        workspace_ids=["workspace-a"],
+        tags=["alpha", "gamma"],
+        memory_type="reflection",
+        status="degraded",
+        created_at=(now - timedelta(days=40)).isoformat(),
+        updated_at=(now - timedelta(days=10)).isoformat(),
+    )
+    repository.create_memory(
+        title="Other workspace fact",
+        content="d" * 500,
+        workspace_ids=["workspace-b"],
+        tags=["beta", "excluded"],
+        memory_type="fact",
+        status="archived",
+        created_at=(now - timedelta(days=5)).isoformat(),
+        updated_at=(now - timedelta(days=1)).isoformat(),
+    )
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=24 * 45, bucket_minutes=24 * 60, now=now.timestamp())
+
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_workspace] == [("workspace-a", 3)]
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_type] == [
+        ("fact", 1),
+        ("plan", 1),
+        ("reflection", 1),
+    ]
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_status] == [
+        ("active", 1),
+        ("degraded", 1),
+        ("stale", 1),
+    ]
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_tag] == [
+        ("alpha", 2),
+        ("shared", 2),
+        ("beta", 1),
+        ("gamma", 1),
+    ]
+
+    assert [(bucket.key, bucket.count) for bucket in nerd_metrics.distributions.created_age_buckets] == [
+        ("lt_1d", 1),
+        ("1d_to_7d", 1),
+        ("7d_to_30d", 0),
+        ("30d_to_90d", 1),
+        ("gte_90d", 0),
+    ]
+    assert [(bucket.key, bucket.count) for bucket in nerd_metrics.distributions.updated_age_buckets] == [
+        ("lt_1d", 2),
+        ("1d_to_7d", 0),
+        ("7d_to_30d", 1),
+        ("30d_to_90d", 0),
+        ("gte_90d", 0),
+    ]
+    assert [(bucket.key, bucket.count) for bucket in nerd_metrics.distributions.content_size_buckets] == [
+        ("0b_to_255b", 1),
+        ("256b_to_1kb", 0),
+        ("1kb_to_4kb", 1),
+        ("4kb_to_16kb", 1),
+        ("gte_16kb", 0),
+    ]
+
+    assert sum(bucket.created_count for bucket in nerd_metrics.timelines.memory_activity) == 3
+    assert sum(bucket.updated_count for bucket in nerd_metrics.timelines.memory_activity) == 3
+    assert nerd_metrics.timelines.memory_activity[-1].total_content_bytes == 9_120
 
 
 def test_management_service_graph_topology_counts_cross_workspace_links(db_manager) -> None:

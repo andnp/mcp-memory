@@ -102,8 +102,18 @@ def list_scoped_memory_rows(db_manager, workspace_id: str | None):
         return []
     conn = db_manager.get_connection()
     query = (
-        "SELECT memories.id, memories.type, memories.status, memories.last_accessed_at, memories.last_surfaced_at, "
-        "LENGTH(COALESCE(memories.content, '')) AS content_bytes FROM memories"
+        "SELECT memories.id, memories.type, memories.status, memories.created_at, memories.updated_at, "
+        "memories.last_accessed_at, memories.last_surfaced_at, LENGTH(COALESCE(memories.content, '')) AS content_bytes, "
+        "COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv, COALESCE(tag_agg.tags, '') AS tags_csv "
+        "FROM memories "
+        "LEFT JOIN ("
+        "SELECT memory_id, GROUP_CONCAT(DISTINCT workspace_id) AS workspace_ids "
+        "FROM memory_workspaces GROUP BY memory_id"
+        ") workspace_agg ON workspace_agg.memory_id = memories.id "
+        "LEFT JOIN ("
+        "SELECT memory_tags.memory_id, GROUP_CONCAT(DISTINCT tags.name) AS tags "
+        "FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id"
+        ") tag_agg ON tag_agg.memory_id = memories.id"
     )
     params: list[object] = []
     if workspace_id is not None:
@@ -169,3 +179,9 @@ def build_queue_diagnostics(task_queue, workspace_id: str | None, limit: int = 8
 
 def row_int(row: Any, key: str) -> int:
     return 0 if row is None else int(row[key])
+
+
+def split_csv_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item for item in value.split(",") if item]

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 import pytest
@@ -37,6 +39,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
     base_time = time.time() - 300.0
+    primary_created_at = datetime.fromtimestamp(base_time - 120.0, tz=UTC).isoformat()
+    primary_updated_at = datetime.fromtimestamp(base_time - 60.0, tz=UTC).isoformat()
+    superseded_created_at = datetime.fromtimestamp(base_time - 90.0, tz=UTC).isoformat()
+    superseded_updated_at = datetime.fromtimestamp(base_time - 30.0, tz=UTC).isoformat()
 
     seed_runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
@@ -78,6 +84,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             workspace_ids=[seed_runtime.workspace_id],
             memory_type="plan",
             tags=["dashboard", "api"],
+            created_at=primary_created_at,
+            updated_at=primary_updated_at,
         )
         superseded = seed_runtime.repository.create_memory(
             title="Management API legacy plan",
@@ -85,9 +93,19 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             workspace_ids=[seed_runtime.workspace_id],
             memory_type="plan",
             tags=["dashboard"],
+            created_at=superseded_created_at,
+            updated_at=superseded_updated_at,
         )
         assert primary is not None and superseded is not None
         seed_runtime.repository.add_link(primary.id, superseded.id, "SUPERSEDES", "Superseded during epic 6")
+        foreign_memory = seed_runtime.repository.create_memory(
+            title="Other workspace memory",
+            content="This should stay out of scoped nerd metrics.",
+            workspace_ids=["workspace-b"],
+            memory_type="fact",
+            tags=["foreign-tag"],
+        )
+        assert foreign_memory is not None
 
         task = seed_runtime.task_queue.enqueue(
             "fact-checker",
@@ -265,6 +283,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert log_summary["total"] == 1
         assert log_summary["by_level"] == {"INFO": 1}
         assert nerd_metrics["stats"]
+        assert "composition" in nerd_metrics
+        assert "distributions" in nerd_metrics
+        assert "timelines" in nerd_metrics
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
@@ -274,6 +295,22 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 2
         assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
         assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
+        assert nerd_metrics["composition"]["by_workspace"] == [
+            {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2}
+        ]
+        assert {item["key"] for item in nerd_metrics["composition"]["by_tag"]} == {"api", "dashboard"}
+        assert nerd_metrics["composition"]["by_status"] == [
+            {"key": "active", "label": "active", "count": 2}
+        ]
+        assert [bucket["key"] for bucket in nerd_metrics["distributions"]["created_age_buckets"]] == [
+            "lt_1d",
+            "1d_to_7d",
+            "7d_to_30d",
+            "30d_to_90d",
+            "gte_90d",
+        ]
+        assert sum(bucket["created_count"] for bucket in nerd_metrics["timelines"]["memory_activity"]) == 2
+        assert nerd_metrics["timelines"]["memory_activity"][-1]["total_content_bytes"] > 0
         assert nerd_metrics["search_quality"]["semantic_enabled"] is True
         assert any(item["task_name"] == "memory-curator" for item in nerd_metrics["route_audit"])
         summarize_route = next(item for item in nerd_metrics["route_audit"] if item["task_name"] == "summarize-memory")
@@ -380,7 +417,7 @@ async def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconne
         ),
     )
 
-    idle_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(idle_app))
+    idle_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(cast(Any, idle_app)))
     idle_app.state.idle_shutdown_task = idle_task
     await asyncio.wait_for(idle_task, timeout=0.2)
 
@@ -398,7 +435,7 @@ async def test_daemon_idle_shutdown_waits_for_last_client_and_cancels_on_reconne
         ),
     )
 
-    reconnect_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(reconnect_app))
+    reconnect_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(cast(Any, reconnect_app)))
     reconnect_app.state.idle_shutdown_task = reconnect_task
     await asyncio.wait_for(reconnect_task, timeout=0.2)
 
@@ -438,7 +475,7 @@ async def test_daemon_idle_shutdown_defers_while_background_tasks_are_running(mo
         ),
     )
 
-    shutdown_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(app))
+    shutdown_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(cast(Any, app)))
     app.state.idle_shutdown_task = shutdown_task
 
     await asyncio.wait_for(deferred_check.wait(), timeout=0.2)

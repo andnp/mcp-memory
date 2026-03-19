@@ -28,6 +28,15 @@ Transition from a static "monitoring dashboard" to an interactive **Memory Comma
 - **Concept:** A dedicated area for resolving contradictions.
 - **Functionality:** Surfaces memories linked by `CONTRADICTS`. Allows the user to manually merge, archive, or ignore the conflict.
 
+### 2.5 Nerd metrics analytics IA
+- The nerd dashboard is now treated as a phased analytics surface instead of one giant undifferentiated panel.
+- The concrete backend contract for the first rollout lives in `docs/specs/12-nerd-metrics-analytics.md`.
+- Slice 1 focuses on three foundational panels:
+    - **Composition** — breakdowns by workspace/project, tag, type, and status
+    - **Distributions** — created age, updated age, and content-size buckets
+    - **Timelines** — created/updated memory activity and cumulative content bytes over time
+- Deeper lifecycle, search-quality, graph-intelligence, and anomaly panels remain later slices layered onto the same `/api/metrics/nerd` contract.
+
 ## 3. Tech Stack Overhaul
 - **Frontend:** React + Vite (for fast iteration and modern component support).
 - **Styling:** Tailwind CSS (for consistent, modern aesthetics).
@@ -42,4 +51,5 @@ Transition from a static "monitoring dashboard" to an interactive **Memory Comma
 ## 5. Implementation Phases
 1.  **Phase 1 (Foundation):** Setup Vite + React + Tailwind. Implement the Global Command Bar (Search/Stash).
 2.  **Phase 2 (Agentic Visibility):** Build the Agent Audit Stream and the real-time "Pulse" indicators.
-3.  **Phase 3 (Exploration):** Integrate the Graph Visualization and the Conflict Inbox.
+3.  **Phase 3 (Analytics Fundamentals):** Ship the first nerd metrics slice from `docs/specs/12-nerd-metrics-analytics.md` behind `/api/metrics/nerd`.
+4.  **Phase 4 (Exploration):** Integrate the Graph Visualization, conflict workflows, and deeper analytics drill-downs.
