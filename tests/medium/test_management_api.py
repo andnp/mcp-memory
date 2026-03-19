@@ -288,6 +288,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "distributions" in nerd_metrics
         assert "timelines" in nerd_metrics
         assert "maintenance" in nerd_metrics
+        assert "lifecycle_trends" in nerd_metrics
+        assert "growth_dynamics" in nerd_metrics
+        assert "maintenance_summary" in nerd_metrics
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
@@ -319,6 +322,17 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert deduplicator_event["candidate_count"] == 6
         assert deduplicator_event["lines_compressed"] == 12
         assert deduplicator_event["impact_summary"] == "merged=1, lines=12"
+        assert nerd_metrics["lifecycle_trends"]["never_surfaced_backlog"]
+        assert nerd_metrics["lifecycle_trends"]["cold_tail"]
+        assert nerd_metrics["growth_dynamics"]["top_tag_trends"]
+        assert nerd_metrics["growth_dynamics"]["workspace_contribution_share"]
+        compaction_family = next(item for item in nerd_metrics["maintenance_summary"]["by_family"] if item["key"] == "compaction")
+        deduplicator_yield = next(item for item in nerd_metrics["maintenance_summary"]["by_agent"] if item["key"] == "deduplicator")
+        assert compaction_family["merged_count"] == 1
+        assert compaction_family["lines_compressed"] == 12
+        assert deduplicator_yield["family_key"] == "compaction"
+        assert deduplicator_yield["delta_per_completed_run"] == 1.0
+        assert any(item["key"] == "compaction" for item in nerd_metrics["maintenance_summary"]["family_delta_series"])
         assert nerd_metrics["search_quality"]["semantic_enabled"] is True
         assert any(item["task_name"] == "memory-curator" for item in nerd_metrics["route_audit"])
         summarize_route = next(item for item in nerd_metrics["route_audit"] if item["task_name"] == "summarize-memory")

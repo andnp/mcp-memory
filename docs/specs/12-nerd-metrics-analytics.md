@@ -17,6 +17,8 @@ It is not a vanity dashboard. It is an operator/debugging surface for answering 
 
 This spec expands the existing `/api/metrics/nerd` payload with a first analytics wave focused on **composition**, **distributions**, and **timelines**.
 
+It now also defines the next additive backend tranche for **lifecycle trends**, **growth dynamics**, and **maintenance summaries**.
+
 ## 2. Contract rules
 
 ### 2.1 Additive-only evolution
@@ -136,6 +138,127 @@ Rules:
   - This is intentionally approximate for slice 1.
   - It is based on present-day memory size plus creation time, not historical content diff logs.
 
+### 4.4 `lifecycle_trends`
+
+```text
+lifecycle_trends: {
+  status_events: CountSeries[]
+  never_surfaced_backlog: TimeCountBucket[]
+  cold_tail: TimeCountBucket[]
+}
+```
+
+`CountSeries`:
+
+- `key: str`
+- `label: str`
+- `buckets: TimeCountBucket[]`
+
+`TimeCountBucket`:
+
+- `bucket_start: float`
+- `count: int`
+
+Rules:
+
+- `status_events` includes only lifecycle-like event families that the runtime can report honestly from task-run results.
+  - Current shipped keys are limited to counters such as `stale`, `degraded`, `archived`, and `restored` when those counters were explicitly reported by a run.
+  - If the selected window has no explicit counters for one of those keys, omit that series rather than synthesizing zeros for a fake metric.
+- `never_surfaced_backlog` is a cumulative/current-stock approximation for currently visible memories whose `last_surfaced_at` is still null.
+  - It is seeded by memories created before the window start.
+  - It is **not** a historical reconstruction of when memories became unsurfaced or were later surfaced.
+- `cold_tail` is the same style of cumulative/current-stock approximation for currently visible memories whose `last_accessed_at` is still null.
+  - It is intentionally a present-day cold-stock trend, not a true historical coldness reconstruction.
+
+### 4.5 `growth_dynamics`
+
+```text
+growth_dynamics: {
+  top_tag_trends: CountSeries[]
+  workspace_contribution_share: ShareSeries[]
+}
+```
+
+`ShareSeries`:
+
+- `key: str`
+- `label: str`
+- `buckets: TimeShareBucket[]`
+
+`TimeShareBucket`:
+
+- `bucket_start: float`
+- `count: int`
+- `share: float`
+
+Rules:
+
+- `top_tag_trends` uses cumulative/current-stock series derived from currently visible memories and their `created_at` timestamps.
+  - Select the top 5 tags by present-day scoped count.
+  - If more tags remain, append `other` and aggregate the remainder there.
+- `workspace_contribution_share` uses the same cumulative/current-stock method, but contributions are counted per visible memory workspace association.
+  - This preserves the existing workspace semantics: a visible shared memory may contribute to more than one workspace bucket.
+  - Select the top 5 workspace IDs by present-day scoped count, plus optional `other`.
+  - `share` is computed within each bucket as `count / total visible contributions in that bucket`.
+- These sections intentionally avoid historical stock reconstruction beyond the creation-time cumulative approximation.
+
+### 4.6 `maintenance_summary`
+
+```text
+maintenance_summary: {
+  by_family: MaintenanceSummaryRow[]
+  by_agent: MaintenanceAgentYieldRow[]
+  family_delta_series: MaintenanceDeltaSeries[]
+}
+```
+
+`MaintenanceSummaryRow`:
+
+- `key: str`
+- `label: str`
+- `task_names: str[]`
+- `total_runs: int`
+- `completed_runs: int`
+- `failed_runs: int`
+- `retry_runs: int`
+- `created_count: int`
+- `merged_count: int`
+- `updated_count: int`
+- `archived_count: int`
+- `degraded_count: int`
+- `restored_count: int`
+- `meaningful_actions: int`
+- `lines_compressed: int`
+- `delta_total: int`
+
+`MaintenanceAgentYieldRow` extends the summary row with:
+
+- `family_key: str`
+- `family_label: str`
+- `actions_per_completed_run: float`
+- `lines_per_completed_run: float`
+- `delta_per_completed_run: float`
+
+`MaintenanceDeltaSeries`:
+
+- `key: str`
+- `label: str`
+- `task_names: str[]`
+- `buckets: MaintenanceDeltaBucket[]`
+
+Rules:
+
+- This section uses **run-reported counters only**.
+  - Do not infer maintenance impact from ingest audit side effects, linked rows, or current memory stock.
+  - Missing counters mean zero contribution, not backfilled guesses.
+- `by_family` rolls maintenance tasks into explicit reporting families. The shipped backend currently uses:
+  - `organization` — `project-manager`, `taxonomist`
+  - `verification` — `fact-checker`, `graph-linker`, `conflict-detector`
+  - `compaction` — `defragmenter`, `deduplicator`, `memory-curator`
+  - `retention` — `sweeper`
+- `by_agent` keeps one row per task name and exposes lightweight yield ratios.
+- `family_delta_series` emits bucketed per-family counters using the same explicit run-reported delta keys.
+
 ## 5. First-slice information architecture
 
 The UI is expected to consume the first analytics wave as three foundational panels:
@@ -157,9 +280,15 @@ This slice intentionally does **not** cover the deeper graph/search/provider/ope
 
 ### Phase B — lifecycle and search depth
 
-- Promotion and supersession funnels
+- Honest lifecycle event trends
 - Search confidence and zero-result analytics
 - Never-surfaced and long-tail retrieval views
+
+### Phase B.1 — additive backend tranche now shipped
+
+- `lifecycle_trends`
+- `growth_dynamics`
+- `maintenance_summary`
 
 ### Phase C — graph and runtime depth
 
@@ -178,4 +307,9 @@ At minimum, backend verification must cover:
 - type/status grouping
 - age and size bucket correctness
 - timeline presence and basic correctness
+- empty shapes for all additive sections
+- cumulative/current-stock math for lifecycle and growth trends
+- top-5 plus `other` capping for growth dynamics
+- maintenance-family aggregation using run-reported counters only
+- missing maintenance counters staying zero / omitted instead of fabricated
 - API contract exposure under `/api/metrics/nerd`

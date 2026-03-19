@@ -275,6 +275,92 @@ class NerdMaintenancePayload(BaseModel):
     events: list[MaintenanceEventPayload] = Field(default_factory=list)
 
 
+class NerdTimeCountBucketPayload(BaseModel):
+    bucket_start: float
+    count: int = 0
+
+
+class NerdTimeShareBucketPayload(BaseModel):
+    bucket_start: float
+    count: int = 0
+    share: float = 0.0
+
+
+class NerdCountSeriesPayload(BaseModel):
+    key: str
+    label: str
+    buckets: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+
+
+class NerdShareSeriesPayload(BaseModel):
+    key: str
+    label: str
+    buckets: list[NerdTimeShareBucketPayload] = Field(default_factory=list)
+
+
+class NerdLifecycleTrendsPayload(BaseModel):
+    status_events: list[NerdCountSeriesPayload] = Field(default_factory=list)
+    never_surfaced_backlog: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+    cold_tail: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+
+
+class NerdGrowthDynamicsPayload(BaseModel):
+    top_tag_trends: list[NerdCountSeriesPayload] = Field(default_factory=list)
+    workspace_contribution_share: list[NerdShareSeriesPayload] = Field(default_factory=list)
+
+
+class NerdMaintenanceSummaryRowPayload(BaseModel):
+    key: str
+    label: str
+    task_names: list[str] = Field(default_factory=list)
+    total_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    retry_runs: int = 0
+    created_count: int = 0
+    merged_count: int = 0
+    updated_count: int = 0
+    archived_count: int = 0
+    degraded_count: int = 0
+    restored_count: int = 0
+    meaningful_actions: int = 0
+    lines_compressed: int = 0
+    delta_total: int = 0
+
+
+class NerdMaintenanceAgentYieldPayload(NerdMaintenanceSummaryRowPayload):
+    family_key: str
+    family_label: str
+    actions_per_completed_run: float = 0.0
+    lines_per_completed_run: float = 0.0
+    delta_per_completed_run: float = 0.0
+
+
+class NerdMaintenanceDeltaBucketPayload(BaseModel):
+    bucket_start: float
+    created_count: int = 0
+    merged_count: int = 0
+    updated_count: int = 0
+    archived_count: int = 0
+    degraded_count: int = 0
+    restored_count: int = 0
+    meaningful_actions: int = 0
+    lines_compressed: int = 0
+
+
+class NerdMaintenanceDeltaSeriesPayload(BaseModel):
+    key: str
+    label: str
+    task_names: list[str] = Field(default_factory=list)
+    buckets: list[NerdMaintenanceDeltaBucketPayload] = Field(default_factory=list)
+
+
+class NerdMaintenanceSummaryPayload(BaseModel):
+    by_family: list[NerdMaintenanceSummaryRowPayload] = Field(default_factory=list)
+    by_agent: list[NerdMaintenanceAgentYieldPayload] = Field(default_factory=list)
+    family_delta_series: list[NerdMaintenanceDeltaSeriesPayload] = Field(default_factory=list)
+
+
 class NerdTimelinesPayload(BaseModel):
     memory_activity: list[MemoryTimelineBucketPayload] = Field(default_factory=list)
 
@@ -377,6 +463,9 @@ class NerdMetricsPayload(BaseModel):
     distributions: NerdDistributionsPayload = Field(default_factory=NerdDistributionsPayload)
     timelines: NerdTimelinesPayload = Field(default_factory=NerdTimelinesPayload)
     maintenance: NerdMaintenancePayload = Field(default_factory=NerdMaintenancePayload)
+    lifecycle_trends: NerdLifecycleTrendsPayload = Field(default_factory=NerdLifecycleTrendsPayload)
+    growth_dynamics: NerdGrowthDynamicsPayload = Field(default_factory=NerdGrowthDynamicsPayload)
+    maintenance_summary: NerdMaintenanceSummaryPayload = Field(default_factory=NerdMaintenanceSummaryPayload)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
     graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
     memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)

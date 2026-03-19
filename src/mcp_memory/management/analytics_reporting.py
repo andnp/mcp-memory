@@ -7,6 +7,17 @@ import math
 from statistics import mean, median
 import time
 
+from mcp_memory.core.task_handlers import (
+    CONFLICT_DETECTOR_TASK_NAME,
+    CURATOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
+    SWEEPER_TASK_NAME,
+    TAXONOMIST_TASK_NAME,
+)
 from mcp_memory.management.agent_run_reporting import (
     decode_run_result,
     extract_ingest_audit,
@@ -18,19 +29,30 @@ from mcp_memory.management.models import (
     AgentThroughputBucketPayload,
     GraphTopologyPayload,
     MaintenanceEventPayload,
+    NerdCountSeriesPayload,
     MemoryTimelineBucketPayload,
+    NerdGrowthDynamicsPayload,
+    NerdLifecycleTrendsPayload,
     MemoryLifecyclePayload,
     NerdAlertPayload,
     NerdCompositionPayload,
     NerdCountBucketPayload,
+    NerdMaintenanceAgentYieldPayload,
     NerdDistributionsPayload,
+    NerdMaintenanceDeltaBucketPayload,
+    NerdMaintenanceDeltaSeriesPayload,
     NerdMaintenancePayload,
+    NerdMaintenanceSummaryPayload,
+    NerdMaintenanceSummaryRowPayload,
     NerdMetricsPayload,
     NerdStatPayload,
+    NerdTimeCountBucketPayload,
+    NerdTimeShareBucketPayload,
     NerdTimelinesPayload,
     ProviderLatencyBucketPayload,
     QueueSnapshotPayload,
     SearchQualityPayload,
+    NerdShareSeriesPayload,
 )
 from mcp_memory.management.reporting_queries import (
     build_queue_diagnostics,
@@ -45,6 +67,7 @@ from mcp_memory.management.route_audit import build_task_route_audit
 
 
 _TAG_LIMIT = 10
+_DYNAMICS_LIMIT = 5
 _AGE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
     ("lt_1d", "< 1 day", 0, 86_400),
     ("1d_to_7d", "1-7 days", 86_400, 7 * 86_400),
@@ -59,6 +82,77 @@ _SIZE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
     ("4kb_to_16kb", "4-16 KiB", 4_096, 16_384),
     ("gte_16kb", ">= 16 KiB", 16_384, None),
 )
+_STATUS_EVENT_DEFS: tuple[tuple[str, str], ...] = (
+    ("stale", "Stale promotions"),
+    ("degraded", "Degraded markings"),
+    ("archived", "Archived markings"),
+    ("restored", "Restored markings"),
+)
+_RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
+    ("created", "created_count"),
+    ("merged", "merged_count"),
+    ("updated", "updated_count"),
+    ("archived", "archived_count"),
+    ("degraded", "degraded_count"),
+    ("restored", "restored_count"),
+    ("meaningful_actions", "meaningful_actions"),
+    ("lines_compressed", "lines_compressed"),
+)
+_MAINTENANCE_FAMILY_DEFS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "organization",
+        "Organization & taxonomy",
+        (PROJECT_MANAGER_TASK_NAME, TAXONOMIST_TASK_NAME),
+    ),
+    (
+        "verification",
+        "Verification & linkage",
+        (FACT_CHECKER_TASK_NAME, GRAPH_LINKER_TASK_NAME, CONFLICT_DETECTOR_TASK_NAME),
+    ),
+    (
+        "compaction",
+        "Compaction & curation",
+        (DEFRAGMENTER_TASK_NAME, DEDUPLICATOR_TASK_NAME, CURATOR_TASK_NAME),
+    ),
+    (
+        "retention",
+        "Retention",
+        (SWEEPER_TASK_NAME,),
+    ),
+)
+_MAINTENANCE_FAMILY_BY_TASK = {
+    task_name: (family_key, family_label)
+    for family_key, family_label, task_names in _MAINTENANCE_FAMILY_DEFS
+    for task_name in task_names
+}
+
+
+@dataclass
+class _MaintenanceSummaryAccumulator:
+    task_names: set[str] = field(default_factory=set)
+    total_runs: int = 0
+    completed_runs: int = 0
+    failed_runs: int = 0
+    retry_runs: int = 0
+    created_count: int = 0
+    merged_count: int = 0
+    updated_count: int = 0
+    archived_count: int = 0
+    degraded_count: int = 0
+    restored_count: int = 0
+    meaningful_actions: int = 0
+    lines_compressed: int = 0
+
+    @property
+    def delta_total(self) -> int:
+        return (
+            self.created_count
+            + self.merged_count
+            + self.updated_count
+            + self.archived_count
+            + self.degraded_count
+            + self.restored_count
+        )
 
 
 @dataclass
@@ -191,6 +285,25 @@ def build_nerd_metrics(
         generated_at=generated_at,
         bucket_seconds=bucket_seconds,
     )
+    lifecycle_trends = build_lifecycle_trends(
+        memory_rows,
+        maintenance_rows=maintenance_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
+    growth_dynamics = build_growth_dynamics(
+        memory_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
+    maintenance_summary = build_maintenance_summary(
+        maintenance_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
     search_quality = build_search_quality(
         search_health=build_search_health(relational_search),
         graph_topology=graph_topology,
@@ -229,6 +342,9 @@ def build_nerd_metrics(
         distributions=distributions,
         timelines=timelines,
         maintenance=maintenance,
+        lifecycle_trends=lifecycle_trends,
+        growth_dynamics=growth_dynamics,
+        maintenance_summary=maintenance_summary,
         queue_snapshot=queue_snapshot,
         graph_topology=graph_topology,
         memory_lifecycle=memory_lifecycle,
@@ -486,6 +602,214 @@ def build_search_quality(*, search_health, graph_topology: GraphTopologyPayload,
     )
 
 
+def build_lifecycle_trends(
+    memory_rows,
+    *,
+    maintenance_rows,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdLifecycleTrendsPayload:
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    if not bucket_starts:
+        return NerdLifecycleTrendsPayload()
+
+    never_surfaced_backlog = _build_backlog_series(
+        memory_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+        predicate=lambda row: row["last_surfaced_at"] is None,
+    )
+    cold_tail = _build_backlog_series(
+        memory_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+        predicate=lambda row: row["last_accessed_at"] is None,
+    )
+
+    event_buckets: dict[str, Counter[int]] = {key: Counter() for key, _ in _STATUS_EVENT_DEFS}
+    observed_event_keys: set[str] = set()
+    for row in maintenance_rows:
+        completed_at = float(row["completed_at"] or 0.0)
+        if completed_at < cutoff or completed_at > generated_at:
+            continue
+        result = decode_run_result(row["result_json"])
+        bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
+        for key, _label in _STATUS_EVENT_DEFS:
+            value = _result_int(result, key)
+            if value is None:
+                continue
+            observed_event_keys.add(key)
+            if value > 0:
+                event_buckets[key][bucket_start] += value
+
+    status_events = [
+        NerdCountSeriesPayload(
+            key=key,
+            label=label,
+            buckets=[
+                NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=event_buckets[key].get(bucket_start, 0))
+                for bucket_start in bucket_starts
+            ],
+        )
+        for key, label in _STATUS_EVENT_DEFS
+        if key in observed_event_keys
+    ]
+    return NerdLifecycleTrendsPayload(
+        status_events=status_events,
+        never_surfaced_backlog=never_surfaced_backlog,
+        cold_tail=cold_tail,
+    )
+
+
+def build_growth_dynamics(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdGrowthDynamicsPayload:
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    if not bucket_starts or not memory_rows:
+        return NerdGrowthDynamicsPayload()
+
+    tag_counts: Counter[str] = Counter()
+    workspace_counts: Counter[str] = Counter()
+    for row in memory_rows:
+        tag_counts.update(split_csv_values(row["tags_csv"]))
+        workspace_counts.update(split_csv_values(row["workspace_ids_csv"]))
+
+    top_tag_keys, include_other_tags = _select_top_keys(tag_counts, limit=_DYNAMICS_LIMIT)
+    top_workspace_keys, include_other_workspaces = _select_top_keys(workspace_counts, limit=_DYNAMICS_LIMIT)
+
+    return NerdGrowthDynamicsPayload(
+        top_tag_trends=_build_cumulative_dimension_count_series(
+            memory_rows,
+            cutoff=cutoff,
+            generated_at=generated_at,
+            bucket_seconds=bucket_seconds,
+            bucket_starts=bucket_starts,
+            top_keys=top_tag_keys,
+            include_other=include_other_tags,
+            extractor=lambda row: split_csv_values(row["tags_csv"]),
+        ),
+        workspace_contribution_share=_build_cumulative_dimension_share_series(
+            memory_rows,
+            cutoff=cutoff,
+            generated_at=generated_at,
+            bucket_seconds=bucket_seconds,
+            bucket_starts=bucket_starts,
+            top_keys=top_workspace_keys,
+            include_other=include_other_workspaces,
+            extractor=lambda row: split_csv_values(row["workspace_ids_csv"]),
+        ),
+    )
+
+
+def build_maintenance_summary(
+    maintenance_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdMaintenanceSummaryPayload:
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    if not bucket_starts or not maintenance_rows:
+        return NerdMaintenanceSummaryPayload()
+
+    family_accumulators: dict[str, _MaintenanceSummaryAccumulator] = {}
+    agent_accumulators: dict[str, _MaintenanceSummaryAccumulator] = {}
+    agent_families: dict[str, tuple[str, str]] = {}
+    family_bucket_totals: dict[str, dict[int, dict[str, int]]] = {}
+
+    for row in maintenance_rows:
+        completed_at = float(row["completed_at"] or 0.0)
+        if completed_at < cutoff or completed_at > generated_at:
+            continue
+        task_name = str(row["task_name"])
+        family_key, family_label = _maintenance_family_for_task(task_name)
+        family_acc = family_accumulators.setdefault(family_key, _MaintenanceSummaryAccumulator())
+        agent_acc = agent_accumulators.setdefault(task_name, _MaintenanceSummaryAccumulator())
+        agent_families[task_name] = (family_key, family_label)
+
+        result = decode_run_result(row["result_json"])
+        deltas = _run_reported_delta_counts(result)
+        _update_maintenance_summary_accumulator(family_acc, task_name=task_name, status=str(row["status"]), deltas=deltas)
+        _update_maintenance_summary_accumulator(agent_acc, task_name=task_name, status=str(row["status"]), deltas=deltas)
+
+        bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
+        family_bucket = family_bucket_totals.setdefault(family_key, {}).setdefault(
+            bucket_start,
+            {attribute_name: 0 for _, attribute_name in _RUN_REPORTED_DELTA_KEYS},
+        )
+        for _key, attribute_name in _RUN_REPORTED_DELTA_KEYS:
+            family_bucket[attribute_name] += deltas[attribute_name]
+
+    by_family = [
+        NerdMaintenanceSummaryRowPayload(
+            key=family_key,
+            label=family_label,
+            task_names=sorted(accumulator.task_names),
+            total_runs=accumulator.total_runs,
+            completed_runs=accumulator.completed_runs,
+            failed_runs=accumulator.failed_runs,
+            retry_runs=accumulator.retry_runs,
+            created_count=accumulator.created_count,
+            merged_count=accumulator.merged_count,
+            updated_count=accumulator.updated_count,
+            archived_count=accumulator.archived_count,
+            degraded_count=accumulator.degraded_count,
+            restored_count=accumulator.restored_count,
+            meaningful_actions=accumulator.meaningful_actions,
+            lines_compressed=accumulator.lines_compressed,
+            delta_total=accumulator.delta_total,
+        )
+        for family_key, family_label, _task_names in _MAINTENANCE_FAMILY_DEFS
+        if (accumulator := family_accumulators.get(family_key)) is not None
+    ]
+
+    by_agent = [
+        _build_agent_yield_payload(
+            task_name=task_name,
+            family_key=agent_families[task_name][0],
+            family_label=agent_families[task_name][1],
+            accumulator=accumulator,
+        )
+        for task_name, accumulator in sorted(
+            agent_accumulators.items(),
+            key=lambda item: (-item[1].delta_total, -item[1].meaningful_actions, item[0]),
+        )
+    ]
+
+    family_delta_series = [
+        NerdMaintenanceDeltaSeriesPayload(
+            key=family_key,
+            label=family_label,
+            task_names=sorted(family_accumulators[family_key].task_names),
+            buckets=[
+                NerdMaintenanceDeltaBucketPayload(
+                    bucket_start=float(bucket_start),
+                    **family_bucket_totals.get(family_key, {}).get(
+                        bucket_start,
+                        {attribute_name: 0 for _, attribute_name in _RUN_REPORTED_DELTA_KEYS},
+                    ),
+                )
+                for bucket_start in bucket_starts
+            ],
+        )
+        for family_key, family_label, _task_names in _MAINTENANCE_FAMILY_DEFS
+        if family_key in family_accumulators
+    ]
+
+    return NerdMaintenanceSummaryPayload(
+        by_family=by_family,
+        by_agent=by_agent,
+        family_delta_series=family_delta_series,
+    )
+
+
 def build_nerd_alerts(
     *,
     queue_snapshot: QueueSnapshotPayload,
@@ -628,16 +952,242 @@ def _build_maintenance_impact_summary(result: dict[str, object], *, ingest_audit
         if value is not None and value > 0:
             parts.append(f"{label}={value}")
 
-    for label, value in (
-        ("created_memories", ingest_audit.created_count),
-        ("touched", ingest_audit.touched_count),
-        ("appended", ingest_audit.appended_count),
-        ("matched", ingest_audit.matched_count),
-    ):
-        if value > 0 and all(not part.startswith(f"{label}=") for part in parts):
-            parts.append(f"{label}={value}")
-
     return ", ".join(parts[:6]) if parts else None
+
+
+def _bucket_starts(*, cutoff: float, generated_at: float, bucket_seconds: int) -> list[int]:
+    if generated_at < cutoff:
+        return []
+    start_bucket = int(cutoff // bucket_seconds) * bucket_seconds
+    end_bucket = int(generated_at // bucket_seconds) * bucket_seconds
+    if end_bucket < start_bucket:
+        return []
+    return list(range(start_bucket, end_bucket + bucket_seconds, bucket_seconds))
+
+
+def _build_backlog_series(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+    predicate,
+) -> list[NerdTimeCountBucketPayload]:
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    if not bucket_starts:
+        return []
+
+    baseline_count = 0
+    created_counts: Counter[int] = Counter()
+    for row in memory_rows:
+        if not predicate(row):
+            continue
+        created_at = _iso_to_timestamp(row["created_at"])
+        if created_at is None:
+            continue
+        if created_at < cutoff:
+            baseline_count += 1
+            continue
+        if created_at <= generated_at:
+            created_counts[int(created_at // bucket_seconds) * bucket_seconds] += 1
+
+    running_count = baseline_count
+    series: list[NerdTimeCountBucketPayload] = []
+    for bucket_start in bucket_starts:
+        running_count += created_counts.get(bucket_start, 0)
+        series.append(NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=running_count))
+    return series
+
+
+def _select_top_keys(counts: Counter[str], *, limit: int) -> tuple[list[str], bool]:
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [key for key, _count in ordered[:limit]], len(ordered) > limit
+
+
+def _dimension_labels(top_keys: list[str], *, include_other: bool) -> list[tuple[str, str]]:
+    labels = [(key, key) for key in top_keys]
+    if include_other:
+        labels.append(("other", "Other"))
+    return labels
+
+
+def _build_cumulative_dimension_count_series(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+    bucket_starts: list[int],
+    top_keys: list[str],
+    include_other: bool,
+    extractor,
+) -> list[NerdCountSeriesPayload]:
+    if not top_keys and not include_other:
+        return []
+
+    tracked_keys = _dimension_labels(top_keys, include_other=include_other)
+    running_counts = {key: 0 for key, _label in tracked_keys}
+    created_counts = {key: Counter() for key, _label in tracked_keys}
+
+    for row in memory_rows:
+        contributions = _map_dimension_contributions(extractor(row), top_keys=top_keys, include_other=include_other)
+        if not contributions:
+            continue
+        created_at = _iso_to_timestamp(row["created_at"])
+        if created_at is None or created_at > generated_at:
+            continue
+        if created_at < cutoff:
+            for key, count in contributions.items():
+                running_counts[key] += count
+            continue
+        bucket_start = int(created_at // bucket_seconds) * bucket_seconds
+        for key, count in contributions.items():
+            created_counts[key][bucket_start] += count
+
+    buckets_by_key: dict[str, list[NerdTimeCountBucketPayload]] = {key: [] for key, _label in tracked_keys}
+    for bucket_start in bucket_starts:
+        for key, _label in tracked_keys:
+            running_counts[key] += created_counts[key].get(bucket_start, 0)
+            buckets_by_key[key].append(
+                NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=running_counts[key])
+            )
+
+    return [
+        NerdCountSeriesPayload(key=key, label=label, buckets=buckets_by_key[key])
+        for key, label in tracked_keys
+    ]
+
+
+def _build_cumulative_dimension_share_series(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+    bucket_starts: list[int],
+    top_keys: list[str],
+    include_other: bool,
+    extractor,
+) -> list[NerdShareSeriesPayload]:
+    if not top_keys and not include_other:
+        return []
+
+    tracked_keys = _dimension_labels(top_keys, include_other=include_other)
+    running_counts = {key: 0 for key, _label in tracked_keys}
+    created_counts = {key: Counter() for key, _label in tracked_keys}
+
+    for row in memory_rows:
+        contributions = _map_dimension_contributions(extractor(row), top_keys=top_keys, include_other=include_other)
+        if not contributions:
+            continue
+        created_at = _iso_to_timestamp(row["created_at"])
+        if created_at is None or created_at > generated_at:
+            continue
+        if created_at < cutoff:
+            for key, count in contributions.items():
+                running_counts[key] += count
+            continue
+        bucket_start = int(created_at // bucket_seconds) * bucket_seconds
+        for key, count in contributions.items():
+            created_counts[key][bucket_start] += count
+
+    buckets_by_key: dict[str, list[NerdTimeShareBucketPayload]] = {key: [] for key, _label in tracked_keys}
+    for bucket_start in bucket_starts:
+        for key, _label in tracked_keys:
+            running_counts[key] += created_counts[key].get(bucket_start, 0)
+        total_count = sum(running_counts.values())
+        for key, _label in tracked_keys:
+            share = 0.0 if total_count == 0 else round(running_counts[key] / total_count, 4)
+            buckets_by_key[key].append(
+                NerdTimeShareBucketPayload(
+                    bucket_start=float(bucket_start),
+                    count=running_counts[key],
+                    share=share,
+                )
+            )
+
+    return [
+        NerdShareSeriesPayload(key=key, label=label, buckets=buckets_by_key[key])
+        for key, label in tracked_keys
+    ]
+
+
+def _map_dimension_contributions(values: list[str], *, top_keys: list[str], include_other: bool) -> Counter[str]:
+    contributions: Counter[str] = Counter()
+    tracked_key_set = set(top_keys)
+    for value in values:
+        if value in tracked_key_set:
+            contributions[value] += 1
+        elif include_other:
+            contributions["other"] += 1
+    return contributions
+
+
+def _maintenance_family_for_task(task_name: str) -> tuple[str, str]:
+    family = _MAINTENANCE_FAMILY_BY_TASK.get(task_name)
+    if family is not None:
+        return family
+    return ("other", "Other")
+
+
+def _run_reported_delta_counts(result: dict[str, object]) -> dict[str, int]:
+    return {
+        attribute_name: max(_result_int(result, result_key) or 0, 0)
+        for result_key, attribute_name in _RUN_REPORTED_DELTA_KEYS
+    }
+
+
+def _update_maintenance_summary_accumulator(
+    accumulator: _MaintenanceSummaryAccumulator,
+    *,
+    task_name: str,
+    status: str,
+    deltas: dict[str, int],
+) -> None:
+    accumulator.task_names.add(task_name)
+    accumulator.total_runs += 1
+    if status == "completed":
+        accumulator.completed_runs += 1
+    elif status == "failed":
+        accumulator.failed_runs += 1
+    elif status == "retry":
+        accumulator.retry_runs += 1
+    for attribute_name, value in deltas.items():
+        setattr(accumulator, attribute_name, getattr(accumulator, attribute_name) + value)
+
+
+def _build_agent_yield_payload(
+    *,
+    task_name: str,
+    family_key: str,
+    family_label: str,
+    accumulator: _MaintenanceSummaryAccumulator,
+) -> NerdMaintenanceAgentYieldPayload:
+    completed_runs = max(accumulator.completed_runs, 0)
+    denominator = completed_runs if completed_runs > 0 else accumulator.total_runs
+    return NerdMaintenanceAgentYieldPayload(
+        key=task_name,
+        label=task_name,
+        family_key=family_key,
+        family_label=family_label,
+        task_names=sorted(accumulator.task_names),
+        total_runs=accumulator.total_runs,
+        completed_runs=accumulator.completed_runs,
+        failed_runs=accumulator.failed_runs,
+        retry_runs=accumulator.retry_runs,
+        created_count=accumulator.created_count,
+        merged_count=accumulator.merged_count,
+        updated_count=accumulator.updated_count,
+        archived_count=accumulator.archived_count,
+        degraded_count=accumulator.degraded_count,
+        restored_count=accumulator.restored_count,
+        meaningful_actions=accumulator.meaningful_actions,
+        lines_compressed=accumulator.lines_compressed,
+        delta_total=accumulator.delta_total,
+        actions_per_completed_run=0.0 if denominator == 0 else round(accumulator.meaningful_actions / denominator, 4),
+        lines_per_completed_run=0.0 if denominator == 0 else round(accumulator.lines_compressed / denominator, 4),
+        delta_per_completed_run=0.0 if denominator == 0 else round(accumulator.delta_total / denominator, 4),
+    )
 
 
 def _bucket_key_for_value(value: float, bucket_defs) -> str:

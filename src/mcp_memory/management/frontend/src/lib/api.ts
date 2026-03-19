@@ -276,6 +276,92 @@ export interface MaintenanceEvent {
   meaningful_actions: number | null;
 }
 
+export interface TimeCountBucket {
+  bucket_start: number;
+  count: number;
+}
+
+export interface TimeShareBucket {
+  bucket_start: number;
+  count: number;
+  share: number;
+}
+
+export interface CountSeries {
+  key: string;
+  label: string;
+  buckets: TimeCountBucket[];
+}
+
+export interface ShareSeries {
+  key: string;
+  label: string;
+  buckets: TimeShareBucket[];
+}
+
+export interface LifecycleTrends {
+  status_events: CountSeries[];
+  never_surfaced_backlog: TimeCountBucket[];
+  cold_tail: TimeCountBucket[];
+}
+
+export interface GrowthDynamics {
+  top_tag_trends: CountSeries[];
+  workspace_contribution_share: ShareSeries[];
+}
+
+export interface MaintenanceSummaryRow {
+  key: string;
+  label: string;
+  task_names: string[];
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  retry_runs: number;
+  created_count: number;
+  merged_count: number;
+  updated_count: number;
+  archived_count: number;
+  degraded_count: number;
+  restored_count: number;
+  meaningful_actions: number;
+  lines_compressed: number;
+  delta_total: number;
+}
+
+export interface MaintenanceAgentYieldRow extends MaintenanceSummaryRow {
+  family_key: string;
+  family_label: string;
+  actions_per_completed_run: number;
+  lines_per_completed_run: number;
+  delta_per_completed_run: number;
+}
+
+export interface MaintenanceDeltaBucket {
+  bucket_start: number;
+  created_count: number;
+  merged_count: number;
+  updated_count: number;
+  archived_count: number;
+  degraded_count: number;
+  restored_count: number;
+  meaningful_actions: number;
+  lines_compressed: number;
+}
+
+export interface MaintenanceDeltaSeries {
+  key: string;
+  label: string;
+  task_names: string[];
+  buckets: MaintenanceDeltaBucket[];
+}
+
+export interface MaintenanceSummary {
+  by_family: MaintenanceSummaryRow[];
+  by_agent: MaintenanceAgentYieldRow[];
+  family_delta_series: MaintenanceDeltaSeries[];
+}
+
 export interface Timelines {
   memory_activity: MemoryTimelineBucket[];
 }
@@ -329,6 +415,9 @@ export interface NerdMetricsResponse {
   distributions: Distributions;
   timelines: Timelines;
   maintenance: MaintenanceMetrics;
+  lifecycle_trends: LifecycleTrends;
+  growth_dynamics: GrowthDynamics;
+  maintenance_summary: MaintenanceSummary;
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];
   alerts: NerdAlert[];

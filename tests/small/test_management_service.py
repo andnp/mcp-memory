@@ -76,6 +76,16 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert [bucket.count for bucket in nerd_metrics.distributions.content_size_buckets] == [0, 0, 0, 0, 0]
     assert nerd_metrics.timelines.memory_activity == []
     assert nerd_metrics.maintenance.events == []
+    assert nerd_metrics.lifecycle_trends.status_events == []
+    assert nerd_metrics.lifecycle_trends.never_surfaced_backlog
+    assert nerd_metrics.lifecycle_trends.cold_tail
+    assert all(bucket.count == 0 for bucket in nerd_metrics.lifecycle_trends.never_surfaced_backlog)
+    assert all(bucket.count == 0 for bucket in nerd_metrics.lifecycle_trends.cold_tail)
+    assert nerd_metrics.growth_dynamics.top_tag_trends == []
+    assert nerd_metrics.growth_dynamics.workspace_contribution_share == []
+    assert nerd_metrics.maintenance_summary.by_family == []
+    assert nerd_metrics.maintenance_summary.by_agent == []
+    assert nerd_metrics.maintenance_summary.family_delta_series == []
     assert nerd_metrics.agent_throughput == []
     assert nerd_metrics.provider_latency == []
 
@@ -89,12 +99,16 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
         content="Only workspace A should see this by default.",
         workspace_ids=["workspace-a"],
         memory_type="fact",
+        created_at="1970-01-01T00:00:01+00:00",
+        updated_at="1970-01-01T00:00:01+00:00",
     )
     memory_b = repository.create_memory(
         title="Workspace B fact",
         content="Only global scope or workspace B should see this.",
         workspace_ids=["workspace-b"],
         memory_type="fact",
+        created_at="1970-01-01T00:00:02+00:00",
+        updated_at="1970-01-01T00:00:02+00:00",
     )
     assert memory_a is not None and memory_b is not None
 
@@ -154,6 +168,8 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
     assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
     assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
     assert [item.task_id for item in scoped_nerd.maintenance.events] == [task_a.id]
+    assert [item.key for item in scoped_nerd.growth_dynamics.workspace_contribution_share] == ["workspace-a"]
+    assert scoped_nerd.growth_dynamics.workspace_contribution_share[0].buckets[-1].count == 1
 
     assert global_overview.memories.total == 2
     assert global_overview.memory_metrics.total_memories == 2
@@ -164,6 +180,8 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
         ("workspace-b", 1),
     ]
     assert [item.task_id for item in global_nerd.maintenance.events] == [task_b.id, task_a.id]
+    assert [item.key for item in global_nerd.growth_dynamics.workspace_contribution_share] == ["workspace-a", "workspace-b"]
+    assert [item.buckets[-1].count for item in global_nerd.growth_dynamics.workspace_contribution_share] == [1, 1]
 
 
 def test_management_service_nerd_metrics_composition_distributions_and_timelines(db_manager) -> None:
@@ -397,14 +415,208 @@ def test_management_service_analytics_handles_zero_duration_rows_and_zero_window
     assert graph_linker_event.merged_count == 2
     assert graph_linker_event.lines_compressed == 7
     assert graph_linker_event.impact_summary == "merged=2, lines=7"
+    verification_family = next(item for item in nerd_metrics.maintenance_summary.by_family if item.key == "verification")
+    graph_linker_yield = next(item for item in nerd_metrics.maintenance_summary.by_agent if item.key == "graph-linker")
+    assert verification_family.total_runs == 3
+    assert verification_family.completed_runs == 1
+    assert verification_family.failed_runs == 1
+    assert verification_family.retry_runs == 1
+    assert verification_family.merged_count == 2
+    assert verification_family.delta_total == 2
+    assert graph_linker_yield.family_key == "verification"
+    assert graph_linker_yield.delta_per_completed_run == 2.0
+    assert graph_linker_yield.lines_per_completed_run == 7.0
+    assert nerd_metrics.lifecycle_trends.status_events == []
     assert any(stat.key == "provider_failure_rate" and stat.value == 0.5 for stat in nerd_metrics.stats)
     assert any(alert.key == "provider_failure_rate" for alert in nerd_metrics.alerts)
 
     assert zero_window_metrics.agent_throughput == []
     assert zero_window_metrics.provider_latency == []
     assert zero_window_metrics.maintenance.events == []
+    assert zero_window_metrics.lifecycle_trends.status_events == []
+    assert zero_window_metrics.growth_dynamics.top_tag_trends == []
+    assert zero_window_metrics.maintenance_summary.by_family == []
     assert any(stat.key == "runs_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
     assert any(stat.key == "provider_calls_last_window" and stat.value == 0.0 for stat in zero_window_metrics.stats)
+
+
+def test_management_service_nerd_metrics_additive_trends_and_maintenance_summary(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    now = datetime(2026, 3, 19, 12, 0, tzinfo=UTC)
+
+    alpha_memory = repository.create_memory(
+        title="Alpha shared",
+        content="alpha",
+        workspace_ids=["workspace-a", "workspace-b"],
+        tags=["alpha"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=6)).isoformat(),
+        updated_at=(now - timedelta(days=6)).isoformat(),
+    )
+    beta_memory = repository.create_memory(
+        title="Beta",
+        content="beta",
+        workspace_ids=["workspace-a"],
+        tags=["beta"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=5)).isoformat(),
+        updated_at=(now - timedelta(days=5)).isoformat(),
+    )
+    gamma_memory = repository.create_memory(
+        title="Gamma",
+        content="gamma",
+        workspace_ids=["workspace-a"],
+        tags=["gamma"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=4)).isoformat(),
+        updated_at=(now - timedelta(days=4)).isoformat(),
+    )
+    delta_memory = repository.create_memory(
+        title="Delta",
+        content="delta",
+        workspace_ids=["workspace-a"],
+        tags=["delta"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=3)).isoformat(),
+        updated_at=(now - timedelta(days=3)).isoformat(),
+    )
+    epsilon_memory = repository.create_memory(
+        title="Epsilon",
+        content="epsilon",
+        workspace_ids=["workspace-a"],
+        tags=["epsilon"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=2)).isoformat(),
+        updated_at=(now - timedelta(days=2)).isoformat(),
+    )
+    zeta_memory = repository.create_memory(
+        title="Zeta",
+        content="zeta",
+        workspace_ids=["workspace-a"],
+        tags=["zeta"],
+        memory_type="fact",
+        created_at=(now - timedelta(days=1)).isoformat(),
+        updated_at=(now - timedelta(days=1)).isoformat(),
+    )
+    foreign_eta_memory = repository.create_memory(
+        title="Foreign eta",
+        content="eta",
+        workspace_ids=["workspace-b"],
+        tags=["eta"],
+        memory_type="fact",
+        created_at=(now - timedelta(hours=12)).isoformat(),
+        updated_at=(now - timedelta(hours=12)).isoformat(),
+    )
+    assert alpha_memory is not None
+    assert beta_memory is not None
+    assert gamma_memory is not None
+    assert delta_memory is not None
+    assert epsilon_memory is not None
+    assert zeta_memory is not None
+    assert foreign_eta_memory is not None
+
+    repository.record_access(
+        alpha_memory.id,
+        access_score=1.0,
+        accessed_at=(now - timedelta(days=5, hours=20)).isoformat(),
+        increment_read_count=False,
+    )
+    db_manager.get_connection().execute(
+        "UPDATE memories SET last_surfaced_at = ? WHERE id = ?",
+        ((now - timedelta(days=5, hours=18)).isoformat(), beta_memory.id),
+    )
+
+    task_project = task_queue.enqueue(
+        "project-manager",
+        task_id="project-manager-summary-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_fact = task_queue.enqueue(
+        "fact-checker",
+        task_id="fact-checker-summary-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_dedup = task_queue.enqueue(
+        "deduplicator",
+        task_id="deduplicator-summary-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=now.timestamp() - 300.0) is not None
+    task_queue.complete(
+        task_project.id,
+        completed_at=(now - timedelta(days=3, hours=12)).timestamp(),
+        run_result={"stale": 2, "updated": 2, "meaningful_actions": 2},
+    )
+    assert task_queue.claim_next(now=now.timestamp() - 200.0) is not None
+    task_queue.complete(
+        task_fact.id,
+        completed_at=(now - timedelta(days=2, hours=12)).timestamp(),
+        run_result={"degraded": 1},
+    )
+    assert task_queue.claim_next(now=now.timestamp() - 100.0) is not None
+    task_queue.complete(
+        task_dedup.id,
+        completed_at=(now - timedelta(days=1, hours=12)).timestamp(),
+        run_result={"merged": 3, "archived": 1, "lines_compressed": 9, "meaningful_actions": 4},
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=24 * 7, bucket_minutes=24 * 60, now=now.timestamp())
+
+    assert [series.key for series in nerd_metrics.lifecycle_trends.status_events] == ["stale", "degraded", "archived"]
+    assert [bucket.count for bucket in nerd_metrics.lifecycle_trends.never_surfaced_backlog][-1] == 5
+    assert [bucket.count for bucket in nerd_metrics.lifecycle_trends.cold_tail][-1] == 5
+
+    assert [series.key for series in nerd_metrics.growth_dynamics.top_tag_trends] == [
+        "alpha",
+        "beta",
+        "delta",
+        "epsilon",
+        "gamma",
+        "other",
+    ]
+    assert [series.buckets[-1].count for series in nerd_metrics.growth_dynamics.top_tag_trends] == [1, 1, 1, 1, 1, 1]
+    assert [series.key for series in nerd_metrics.growth_dynamics.workspace_contribution_share] == [
+        "workspace-a",
+        "workspace-b",
+    ]
+    assert [series.buckets[-1].count for series in nerd_metrics.growth_dynamics.workspace_contribution_share] == [6, 1]
+    assert [series.buckets[-1].share for series in nerd_metrics.growth_dynamics.workspace_contribution_share] == [0.8571, 0.1429]
+
+    organization_family = next(item for item in nerd_metrics.maintenance_summary.by_family if item.key == "organization")
+    verification_family = next(item for item in nerd_metrics.maintenance_summary.by_family if item.key == "verification")
+    compaction_family = next(item for item in nerd_metrics.maintenance_summary.by_family if item.key == "compaction")
+    assert organization_family.task_names == ["project-manager"]
+    assert organization_family.updated_count == 2
+    assert organization_family.delta_total == 2
+    assert verification_family.degraded_count == 1
+    assert verification_family.delta_total == 1
+    assert compaction_family.merged_count == 3
+    assert compaction_family.archived_count == 1
+    assert compaction_family.lines_compressed == 9
+    assert compaction_family.delta_total == 4
+
+    deduplicator_yield = next(item for item in nerd_metrics.maintenance_summary.by_agent if item.key == "deduplicator")
+    assert deduplicator_yield.family_key == "compaction"
+    assert deduplicator_yield.meaningful_actions == 4
+    assert deduplicator_yield.delta_per_completed_run == 4.0
+    assert deduplicator_yield.lines_per_completed_run == 9.0
+
+    compaction_series = next(item for item in nerd_metrics.maintenance_summary.family_delta_series if item.key == "compaction")
+    assert compaction_series.task_names == ["deduplicator"]
+    assert sum(bucket.merged_count for bucket in compaction_series.buckets) == 3
+    assert sum(bucket.archived_count for bucket in compaction_series.buckets) == 1
 
 
 def test_management_service_overview_and_memory_detail(db_manager) -> None:

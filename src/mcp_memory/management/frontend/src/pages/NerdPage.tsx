@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 
-import { ApiError, fetchNerdMetrics, type CountBucket, type MaintenanceEvent } from '../lib/api';
+import {
+  ApiError,
+  fetchNerdMetrics,
+  type CountBucket,
+  type MaintenanceDeltaBucket,
+  type MaintenanceEvent,
+  type ShareSeries,
+} from '../lib/api';
 
 function PlotFigure({ chart }: { chart: HTMLElement | SVGElement | null }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -85,6 +92,54 @@ function formatTimestamp(value: number): string {
 
 function formatTaskName(taskName: string): string {
   return taskName.split('-').join(' ');
+}
+
+function formatSignedDelta(value: number): string {
+  if (value > 0) {
+    return `+${Math.round(value)}`;
+  }
+  if (value < 0) {
+    return `${Math.round(value)}`;
+  }
+  return '0';
+}
+
+function signedDeltaClass(value: number): string {
+  if (value > 0) {
+    return 'text-emerald-200';
+  }
+  if (value < 0) {
+    return 'text-danger';
+  }
+  return 'text-muted';
+}
+
+function formatRatio(value: number): string {
+  return value.toFixed(2);
+}
+
+function latestCount(series: { buckets: Array<{ count: number }> }): number {
+  return series.buckets.at(-1)?.count ?? 0;
+}
+
+function seriesCountDelta(series: { buckets: Array<{ count: number }> }): number {
+  if (!series.buckets.length) {
+    return 0;
+  }
+  return (series.buckets.at(-1)?.count ?? 0) - series.buckets[0].count;
+}
+
+function latestShare(series: ShareSeries): number {
+  return series.buckets.at(-1)?.share ?? 0;
+}
+
+function maintenanceBucketDelta(bucket: MaintenanceDeltaBucket): number {
+  return bucket.created_count
+    + bucket.merged_count
+    + bucket.updated_count
+    + bucket.archived_count
+    + bucket.degraded_count
+    + bucket.restored_count;
 }
 
 function maintenanceStatusClass(status: string): string {
@@ -360,6 +415,98 @@ export function NerdPage() {
     });
   }, [maintenanceOverlayEvents, nerdQuery.data]);
 
+  const lifecycleTrendChart = useMemo(() => {
+    const backlogRows = nerdQuery.data?.lifecycle_trends.never_surfaced_backlog ?? [];
+    const coldTailRows = nerdQuery.data?.lifecycle_trends.cold_tail ?? [];
+    if (!backlogRows.length && !coldTailRows.length) {
+      return null;
+    }
+    const rows = [
+      ...backlogRows.map((bucket) => ({ ...bucket, label: 'never surfaced backlog' })),
+      ...coldTailRows.map((bucket) => ({ ...bucket, label: 'cold tail' })),
+    ];
+    return Plot.plot({
+      height: 240,
+      marginLeft: 56,
+      style: { background: 'transparent', color: '#c9d1d9' },
+      x: { type: 'time', label: 'time' },
+      y: { grid: true, label: 'memories' },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'count',
+          stroke: 'label',
+          strokeWidth: 2,
+        }),
+      ],
+    });
+  }, [nerdQuery.data]);
+
+  const topTagTrendChart = useMemo(() => {
+    const rows = nerdQuery.data?.growth_dynamics.top_tag_trends.flatMap((series) =>
+      series.buckets.map((bucket) => ({
+        bucket_start: bucket.bucket_start,
+        count: bucket.count,
+        label: series.label,
+      })),
+    ) ?? [];
+    if (!rows.length) {
+      return null;
+    }
+    return Plot.plot({
+      height: 240,
+      marginLeft: 56,
+      style: { background: 'transparent', color: '#c9d1d9' },
+      x: { type: 'time', label: 'time' },
+      y: { grid: true, label: 'memories' },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'count',
+          stroke: 'label',
+          strokeWidth: 2,
+        }),
+      ],
+    });
+  }, [nerdQuery.data]);
+
+  const familyDeltaChart = useMemo(() => {
+    const rows = nerdQuery.data?.maintenance_summary.family_delta_series.flatMap((series) =>
+      series.buckets.map((bucket) => ({
+        bucket_start: bucket.bucket_start,
+        delta_total: maintenanceBucketDelta(bucket),
+        label: series.label,
+      })),
+    ).filter((row) => row.delta_total > 0) ?? [];
+    if (!rows.length) {
+      return null;
+    }
+    return Plot.plot({
+      height: 240,
+      marginLeft: 56,
+      style: { background: 'transparent', color: '#c9d1d9' },
+      x: { type: 'time', label: 'time' },
+      y: { grid: true, label: 'delta' },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'delta_total',
+          stroke: 'label',
+          strokeWidth: 2,
+        }),
+        Plot.dot(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'delta_total',
+          fill: 'label',
+          r: 3,
+        }),
+      ],
+    });
+  }, [nerdQuery.data]);
+
   const linkTypeChart = useMemo(() => {
     if (!nerdQuery.data) {
       return null;
@@ -437,6 +584,33 @@ export function NerdPage() {
     { label: 'Scheduled', value: formatStatValue(nerdQuery.data.queue_snapshot.scheduled_count, null) },
     { label: 'Oldest runnable age', value: formatStatValue(nerdQuery.data.queue_snapshot.oldest_age_seconds, 's') },
   ];
+
+  const lifecycleEventRows = nerdQuery.data.lifecycle_trends.status_events.map((series) => ({
+    key: series.key,
+    label: series.label,
+    total: series.buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+    latest: latestCount(series),
+  }));
+
+  const topTagRows = nerdQuery.data.growth_dynamics.top_tag_trends.map((series) => ({
+    key: series.key,
+    label: series.label,
+    currentCount: latestCount(series),
+    delta: seriesCountDelta(series),
+  }));
+
+  const workspaceShareRows = nerdQuery.data.growth_dynamics.workspace_contribution_share.map((series) => ({
+    key: series.key,
+    label: series.label,
+    currentCount: latestCount(series),
+    share: latestShare(series),
+  }));
+
+  const familySummaryRows = [...nerdQuery.data.maintenance_summary.by_family]
+    .sort((left, right) => right.delta_total - left.delta_total || right.completed_runs - left.completed_runs);
+
+  const agentYieldRows = [...nerdQuery.data.maintenance_summary.by_agent]
+    .sort((left, right) => right.delta_per_completed_run - left.delta_per_completed_run || right.completed_runs - left.completed_runs);
 
   return (
     <div className="space-y-6">
@@ -619,6 +793,227 @@ export function NerdPage() {
                 <tr>
                   <td colSpan={6} className="text-xs text-muted">
                     No maintenance task evidence in the selected window yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          eyebrow="Lifecycle & Growth"
+          title="Backlog pressure and growth mix"
+          description="Current-stock trend lines keep never-surfaced pressure, cold-tail drift, and dominant tag/workspace growth visible without turning the page into a chart petting zoo."
+        />
+        <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <section className="panel p-3">
+            <p className="panel-title">Lifecycle backlog</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Never surfaced vs cold tail</h3>
+            <p className="mt-1 text-[11px] text-muted">Both lines are cumulative scoped stock approximations over the selected window.</p>
+            <div className="mt-3">{lifecycleTrendChart ? <PlotFigure chart={lifecycleTrendChart} /> : <p className="text-xs text-muted">No lifecycle-trend data yet.</p>}</div>
+          </section>
+
+          <section className="panel p-3">
+            <p className="panel-title">Growth dynamics</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Top-tag stock over time</h3>
+            <p className="mt-1 text-[11px] text-muted">Top tags are capped by the backend; `other` absorbs the tail when the tag zoo gets ambitious.</p>
+            <div className="mt-3">{topTagTrendChart ? <PlotFigure chart={topTagTrendChart} /> : <p className="text-xs text-muted">No tag-trend data yet.</p>}</div>
+          </section>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Lifecycle events</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Run-reported status deltas</h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Event</th>
+                  <th>Total</th>
+                  <th>Latest bucket</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lifecycleEventRows.length ? (
+                  lifecycleEventRows.map((row) => (
+                    <tr key={row.key}>
+                      <td>{row.label}</td>
+                      <td>{formatStatValue(row.total, null)}</td>
+                      <td>{formatStatValue(row.latest, null)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={3} className="text-xs text-muted">
+                      No explicit lifecycle event counters landed in the selected window.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            <section className="table-shell">
+              <div className="border-b border-border px-3 py-2">
+                <p className="panel-title">Top tags</p>
+                <h3 className="mt-1 text-base font-semibold text-text">Current stock and window delta</h3>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tag</th>
+                    <th>Current</th>
+                    <th>Δ window</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topTagRows.length ? (
+                    topTagRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.label}</td>
+                        <td>{formatStatValue(row.currentCount, null)}</td>
+                        <td className={signedDeltaClass(row.delta)}>{formatSignedDelta(row.delta)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={3} className="text-xs text-muted">
+                        No scoped top-tag growth data yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </section>
+
+            <section className="table-shell">
+              <div className="border-b border-border px-3 py-2">
+                <p className="panel-title">Workspace share</p>
+                <h3 className="mt-1 text-base font-semibold text-text">Current contribution mix</h3>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Workspace</th>
+                    <th>Count</th>
+                    <th>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workspaceShareRows.length ? (
+                    workspaceShareRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.label}</td>
+                        <td>{formatStatValue(row.currentCount, null)}</td>
+                        <td>{formatStatValue(row.share, 'pct')}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={3} className="text-xs text-muted">
+                        No workspace-share growth data yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
+          eyebrow="Maintenance Yield"
+          title="What background work actually produced"
+          description="Family rollups stay operator-readable while agent-level yield ratios show whether maintenance runs are paying rent."
+        />
+        <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <section className="panel p-3">
+            <p className="panel-title">Family deltas</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Per-family maintenance output over time</h3>
+            <p className="mt-1 text-[11px] text-muted">Each point is the sum of explicit run-reported delta counters in that bucket.</p>
+            <div className="mt-3">{familyDeltaChart ? <PlotFigure chart={familyDeltaChart} /> : <p className="text-xs text-muted">No family delta evidence yet.</p>}</div>
+          </section>
+
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">By family</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Maintenance summary</h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>Runs</th>
+                  <th>Delta</th>
+                  <th>Actions</th>
+                  <th>Lines</th>
+                </tr>
+              </thead>
+              <tbody>
+                {familySummaryRows.length ? (
+                  familySummaryRows.map((row) => (
+                    <tr key={row.key}>
+                      <td>
+                        <div className="font-medium text-text">{row.label}</div>
+                        <div className="text-[11px] text-muted">{row.task_names.map(formatTaskName).join(', ') || '—'}</div>
+                      </td>
+                      <td className="text-xs text-muted">{`${row.completed_runs}/${row.total_runs} c · ${row.failed_runs} f · ${row.retry_runs} r`}</td>
+                      <td>{formatStatValue(row.delta_total, null)}</td>
+                      <td>{formatStatValue(row.meaningful_actions, null)}</td>
+                      <td>{formatStatValue(row.lines_compressed, null)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="text-xs text-muted">
+                      No maintenance summary rows in the selected window.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </div>
+
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">By agent</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Condensed agent yield</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Family</th>
+                <th>Completed</th>
+                <th>Δ/run</th>
+                <th>Actions/run</th>
+                <th>Lines/run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agentYieldRows.length ? (
+                agentYieldRows.map((row) => (
+                  <tr key={row.key}>
+                    <td>{formatTaskName(row.label)}</td>
+                    <td>{row.family_label}</td>
+                    <td>{formatStatValue(row.completed_runs, null)}</td>
+                    <td>{formatRatio(row.delta_per_completed_run)}</td>
+                    <td>{formatRatio(row.actions_per_completed_run)}</td>
+                    <td>{formatRatio(row.lines_per_completed_run)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} className="text-xs text-muted">
+                    No agent-yield rows in the selected window.
                   </td>
                 </tr>
               )}
