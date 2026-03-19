@@ -18,10 +18,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
+from mcp_memory.daemon_dispatch import dispatch_management_request, error_payload
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
-from mcp_memory.daemon_transport import DaemonZmqServer, dispatch_management_request
+from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
@@ -195,12 +196,15 @@ def create_daemon_app(
     @app.api_route("/api/{api_path:path}", methods=["GET", "POST"])
     async def dashboard_api(api_path: str, request: Request):
         payload = await _payload_from_http_request(request)
-        result = dispatch_management_request(
-            app.state.routes,
-            app.state.metadata,
-            f"/api/{api_path}",
-            payload,
-        )
+        try:
+            result = dispatch_management_request(
+                app.state.routes,
+                app.state.metadata,
+                f"/api/{api_path}",
+                payload,
+            )
+        except ValueError as exc:
+            result = error_payload(exc)
         if result.get("status") == "error" and result.get("error") == "unknown_transport_path":
             raise HTTPException(status_code=404, detail=str(result.get("error")))
         if result.get("status") == "error":

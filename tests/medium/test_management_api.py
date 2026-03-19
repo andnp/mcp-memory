@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import pytest
 import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
-from mcp_memory.daemon_transport import request_daemon_json
+from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.mcp.runtime import create_runtime
 
 
@@ -538,3 +539,138 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     assert record_thought.json()["status"] == "recorded"
     assert overview_after.json()["journal"]["pending_count"] >= overview.json()["journal"]["pending_count"] + 1
     assert missing_asset.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_daemon_zmq_dispatch_rejects_invalid_transport_payload_shapes(tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: None,
+        hook_handlers={},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: None,
+    )
+
+    assert await server._dispatch(b"not-json") == {"status": "error", "error": "invalid_transport_payload"}
+    assert await server._dispatch(json.dumps(["not", "an", "object"]).encode("utf-8")) == {
+        "status": "error",
+        "error": "invalid_transport_payload",
+    }
+    assert await server._dispatch(json.dumps({"payload": {}}).encode("utf-8")) == {
+        "status": "error",
+        "error": "transport_path_required",
+    }
+    assert await server._dispatch(json.dumps({"path": "/api/overview", "payload": []}).encode("utf-8")) == {
+        "status": "error",
+        "error": "transport_payload_must_be_object",
+    }
+
+
+def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        memory = runtime.repository.create_memory(
+            title="Parity memory",
+            content="Keep HTTP and ZMQ dispatch aligned.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+        )
+        assert memory is not None
+    finally:
+        runtime.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        metadata = app.state.metadata
+
+        http_detail = client.get(f"/api/memories/{memory.id}")
+        zmq_detail = request_daemon_json(metadata, f"/api/memories/{memory.id}", None, timeout_seconds=5)
+
+        assert http_detail.status_code == 200
+        assert http_detail.json() == zmq_detail
+
+        http_invalid_limit = client.get("/api/tasks", params={"limit": "0"})
+        zmq_invalid_limit = request_daemon_json(metadata, "/api/tasks?limit=0", None, timeout_seconds=5)
+
+        assert http_invalid_limit.status_code == 400
+        assert http_invalid_limit.json() == zmq_invalid_limit
+
+        http_unknown = client.get("/api/not-a-route")
+        zmq_unknown = request_daemon_json(metadata, "/api/not-a-route", None, timeout_seconds=5)
+
+        assert http_unknown.status_code == 404
+        assert http_unknown.json() == {"detail": "unknown_transport_path"}
+        assert zmq_unknown == {
+            "status": "error",
+            "error": "unknown_transport_path",
+            "path": "/api/not-a-route",
+        }
+
+        queue = app.state.routes.ctx.task_queue
+        assert queue is not None
+        http_task = queue.enqueue(
+            "memory-curator",
+            task_id="http-cancel-task",
+            workspace_id=app.state.routes.ctx.workspace_id,
+            available_at=time.time() + 3600.0,
+        )
+        zmq_task = queue.enqueue(
+            "memory-curator",
+            task_id="zmq-cancel-task",
+            workspace_id=app.state.routes.ctx.workspace_id,
+            available_at=time.time() + 3600.0,
+        )
+
+        http_cancel = client.post(
+            f"/api/admin/tasks/{http_task.id}/cancel",
+            json={"cancelled_by": "http-test", "reason": "http_cancelled"},
+        )
+        zmq_cancel = request_daemon_json(
+            metadata,
+            f"/api/admin/tasks/{zmq_task.id}/cancel",
+            {"cancelled_by": "zmq-test", "reason": "zmq_cancelled"},
+            timeout_seconds=5,
+        )
+
+        assert http_cancel.status_code == 200
+        assert http_cancel.json()["status"] == "cancelled"
+        assert http_cancel.json()["task"]["id"] == http_task.id
+        assert http_cancel.json()["task"]["cancellation_reason"] == "http_cancelled"
+        assert zmq_cancel["status"] == "cancelled"
+        assert zmq_cancel["task"]["id"] == zmq_task.id
+        assert zmq_cancel["task"]["cancellation_reason"] == "zmq_cancelled"
+
+
+def test_management_api_rejects_invalid_json_and_non_object_json_body(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        invalid_json = client.post(
+            "/api/memories/search",
+            content=b"{",
+            headers={"content-type": "application/json"},
+        )
+        non_object_json = client.post(
+            "/api/memories/search",
+            json=["not", "an", "object"],
+        )
+
+    assert invalid_json.status_code == 400
+    assert invalid_json.json() == {"detail": "invalid_json_body"}
+    assert non_object_json.status_code == 400
+    assert non_object_json.json() == {"detail": "json_body_must_be_object"}
