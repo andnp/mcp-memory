@@ -1326,6 +1326,46 @@ def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatc
     assert refreshed.available_at == pytest.approx(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME])
 
 
+def test_bootstrap_background_tasks_preserves_idle_paused_recurring_maintenance(monkeypatch, db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    journal = System1Journal(db_manager)
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: 100.0)
+    journal.record("old thought", workspace_id="workspace-a")
+
+    paused = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        available_at=0.0,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME],
+        },
+        task_id="paused-curator-bootstrap",
+    )
+    assert queue.claim_next(now=200.0) is not None
+    queue.complete(
+        paused.id,
+        completed_at=201.0,
+        run_result={
+            "paused_for_idle": True,
+            "idle_seconds": 4000.0,
+            "last_thought_at": 100.0,
+        },
+    )
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 5000.0)
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.time.time", lambda: 5000.0)
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue, journal=journal)
+
+    bootstrap_background_tasks(ctx)
+
+    assert queue.find_open_task(CURATOR_TASK_NAME, None) is None
+
+
 def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
     monkeypatch,
     tmp_path: Path,
@@ -3652,6 +3692,219 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert seed_payload[0]["title"] == "Auth rollout note"
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
         assert seed_payload[0]["oversized_for_curator"] is False
+    finally:
+        runtime.close()
+
+
+def _curator_task_for_tests(workspace_id: str | None, *, task_id: str = "memory-curator-seed-test") -> TaskRecord:
+    return TaskRecord(
+        id=task_id,
+        task_name=CURATOR_TASK_NAME,
+        data={"workspace_id": workspace_id, "strategy": "anomaly"},
+        workspace_id=workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+
+def test_memory_curator_recent_records_are_seeded_when_available(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        base_time = datetime(2026, 3, 1, tzinfo=UTC)
+        for index in range(8):
+            created = runtime.repository.create_memory(
+                title=f"Older observation {index}",
+                content="short observation",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["routine"],
+                created_at=(base_time + timedelta(days=index)).isoformat(),
+                updated_at=(base_time + timedelta(days=index)).isoformat(),
+            )
+            assert created is not None
+
+        recent = runtime.repository.create_memory(
+            title="Recent rollout concern",
+            content="Short recent fact that should still get curator pressure.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["recent"],
+            created_at=(base_time + timedelta(days=40)).isoformat(),
+            updated_at=(base_time + timedelta(days=41)).isoformat(),
+        )
+        assert recent is not None
+
+        seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
+
+        assert len(seed_records) == 8
+        assert recent.id in {record.id for record in seed_records}
+    finally:
+        runtime.close()
+
+
+def test_memory_curator_recency_quota_is_capped(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        base_time = datetime(2026, 2, 1, tzinfo=UTC)
+        older_ids: list[str] = []
+        recent_ids: list[str] = []
+        for index in range(6):
+            older = runtime.repository.create_memory(
+                title=f"Older observation {index}",
+                content="short observation",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["older"],
+                created_at=(base_time + timedelta(days=index)).isoformat(),
+                updated_at=(base_time + timedelta(days=index)).isoformat(),
+            )
+            assert older is not None
+            older_ids.append(older.id)
+
+        for index in range(5):
+            recent = runtime.repository.create_memory(
+                title=f"Recent fact {index}",
+                content="short recent fact",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=["recent"],
+                created_at=(base_time + timedelta(days=50 + index)).isoformat(),
+                updated_at=(base_time + timedelta(days=50 + index)).isoformat(),
+            )
+            assert recent is not None
+            recent_ids.append(recent.id)
+
+        seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
+        seeded_ids = {record.id for record in seed_records}
+
+        assert len(seed_records) == 8
+        assert len(seeded_ids.intersection(recent_ids)) == 2
+        assert seeded_ids.issuperset(older_ids)
+    finally:
+        runtime.close()
+
+
+def test_memory_curator_anomaly_seeds_survive_recency_bias(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        base_time = datetime(2026, 1, 1, tzinfo=UTC)
+        first_anomaly = runtime.repository.create_memory(
+            title="Oversized fact one",
+            content="A" * (CURATOR_MAX_MEMORY_CHARS + 100),
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["oversized"],
+            created_at=base_time.isoformat(),
+            updated_at=base_time.isoformat(),
+        )
+        second_anomaly = runtime.repository.create_memory(
+            title="Oversized fact two",
+            content="B" * (CURATOR_MAX_MEMORY_CHARS + 200),
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["oversized"],
+            created_at=(base_time + timedelta(days=1)).isoformat(),
+            updated_at=(base_time + timedelta(days=1)).isoformat(),
+        )
+        assert first_anomaly is not None and second_anomaly is not None
+
+        for index in range(8):
+            created = runtime.repository.create_memory(
+                title=f"Recent note {index}",
+                content="short recent note",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=["recent"],
+                created_at=(base_time + timedelta(days=30 + index)).isoformat(),
+                updated_at=(base_time + timedelta(days=30 + index)).isoformat(),
+            )
+            assert created is not None
+
+        seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
+        seeded_ids = {record.id for record in seed_records}
+
+        assert len(seed_records) == 8
+        assert first_anomaly.id in seeded_ids
+        assert second_anomaly.id in seeded_ids
+    finally:
+        runtime.close()
+
+
+def test_memory_curator_fill_still_includes_older_candidates_after_recency_quota(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        base_time = datetime(2026, 2, 1, tzinfo=UTC)
+        older_ids: list[str] = []
+        for index in range(4):
+            older = runtime.repository.create_memory(
+                title=f"Older observation {index}",
+                content="short observation",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["older"],
+                created_at=(base_time + timedelta(days=index)).isoformat(),
+                updated_at=(base_time + timedelta(days=index)).isoformat(),
+            )
+            assert older is not None
+            older_ids.append(older.id)
+
+        recent_ids: list[str] = []
+        for index in range(6):
+            recent = runtime.repository.create_memory(
+                title=f"Recent fact {index}",
+                content="short recent fact",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=["recent"],
+                created_at=(base_time + timedelta(days=40 + index)).isoformat(),
+                updated_at=(base_time + timedelta(days=40 + index)).isoformat(),
+            )
+            assert recent is not None
+            recent_ids.append(recent.id)
+
+        seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
+        seeded_ids = {record.id for record in seed_records}
+
+        assert len(seed_records) == 8
+        assert len(seeded_ids.intersection(recent_ids)) == 4
+        assert seeded_ids.issuperset(older_ids)
     finally:
         runtime.close()
 

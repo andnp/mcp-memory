@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue
@@ -26,6 +27,17 @@ class RecordThoughtOperation:
         }
 
         if self._task_queue is not None:
+            resumed = resume_paused_recurring_maintenance(self._task_queue, now=entry.timestamp)
+            if resumed:
+                payload["resumed_maintenance_tasks"] = [
+                    {
+                        "id": task.id,
+                        "status": task.status,
+                        "task_name": task.task_name,
+                        "workspace_id": task.workspace_id,
+                    }
+                    for task in resumed
+                ]
             scheduled = schedule_system1_ingest(
                 self._task_queue,
                 self._journal,

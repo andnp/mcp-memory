@@ -1,7 +1,7 @@
 ### Ideas
 
-- If there has been no new thought recorded for an hour, we should pause all background tasks.
+- Implemented: autonomous recurring maintenance pauses after 1 hour with no new thought.
 
-- The `memory-curator` should run hourly.
+- Implemented: `memory-curator` runs hourly.
 
-- We should make sure one of the candidate selection algorithms is recency biased (assumes most recent memories are the least organized)
+- Implemented: curator seed selection includes a bounded recency-biased slice.

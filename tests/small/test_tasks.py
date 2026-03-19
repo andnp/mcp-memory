@@ -8,11 +8,15 @@ import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.maintenance_idle import AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
+    CURATOR_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
     SYSTEM1_INGEST_TASK_NAME,
+    RECURRING_TASK_INTERVAL_SECONDS,
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue
@@ -563,6 +567,129 @@ async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     task_runs = queue.list_task_runs(task_name="ingest-system1")
     assert len(task_runs) == 1
     assert task_runs[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_pauses_idle_autonomous_recurring_maintenance(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+    seen: list[str] = []
+
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: 100.0)
+    journal.record("old maintenance anchor", workspace_id="workspace-a")
+
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME],
+        },
+        available_at=0.0,
+        task_id="idle-curator",
+    )
+    claimed = queue.claim_next(now=100.0 + AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0)
+    assert claimed is not None
+
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.time.time", lambda: 100.0 + AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0)
+    worker = RuntimeTaskWorker(
+        ApplicationContext(db_manager=db_manager, task_queue=queue, journal=journal),
+        handlers={CURATOR_TASK_NAME: lambda ctx, task: seen.append(task.id)},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    run = queue.list_task_runs(task_id=task.id)[0]
+
+    assert completed.status == "completed"
+    assert seen == []
+    assert queue.find_open_task(CURATOR_TASK_NAME, None) is None
+    assert run.result["paused_for_idle"] is True
+    assert run.result["last_thought_at"] == pytest.approx(100.0)
+    assert run.result["idle_seconds"] == pytest.approx(AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_does_not_pause_manual_maintenance_runs_when_idle(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+    seen: list[str] = []
+
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: 100.0)
+    journal.record("old maintenance anchor", workspace_id="workspace-a")
+
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="manual-curator",
+    )
+    claimed = queue.claim_next(now=100.0 + AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0)
+    assert claimed is not None
+
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.time.time", lambda: 100.0 + AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0)
+    worker = RuntimeTaskWorker(
+        ApplicationContext(db_manager=db_manager, task_queue=queue, journal=journal),
+        handlers={CURATOR_TASK_NAME: lambda ctx, task: seen.append(task.id)},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    run = queue.list_task_runs(task_id=task.id)[0]
+
+    assert completed.status == "completed"
+    assert seen == ["manual-curator"]
+    assert run.result == {}
+
+
+def test_record_thought_operation_resumes_paused_recurring_maintenance(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    paused = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME],
+        },
+        available_at=0.0,
+        task_id="paused-curator",
+    )
+    assert queue.claim_next(now=10.0) is not None
+    queue.complete(
+        paused.id,
+        completed_at=20.0,
+        run_result={
+            "paused_for_idle": True,
+            "idle_seconds": AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 5.0,
+            "last_thought_at": 5.0,
+        },
+    )
+
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: 200.0)
+    payload = RecordThoughtOperation(journal, queue, "workspace-a").execute("fresh thought")
+    resumed = queue.find_open_task(CURATOR_TASK_NAME, None)
+
+    assert resumed is not None
+    assert resumed.status == "pending"
+    assert resumed.available_at == pytest.approx(200.0)
+    assert resumed.data["trigger"] == "recurring_resume"
+    assert payload["resumed_maintenance_tasks"] == [
+        {
+            "id": resumed.id,
+            "status": "pending",
+            "task_name": CURATOR_TASK_NAME,
+            "workspace_id": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

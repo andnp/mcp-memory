@@ -15,6 +15,7 @@ from rich.table import Table
 import uvicorn
 
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.daemon import DaemonStopResult, create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
 from mcp_memory.daemon_process import find_free_port
@@ -1479,6 +1480,8 @@ def import_markdown(
                 list(file_paths),
                 workspace_id=resolved_workspace_id,
             )
+            if runtime.task_queue is not None:
+                resume_paused_recurring_maintenance(runtime.task_queue)
             for entry_id, file_name in recorded:
                 console.print(f"[green]Recorded thought:[/] {file_name} (entry {entry_id})")
             console.print(f"[green]Recorded total:[/] {len(recorded)} thoughts → buffer")

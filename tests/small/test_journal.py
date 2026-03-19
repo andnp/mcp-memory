@@ -42,6 +42,16 @@ def test_system1_journal_workspace_queries_are_scoped(system1_journal) -> None:
     assert system1_journal.get_oldest_pending_timestamp(workspace_id="workspace-a") == first.timestamp
 
 
+def test_system1_journal_get_latest_thought_timestamp_tracks_most_recent_entry(system1_journal) -> None:
+    first = system1_journal.record("first thought", workspace_id="workspace-a")
+    system1_journal.mark_processed([first.id])
+    second = system1_journal.record("second thought", workspace_id="workspace-b")
+
+    assert system1_journal.get_latest_thought_timestamp() == second.timestamp
+    assert system1_journal.get_latest_thought_timestamp(workspace_id="workspace-a") == first.timestamp
+    assert system1_journal.get_latest_thought_timestamp(workspace_id="workspace-b") == second.timestamp
+
+
 def test_system1_journal_claims_release_and_delete_are_task_scoped(system1_journal) -> None:
     first = system1_journal.record("first claimed thought", workspace_id="workspace-a")
     second = system1_journal.record("second claimed thought", workspace_id="workspace-a")

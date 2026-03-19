@@ -21,6 +21,7 @@ from mcp_memory.core.tasks import TaskRecord
 
 CURATOR_MAX_SEED_RECORDS = 8
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 2
+CURATOR_RECENCY_SEED_RECORDS = 2
 CURATOR_MAX_MEMORY_CHARS = 4000
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
@@ -116,6 +117,11 @@ def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Samp
         anomaly_candidates = largest_candidates
 
     extend_unique_seed_records(seed_records, anomaly_candidates, CURATOR_SIZE_ANOMALY_SEED_RECORDS)
+    extend_unique_seed_records(
+        seed_records,
+        sort_recent_curator_candidates(candidates),
+        min(CURATOR_MAX_SEED_RECORDS, len(seed_records) + CURATOR_RECENCY_SEED_RECORDS),
+    )
     extend_unique_seed_records(seed_records, prioritized_candidates, CURATOR_MAX_SEED_RECORDS)
     return SamplingBatch(
         requested_strategy=sampled_batch.requested_strategy,
@@ -151,6 +157,18 @@ def extend_unique_seed_records(seed_records: list[Any], candidates: list[Any], l
             return
 
 
+def sort_recent_curator_candidates(candidates: list[Any]) -> list[Any]:
+    return sorted(
+        candidates,
+        key=lambda record: (
+            _sort_curator_timestamp(record.created_at),
+            _sort_curator_timestamp(record.updated_at),
+            -(record.read_count),
+        ),
+        reverse=True,
+    )
+
+
 def is_oversized_curator_memory(record) -> bool:
     return len(record.content.strip()) > CURATOR_MAX_MEMORY_CHARS
 
@@ -161,6 +179,12 @@ def should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
 
 def build_support_counts(ctx: ApplicationContext, candidates: list) -> dict[str, int]:
     return support_counts_for_candidates(ctx, candidates)
+
+
+def _sort_curator_timestamp(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
 
 
 def truncate_text(value: str | None, limit: int) -> str:

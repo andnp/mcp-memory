@@ -348,6 +348,25 @@ class System1Journal:
             return None
         return float(row[0])
 
+    def get_latest_thought_timestamp(self, workspace_id: str | None | object = _ALL_WORKSPACES) -> float | None:
+        """Return the most recent thought timestamp regardless of journal status."""
+        conn = self._db.get_connection()
+        clauses: list[str] = []
+        params: list[object] = []
+        if workspace_id is None:
+            clauses.append("workspace_id IS NULL")
+        elif workspace_id is not _ALL_WORKSPACES:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+
+        query = "SELECT MAX(timestamp) FROM system1_journal"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        row = conn.execute(query, params).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
+
     def get_recent(self, limit: int = 10) -> list[JournalEntry]:
         """Get most recent entries regardless of status."""
         conn = self._db.get_connection()

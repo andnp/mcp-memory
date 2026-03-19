@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.maintenance_idle import should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
@@ -161,6 +162,7 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
     for task_name, interval_seconds in RECURRING_TASK_INTERVAL_SECONDS.items():
         _ensure_recurring_task_scheduled(
             task_queue,
+            journal=journal,
             task_name=task_name,
             workspace_id=None,
             interval_seconds=interval_seconds,
@@ -170,6 +172,7 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
 def _ensure_recurring_task_scheduled(
     task_queue,
     *,
+    journal,
     task_name: str,
     workspace_id: str | None,
     interval_seconds: float,
@@ -205,6 +208,9 @@ def _ensure_recurring_task_scheduled(
                     available_at=next_available_at,
                     priority=priority,
                 )
+        return
+
+    if journal is not None and should_preserve_idle_pause(summary, journal):
         return
 
     task_queue.enqueue_unique(

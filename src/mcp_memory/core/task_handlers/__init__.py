@@ -1,4 +1,5 @@
 from mcp_memory.core.task_handlers.constants import (
+    AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
     DEFAULT_INGEST_BATCH_SIZE,
     DEFAULT_AGENT_SCAN_LIMIT,
     DEFAULT_TASK_PRIORITY,
@@ -44,6 +45,7 @@ from mcp_memory.core.task_handlers.summarize import handle_summarize_memory_task
 __all__ = [
     "DEFAULT_INGEST_BATCH_SIZE",
     "DEFAULT_AGENT_SCAN_LIMIT",
+    "AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS",
     "DEFAULT_TASK_PRIORITY",
     "DEFAULT_RECURRING_TASK_INTERVAL_SECONDS",
     "DEFAULT_STALE_PLAN_DAYS",

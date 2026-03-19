@@ -7,6 +7,10 @@ import logging
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.maintenance_idle import (
+    build_idle_pause_result,
+    should_pause_autonomous_recurring_maintenance,
+)
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
 from mcp_memory.core.tasks import TaskRecord
@@ -112,6 +116,23 @@ class RuntimeTaskWorker:
                 f"No task handler registered for {task.task_name}",
             )
             return
+
+        journal = getattr(self._ctx, "journal", None)
+        if journal is not None:
+            idle_state = await asyncio.to_thread(
+                should_pause_autonomous_recurring_maintenance,
+                task,
+                journal,
+            )
+            if idle_state is not None:
+                completed_task = await asyncio.to_thread(
+                    task_queue.complete,
+                    task.id,
+                    None,
+                    build_idle_pause_result(task, idle_state),
+                )
+                await asyncio.to_thread(self._reconcile_task_conversations, completed_task)
+                return
 
         try:
             if iscoroutinefunction(handler):
