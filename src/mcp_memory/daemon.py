@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+import shlex
 import signal
 import time
 from dataclasses import dataclass
@@ -12,11 +13,13 @@ from mcp_memory.config import (
     resolve_daemon_lock_path,
     resolve_daemon_metadata_path,
     resolve_daemon_socket_path,
+    resolve_daemon_startup_log_path,
 )
 from mcp_memory.daemon_app import create_daemon_app
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_process import (
+    DaemonSpawnDetails,
     find_free_port as _find_free_port,
     is_daemon_healthy as _is_daemon_healthy,
     remove_metadata,
@@ -101,7 +104,7 @@ def ensure_daemon_started(
             )
 
         daemon_port = _find_free_port()
-        _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
+        spawn_details = _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
         poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
         deadline = time.monotonic() + timeout_seconds
         current = None
@@ -109,6 +112,14 @@ def ensure_daemon_started(
             current = _read_daemon_metadata(metadata_path)
             if current is not None and _is_daemon_healthy(current):
                 return current
+            if _spawned_daemon_exited_before_readiness(spawn_details, current):
+                raise RuntimeError(
+                    _format_startup_failure_message(
+                        "Global daemon exited before becoming ready.",
+                        spawn_details=spawn_details,
+                        metadata=current,
+                    )
+                )
             time.sleep(poll_interval_seconds)
 
         if current is None:
@@ -117,6 +128,14 @@ def ensure_daemon_started(
                 current = _read_daemon_metadata(metadata_path)
                 if current is not None:
                     break
+                if _spawned_daemon_exited_before_readiness(spawn_details, current):
+                    raise RuntimeError(
+                        _format_startup_failure_message(
+                            "Global daemon exited before publishing readiness metadata.",
+                            spawn_details=spawn_details,
+                            metadata=current,
+                        )
+                    )
                 time.sleep(poll_interval_seconds)
 
         if current is not None and _is_process_running(current.pid):
@@ -126,14 +145,31 @@ def ensure_daemon_started(
                 latest = _read_daemon_metadata(metadata_path)
                 if latest is not None and _is_daemon_healthy(latest):
                     return latest
+                if _spawned_daemon_exited_before_readiness(spawn_details, latest):
+                    raise RuntimeError(
+                        _format_startup_failure_message(
+                            "Global daemon exited before reaching a healthy state.",
+                            spawn_details=spawn_details,
+                            metadata=latest,
+                        )
+                    )
                 time.sleep(poll_interval_seconds)
             latest = _read_daemon_metadata(metadata_path)
             if latest is not None and _is_process_running(latest.pid):
                 raise RuntimeError(
-                    "Timed out waiting for global daemon startup "
-                    f"(metadata_present pid={latest.pid} endpoint={latest.transport_endpoint})"
+                    _format_startup_failure_message(
+                        "Timed out waiting for global daemon startup.",
+                        spawn_details=spawn_details,
+                        metadata=latest,
+                    )
                 )
-        raise RuntimeError("Timed out waiting for global daemon startup")
+        raise RuntimeError(
+            _format_startup_failure_message(
+                "Timed out waiting for global daemon startup.",
+                spawn_details=spawn_details,
+                metadata=current,
+            )
+        )
     finally:
         lock.release()
 
@@ -361,3 +397,66 @@ def _is_daemon_command(command: tuple[str, ...]) -> bool:
     if not command:
         return False
     return len(command) >= 4 and command[1:4] == ("-m", "mcp_memory.cli", "daemon")
+
+
+def _spawned_daemon_exited_before_readiness(
+    spawn_details: DaemonSpawnDetails | None,
+    metadata: DaemonMetadata | None,
+) -> bool:
+    if spawn_details is None:
+        return False
+    try:
+        returncode = spawn_details.process.poll()
+    except Exception:
+        return False
+    if returncode is None:
+        return False
+    return metadata is None or metadata.pid == spawn_details.pid
+
+
+def _format_startup_failure_message(
+    reason: str,
+    *,
+    spawn_details: DaemonSpawnDetails | None,
+    metadata: DaemonMetadata | None,
+) -> str:
+    startup_log_path = resolve_daemon_startup_log_path()
+    details: list[str] = [reason]
+    if spawn_details is not None:
+        details.append(f"spawn_pid={spawn_details.pid}")
+        details.append(f"startup_log={spawn_details.startup_log_path}")
+        try:
+            returncode = spawn_details.process.poll()
+        except Exception:
+            returncode = None
+        if returncode is not None:
+            details.append(f"exit_code={returncode}")
+        details.append(f"command={shlex.join(spawn_details.command)}")
+        startup_log_path = spawn_details.startup_log_path
+    else:
+        details.append(f"startup_log={startup_log_path}")
+
+    if metadata is None:
+        details.append("metadata=missing")
+    else:
+        details.append(f"metadata_pid={metadata.pid}")
+        details.append(f"metadata_endpoint={metadata.transport_endpoint}")
+        details.append(f"metadata_status={metadata.status}")
+
+    tail = _read_startup_log_tail(startup_log_path)
+    if tail is None:
+        return " ".join(details)
+    return " ".join(details) + f"\nStartup log tail ({startup_log_path}):\n{tail}"
+
+
+def _read_startup_log_tail(startup_log_path: Path, *, max_lines: int = 40, max_chars: int = 4000) -> str | None:
+    try:
+        content = startup_log_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not content.strip():
+        return None
+    tail = "\n".join(content.splitlines()[-max_lines:]).strip()
+    if len(tail) > max_chars:
+        tail = tail[-max_chars:]
+    return tail

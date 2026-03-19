@@ -4,13 +4,28 @@ import json
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import asdict
+from dataclasses import dataclass
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
+from mcp_memory.config import resolve_daemon_startup_log_path
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.daemon_models import DaemonMetadata
+
+
+class _PollableProcess(Protocol):
+    def poll(self) -> int | None: ...
+
+
+@dataclass(frozen=True)
+class DaemonSpawnDetails:
+    pid: int
+    command: tuple[str, ...]
+    startup_log_path: Path
+    process: _PollableProcess
 
 
 def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
@@ -26,7 +41,7 @@ def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
         return None
 
 
-def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> None:
+def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> DaemonSpawnDetails:
     command = [
         sys.executable,
         "-m",
@@ -39,13 +54,29 @@ def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> None:
         "--port",
         str(port),
     ]
-    subprocess.Popen(
-        command,
-        cwd=str(workspace_root),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
+    startup_log_path = resolve_daemon_startup_log_path()
+    startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with startup_log_path.open("a", encoding="utf-8") as startup_log:
+        startup_log.write(
+            "\n=== daemon spawn "
+            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+            f"pid=pending host={host} port={port} cwd={workspace_root} ===\n"
+        )
+        startup_log.write(f"command: {' '.join(command)}\n")
+        startup_log.flush()
+        process = subprocess.Popen(
+            command,
+            cwd=str(workspace_root),
+            stdout=subprocess.DEVNULL,
+            stderr=startup_log,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    return DaemonSpawnDetails(
+        pid=process.pid,
+        command=tuple(command),
+        startup_log_path=startup_log_path,
+        process=process,
     )
 
 

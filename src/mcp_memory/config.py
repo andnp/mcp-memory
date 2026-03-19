@@ -600,6 +600,13 @@ def resolve_daemon_metadata_path(workspace_id: str | None = None) -> Path:
     return metadata_dir / "daemon.json"
 
 
+def resolve_daemon_startup_log_path(workspace_id: str | None = None) -> Path:
+    del workspace_id
+    daemon_dir = resolve_state_dir() / "daemons"
+    daemon_dir.mkdir(parents=True, exist_ok=True)
+    return daemon_dir / "daemon.log"
+
+
 def resolve_daemon_lock_path(workspace_id: str | None = None) -> Path:
     del workspace_id
     lock_dir = resolve_state_dir() / "locks"

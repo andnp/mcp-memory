@@ -9,7 +9,7 @@ import mcp_memory.daemon as daemon_module
 
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
-from mcp_memory.daemon_process import is_daemon_healthy, spawn_daemon_process
+from mcp_memory.daemon_process import DaemonSpawnDetails, is_daemon_healthy, spawn_daemon_process
 
 
 pytestmark = pytest.mark.medium
@@ -109,22 +109,134 @@ def test_is_process_running_treats_zombies_as_stopped(monkeypatch) -> None:
 
 
 def test_spawn_daemon_process_uses_workspace_root_as_cwd(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     captured: dict[str, object] = {}
 
     def _fake_popen(command, **kwargs):
         captured['command'] = command
         captured.update(kwargs)
         class _DummyProcess:
-            pass
+            pid = 4321
         return _DummyProcess()
 
     monkeypatch.setattr('mcp_memory.daemon_process.subprocess.Popen', _fake_popen)
 
-    spawn_daemon_process(tmp_path / 'workspace', '127.0.0.1', 8123)
+    details = spawn_daemon_process(tmp_path / 'workspace', '127.0.0.1', 8123)
 
     assert captured['cwd'] == str(tmp_path / 'workspace')
     assert captured['stdin'] is not None
     assert captured['start_new_session'] is True
+    assert details.pid == 4321
+    assert details.command[1:4] == ('-m', 'mcp_memory.cli', 'daemon')
+    assert details.startup_log_path.name == 'daemon.log'
+
+
+def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exits(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    config = Config()
+    config.daemon.auto_start_timeout_seconds = 0.2
+    spec = _Spec(
+        memory_path=tmp_path / 'memories',
+        config=config,
+        workspace_id='workspace-start',
+        workspace_root=tmp_path / 'workspace',
+        lock_path=tmp_path / 'workspace.lock',
+    )
+    startup_log_path = tmp_path / 'state' / 'mcp-memory' / 'daemons' / 'daemon.log'
+    startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+    startup_log_path.write_text('booting\nTraceback: bind failed\n', encoding='utf-8')
+
+    class _ExitedProcess:
+        def poll(self) -> int:
+            return 17
+
+    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', lambda path: None)
+    monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
+    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9006)
+    monkeypatch.setattr(
+        'mcp_memory.daemon._spawn_daemon_process',
+        lambda workspace_root, host, port: DaemonSpawnDetails(
+            pid=4444,
+            command=('python', '-m', 'mcp_memory.cli', 'daemon'),
+            startup_log_path=startup_log_path,
+            process=_ExitedProcess(),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match='Startup log tail') as exc_info:
+        ensure_daemon_started()
+
+    message = str(exc_info.value)
+    assert 'exit_code=17' in message
+    assert f'startup_log={startup_log_path}' in message
+    assert 'Traceback: bind failed' in message
+
+
+def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    config = Config()
+    config.daemon.auto_start_timeout_seconds = 0.2
+    config.daemon.healthcheck_interval_seconds = 0.05
+    spec = _Spec(
+        memory_path=tmp_path / 'memories',
+        config=config,
+        workspace_id='workspace-start',
+        workspace_root=tmp_path / 'workspace',
+        lock_path=tmp_path / 'workspace.lock',
+    )
+    startup_log_path = tmp_path / 'state' / 'mcp-memory' / 'daemons' / 'daemon.log'
+    startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+    startup_log_path.write_text('still starting\nlast warning\n', encoding='utf-8')
+    metadata = DaemonMetadata(
+        host='127.0.0.1',
+        port=9007,
+        pid=5555,
+        started_at=1.0,
+        status='starting',
+    )
+
+    class _RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    monotonic_state = {'value': -0.05}
+
+    def _fake_monotonic() -> float:
+        monotonic_state['value'] += 0.05
+        return monotonic_state['value']
+
+    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
+    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9007)
+    monkeypatch.setattr(
+        'mcp_memory.daemon._spawn_daemon_process',
+        lambda workspace_root, host, port: DaemonSpawnDetails(
+            pid=5555,
+            command=('python', '-m', 'mcp_memory.cli', 'daemon'),
+            startup_log_path=startup_log_path,
+            process=_RunningProcess(),
+        ),
+    )
+    read_count = {'count': 0}
+
+    def _fake_read(_path):
+        read_count['count'] += 1
+        return None if read_count['count'] == 1 else metadata
+
+    monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', _fake_read)
+    monkeypatch.setattr('mcp_memory.daemon._is_daemon_healthy', lambda current: False)
+    monkeypatch.setattr('mcp_memory.daemon._is_process_running', lambda pid: True)
+    monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
+    monkeypatch.setattr('mcp_memory.daemon.time.monotonic', _fake_monotonic)
+
+    with pytest.raises(RuntimeError, match='Timed out waiting for global daemon startup') as exc_info:
+        ensure_daemon_started()
+
+    message = str(exc_info.value)
+    assert 'metadata_status=starting' in message
+    assert 'metadata_endpoint=http://127.0.0.1:9007' in message
+    assert 'last warning' in message
 
 
 def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, tmp_path: Path) -> None:
