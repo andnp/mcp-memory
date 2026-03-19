@@ -12,7 +12,7 @@ Recent work substantially increased the system's capability surface:
 
 The product direction still looks right, but the codebase is now at the point where the main risks are **architectural drift, boundary blur, and duplicated orchestration**, not missing features.
 
-This plan captures a first-pass architecture review and a refactor roadmap intended to improve maintainability, policy clarity, and implementation velocity before another large wave of feature work.
+This document started as a first-pass architecture review. It is now updated to reflect the current repository state after several refactor slices already landed, so the roadmap below focuses on **remaining debt**, not work that is already complete.
 
 ## 2. Current System Map
 
@@ -30,7 +30,7 @@ The active system has five major layers.
 - forwarding tool calls into the daemon transport
 
 **Observation:**
-This layer is mostly thin, but it still owns too much workflow glue around daemon/runtime bootstrapping and local-vs-daemon behavior.
+This layer is still broadly correct, but `cli.py` remains a large workflow-glue hotspot and still knows too much about bootstrapping, daemon mediation, and local-vs-daemon behavior.
 
 ### 2.2 Daemon Lifecycle & Transport Layer
 **Primary files:**
@@ -48,7 +48,7 @@ This layer is mostly thin, but it still owns too much workflow glue around daemo
 - binding runtime lifetime to daemon lifetime
 
 **Observation:**
-This layer is feature-rich and fairly robust, but the startup/lifespan path composes many concerns at once, making it harder to reason about degradation and test setup.
+This layer is feature-rich and reasonably robust, but startup/lifespan behavior still composes many concerns at once. The architecture is coherent, yet the ownership boundaries around construction, dispatch, and degradation are still more centralized than ideal.
 
 ### 2.3 Runtime Composition Layer
 **Primary files:**
@@ -62,7 +62,7 @@ This layer is feature-rich and fairly robust, but the startup/lifespan path comp
 - carry config/workspace/runtime-wide dependencies
 
 **Observation:**
-`ApplicationContext` has become a large service bag. It is useful operationally, but too many parts of the system can reach too many other parts with no narrow abstraction boundary.
+`ApplicationContext` remains the broadest dependency carrier in the system. It is operationally convenient, but still too much of a service bag for long-term maintainability.
 
 ### 2.4 Background Agent & Task Runtime Layer
 **Primary files:**
@@ -81,7 +81,7 @@ This layer is feature-rich and fairly robust, but the startup/lifespan path comp
 - strategy selection and grouping
 
 **Observation:**
-This is currently the highest-leverage architectural area. Policy and execution are mixed together, and multiple handlers repeat the same orchestration structure with task-specific variations.
+This remains the highest-leverage area. The deduplicator path is healthier than before, but `maintenance.py` and `ingest.py` still concentrate orchestration patterns that should be more modular.
 
 ### 2.5 Internal API / Management Layer
 **Primary files:**
@@ -90,6 +90,7 @@ This is currently the highest-leverage architectural area. Policy and execution 
 - `src/mcp_memory/mcp/tools.py`
 - `src/mcp_memory/mcp/internal_tools.py`
 - `src/mcp_memory/management/service.py`
+- `src/mcp_memory/management/*.py`
 
 **Responsibilities:**
 - user-facing MCP tool contracts
@@ -98,216 +99,231 @@ This is currently the highest-leverage architectural area. Policy and execution 
 - stats, diagnostics, task operations, AI conversation visibility
 
 **Observation:**
-The internal API surface is powerful, but contract consistency and layering discipline need tightening. Management logic in particular now carries too much metric and orchestration semantics.
+This area improved materially. `ManagementService` is now more façade-like and delegates to reporting builders, but reporting queries are still schema-coupled and `internal_services.py` remains too mixed by mutation domain.
 
-## 3. Highest-Risk Architectural Issues
+## 3. Status Update: What Is Already Done
 
-### 3.1 `ApplicationContext` is too broad
-**File:** `src/mcp_memory/context.py`
+The original roadmap identified several “do now” items that have since landed at least partially.
 
-`ApplicationContext` couples:
-- config and workspace identity
-- persistence services
-- search and embedding services
-- provider registry and active providers
-- task queue and runtime state
+### 3.1 Provider routing policy extraction is largely complete
+The core policy split now lives in:
+- `src/mcp_memory/core/provider_policy.py`
+- `src/mcp_memory/core/task_policy.py`
 
-This makes it easy to build features quickly, but it weakens module boundaries and makes testing/refactoring more expensive.
+`agent_runtime` depends on policy helpers rather than embedding the full routing decision tree inline.
 
-### 3.2 `ManagementService` is too large and semantically overloaded
-**File:** `src/mcp_memory/management/service.py`
+### 3.2 `ManagementService` is no longer the same monolith
+Recent refactors split reporting logic into:
+- `src/mcp_memory/management/route_audit.py`
+- `src/mcp_memory/management/health_reporting.py`
+- `src/mcp_memory/management/agent_run_reporting.py`
+- `src/mcp_memory/management/overview_reporting.py`
+- `src/mcp_memory/management/analytics_reporting.py`
 
-It currently acts as:
-- a metrics engine
-- a reporting facade
-- a task-control surface
-- a memory-query adapter
-- a dashboard API backend
+`src/mcp_memory/management/service.py` is still important, but it is now primarily a façade over those builders rather than a 1.3k+ mixed-responsibility blob.
 
-This increases the chance of semantic bugs in observability logic and makes it harder to evolve metrics cleanly.
+### 3.3 The deduplicator path is now split into clearer seams
+Recent slices extracted:
+- `src/mcp_memory/core/task_handlers/deduplicator_support.py`
+- `src/mcp_memory/core/task_handlers/deduplicator_merge.py`
 
-### 3.3 Background task handlers duplicate orchestration structure
-**Files:**
-- `src/mcp_memory/core/task_handlers/ingest.py`
+This reduced the risk and surface area of `handle_deduplicator_task()` and removed one notable private-helper dependency from `internal_services.py`.
+
+## 4. Ranked Architecture Debt List
+
+This ranked list reflects the **current** architecture state and focuses on smells beyond raw LOC counts.
+
+### 4.1 High — `ApplicationContext` is still a broad service bag
+**Primary file:** `src/mcp_memory/context.py`
+
+Why it matters:
+- too many modules can reach too many other modules through one object
+- it weakens boundary discipline even when file boundaries look clean
+- some helper/reporting code still fabricates or partially populates context-like state just to reuse policy APIs
+
+Symptoms:
+- runtime composition, management reporting, and provider-selection logic still depend on broad ambient context
+- testing and refactoring are more expensive than they should be because narrow dependencies are not expressed explicitly
+
+### 4.2 High — background maintenance orchestration is still too concentrated
+**Primary files:**
 - `src/mcp_memory/core/task_handlers/maintenance.py`
+- `src/mcp_memory/core/task_handlers/ingest.py`
 
-Common repeated structure includes:
-- seed/claim selection
-- provider-policy choice
-- tool-loop or agentic path execution
-- finalization / delete / release / cleanup
-- structured run metadata assembly
+Why it matters:
+- maintenance handlers still mix policy, work selection, prompting, deterministic fallbacks, and mutation finalization
+- adding or changing a maintenance family still tends to touch multiple orchestration layers
 
-This is the biggest code-quality hotspot because every policy change risks touching multiple handlers.
+What improved:
+- deduplicator work is meaningfully better isolated
 
-### 3.4 Provider routing mixes policy and execution
-**File:** `src/mcp_memory/core/agent_runtime.py`
+What still smells:
+- graph linker, conflict detector, defragmenter, curator, and shared maintenance helpers still live too close together
+- ingest still owns task-specific claiming/finalization logic that wants a smaller service seam
 
-Current routing logic still combines:
-- task semantics
-- capability preference
-- budget checks
-- route ordering
-- fallback selection
-- binding usage context
+### 4.3 High — reporting/query logic is still schema-coupled
+**Primary files:**
+- `src/mcp_memory/management/overview_reporting.py`
+- `src/mcp_memory/management/analytics_reporting.py`
 
-This should become a more explicit policy object or module so handlers and workers can depend on a simpler interface.
+Why it matters:
+- management/reporting logic talks directly to SQLite schema details instead of a dedicated read-model/query layer
+- workspace scoping rules and reporting semantics are encoded in multiple places
+- schema evolution will be more brittle than necessary
 
-### 3.5 Internal MCP tool contracts are not yet uniform enough
-**Files:**
-- `src/mcp_memory/mcp/internal_tools.py`
-- `src/mcp_memory/mcp/internal_services.py`
-- `src/mcp_memory/mcp/services.py`
+This is a real architectural smell even when the builder split itself is healthy.
 
-The surface is useful, but naming, error semantics, and service conventions still feel organically grown rather than deliberately standardized.
+### 4.4 Medium — internal MCP maintenance services are too mixed by domain
+**Primary file:** `src/mcp_memory/mcp/internal_services.py`
 
-### 3.6 Tests are too exposed to host/runtime ambient state
-**Relevant areas:** provider tests, runtime tests, daemon/CLI tests
+Why it matters:
+- read/search/list behavior lives beside ingest-specific mutations and generic maintenance mutations
+- internal tool semantics are powerful, but the implementation module is still a kitchen sink
+- mutation invariants are harder to audit when multiple domains share one service file
 
-We already saw this concretely via:
-- real provider CLI discovery hazards
-- daemon command path mismatches
-- config drift between repo defaults and live user config
+### 4.5 Medium — daemon composition and dispatch are still centralized
+**Primary files:**
+- `src/mcp_memory/daemon_app.py`
+- `src/mcp_memory/daemon_transport.py`
 
-The suite needs stronger fixtures and more explicit runtime construction boundaries.
+Why it matters:
+- lifecycle, worker startup, metadata publication, hook wiring, and request dispatch still gather in a small number of high-authority modules
+- the design is coherent, but testability and fault-isolation would improve with narrower composition seams
 
-## 4. Design Principles for the Refactor Phase
+### 4.6 Medium — extension seams still require too many coordinated edits
+**Common touchpoints:**
+- `core/task_handlers/constants.py`
+- `core/task_policy.py`
+- `core/agent_runtime.py`
+- management reporting/audit code
+- tests
 
-### 4.1 Separate policy from execution
+Why it matters:
+- adding a new background agent is not hard, but it is not yet a one-obvious-place change
+- the architecture still encourages cross-cutting edits for new maintenance capabilities
+
+### 4.7 Low — helper logic is still duplicated in a few places
+Examples:
+- token/tag normalization heuristics in maintenance-related modules
+- reporting bucketing and summary logic split across builder modules
+
+Why it matters:
+- mostly a cleanup concern today
+- left alone, it will slowly reintroduce drift between maintenance families and reporting surfaces
+
+## 5. Design Principles for the Next Refactor Phase
+
+### 5.1 Separate policy from execution
 - **Policy** decides: capability tier, fallback chain, budgets, deterministic bypass, sampling strategy.
 - **Execution** performs: claim work, call provider/tool loop, apply mutations, finalize task outcome.
 
-### 4.2 Standardize maintenance-agent orchestration
-The ingest / dedup / curator family should share a framework for:
-- selecting work
-- entering agentic or deterministic paths
-- finalizing mutation state
-- emitting structured run metadata
+### 5.2 Standardize maintenance-agent orchestration incrementally
+The deduplicator split proved that small, family-specific extractions work. Continue applying that pattern to curator, graph/conflict, and ingest rather than attempting one giant framework rewrite.
 
-### 4.3 Keep daemon boundaries explicit
-The daemon should remain the operational center of gravity. Local/runtime construction should be treated as infrastructure, not a casual convenience layer sprinkled throughout the codebase.
+### 5.3 Keep daemon boundaries explicit
+The daemon should remain the operational center of gravity. Runtime construction and daemon-backed operation should be separate on purpose, not just by habit.
 
-### 4.4 Make observability definitions precise
-Every dashboard stat and alert should have crisp semantics.
-Examples:
-- runnable vs scheduled queue age
-- provider failure rate windows
-- degraded vs stale vs archived memory states
-- candidate_count vs seed_count vs touched_count
+### 5.4 Centralize read-model/query semantics for reporting
+Builder modules are a good façade layer, but raw reporting queries should live behind a more deliberate read-model/query seam.
 
-### 4.5 Tighten internal API contracts
-Internal maintenance tools should feel like a stable internal platform, not just a collection of useful helpers.
+### 5.5 Tighten internal API contracts
+Internal maintenance tools should continue moving toward a stable internal platform with consistent validation, naming, and mutation semantics.
 
-## 5. Refactor Roadmap
+## 6. Updated Refactor Roadmap
 
-### 5.1 Do Now — Highest-Leverage Refactor Tranche
+### 6.1 Do Now — Highest-Leverage Remaining Tranche
 
-#### Refactor A: Shared maintenance-agent execution framework
-**Goal:** extract a common orchestration skeleton for ingest, deduplicator, and curator.
+#### Refactor A: Continue maintenance-family extraction
+**Goal:** keep peeling families out of `maintenance.py` using the same behavior-preserving pattern that worked for the deduplicator.
 
-**Potential shape:**
-- work selection / seed acquisition
-- policy resolution
-- agentic execution path
-- deterministic fallback path
-- finalization/cleanup hook
-- structured result metadata builder
+**Best next candidates:**
+1. graph linker + conflict detector support
+2. curator support
+3. defragmentation support
 
 **Expected payoff:**
-- less duplicated control flow
-- easier policy changes
-- more uniform metrics and tests
-- easier future agent additions
+- smaller maintenance blast radius
+- clearer family-level tests
+- easier reuse of common orchestration decisions without a premature framework rewrite
 
-#### Refactor B: Provider routing policy extraction
-**Goal:** move route/capability/fallback semantics into a dedicated policy module.
-
-**Expected payoff:**
-- fewer branching conditionals in runtime glue
-- clearer capability-tier semantics
-- easier testability of routing behavior
-- less handler-level coupling to provider details
-
-#### Refactor C: Normalize task run metadata contracts
-**Goal:** standardize fields emitted by all maintenance handlers.
+#### Refactor B: Introduce a narrow provider-selection input boundary
+**Goal:** let provider-selection and route-audit logic depend on a smaller typed input than full `ApplicationContext`.
 
 **Expected payoff:**
-- simpler management metrics
-- fewer one-off UI/dashboard transformations
-- easier debugging and comparison across agents
+- directly attacks the service-bag smell
+- cleaner reuse from management/reporting code
+- easier policy testing without synthetic context construction
 
-### 5.2 Do Next — Boundary Cleanup
+#### Refactor C: Create a reporting query/read-model layer
+**Goal:** centralize raw reporting SQL and workspace scoping for overview/analytics builders.
 
-#### Refactor D: Internal MCP tool/service contract cleanup
+**Expected payoff:**
+- less schema-coupled reporting logic
+- clearer semantics for dashboard metrics
+- easier evolution of management payloads and operational definitions
+
+### 6.2 Do Next — Boundary Cleanup
+
+#### Refactor D: Split `internal_services.py` by mutation domain
 **Focus:**
-- naming consistency
-- argument validation consistency
-- error contract consistency
-- clearer separation of user-facing vs internal surfaces
+- read/search/list services
+- ingest-specific mutation services
+- generic maintenance mutation services
 
-#### Refactor E: Split `ManagementService`
-Break it into narrower components such as:
-- task/queue reporting
-- memory metrics/reporting
-- provider/runtime telemetry
-- dashboard composition
+#### Refactor E: Extract ingest claim/finalization helpers behind a narrow service seam
+**Focus:**
+- thought-batch claiming
+- cleanup/release/finalization rules
+- structured run metadata assembly
 
 #### Refactor F: Test architecture cleanup
 **Focus:**
 - explicit runtime factories
-- safer provider/CLI isolation
+- stronger provider/CLI isolation
 - less dependence on ambient user config and installed tools
 
-### 5.3 Later — Deeper Structural Cleanup
+### 6.3 Later — Deeper Structural Cleanup
 
 #### Refactor G: Narrow `ApplicationContext`
-Split it into smaller service bundles or typed facades.
+Split it into smaller service bundles or typed facades once enough consumers can move to narrower inputs.
 
 #### Refactor H: Daemon/runtime ownership cleanup
 Make local runtime construction and daemon-backed operation more deliberately separated.
 
 #### Refactor I: Dashboard semantics & alert taxonomy pass
-Tighten definitions and make operational alerts consistently actionable.
+Tighten metric definitions and make operational alerts consistently actionable.
 
-## 6. Immediate Recommendation
+## 7. Immediate Recommendation
 
-The first implementation tranche should be:
+The best next implementation tranche is now:
 
-### **Background-agent framework + provider policy cleanup**
+### **Maintenance-family extraction + reporting query-layer cleanup**
 
-This is the best leverage point because it touches:
-- maintainability
-- policy clarity
-- future feature velocity
-- observability quality
-- cost and quality control
+That combines the two highest-value remaining themes:
+- reduce coordination hotspots in background-agent code
+- reduce schema coupling in management/reporting code
 
-It is also the area where recent complexity has accumulated fastest.
+Provider policy cleanup is no longer the first-order problem it was in the original draft; the bigger remaining architectural risks are now **broad dependency carriers and mixed orchestration/query seams**.
 
-## 7. Proposed First Coding Slice
+## 8. Proposed Next Coding Slices
 
-A minimal, behavior-preserving first slice should:
+Recommended near-term order:
 
-1. introduce a shared maintenance-agent execution abstraction
-2. migrate one handler family onto it first
-3. extract provider routing policy behind a narrower interface
-4. preserve all current external behavior and management payload contracts
-5. add explicit tests for policy-vs-execution boundaries
-
-Recommended candidate order:
-1. `deduplicator`
-2. `memory-curator`
-3. `ingest-system1`
+1. extract graph/conflict support from `maintenance.py`
+2. extract curator support from `maintenance.py`
+3. introduce a narrower provider-selection input model
+4. create a management reporting query layer used by `overview_reporting.py` and `analytics_reporting.py`
+5. split `mcp/internal_services.py` by domain
 
 Rationale:
-- deduplicator already has a relatively crisp seed-selection + execution pattern
-- curator is high-value and policy-heavy
-- ingest has the most task-specific finalization semantics and should likely move last
+- these are all small, behavior-preserving slices
+- each slice tightens one real boundary instead of chasing cosmetics
+- each slice reduces future change coupling in an area that still carries meaningful structural debt
 
-## 8. Completion Criteria for the Review Phase
+## 9. Completion Criteria for This Review Update
 
-This architecture review tranche is complete when we have:
-- this durable written plan
-- high-fidelity memories capturing the structural findings
-- a clear first refactor target
-- agreement that the next coding work should prioritize architectural leverage over new feature surface
+This roadmap update is complete when it:
+- reflects the current live code rather than the earlier snapshot
+- removes already completed refactor items from the “do now” queue
+- records the strongest remaining debt in ranked order
+- provides a concrete next tranche that favors architecture leverage over new feature surface
