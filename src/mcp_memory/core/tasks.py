@@ -536,6 +536,8 @@ class SQLiteTaskQueue:
             if task.subprocess_pid is not None:
                 if _is_process_alive(task.subprocess_pid):
                     continue
+                if not is_stale:
+                    continue
                 if task.cancellation_requested_at is not None:
                     recovered.append(self.finalize_cancellation(task.id, cancelled_at=current_time))
                 else:

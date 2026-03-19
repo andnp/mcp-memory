@@ -182,21 +182,61 @@ def test_sqlite_task_queue_tracks_running_subprocess_and_finalizes_cancellation(
     assert cancelled.last_error == "timeout triage"
 
 
-def test_sqlite_task_queue_recovers_abandoned_running_tasks(db_manager, monkeypatch) -> None:
+def test_sqlite_task_queue_does_not_recover_dead_subprocess_before_stale_threshold(
+    db_manager,
+    monkeypatch,
+) -> None:
     queue = SQLiteTaskQueue(db_manager)
-    stale = queue.enqueue("stale-task", task_id="stale-task", available_at=0.0)
-    pid_dead = queue.enqueue("pid-dead-task", task_id="pid-dead-task", available_at=0.0)
+    task = queue.enqueue("pid-dead-task", task_id="pid-dead-task", available_at=0.0)
+
+    assert queue.claim_next(now=950.0) is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-dead", updated_at=951.0)
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=100.0)
+
+    assert recovered == []
+    running = queue.get_task(task.id)
+    assert running.status == "running"
+    assert running.subprocess_pid == 9999
+    assert running.last_error is None
+
+
+def test_sqlite_task_queue_fails_dead_stale_subprocess_task(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("pid-dead-task", task_id="pid-dead-task", available_at=0.0)
 
     assert queue.claim_next(now=10.0) is not None
-    assert queue.claim_next(now=11.0) is not None
-    queue.set_running_process(pid_dead.id, subprocess_pid=9999, request_id="req-dead", updated_at=12.0)
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-dead", updated_at=12.0)
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
     recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=300.0)
 
-    assert {task.id for task in recovered} == {stale.id, pid_dead.id}
-    assert queue.get_task(stale.id).status == "failed"
-    assert queue.get_task(pid_dead.id).status == "failed"
+    assert [item.id for item in recovered] == [task.id]
+    failed = queue.get_task(task.id)
+    assert failed.status == "failed"
+    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+
+
+def test_sqlite_task_queue_cancels_dead_stale_subprocess_when_cancellation_requested(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("pid-dead-task", task_id="pid-dead-task", available_at=0.0)
+
+    assert queue.claim_next(now=10.0) is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-dead", updated_at=12.0)
+    queue.request_cancel(task.id, cancelled_by="cli", reason="operator_cancelled", requested_at=20.0)
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=300.0)
+
+    assert [item.id for item in recovered] == [task.id]
+    cancelled = queue.get_task(task.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.last_error == "operator_cancelled"
+    assert cancelled.subprocess_pid is None
 
 
 def test_sqlite_task_queue_summarize_task_runs_aggregates_status_and_compression(db_manager) -> None:
