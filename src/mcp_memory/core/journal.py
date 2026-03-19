@@ -9,6 +9,7 @@ from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 _ALL_WORKSPACES = object()
+RECOVERABLE_RETENTION_SECONDS = 48 * 60 * 60
 
 
 class JournalEntry:
@@ -145,45 +146,88 @@ class System1Journal:
         if not task_id or not task_id.strip():
             return []
 
-        conn = self._db.get_connection()
-        rows = conn.execute(
-            "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = ? ORDER BY timestamp ASC",
-            (task_id.strip(),),
-        ).fetchall()
-        entry_ids = [int(row[0]) for row in rows]
-        if not entry_ids:
+        return self.release_claimed_entry_ids(task_id, self.get_claimed_entry_ids(task_id))
+
+    def move_claims_to_recoverable(
+        self,
+        task_id: str,
+        *,
+        recoverable_until: float | None = None,
+    ) -> list[int]:
+        """Move claimed entries to recoverable for one task and return their ids."""
+        if not task_id or not task_id.strip():
             return []
 
-        placeholders = ",".join("?" for _ in entry_ids)
-        conn.execute(
-            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL "
-            f"WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
-            [*entry_ids, task_id.strip()],
+        return self.move_claimed_entry_ids_to_recoverable(
+            task_id,
+            self.get_claimed_entry_ids(task_id),
+            recoverable_until=recoverable_until,
         )
-        conn.commit()
-        return entry_ids
 
     def delete_claims(self, task_id: str) -> list[int]:
         """Delete claimed entries owned by one task and return their ids."""
         if not task_id or not task_id.strip():
             return []
 
-        conn = self._db.get_connection()
-        rows = conn.execute(
-            "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = ? ORDER BY timestamp ASC",
-            (task_id.strip(),),
-        ).fetchall()
-        entry_ids = [int(row[0]) for row in rows]
-        if not entry_ids:
+        return self.delete_claimed_entry_ids(task_id, self.get_claimed_entry_ids(task_id))
+
+    def get_claimed_entry_ids(self, task_id: str) -> list[int]:
+        """Return claimed entry ids owned by one task, oldest first."""
+        return self._normalize_claimed_entry_ids(task_id, None)
+
+    def release_claimed_entry_ids(self, task_id: str, entry_ids: list[int]) -> list[int]:
+        """Release specific claimed entries back to pending for one task."""
+        claimed_entry_ids = self._normalize_claimed_entry_ids(task_id, entry_ids)
+        if not claimed_entry_ids:
             return []
 
-        placeholders = ",".join("?" for _ in entry_ids)
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in claimed_entry_ids)
         conn.execute(
-            f"DELETE FROM system1_journal WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
-            [*entry_ids, task_id.strip()],
+            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL, recoverable_until = NULL "
+            f"WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
+            [*claimed_entry_ids, task_id.strip()],
         )
         conn.commit()
-        return entry_ids
+        return claimed_entry_ids
+
+    def move_claimed_entry_ids_to_recoverable(
+        self,
+        task_id: str,
+        entry_ids: list[int],
+        *,
+        recoverable_until: float | None = None,
+    ) -> list[int]:
+        """Move specific claimed entries to recoverable for one task."""
+        claimed_entry_ids = self._normalize_claimed_entry_ids(task_id, entry_ids)
+        if not claimed_entry_ids:
+            return []
+
+        expiry_timestamp = time.time() + RECOVERABLE_RETENTION_SECONDS if recoverable_until is None else recoverable_until
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in claimed_entry_ids)
+        conn.execute(
+            f"UPDATE system1_journal SET status = 'recoverable', claim_task_id = NULL, claimed_at = NULL, recoverable_until = ? "
+            f"WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
+            [expiry_timestamp, *claimed_entry_ids, task_id.strip()],
+        )
+        conn.commit()
+        return claimed_entry_ids
+
+    def delete_claimed_entry_ids(self, task_id: str, entry_ids: list[int]) -> list[int]:
+        """Delete specific claimed entries owned by one task and return their ids."""
+        claimed_entry_ids = self._normalize_claimed_entry_ids(task_id, entry_ids)
+        if not claimed_entry_ids:
+            return []
+
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in claimed_entry_ids)
+        conn.execute(
+            f"DELETE FROM system1_journal WHERE id IN ({placeholders}) AND status = 'claimed' AND claim_task_id = ?",
+            [*claimed_entry_ids, task_id.strip()],
+        )
+        conn.commit()
+        return claimed_entry_ids
 
     def release_orphaned_claims(self) -> list[int]:
         """Release claimed thoughts whose owning task is no longer running."""
@@ -208,8 +252,35 @@ class System1Journal:
 
         placeholders = ",".join("?" for _ in entry_ids)
         conn.execute(
-            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL "
+            f"UPDATE system1_journal SET status = 'pending', claim_task_id = NULL, claimed_at = NULL, recoverable_until = NULL "
             f"WHERE id IN ({placeholders}) AND status = 'claimed'",
+            entry_ids,
+        )
+        conn.commit()
+        return entry_ids
+
+    def purge_expired_recoverable(self, *, now: float | None = None) -> list[int]:
+        """Delete expired recoverable entries and return their ids."""
+        cutoff = time.time() if now is None else now
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM system1_journal
+            WHERE status = 'recoverable'
+              AND recoverable_until IS NOT NULL
+              AND recoverable_until <= ?
+            ORDER BY timestamp ASC
+            """,
+            (cutoff,),
+        ).fetchall()
+        entry_ids = [int(row[0]) for row in rows]
+        if not entry_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in entry_ids)
+        conn.execute(
+            f"DELETE FROM system1_journal WHERE id IN ({placeholders}) AND status = 'recoverable'",
             entry_ids,
         )
         conn.commit()
@@ -222,7 +293,7 @@ class System1Journal:
         conn = self._db.get_connection()
         placeholders = ",".join("?" for _ in entry_ids)
         cursor = conn.execute(
-            f"UPDATE system1_journal SET status = 'processed', claim_task_id = NULL, claimed_at = NULL "
+            f"UPDATE system1_journal SET status = 'processed', claim_task_id = NULL, claimed_at = NULL, recoverable_until = NULL "
             f"WHERE id IN ({placeholders}) AND status = 'pending'",
             entry_ids,
         )
@@ -236,7 +307,7 @@ class System1Journal:
         conn = self._db.get_connection()
         placeholders = ",".join("?" for _ in entry_ids)
         cursor = conn.execute(
-            f"UPDATE system1_journal SET status = 'archived', claim_task_id = NULL, claimed_at = NULL "
+            f"UPDATE system1_journal SET status = 'archived', claim_task_id = NULL, claimed_at = NULL, recoverable_until = NULL "
             f"WHERE id IN ({placeholders}) AND status = 'processed'",
             entry_ids,
         )
@@ -289,3 +360,27 @@ class System1Journal:
             JournalEntry(id=r[0], content=r[1], workspace_id=r[2], timestamp=r[3], status=r[4])
             for r in rows
         ]
+
+    def _normalize_claimed_entry_ids(self, task_id: str, entry_ids: list[int] | None) -> list[int]:
+        if not task_id or not task_id.strip():
+            return []
+
+        conn = self._db.get_connection()
+        params: list[object] = [task_id.strip()]
+        query = (
+            "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = ?"
+        )
+        if entry_ids is not None:
+            normalized_entry_ids = [
+                entry_id
+                for entry_id in entry_ids
+                if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
+            ]
+            if not normalized_entry_ids:
+                return []
+            placeholders = ",".join("?" for _ in normalized_entry_ids)
+            query += f" AND id IN ({placeholders})"
+            params.extend(normalized_entry_ids)
+        query += " ORDER BY timestamp ASC"
+        rows = conn.execute(query, params).fetchall()
+        return [int(row[0]) for row in rows]

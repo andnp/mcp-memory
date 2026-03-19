@@ -90,3 +90,38 @@ def test_system1_journal_release_orphaned_claims_only_releases_non_running_tasks
     assert [entry.id for entry in journal.get_pending(workspace_id="workspace-a")] == [orphaned_entry.id]
     assert journal.count_by_status(workspace_id="workspace-a") == {"claimed": 1, "pending": 1}
     assert running_entry.id not in released_ids
+
+
+def test_system1_journal_moves_claimed_entries_to_recoverable_and_purges_expired_rows(system1_journal, db_manager) -> None:
+    first = system1_journal.record("first recoverable thought", workspace_id="workspace-a")
+    second = system1_journal.record("second recoverable thought", workspace_id="workspace-a")
+    third = system1_journal.record("still pending thought", workspace_id="workspace-a")
+
+    claimed = system1_journal.claim_pending(task_id="ingest-a", limit=2, workspace_id="workspace-a", claimed_at=10.0)
+    recoverable_ids = system1_journal.move_claims_to_recoverable("ingest-a", recoverable_until=100.0)
+
+    assert [entry.id for entry in claimed] == [first.id, second.id]
+    assert recoverable_ids == [first.id, second.id]
+    assert system1_journal.count_by_status(workspace_id="workspace-a") == {"pending": 1, "recoverable": 2}
+
+    row = db_manager.get_connection().execute(
+        "SELECT status, claim_task_id, claimed_at, recoverable_until FROM system1_journal WHERE id = ?",
+        (first.id,),
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "recoverable"
+    assert row["claim_task_id"] is None
+    assert row["claimed_at"] is None
+    assert row["recoverable_until"] == pytest.approx(100.0)
+
+    claimed_again = system1_journal.claim_pending(
+        task_id="ingest-b",
+        limit=10,
+        workspace_id="workspace-a",
+        claimed_at=11.0,
+    )
+    assert [entry.id for entry in claimed_again] == [third.id]
+
+    assert system1_journal.purge_expired_recoverable(now=99.0) == []
+    assert system1_journal.purge_expired_recoverable(now=100.0) == [first.id, second.id]
+    assert system1_journal.count_by_status(workspace_id="workspace-a") == {"claimed": 1}

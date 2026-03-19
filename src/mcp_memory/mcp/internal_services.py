@@ -11,6 +11,9 @@ from mcp_memory.mcp.validation import optional_object, optional_positive_int, op
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
 
 
+INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY = "ingest_handled_entry_ids"
+
+
 def internal_search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
     return search_memory_records_service(ctx, arguments)
 
@@ -164,7 +167,8 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
-    return {"status": "ok", "record": memory_record_payload(updated)}
+    _record_successful_ingest_entry_ids(ctx, task_id=task_id, entry_ids=entry_ids)
+    return {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
 
 
 def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -197,7 +201,8 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
     )
     assert record is not None
     _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
-    return {"status": "ok", "record": memory_record_payload(record)}
+    _record_successful_ingest_entry_ids(ctx, task_id=task_id, entry_ids=entry_ids)
+    return {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
 
 
 def internal_append_memory_content_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -616,3 +621,16 @@ def _journal_entry_payload(entry) -> dict[str, Any]:
         "timestamp": entry.timestamp,
         "status": entry.status,
     }
+
+
+def _record_successful_ingest_entry_ids(ctx: ApplicationContext, *, task_id: str, entry_ids: list[int]) -> None:
+    if ctx.task_queue is None:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_int_list(
+            task_id,
+            field_name=INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+            values=entry_ids,
+        )
+    except ValueError:
+        return

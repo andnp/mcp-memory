@@ -18,6 +18,7 @@ from mcp_memory.core.task_handlers.constants import (
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.mcp.internal_services import INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY
 
 
 SEMANTIC_CLUSTER_SIZE = 5
@@ -41,7 +42,14 @@ async def handle_ingest_system1_task(
     provider: Any = None,
 ) -> dict[str, Any]:
     if ctx.journal is None or ctx.repository is None:
-        return _build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0)
+        return _build_ingest_result(
+            created_ids=[],
+            claimed_ids=[],
+            deleted_ids=[],
+            recoverable_ids=[],
+            released_ids=[],
+            meaningful_actions=0,
+        )
 
     journal_workspace_id = resolve_pending_workspace_id(
         ctx.journal,
@@ -56,7 +64,14 @@ async def handle_ingest_system1_task(
     )
     if pending_count_before_run <= 0:
         return {
-            **_build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0),
+            **_build_ingest_result(
+                created_ids=[],
+                claimed_ids=[],
+                deleted_ids=[],
+                recoverable_ids=[],
+                released_ids=[],
+                meaningful_actions=0,
+            ),
             "requested_grouping_strategy": grouping_strategy_requested,
             "grouping_strategy_used": grouping_strategy_used,
             "grouping_fallback_reason": grouping_fallback_reason,
@@ -76,6 +91,7 @@ async def handle_ingest_system1_task(
     supports_agentic = getattr(provider, "supports_agentic", None)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
         try:
+            _reset_recorded_ingest_handled_entry_ids(ctx, task.id)
             agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
                 _build_ingest_agent_prompt(
                     task,
@@ -97,35 +113,28 @@ async def handle_ingest_system1_task(
                     "ingest_agentic_no_tool_calls_with_pending_entries: "
                     f"pending_count={pending_count_before_run}"
                 )
-            if meaningful_actions <= 0:
-                released_ids = ctx.journal.release_claims(task.id)
-                return {
-                    **_build_ingest_result(
-                        created_ids=normalized["created_memory_ids"],
-                        claimed_ids=released_ids,
-                        deleted_ids=[],
-                        released_ids=released_ids,
-                        meaningful_actions=0,
-                    ),
-                        "requested_grouping_strategy": grouping_strategy_requested,
-                        "grouping_strategy_used": grouping_strategy_used,
-                        "grouping_fallback_reason": grouping_fallback_reason,
-                    "summary": normalized["summary"],
-                    "execution_mode": "agentic_mcp",
-                    "tool_calls_executed": normalized["tool_calls_executed"],
-                    "mutations": normalized["mutations"],
-                    "tool_names_used": normalized["tool_names_used"],
-                }
+            claimed_ids = ctx.journal.get_claimed_entry_ids(task.id)
+            claimed_entry_id_set = set(claimed_ids)
+            handled_entry_ids = [
+                entry_id
+                for entry_id in _recorded_ingest_handled_entry_ids(ctx, task.id)
+                if entry_id in claimed_entry_id_set
+            ]
+            meaningful_actions = max(meaningful_actions, 1 if handled_entry_ids else 0)
 
-            deleted_ids = ctx.journal.delete_claims(task.id)
-            if deleted_ids:
-                _cleanup_deleted_thought_embeddings(ctx, deleted_ids)
+            recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task.id, handled_entry_ids)
+            recoverable_entry_id_set = set(recoverable_ids)
+            released_ids = ctx.journal.release_claimed_entry_ids(
+                task.id,
+                [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
+            )
             return {
                 **_build_ingest_result(
                     created_ids=normalized["created_memory_ids"],
-                    claimed_ids=deleted_ids,
-                    deleted_ids=deleted_ids,
-                    released_ids=[],
+                    claimed_ids=claimed_ids,
+                    deleted_ids=[],
+                    recoverable_ids=recoverable_ids,
+                    released_ids=released_ids,
                     meaningful_actions=meaningful_actions,
                 ),
                 "requested_grouping_strategy": grouping_strategy_requested,
@@ -148,7 +157,14 @@ async def handle_ingest_system1_task(
     )
     if not entries:
         return {
-            **_build_ingest_result(created_ids=[], claimed_ids=[], deleted_ids=[], released_ids=[], meaningful_actions=0),
+            **_build_ingest_result(
+                created_ids=[],
+                claimed_ids=[],
+                deleted_ids=[],
+                recoverable_ids=[],
+                released_ids=[],
+                meaningful_actions=0,
+            ),
             "requested_grouping_strategy": grouping_strategy_requested,
             "grouping_strategy_used": grouping_strategy_used,
             "grouping_fallback_reason": grouping_fallback_reason,
@@ -156,6 +172,7 @@ async def handle_ingest_system1_task(
 
     claimed_ids = [entry.id for entry in entries]
     created_ids: list[str] = []
+    handled_ids: list[int] = []
     meaningful_actions = 0
     grouped_entries = _build_ingest_groups(
         ctx,
@@ -197,6 +214,7 @@ async def handle_ingest_system1_task(
                 )
 
             created_ids.extend(group_created_ids)
+            handled_ids.extend(group_handled_ids)
             meaningful_actions += group_meaningful_actions + tool_mutations
 
         if meaningful_actions <= 0:
@@ -205,6 +223,7 @@ async def handle_ingest_system1_task(
                 created_ids=created_ids,
                 claimed_ids=claimed_ids,
                 deleted_ids=[],
+                recoverable_ids=[],
                 released_ids=released_ids,
                 meaningful_actions=meaningful_actions,
             ) | {
@@ -213,15 +232,19 @@ async def handle_ingest_system1_task(
                 "grouping_fallback_reason": grouping_fallback_reason,
             }
 
-        deleted_ids = ctx.journal.delete_claims(task.id)
-        if deleted_ids:
-            _cleanup_deleted_thought_embeddings(ctx, deleted_ids)
+        recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task.id, handled_ids)
+        recoverable_entry_id_set = set(recoverable_ids)
+        released_ids = ctx.journal.release_claimed_entry_ids(
+            task.id,
+            [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
+        )
 
         return _build_ingest_result(
             created_ids=created_ids,
             claimed_ids=claimed_ids,
-            deleted_ids=deleted_ids,
-            released_ids=[],
+            deleted_ids=[],
+            recoverable_ids=recoverable_ids,
+            released_ids=released_ids,
             meaningful_actions=meaningful_actions,
         ) | {
             "requested_grouping_strategy": grouping_strategy_requested,
@@ -264,7 +287,8 @@ async def _analyze_ingest_actions(
     actions = _extract_ingest_actions(response.response)
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
-    return actions, response.mutating_tool_calls
+    normalized_actions = [action for action in actions if isinstance(action, dict)]
+    return normalized_actions, response.mutating_tool_calls
 
 
 def _group_related_entries(entries, threshold: float = 0.3, *, seed_entries=None):
@@ -666,6 +690,7 @@ def _build_ingest_result(
     created_ids: list[str],
     claimed_ids: list[int],
     deleted_ids: list[int],
+    recoverable_ids: list[int],
     released_ids: list[int],
     meaningful_actions: int,
 ) -> dict[str, Any]:
@@ -673,9 +698,10 @@ def _build_ingest_result(
         "created_memory_ids": created_ids,
         "claimed_entry_ids": claimed_ids,
         "deleted_entry_ids": deleted_ids,
+        "recoverable_entry_ids": recoverable_ids,
         "released_entry_ids": released_ids,
         "meaningful_actions": meaningful_actions,
-        "processed_entry_ids": deleted_ids,
+        "processed_entry_ids": recoverable_ids,
     }
 
 
@@ -792,6 +818,7 @@ def _extract_agentic_tool_names(value: object) -> list[str]:
 def _count_mutating_agentic_tool_calls(value: object) -> int:
     if not isinstance(value, dict):
         return 0
+    by_name_payload = cast(dict[Any, Any], value)
     read_only_tool_names = {
         "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
         "mcp_mcp-memory-internal_internal_search_memory_records",
@@ -799,8 +826,37 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
         "mcp_mcp-memory-internal_internal_list_memory_records",
     }
     total = 0
-    for name, payload in value.items():
+    for name, payload in by_name_payload.items():
         if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
             continue
         total += _coerce_non_negative_int(payload.get("count"))
     return total
+
+
+def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> None:
+    if ctx.task_queue is None:
+        return
+    try:
+        ctx.task_queue.clear_running_task_data_keys(
+            task_id,
+            field_names=[INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY],
+        )
+    except ValueError:
+        return
+
+
+def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> list[int]:
+    if ctx.task_queue is None:
+        return []
+    try:
+        task = ctx.task_queue.get_task(task_id)
+    except ValueError:
+        return []
+    raw_entry_ids = task.data.get(INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY)
+    if not isinstance(raw_entry_ids, list):
+        return []
+    return [
+        entry_id
+        for entry_id in raw_entry_ids
+        if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
+    ]

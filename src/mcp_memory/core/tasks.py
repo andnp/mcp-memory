@@ -599,6 +599,98 @@ class SQLiteTaskQueue:
         conn.commit()
         return self.get_task(task_id)
 
+    def extend_running_task_data_int_list(
+        self,
+        task_id: str,
+        *,
+        field_name: str,
+        values: list[int],
+    ) -> TaskRecord:
+        if not field_name.strip():
+            raise ValueError("field_name is required")
+
+        normalized_values = [
+            value
+            for value in values
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ]
+        if not normalized_values:
+            return self.get_task(task_id)
+
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not open")
+
+        task_data = _decode_json_object(row["data"])
+        existing_values = task_data.get(field_name)
+        if not isinstance(existing_values, list):
+            existing_values = []
+        merged_values = sorted(
+            {
+                *[
+                    int(value)
+                    for value in existing_values
+                    if isinstance(value, int) and not isinstance(value, bool) and value > 0
+                ],
+                *normalized_values,
+            }
+        )
+        task_data[field_name] = merged_values
+
+        now = time.time()
+        cursor = conn.execute(
+            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+            (json.dumps(task_data, sort_keys=True), now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not open")
+        conn.commit()
+        return self.get_task(task_id)
+
+    def clear_running_task_data_keys(
+        self,
+        task_id: str,
+        *,
+        field_names: list[str],
+    ) -> TaskRecord:
+        normalized_field_names = [field_name.strip() for field_name in field_names if isinstance(field_name, str) and field_name.strip()]
+        if not normalized_field_names:
+            return self.get_task(task_id)
+
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not open")
+
+        task_data = _decode_json_object(row["data"])
+        updated = False
+        for field_name in normalized_field_names:
+            if field_name in task_data:
+                task_data.pop(field_name, None)
+                updated = True
+
+        if not updated:
+            return self.get_task(task_id)
+
+        now = time.time()
+        cursor = conn.execute(
+            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+            (json.dumps(task_data, sort_keys=True), now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not open")
+        conn.commit()
+        return self.get_task(task_id)
+
     def find_open_task(
         self,
         task_name: str,

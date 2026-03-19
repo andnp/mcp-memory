@@ -106,6 +106,7 @@ def format_result_summary(result: dict[str, object]) -> str | None:
         "deleted_tasks",
         "deleted_journal_entries",
         "claimed_entry_ids",
+        "recoverable_entry_ids",
         "deleted_entry_ids",
         "released_entry_ids",
         "meaningful_actions",

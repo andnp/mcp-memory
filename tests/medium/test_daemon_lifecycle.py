@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import mcp_memory.daemon as daemon_module
 
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
@@ -50,6 +51,49 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
 
     assert current.port == 8123
     assert current.daemon_scope == "global"
+
+
+def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.auto_start_timeout_seconds = 0.25
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-timeout",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8123,
+        pid=123,
+        started_at=1.0,
+        status="ready",
+    )
+    acquired_timeouts: list[float] = []
+    released: list[bool] = []
+
+    class _FakeLock:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        def acquire(self, *, timeout_seconds: float) -> None:
+            acquired_timeouts.append(timeout_seconds)
+
+        def release(self) -> None:
+            released.append(True)
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.FilesystemLock", _FakeLock)
+    monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+
+    current = ensure_daemon_started()
+
+    assert current.pid == metadata.pid
+    assert acquired_timeouts == [0.25]
+    assert released == [True]
 
 
 def test_read_daemon_metadata_returns_none_for_missing_file(tmp_path: Path) -> None:
@@ -163,7 +207,7 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
-    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+    monotonic_values = iter([value * 0.2 for value in range(8)])
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
 
@@ -212,7 +256,7 @@ def test_stop_daemon_terminates_unhealthy_running_process_before_removing_metada
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
     monkeypatch.setattr("mcp_memory.daemon._probe_daemon_socket", lambda socket_path, timeout_seconds: False)
     monkeypatch.setattr("mcp_memory.daemon._remove_daemon_socket", lambda socket_path: removed_sockets.append(Path(socket_path)))
-    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+    monotonic_values = iter([value * 0.2 for value in range(8)])
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
 
@@ -275,6 +319,34 @@ def test_stop_daemon_reports_sigkill_escalation(monkeypatch, tmp_path: Path) -> 
     assert stopped.signal_sequence == ("SIGTERM", "SIGKILL")
     assert stopped.escalated_to_sigkill is True
     assert sent_signals == [15, 9]
+
+
+def test_terminate_daemon_process_uses_fresh_deadline_after_sigkill(monkeypatch) -> None:
+    wait_deadlines: list[float] = []
+    sent_signals: list[str] = []
+    monotonic_values = iter([10.0, 20.0])
+
+    monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("mcp_memory.daemon._signal_daemon_process", lambda pid, sig: sent_signals.append(sig.name) or None)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: True)
+
+    def _fake_wait(pid: int, *, deadline: float, poll_interval_seconds: float) -> None:
+        wait_deadlines.append(deadline)
+        if len(wait_deadlines) == 1:
+            raise RuntimeError("timeout")
+
+    monkeypatch.setattr("mcp_memory.daemon._wait_for_process_exit", _fake_wait)
+
+    termination = daemon_module._terminate_daemon_process(
+        3456,
+        deadline=15.0,
+        poll_interval_seconds=0.5,
+    )
+
+    assert wait_deadlines == [15.0, 25.0]
+    assert sent_signals == ["SIGTERM", "SIGKILL"]
+    assert termination.signal_sequence == ("SIGTERM", "SIGKILL")
+    assert termination.escalated_to_sigkill is True
 
 
 def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monkeypatch, tmp_path: Path) -> None:
@@ -349,7 +421,7 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
     spawned: list[tuple[Path, str, int]] = []
     killed: list[int] = []
     process_states = iter([False, False, False])
-    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+    monotonic_values = iter([value * 0.2 for value in range(8)])
 
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: None if not spawned else metadata)
@@ -412,7 +484,7 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
     spawned: list[tuple[Path, str, int]] = []
     killed: list[int] = []
     process_states = iter([False, False, False])
-    monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
+    monotonic_values = iter([value * 0.2 for value in range(8)])
 
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(

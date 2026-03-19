@@ -88,10 +88,12 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
 
         assert len(result["created_memory_ids"]) == 1
         assert len(result["claimed_entry_ids"]) == 2
-        assert len(result["deleted_entry_ids"]) == 2
+        assert len(result["deleted_entry_ids"]) == 0
+        assert len(result["recoverable_entry_ids"]) == 2
         assert result["released_entry_ids"] == []
         assert result["meaningful_actions"] == 1
-        assert runtime.journal.count_by_status() == {}
+        assert result["processed_entry_ids"] == result["recoverable_entry_ids"]
+        assert runtime.journal.count_by_status() == {"recoverable": 2}
         assert len(records) == 1
         assert records[0].type == "observation"
         assert records[0].metadata["ingest_task_id"] == "ingest-test"
@@ -155,11 +157,13 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
         memories = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
 
         assert result["created_memory_ids"] == [target.id]
-        assert len(result["deleted_entry_ids"]) == 1
+        assert result["deleted_entry_ids"] == []
+        assert len(result["recoverable_entry_ids"]) == 1
         assert result["released_entry_ids"] == []
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert len(memories) == 1
+        assert runtime.journal.count_by_status() == {"recoverable": 1}
     finally:
         runtime.close()
 
@@ -252,7 +256,8 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
 
         assert result["created_memory_ids"] == [target.id]
         assert result["claimed_entry_ids"] == [entry.id]
-        assert result["deleted_entry_ids"] == [entry.id]
+        assert result["deleted_entry_ids"] == []
+        assert result["recoverable_entry_ids"] == [entry.id]
         assert result["released_entry_ids"] == []
         assert result["meaningful_actions"] == 1
         assert result["execution_mode"] == "agentic_mcp"
@@ -266,6 +271,7 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "deterministic fixtures" in updated.content
         assert updated.metadata["appended_entry_ids"] == [entry.id]
         assert updated.metadata["ingest_task_id"] == task.id
+        assert runtime.journal.count_by_status() == {"recoverable": 1}
         assert provider.prompts
         assert "internal_get_next_ingest_batch" in provider.prompts[0]
         assert INGEST_APPEND_TOOL_NAME in provider.prompts[0]
@@ -273,6 +279,103 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_releases_unhandled_claimed_entries(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        first_entry = runtime.journal.record(
+            "The user also prefers deterministic fixtures for pytest.",
+            workspace_id=runtime.workspace_id,
+        )
+        second_entry = runtime.journal.record(
+            "The user wants me to make the change easy, then make the easy change.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-partial-task",
+        )
+
+        class _PartialAgenticProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10, "grouping_strategy": "fifo"},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                append_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_APPEND_TOOL_NAME,
+                    {
+                        "memory_id": target.id,
+                        "content": "Prefer deterministic fixtures for pytest.",
+                        "task_id": task.id,
+                        "entry_ids": [claimed_entry_ids[0]],
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                append_payload = json.loads(append_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest appended only the handled claimed entry.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest appended only the handled claimed entry.",
+                                "created_memory_ids": [append_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 2,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 1},
+                                    f"mcp_mcp-memory-internal_{INGEST_APPEND_TOOL_NAME}": {"count": 1},
+                                },
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _PartialAgenticProvider())
+        pending_entries = runtime.journal.get_pending(workspace_id=runtime.workspace_id)
+
+        assert result["claimed_entry_ids"] == [first_entry.id, second_entry.id]
+        assert result["deleted_entry_ids"] == []
+        assert result["recoverable_entry_ids"] == [first_entry.id]
+        assert result["released_entry_ids"] == [second_entry.id]
+        assert result["processed_entry_ids"] == [first_entry.id]
+        assert [entry.id for entry in pending_entries] == [second_entry.id]
+        assert runtime.journal.count_by_status() == {"pending": 1, "recoverable": 1}
+        assert runtime.repository.get_memory(target.id) is not None
     finally:
         runtime.close()
 
@@ -565,7 +668,8 @@ async def test_ingest_handler_can_use_internal_tools_before_appending(monkeypatc
         updated = runtime.repository.get_memory(target.id)
 
         assert result["created_memory_ids"] == [target.id]
-        assert len(result["deleted_entry_ids"]) == 1
+        assert result["deleted_entry_ids"] == []
+        assert len(result["recoverable_entry_ids"]) == 1
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert provider.call_count == 2
@@ -889,6 +993,10 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
             "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",
             ("processed note", runtime.workspace_id, cutoff_timestamp, "processed"),
         )
+        conn.execute(
+            "INSERT INTO system1_journal (content, workspace_id, timestamp, status, recoverable_until) VALUES (?, ?, ?, ?, ?)",
+            ("recoverable note", runtime.workspace_id, cutoff_timestamp, "recoverable", cutoff_timestamp),
+        )
         conn.commit()
 
         project_result = handle_project_manager_task(
@@ -958,7 +1066,7 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
         assert project_result["updated"] == 1
         assert fact_result["degraded"] == 1
         assert sweep_result["deleted_tasks"] == 1
-        assert sweep_result["deleted_journal_entries"] == 1
+        assert sweep_result["deleted_journal_entries"] == 2
         refreshed_stale = runtime.repository.get_memory(stale_plan.id)
         refreshed_healthy = runtime.repository.get_memory(healthy_memory.id)
         refreshed_broken = runtime.repository.get_memory(broken_memory.id)

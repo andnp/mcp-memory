@@ -17,6 +17,7 @@ class InternalToolLoopResult:
     successful_tool_calls: int = 0
     mutating_tool_calls: int = 0
     tool_names_used: list[str] = field(default_factory=list)
+    handled_entry_ids: list[int] = field(default_factory=list)
 
 
 async def run_internal_tool_loop(
@@ -39,6 +40,7 @@ async def run_internal_tool_loop(
     successful_calls = 0
     mutating_calls = 0
     tool_names_used: list[str] = []
+    handled_entry_ids: list[int] = []
     last_invalid_positive_response: dict[str, Any] | None = None
 
     for _ in range(max_rounds):
@@ -69,6 +71,7 @@ async def run_internal_tool_loop(
                 successful_tool_calls=successful_calls,
                 mutating_tool_calls=mutating_calls,
                 tool_names_used=tool_names_used,
+                handled_entry_ids=sorted(set(handled_entry_ids)),
             )
 
         round_calls = tool_calls[:max_tool_calls_per_round]
@@ -93,6 +96,7 @@ async def run_internal_tool_loop(
                 successful_calls += 1
                 if _is_mutating_tool_name(name):
                     mutating_calls += 1
+                handled_entry_ids.extend(_handled_ingest_entry_ids(name, arguments, result))
             round_results.append({"name": name, "arguments": arguments, "result": result})
 
         transcript.append({"tool_calls": round_calls, "tool_results": round_results})
@@ -104,6 +108,7 @@ async def run_internal_tool_loop(
             successful_tool_calls=successful_calls,
             mutating_tool_calls=mutating_calls,
             tool_names_used=tool_names_used,
+            handled_entry_ids=sorted(set(handled_entry_ids)),
         )
 
     return InternalToolLoopResult(
@@ -116,6 +121,7 @@ async def run_internal_tool_loop(
         successful_tool_calls=successful_calls,
         mutating_tool_calls=mutating_calls,
         tool_names_used=tool_names_used,
+        handled_entry_ids=sorted(set(handled_entry_ids)),
     )
 
 
@@ -202,3 +208,18 @@ def _reported_positive_actions_taken(response: dict[str, Any]) -> int | None:
     if actions_taken <= 0:
         return None
     return actions_taken
+
+
+def _handled_ingest_entry_ids(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> list[int]:
+    if name not in {"internal_ingest_append_memory", "internal_ingest_create_memory"}:
+        return []
+    if result.get("status") != "ok":
+        return []
+    raw_entry_ids = result.get("handled_entry_ids", arguments.get("entry_ids"))
+    if not isinstance(raw_entry_ids, list):
+        return []
+    return [
+        entry_id
+        for entry_id in raw_entry_ids
+        if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
+    ]

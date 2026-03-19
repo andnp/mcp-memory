@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -62,7 +62,8 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             timestamp REAL NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             claim_task_id TEXT,
-            claimed_at REAL
+            claimed_at REAL,
+            recoverable_until REAL
         );
 
         CREATE INDEX IF NOT EXISTS idx_system1_journal_status ON system1_journal(status);
@@ -241,8 +242,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "system1_journal", "author", "TEXT")
     ensure_column(conn, "system1_journal", "claim_task_id", "TEXT")
     ensure_column(conn, "system1_journal", "claimed_at", "REAL")
+    ensure_column(conn, "system1_journal", "recoverable_until", "REAL")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_system1_journal_claim_task_id ON system1_journal(claim_task_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_system1_journal_recoverable_until ON system1_journal(status, recoverable_until)"
     )
     ensure_column(conn, "tasks", "workspace_id", "TEXT")
     ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 100")

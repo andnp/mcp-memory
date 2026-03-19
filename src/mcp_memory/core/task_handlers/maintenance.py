@@ -196,15 +196,63 @@ def handle_sweeper_task(
         "DELETE FROM tasks WHERE status = 'completed' AND updated_at < ?",
         (cutoff_timestamp,),
     ).rowcount
+    deleted_recoverable_entry_ids = _purge_recoverable_journal_entries(ctx, cutoff_timestamp)
+    if deleted_recoverable_entry_ids:
+        _cleanup_deleted_thought_embeddings(ctx, deleted_recoverable_entry_ids)
     deleted_journal_entries = conn.execute(
         "DELETE FROM system1_journal WHERE status IN ('processed', 'archived') AND timestamp < ?",
         (cutoff_timestamp,),
-    ).rowcount
+    ).rowcount + len(deleted_recoverable_entry_ids)
     conn.commit()
     return {
         "deleted_tasks": deleted_tasks,
         "deleted_journal_entries": deleted_journal_entries,
     }
+
+
+def _purge_recoverable_journal_entries(ctx: ApplicationContext, cutoff_timestamp: float) -> list[int]:
+    if ctx.journal is not None:
+        return ctx.journal.purge_expired_recoverable(now=cutoff_timestamp)
+
+    if ctx.db_manager is None:
+        return []
+
+    conn = ctx.db_manager.get_connection()
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM system1_journal
+        WHERE status = 'recoverable'
+          AND recoverable_until IS NOT NULL
+          AND recoverable_until <= ?
+        ORDER BY timestamp ASC
+        """,
+        (cutoff_timestamp,),
+    ).fetchall()
+    entry_ids = [int(row[0]) for row in rows]
+    if not entry_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in entry_ids)
+    conn.execute(
+        f"DELETE FROM system1_journal WHERE id IN ({placeholders}) AND status = 'recoverable'",
+        entry_ids,
+    )
+    return entry_ids
+
+
+def _cleanup_deleted_thought_embeddings(ctx: ApplicationContext, deleted_ids: list[int]) -> None:
+    vector_store = getattr(ctx, "vector_store", None)
+    embedder = getattr(ctx, "embedder", None)
+    if vector_store is None:
+        return
+    model_name = None if embedder is None else embedder.model_name
+    for entry_id in deleted_ids:
+        vector_store.delete(
+            source_kind="thought",
+            source_id=str(entry_id),
+            model_name=model_name,
+        )
 
 
 async def handle_graph_linker_task(

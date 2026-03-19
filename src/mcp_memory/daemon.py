@@ -66,7 +66,7 @@ def ensure_daemon_started(
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
-    timeout_seconds = max(spec.config.daemon.auto_start_timeout_seconds, 60.0)
+    timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
         existing = _read_daemon_metadata(metadata_path)
@@ -267,6 +267,7 @@ def _terminate_daemon_process(
     deadline: float,
     poll_interval_seconds: float,
 ) -> _DaemonTerminationResult:
+    wait_timeout_seconds = max(deadline - time.monotonic(), poll_interval_seconds)
     signal_sequence = [signal.SIGTERM.name]
     process_group_id = _signal_daemon_process(pid, signal.SIGTERM)
     try:
@@ -291,7 +292,7 @@ def _terminate_daemon_process(
         signal_sequence.append(signal.SIGKILL.name)
         _wait_for_process_exit(
             pid,
-            deadline=deadline,
+            deadline=time.monotonic() + wait_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
         return _DaemonTerminationResult(

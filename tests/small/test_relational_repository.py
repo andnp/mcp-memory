@@ -83,8 +83,9 @@ def test_database_manager_migrates_legacy_journal_schema_without_claim_columns(t
             row[1] for row in migrated_conn.execute("PRAGMA index_list(system1_journal)").fetchall()
         }
 
-        assert {"claim_task_id", "claimed_at"} <= journal_columns
+        assert {"claim_task_id", "claimed_at", "recoverable_until"} <= journal_columns
         assert "idx_system1_journal_claim_task_id" in journal_indexes
+        assert "idx_system1_journal_recoverable_until" in journal_indexes
         assert manager.get_schema_version() == SCHEMA_VERSION
     finally:
         manager.close()
