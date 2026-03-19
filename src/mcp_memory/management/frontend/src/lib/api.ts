@@ -230,6 +230,36 @@ export interface SearchQuality {
   last_error: string | null;
 }
 
+export interface CountBucket {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface Composition {
+  by_workspace: CountBucket[];
+  by_tag: CountBucket[];
+  by_type: CountBucket[];
+  by_status: CountBucket[];
+}
+
+export interface Distributions {
+  created_age_buckets: CountBucket[];
+  updated_age_buckets: CountBucket[];
+  content_size_buckets: CountBucket[];
+}
+
+export interface MemoryTimelineBucket {
+  bucket_start: number;
+  created_count: number;
+  updated_count: number;
+  total_content_bytes: number;
+}
+
+export interface Timelines {
+  memory_activity: MemoryTimelineBucket[];
+}
+
 export interface NerdAlert {
   key: string;
   severity: 'info' | 'warning' | 'error';
@@ -271,6 +301,9 @@ export interface NerdMetricsResponse {
   };
   graph_topology: GraphTopology;
   memory_lifecycle: MemoryLifecycle;
+  composition: Composition;
+  distributions: Distributions;
+  timelines: Timelines;
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];
   alerts: NerdAlert[];
