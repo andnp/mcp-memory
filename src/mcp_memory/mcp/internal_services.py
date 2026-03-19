@@ -12,6 +12,8 @@ from mcp_memory.serialization import compact_memory_record_payload, memory_recor
 
 
 INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY = "ingest_handled_entry_ids"
+INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY = "ingest_entry_dispositions"
+INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY = "ingest_tool_invocations"
 
 
 def internal_search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -108,6 +110,12 @@ def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: d
         grouping_strategy=grouping_strategy_used,
     )
     pending_remaining = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
+    _record_ingest_tool_invocation(
+        ctx,
+        task_id=task_id,
+        tool_name="internal_get_next_ingest_batch",
+        mutation=False,
+    )
     return {
         "status": "ok",
         "task_id": task_id,
@@ -168,6 +176,25 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
     _record_successful_ingest_entry_ids(ctx, task_id=task_id, entry_ids=entry_ids)
+    _record_successful_ingest_entry_dispositions(
+        ctx,
+        task_id=task_id,
+        entry_dispositions=[
+            {
+                "entry_id": entry_id,
+                "disposition": "appended",
+                "memory_id": updated.id,
+                "memory_title": updated.title,
+            }
+            for entry_id in entry_ids
+        ],
+    )
+    _record_ingest_tool_invocation(
+        ctx,
+        task_id=task_id,
+        tool_name="internal_ingest_append_memory",
+        mutation=True,
+    )
     return {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
 
 
@@ -202,6 +229,25 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
     assert record is not None
     _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
     _record_successful_ingest_entry_ids(ctx, task_id=task_id, entry_ids=entry_ids)
+    _record_successful_ingest_entry_dispositions(
+        ctx,
+        task_id=task_id,
+        entry_dispositions=[
+            {
+                "entry_id": entry_id,
+                "disposition": "created",
+                "memory_id": record.id,
+                "memory_title": record.title,
+            }
+            for entry_id in entry_ids
+        ],
+    )
+    _record_ingest_tool_invocation(
+        ctx,
+        task_id=task_id,
+        tool_name="internal_ingest_create_memory",
+        mutation=True,
+    )
     return {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
 
 
@@ -631,6 +677,48 @@ def _record_successful_ingest_entry_ids(ctx: ApplicationContext, *, task_id: str
             task_id,
             field_name=INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
             values=entry_ids,
+        )
+    except ValueError:
+        return
+
+
+def _record_successful_ingest_entry_dispositions(
+    ctx: ApplicationContext,
+    *,
+    task_id: str,
+    entry_dispositions: list[dict[str, Any]],
+) -> None:
+    if ctx.task_queue is None:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_object_list(
+            task_id,
+            field_name=INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
+            values=entry_dispositions,
+        )
+    except ValueError:
+        return
+
+
+def _record_ingest_tool_invocation(
+    ctx: ApplicationContext,
+    *,
+    task_id: str,
+    tool_name: str,
+    mutation: bool,
+) -> None:
+    if ctx.task_queue is None:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_object_list(
+            task_id,
+            field_name=INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+            values=[
+                {
+                    "tool_name": tool_name,
+                    "mutation": mutation,
+                }
+            ],
         )
     except ValueError:
         return

@@ -27,6 +27,7 @@ from mcp_memory.management.models import (
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
     RuntimeLogSummaryPayload,
+    TaskDetailPayload,
     TaskListPayload,
 )
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -287,8 +288,38 @@ class ManagementService:
         )
         return TaskListPayload(tasks=[task_payload(task) for task in tasks])
 
-    def list_recent_agent_runs(self, *, limit: int = 20) -> AgentRunHistoryListPayload:
-        return AgentRunHistoryListPayload(runs=build_recent_agent_runs(self._db_manager, self._workspace_id, limit=limit))
+    def list_recent_agent_runs(self, *, limit: int = 20, detail_level: str = "compact") -> AgentRunHistoryListPayload:
+        return AgentRunHistoryListPayload(
+            runs=build_recent_agent_runs(
+                self._db_manager,
+                self._workspace_id,
+                limit=limit,
+                detail_level=detail_level,
+            )
+        )
+
+    def get_task_detail(self, task_id: str) -> TaskDetailPayload:
+        task = self._task_queue.get_task(task_id)
+        runs = self._task_queue.list_task_runs(task_id=task_id, limit=50)
+        from mcp_memory.management.agent_run_reporting import build_agent_run_history_payload
+
+        return TaskDetailPayload(
+            task=task_payload(task),
+            runs=[
+                build_agent_run_history_payload(
+                    task_id=run.task_id,
+                    task_name=run.task_name,
+                    status=run.status,
+                    started_at=run.started_at,
+                    completed_at=run.completed_at,
+                    duration_seconds=run.duration_seconds,
+                    error_text=run.error_text,
+                    result=run.result,
+                    detail_level="full",
+                )
+                for run in runs
+            ],
+        )
 
     def get_nerd_metrics(
         self,

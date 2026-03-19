@@ -18,7 +18,11 @@ from mcp_memory.core.task_handlers.constants import (
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.mcp.internal_services import INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY
+from mcp_memory.mcp.internal_services import (
+    INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
+    INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+    INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+)
 
 
 SEMANTIC_CLUSTER_SIZE = 5
@@ -101,51 +105,57 @@ async def handle_ingest_system1_task(
                 )
             )
             normalized = _normalize_ingest_agentic_result(agentic_result)
-            meaningful_actions = max(normalized["meaningful_actions"], normalized["mutations"])
+            authoritative_tool_usage = _recorded_ingest_tool_usage(ctx, task.id)
+            meaningful_actions = max(normalized["meaningful_actions"], authoritative_tool_usage["mutations"])
             if (
                 pending_count_before_run > 0
-                and normalized["tool_calls_executed"] <= 0
+                and authoritative_tool_usage["tool_calls_executed"] <= 0
                 and meaningful_actions <= 0
                 and not normalized["created_memory_ids"]
             ):
                 ctx.journal.release_claims(task.id)
-                raise RuntimeError(
-                    "ingest_agentic_no_tool_calls_with_pending_entries: "
-                    f"pending_count={pending_count_before_run}"
-                )
-            claimed_ids = ctx.journal.get_claimed_entry_ids(task.id)
-            claimed_entry_id_set = set(claimed_ids)
-            handled_entry_ids = [
-                entry_id
-                for entry_id in _recorded_ingest_handled_entry_ids(ctx, task.id)
-                if entry_id in claimed_entry_id_set
-            ]
-            meaningful_actions = max(meaningful_actions, 1 if handled_entry_ids else 0)
+            else:
+                claimed_ids = ctx.journal.get_claimed_entry_ids(task.id)
+                claimed_entry_id_set = set(claimed_ids)
+                semantic_entry_dispositions = _recorded_ingest_entry_dispositions(ctx, task.id)
+                handled_entry_ids = [
+                    entry_id
+                    for entry_id in _recorded_ingest_handled_entry_ids(ctx, task.id)
+                    if entry_id in claimed_entry_id_set
+                ]
+                meaningful_actions = max(meaningful_actions, 1 if handled_entry_ids else 0)
 
-            recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task.id, handled_entry_ids)
-            recoverable_entry_id_set = set(recoverable_ids)
-            released_ids = ctx.journal.release_claimed_entry_ids(
-                task.id,
-                [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
-            )
-            return {
-                **_build_ingest_result(
-                    created_ids=normalized["created_memory_ids"],
-                    claimed_ids=claimed_ids,
-                    deleted_ids=[],
-                    recoverable_ids=recoverable_ids,
-                    released_ids=released_ids,
-                    meaningful_actions=meaningful_actions,
-                ),
-                "requested_grouping_strategy": grouping_strategy_requested,
-                "grouping_strategy_used": grouping_strategy_used,
-                "grouping_fallback_reason": grouping_fallback_reason,
-                "summary": normalized["summary"],
-                "execution_mode": "agentic_mcp",
-                "tool_calls_executed": normalized["tool_calls_executed"],
-                "mutations": normalized["mutations"],
-                "tool_names_used": normalized["tool_names_used"],
-            }
+                recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task.id, handled_entry_ids)
+                recoverable_entry_id_set = set(recoverable_ids)
+                released_ids = ctx.journal.release_claimed_entry_ids(
+                    task.id,
+                    [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
+                )
+                return {
+                    **_build_ingest_result(
+                        created_ids=normalized["created_memory_ids"],
+                        claimed_ids=claimed_ids,
+                        deleted_ids=[],
+                        recoverable_ids=recoverable_ids,
+                        released_ids=released_ids,
+                        meaningful_actions=meaningful_actions,
+                        semantic_entry_dispositions=semantic_entry_dispositions,
+                    ),
+                    "requested_grouping_strategy": grouping_strategy_requested,
+                    "grouping_strategy_used": grouping_strategy_used,
+                    "grouping_fallback_reason": grouping_fallback_reason,
+                    "summary": normalized["summary"],
+                    "execution_mode": "agentic_mcp",
+                    "tool_calls_executed": authoritative_tool_usage["tool_calls_executed"],
+                    "mutations": authoritative_tool_usage["mutations"],
+                    "tool_names_used": authoritative_tool_usage["tool_names_used"],
+                    "provider_reported_tool_calls": normalized["tool_calls_executed"],
+                    "provider_reported_mutations": normalized["mutations"],
+                    "provider_reported_tool_names_used": normalized["tool_names_used"],
+                    "provider_reported_entry_outcomes": normalized["entry_outcomes"],
+                    "provider_reported_touched_memory_ids": normalized["touched_memory_ids"],
+                    "provider_reported_matched_memory_ids": normalized["matched_memory_ids"],
+                }
         except BaseException:
             ctx.journal.release_claims(task.id)
             raise
@@ -174,6 +184,7 @@ async def handle_ingest_system1_task(
     created_ids: list[str] = []
     handled_ids: list[int] = []
     meaningful_actions = 0
+    semantic_entry_dispositions: list[dict[str, Any]] = []
     grouped_entries = _build_ingest_groups(
         ctx,
         entries,
@@ -196,8 +207,9 @@ async def handle_ingest_system1_task(
             group_created_ids: list[str] = []
             group_handled_ids: list[int] = []
             group_meaningful_actions = 0
+            group_entry_dispositions: list[dict[str, Any]] = []
             if actions:
-                group_created_ids, group_handled_ids, group_meaningful_actions = _execute_ingest_actions(
+                group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _execute_ingest_actions(
                     ctx,
                     task,
                     workspace_id,
@@ -206,7 +218,7 @@ async def handle_ingest_system1_task(
                 )
 
             if not group_handled_ids:
-                group_created_ids, group_handled_ids, group_meaningful_actions = _fallback_ingest_entries(
+                group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _fallback_ingest_entries(
                     ctx,
                     task,
                     workspace_id,
@@ -215,6 +227,7 @@ async def handle_ingest_system1_task(
 
             created_ids.extend(group_created_ids)
             handled_ids.extend(group_handled_ids)
+            semantic_entry_dispositions.extend(group_entry_dispositions)
             meaningful_actions += group_meaningful_actions + tool_mutations
 
         if meaningful_actions <= 0:
@@ -226,6 +239,7 @@ async def handle_ingest_system1_task(
                 recoverable_ids=[],
                 released_ids=released_ids,
                 meaningful_actions=meaningful_actions,
+                semantic_entry_dispositions=semantic_entry_dispositions,
             ) | {
                 "requested_grouping_strategy": grouping_strategy_requested,
                 "grouping_strategy_used": grouping_strategy_used,
@@ -246,6 +260,7 @@ async def handle_ingest_system1_task(
             recoverable_ids=recoverable_ids,
             released_ids=released_ids,
             meaningful_actions=meaningful_actions,
+            semantic_entry_dispositions=semantic_entry_dispositions,
         ) | {
             "requested_grouping_strategy": grouping_strategy_requested,
             "grouping_strategy_used": grouping_strategy_used,
@@ -422,7 +437,12 @@ def _build_ingest_agent_prompt(
         "Use the generic append/create tools only when a non-ingest workflow truly requires them.\n"
         f"Use workspace_id '{workspace_id}' when you need a fallback workspace.\n"
         "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
-        'When finished, output final JSON only in the form {"summary": "...", "created_memory_ids": ["..."], "meaningful_actions": N}.\n'
+        "Preserve concrete symbols, file paths, thresholds, IDs, error strings, config keys, and commit refs when they appear in the source entries or supporting memories.\n"
+        "When uncertain, prefer narrow concrete observations over broad abstraction.\n"
+        "When finished, output final JSON only. Include explicit per-entry outcomes for every claimed entry you handled or intentionally left unchanged.\n"
+        'Use an additive contract like {"summary": "...", "created_memory_ids": ["..."], "touched_memory_ids": ["..."], "matched_memory_ids": ["..."], "meaningful_actions": N, "entry_outcomes": [{"entry_id": 123, "disposition": "created"|"appended"|"matched_existing"|"ignored"|"no_mutation", "memory_id": "...", "reason": "..."}]}.\n'
+        "Do not make vague claims like 'matched existing canonical memories' unless the final JSON includes structured entry_outcomes with entry_id and memory_id for each such match.\n"
+        "Provide a reason whenever an entry outcome is ignored, no_mutation, or matched_existing.\n"
     )
 
 
@@ -530,7 +550,7 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
     parsed = agentic_result.parsed if isinstance(getattr(agentic_result, "parsed", None), dict) else {}
     response_payload = parsed
     response_text = parsed.get("response")
-    if not {"summary", "created_memory_ids", "meaningful_actions"} <= set(response_payload) and isinstance(response_text, str):
+    if not _looks_like_ingest_agentic_final_json(response_payload) and isinstance(response_text, str):
         nested = _extract_embedded_json_object(response_text)
         if isinstance(nested, dict):
             response_payload = nested
@@ -538,9 +558,25 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
     tool_stats = raw_tool_stats if isinstance(raw_tool_stats, dict) else {}
     raw_tool_payload = tool_stats.get("tools")
     tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
+    created_memory_ids = _coerce_string_list(response_payload.get("created_memory_ids"))
+    entry_outcomes = _coerce_ingest_entry_outcomes(response_payload.get("entry_outcomes"))
+    response_has_touched_memory_ids = "touched_memory_ids" in response_payload
+    response_has_matched_memory_ids = "matched_memory_ids" in response_payload
+    touched_memory_ids = _coerce_string_list(response_payload.get("touched_memory_ids"))
+    matched_memory_ids = _coerce_string_list(response_payload.get("matched_memory_ids"))
+    if not response_has_touched_memory_ids:
+        touched_memory_ids = _merge_string_lists(
+            created_memory_ids,
+            _memory_ids_from_entry_outcomes(entry_outcomes),
+        )
+    if not response_has_matched_memory_ids:
+        matched_memory_ids = _memory_ids_from_entry_outcomes(entry_outcomes, {"appended", "matched_existing"})
     return {
         "summary": _coerce_text_summary(getattr(agentic_result, "summary", None)) or _coerce_text_summary(response_payload.get("summary")),
-        "created_memory_ids": _coerce_string_list(response_payload.get("created_memory_ids")),
+        "created_memory_ids": created_memory_ids,
+        "entry_outcomes": entry_outcomes,
+        "touched_memory_ids": touched_memory_ids,
+        "matched_memory_ids": matched_memory_ids,
         "meaningful_actions": _coerce_non_negative_int(response_payload.get("meaningful_actions")),
         "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
         "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
@@ -564,11 +600,12 @@ def _execute_ingest_actions(
     workspace_id: str,
     entries,
     actions: list[dict[str, Any]],
-) -> tuple[list[str], list[int], int]:
+) -> tuple[list[str], list[int], int, list[dict[str, Any]]]:
     assert ctx.repository is not None
     created_ids: list[str] = []
     handled_ids: list[int] = []
     meaningful_actions = 0
+    entry_dispositions: list[dict[str, Any]] = []
     for action in actions:
         entry_indices = action.get("entry_indices", [])
         selected_entries = [
@@ -582,6 +619,13 @@ def _execute_ingest_actions(
         action_type = str(action.get("type", "")).strip()
         if action_type == "ignore":
             handled_ids.extend(entry.id for entry in selected_entries)
+            entry_dispositions.extend(
+                _build_semantic_entry_dispositions(
+                    selected_entries,
+                    disposition="ignored",
+                    reason="provider_marked_ignore",
+                )
+            )
             continue
 
         if action_type == "append":
@@ -603,6 +647,14 @@ def _execute_ingest_actions(
                     updated = refreshed
             handled_ids.extend(entry.id for entry in selected_entries)
             created_ids.append(updated.id)
+            entry_dispositions.extend(
+                _build_semantic_entry_dispositions(
+                    selected_entries,
+                    disposition="appended",
+                    memory_id=updated.id,
+                    memory_title=updated.title,
+                )
+            )
             meaningful_actions += 1
             continue
 
@@ -630,10 +682,18 @@ def _execute_ingest_actions(
         assert record is not None
         created_ids.append(record.id)
         handled_ids.extend(entry.id for entry in selected_entries)
+        entry_dispositions.extend(
+            _build_semantic_entry_dispositions(
+                selected_entries,
+                disposition="created",
+                memory_id=record.id,
+                memory_title=record.title,
+            )
+        )
         meaningful_actions += 1
         _enqueue_summary_task(ctx, _primary_workspace_id(record.workspace_ids), record.id)
 
-    return created_ids, handled_ids, meaningful_actions
+    return created_ids, handled_ids, meaningful_actions, entry_dispositions
 
 
 def _append_entries_to_existing_memory(
@@ -666,7 +726,7 @@ def _fallback_ingest_entries(
     task: TaskRecord,
     workspace_id: str,
     entries,
-) -> tuple[list[str], list[int], int]:
+) -> tuple[list[str], list[int], int, list[dict[str, Any]]]:
     assert ctx.repository is not None
     workspace_ids = _resolve_entry_workspace_ids(entries, workspace_id)
     record = ctx.repository.create_memory(
@@ -682,7 +742,17 @@ def _fallback_ingest_entries(
     )
     assert record is not None
     _enqueue_summary_task(ctx, _primary_workspace_id(workspace_ids), record.id)
-    return [record.id], [entry.id for entry in entries], 1
+    return (
+        [record.id],
+        [entry.id for entry in entries],
+        1,
+        _build_semantic_entry_dispositions(
+            entries,
+            disposition="created",
+            memory_id=record.id,
+            memory_title=record.title,
+        ),
+    )
 
 
 def _build_ingest_result(
@@ -693,7 +763,14 @@ def _build_ingest_result(
     recoverable_ids: list[int],
     released_ids: list[int],
     meaningful_actions: int,
+    semantic_entry_dispositions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    entry_dispositions = _finalize_entry_dispositions(
+        claimed_ids=claimed_ids,
+        recoverable_ids=recoverable_ids,
+        released_ids=released_ids,
+        semantic_entry_dispositions=semantic_entry_dispositions or [],
+    )
     return {
         "created_memory_ids": created_ids,
         "claimed_entry_ids": claimed_ids,
@@ -702,6 +779,10 @@ def _build_ingest_result(
         "released_entry_ids": released_ids,
         "meaningful_actions": meaningful_actions,
         "processed_entry_ids": recoverable_ids,
+        "entry_dispositions": entry_dispositions,
+        "touched_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended", "created", "matched_existing"}),
+        "appended_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended"}),
+        "matched_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended", "matched_existing"}),
     }
 
 
@@ -792,6 +873,58 @@ def _coerce_string_list(value: object) -> list[str]:
     return normalized
 
 
+def _looks_like_ingest_agentic_final_json(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    ingest_contract_keys = {
+        "summary",
+        "created_memory_ids",
+        "entry_outcomes",
+        "touched_memory_ids",
+        "matched_memory_ids",
+        "meaningful_actions",
+    }
+    return any(key in value for key in ingest_contract_keys)
+
+
+def _coerce_ingest_entry_outcomes(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entry_id = item.get("entry_id")
+        if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id <= 0:
+            continue
+        raw_disposition = item.get("disposition", item.get("outcome"))
+        if not isinstance(raw_disposition, str) or not raw_disposition.strip():
+            continue
+        normalized.append(
+            _build_semantic_entry_disposition(
+                entry_id=entry_id,
+                disposition=raw_disposition.strip(),
+                memory_id=item.get("memory_id"),
+                memory_title=item.get("memory_title"),
+                reason=item.get("reason"),
+            )
+        )
+    return normalized
+
+
+def _memory_ids_from_entry_outcomes(
+    entry_outcomes: list[dict[str, Any]],
+    included_dispositions: set[str] | None = None,
+) -> list[str]:
+    dispositions = included_dispositions or {"created", "appended", "matched_existing"}
+    return _memory_ids_for_dispositions(entry_outcomes, dispositions)
+
+
+def _merge_string_lists(*values: list[str]) -> list[str]:
+    return sorted({item for value in values for item in value})
+
+
 def _extract_embedded_json_object(text: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(text)
@@ -839,10 +972,59 @@ def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: s
     try:
         ctx.task_queue.clear_running_task_data_keys(
             task_id,
-            field_names=[INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY],
+            field_names=[
+                INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+                INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
+                INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+            ],
         )
     except ValueError:
         return
+
+
+def _recorded_ingest_tool_usage(ctx: ApplicationContext, task_id: str) -> dict[str, Any]:
+    if ctx.task_queue is None:
+        return {
+            "tool_calls_executed": 0,
+            "mutations": 0,
+            "tool_names_used": [],
+        }
+    try:
+        task = ctx.task_queue.get_task(task_id)
+    except ValueError:
+        return {
+            "tool_calls_executed": 0,
+            "mutations": 0,
+            "tool_names_used": [],
+        }
+
+    raw_invocations = task.data.get(INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY)
+    if not isinstance(raw_invocations, list):
+        return {
+            "tool_calls_executed": 0,
+            "mutations": 0,
+            "tool_names_used": [],
+        }
+
+    normalized_invocations: list[dict[str, Any]] = []
+    for item in raw_invocations:
+        if not isinstance(item, dict):
+            continue
+        tool_name = item.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            continue
+        normalized_invocations.append(
+            {
+                "tool_name": tool_name.strip(),
+                "mutation": bool(item.get("mutation")),
+            }
+        )
+
+    return {
+        "tool_calls_executed": len(normalized_invocations),
+        "mutations": sum(1 for item in normalized_invocations if item["mutation"]),
+        "tool_names_used": sorted({item["tool_name"] for item in normalized_invocations}),
+    }
 
 
 def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> list[int]:
@@ -860,3 +1042,126 @@ def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) ->
         for entry_id in raw_entry_ids
         if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
     ]
+
+
+def _recorded_ingest_entry_dispositions(ctx: ApplicationContext, task_id: str) -> list[dict[str, Any]]:
+    if ctx.task_queue is None:
+        return []
+    try:
+        task = ctx.task_queue.get_task(task_id)
+    except ValueError:
+        return []
+    raw_entry_dispositions = task.data.get(INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY)
+    if not isinstance(raw_entry_dispositions, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_entry_dispositions:
+        if not isinstance(item, dict):
+            continue
+        entry_id = item.get("entry_id")
+        if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id <= 0:
+            continue
+        disposition = item.get("disposition")
+        if not isinstance(disposition, str) or not disposition.strip():
+            continue
+        normalized.append(
+            _build_semantic_entry_disposition(
+                entry_id=entry_id,
+                disposition=disposition.strip(),
+                memory_id=item.get("memory_id"),
+                memory_title=item.get("memory_title"),
+                reason=item.get("reason"),
+            )
+        )
+    return normalized
+
+
+def _build_semantic_entry_dispositions(
+    entries,
+    *,
+    disposition: str,
+    memory_id: str | None = None,
+    memory_title: str | None = None,
+    reason: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        _build_semantic_entry_disposition(
+            entry_id=entry.id,
+            disposition=disposition,
+            memory_id=memory_id,
+            memory_title=memory_title,
+            reason=reason,
+        )
+        for entry in entries
+    ]
+
+
+def _build_semantic_entry_disposition(
+    *,
+    entry_id: int,
+    disposition: str,
+    memory_id: object = None,
+    memory_title: object = None,
+    reason: object = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "entry_id": entry_id,
+        "disposition": disposition,
+    }
+    if isinstance(memory_id, str) and memory_id.strip():
+        payload["memory_id"] = memory_id.strip()
+    if isinstance(memory_title, str) and memory_title.strip():
+        payload["memory_title"] = memory_title.strip()
+    if isinstance(reason, str) and reason.strip():
+        payload["reason"] = reason.strip()
+    return payload
+
+
+def _finalize_entry_dispositions(
+    *,
+    claimed_ids: list[int],
+    recoverable_ids: list[int],
+    released_ids: list[int],
+    semantic_entry_dispositions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    recoverable_entry_id_set = set(recoverable_ids)
+    released_entry_id_set = set(released_ids)
+    semantic_by_entry_id: dict[int, dict[str, Any]] = {}
+    for disposition in semantic_entry_dispositions:
+        entry_id = disposition.get("entry_id")
+        if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0:
+            semantic_by_entry_id[entry_id] = disposition
+
+    finalized: list[dict[str, Any]] = []
+    for entry_id in claimed_ids:
+        finalization_status = "recoverable" if entry_id in recoverable_entry_id_set else "released"
+        semantic_disposition = semantic_by_entry_id.get(entry_id)
+        if semantic_disposition is None:
+            finalized.append(
+                {
+                    "entry_id": entry_id,
+                    "disposition": "released_unhandled" if entry_id in released_entry_id_set else "recoverable_unclassified",
+                    "finalization_status": finalization_status,
+                }
+            )
+            continue
+
+        finalized_disposition = {
+            **semantic_disposition,
+            "finalization_status": finalization_status,
+        }
+        finalized.append(finalized_disposition)
+    return finalized
+
+
+def _memory_ids_for_dispositions(entry_dispositions: list[dict[str, Any]], included_dispositions: set[str]) -> list[str]:
+    return sorted(
+        {
+            memory_id.strip()
+            for disposition in entry_dispositions
+            if disposition.get("disposition") in included_dispositions
+            for memory_id in [disposition.get("memory_id")]
+            if isinstance(memory_id, str) and memory_id.strip()
+        }
+    )

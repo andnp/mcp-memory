@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -117,6 +119,40 @@ class RunResultMetadataPayload(BaseModel):
     group_count: int | None = None
 
 
+class IngestEntryDispositionPayload(BaseModel):
+    entry_id: int
+    disposition: str
+    finalization_status: str | None = None
+    memory_id: str | None = None
+    memory_title: str | None = None
+    reason: str | None = None
+
+
+class IngestAuditPayload(BaseModel):
+    claimed_count: int = 0
+    handled_count: int = 0
+    released_count: int = 0
+    deleted_count: int = 0
+    processed_count: int = 0
+    meaningful_actions: int = 0
+    created_count: int = 0
+    touched_count: int = 0
+    appended_count: int = 0
+    matched_count: int = 0
+    tool_calls_executed: int | None = None
+    mutations: int | None = None
+    provider_reported_tool_calls: int | None = None
+    provider_reported_mutations: int | None = None
+    created_memory_ids: list[str] = Field(default_factory=list)
+    touched_memory_ids: list[str] = Field(default_factory=list)
+    appended_memory_ids: list[str] = Field(default_factory=list)
+    matched_memory_ids: list[str] = Field(default_factory=list)
+    provider_reported_touched_memory_ids: list[str] = Field(default_factory=list)
+    provider_reported_matched_memory_ids: list[str] = Field(default_factory=list)
+    entry_dispositions: list[IngestEntryDispositionPayload] = Field(default_factory=list)
+    provider_reported_entry_outcomes: list[IngestEntryDispositionPayload] = Field(default_factory=list)
+
+
 class AgentRunPayload(BaseModel):
     task_name: str
     running_count: int = 0
@@ -133,11 +169,13 @@ class AgentRunPayload(BaseModel):
     last_error: str | None = None
     last_result_summary: str | None = None
     last_result_metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
+    last_ingest_audit: IngestAuditPayload = Field(default_factory=IngestAuditPayload)
     next_available_at: float | None = None
     seconds_until_next_run: float | None = None
 
 
 class AgentRunHistoryPayload(BaseModel):
+    task_id: str | None = None
     task_name: str
     status: str
     started_at: float
@@ -146,6 +184,8 @@ class AgentRunHistoryPayload(BaseModel):
     error_text: str | None = None
     result_summary: str | None = None
     result_metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
+    ingest_audit: IngestAuditPayload = Field(default_factory=IngestAuditPayload)
+    result: dict[str, Any] | None = None
 
 
 class AgentRunHistoryListPayload(BaseModel):
@@ -354,6 +394,11 @@ class MemoryDetailPayload(BaseModel):
 
 class TaskListPayload(BaseModel):
     tasks: list[dict] = Field(default_factory=list)
+
+
+class TaskDetailPayload(BaseModel):
+    task: dict[str, Any]
+    runs: list[AgentRunHistoryPayload] = Field(default_factory=list)
 
 
 class MemoryListPayload(BaseModel):

@@ -654,6 +654,45 @@ class SQLiteTaskQueue:
         conn.commit()
         return self.get_task(task_id)
 
+    def extend_running_task_data_object_list(
+        self,
+        task_id: str,
+        *,
+        field_name: str,
+        values: list[dict[str, Any]],
+    ) -> TaskRecord:
+        if not field_name.strip():
+            raise ValueError("field_name is required")
+
+        normalized_values = [dict(value) for value in values if isinstance(value, dict)]
+        if not normalized_values:
+            return self.get_task(task_id)
+
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task {task_id} is not open")
+
+        task_data = _decode_json_object(row["data"])
+        existing_values = task_data.get(field_name)
+        if not isinstance(existing_values, list):
+            existing_values = []
+        task_data[field_name] = [*existing_values, *normalized_values]
+
+        now = time.time()
+        cursor = conn.execute(
+            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+            (json.dumps(task_data, sort_keys=True), now, task_id),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Task {task_id} is not open")
+        conn.commit()
+        return self.get_task(task_id)
+
     def clear_running_task_data_keys(
         self,
         task_id: str,
@@ -749,6 +788,7 @@ class SQLiteTaskQueue:
 
     def list_task_runs(
         self,
+        task_id: str | None = None,
         task_name: str | None = None,
         workspace_id: str | None = None,
         limit: int = 50,
@@ -756,6 +796,10 @@ class SQLiteTaskQueue:
         clauses: list[str] = []
         params: list[object] = []
         query = "SELECT * FROM task_runs"
+
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            params.append(task_id)
 
         if task_name is not None:
             clauses.append("task_name = ?")

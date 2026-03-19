@@ -7,7 +7,7 @@ from typing import Any
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
+from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -141,6 +141,23 @@ class TaskQueueFacade:
         return self.task_queue.summarize_task_runs(
             task_names,
             workspace_id=workspace_id,
+        )
+
+    def list_task_runs(
+        self,
+        *,
+        task_id: str | None = None,
+        task_name: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> list[TaskRunRecord]:
+        if self.task_queue is None:
+            return []
+        return self.task_queue.list_task_runs(
+            task_id=task_id,
+            task_name=task_name,
+            workspace_id=workspace_id,
+            limit=limit,
         )
 
     def request_cancel(

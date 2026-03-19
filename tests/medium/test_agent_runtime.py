@@ -43,6 +43,8 @@ from mcp_memory.core.task_handlers.maintenance import (
 from mcp_memory.core.task_handlers.ingest import (
     INGEST_APPEND_TOOL_NAME,
     INGEST_CREATE_TOOL_NAME,
+    _build_ingest_agent_prompt,
+    _normalize_ingest_agentic_result,
 )
 from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEMORY_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
@@ -55,6 +57,139 @@ from tests.sdk.providers import FakeAIProvider
 
 
 pytestmark = pytest.mark.medium
+
+
+def test_normalize_ingest_agentic_result_preserves_rich_final_json_contract() -> None:
+    result = _normalize_ingest_agentic_result(
+        AgenticRunResult(
+            status="success",
+            summary="Provider summary",
+            parsed={
+                "response": json.dumps(
+                    {
+                        "summary": "Provider summary",
+                        "created_memory_ids": ["memory-created"],
+                        "touched_memory_ids": ["memory-created", "memory-existing"],
+                        "matched_memory_ids": ["memory-existing"],
+                        "meaningful_actions": 2,
+                        "entry_outcomes": [
+                            {
+                                "entry_id": 101,
+                                "disposition": "created",
+                                "memory_id": "memory-created",
+                                "reason": "Captured the explicit config key timeout_ms=5000.",
+                            },
+                            {
+                                "entry_id": 102,
+                                "disposition": "matched_existing",
+                                "memory_id": "memory-existing",
+                                "reason": "Exact match for error string E_CONNRESET in existing canonical memory.",
+                            },
+                        ],
+                    }
+                ),
+                "stats": {
+                    "tools": {
+                        "totalCalls": 3,
+                        "byName": {
+                            "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 1},
+                            f"mcp_mcp-memory-internal_{INGEST_CREATE_TOOL_NAME}": {"count": 1},
+                            f"mcp_mcp-memory-internal_{INGEST_APPEND_TOOL_NAME}": {"count": 1},
+                        },
+                    }
+                },
+            },
+        )
+    )
+
+    assert result["summary"] == "Provider summary"
+    assert result["created_memory_ids"] == ["memory-created"]
+    assert result["touched_memory_ids"] == ["memory-created", "memory-existing"]
+    assert result["matched_memory_ids"] == ["memory-existing"]
+    assert result["meaningful_actions"] == 2
+    assert result["entry_outcomes"] == [
+        {
+            "entry_id": 101,
+            "disposition": "created",
+            "memory_id": "memory-created",
+            "reason": "Captured the explicit config key timeout_ms=5000.",
+        },
+        {
+            "entry_id": 102,
+            "disposition": "matched_existing",
+            "memory_id": "memory-existing",
+            "reason": "Exact match for error string E_CONNRESET in existing canonical memory.",
+        },
+    ]
+    assert result["tool_calls_executed"] == 3
+    assert result["mutations"] == 2
+
+
+def test_normalize_ingest_agentic_result_remains_backward_compatible_with_thin_json() -> None:
+    result = _normalize_ingest_agentic_result(
+        AgenticRunResult(
+            status="success",
+            summary="Thin summary",
+            parsed={
+                "response": json.dumps(
+                    {
+                        "summary": "Thin summary",
+                        "created_memory_ids": ["memory-created"],
+                        "meaningful_actions": 1,
+                    }
+                ),
+                "stats": {
+                    "tools": {
+                        "totalCalls": 1,
+                        "byName": {
+                            f"mcp_mcp-memory-internal_{INGEST_CREATE_TOOL_NAME}": {"count": 1},
+                        },
+                    }
+                },
+            },
+        )
+    )
+
+    assert result["summary"] == "Thin summary"
+    assert result["created_memory_ids"] == ["memory-created"]
+    assert result["touched_memory_ids"] == ["memory-created"]
+    assert result["matched_memory_ids"] == []
+    assert result["entry_outcomes"] == []
+    assert result["meaningful_actions"] == 1
+    assert result["tool_calls_executed"] == 1
+    assert result["mutations"] == 1
+
+
+def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() -> None:
+    prompt = _build_ingest_agent_prompt(
+        TaskRecord(
+            id="ingest-prompt-test",
+            task_name=SYSTEM1_INGEST_TASK_NAME,
+            data={"workspace_id": "workspace-test"},
+            workspace_id="workspace-test",
+            status="pending",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        ),
+        workspace_id="workspace-test",
+        batch_size=10,
+        grouping_strategy="fifo",
+    )
+
+    assert "Preserve concrete symbols, file paths, thresholds, IDs, error strings, config keys, and commit refs" in prompt
+    assert "When uncertain, prefer narrow concrete observations over broad abstraction." in prompt
+    assert "Include explicit per-entry outcomes for every claimed entry" in prompt
+    assert '"entry_outcomes": [{"entry_id": 123, "disposition": "created"|"appended"|"matched_existing"|"ignored"|"no_mutation"' in prompt
+    assert "Do not make vague claims like 'matched existing canonical memories'" in prompt
+    assert "Provide a reason whenever an entry outcome is ignored, no_mutation, or matched_existing." in prompt
 
 
 @pytest.mark.asyncio
@@ -93,6 +228,25 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         assert result["released_entry_ids"] == []
         assert result["meaningful_actions"] == 1
         assert result["processed_entry_ids"] == result["recoverable_entry_ids"]
+        assert result["entry_dispositions"] == [
+            {
+                "entry_id": result["claimed_entry_ids"][0],
+                "disposition": "created",
+                "finalization_status": "recoverable",
+                "memory_id": records[0].id,
+                "memory_title": records[0].title,
+            },
+            {
+                "entry_id": result["claimed_entry_ids"][1],
+                "disposition": "created",
+                "finalization_status": "recoverable",
+                "memory_id": records[0].id,
+                "memory_title": records[0].title,
+            },
+        ]
+        assert result["touched_memory_ids"] == [records[0].id]
+        assert result["appended_memory_ids"] == []
+        assert result["matched_memory_ids"] == []
         assert runtime.journal.count_by_status() == {"recoverable": 2}
         assert len(records) == 1
         assert records[0].type == "observation"
@@ -264,9 +418,30 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["tool_calls_executed"] == 2
         assert result["mutations"] == 1
         assert result["tool_names_used"] == [
+            "internal_get_next_ingest_batch",
+            INGEST_APPEND_TOOL_NAME,
+        ]
+        assert result["provider_reported_tool_calls"] == 2
+        assert result["provider_reported_mutations"] == 1
+        assert result["provider_reported_tool_names_used"] == [
             "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
             f"mcp_mcp-memory-internal_{INGEST_APPEND_TOOL_NAME}",
         ]
+        assert result["provider_reported_entry_outcomes"] == []
+        assert result["provider_reported_touched_memory_ids"] == [target.id]
+        assert result["provider_reported_matched_memory_ids"] == []
+        assert result["entry_dispositions"] == [
+            {
+                "entry_id": entry.id,
+                "disposition": "appended",
+                "finalization_status": "recoverable",
+                "memory_id": target.id,
+                "memory_title": target.title,
+            }
+        ]
+        assert result["touched_memory_ids"] == [target.id]
+        assert result["appended_memory_ids"] == [target.id]
+        assert result["matched_memory_ids"] == [target.id]
         assert updated is not None
         assert "deterministic fixtures" in updated.content
         assert updated.metadata["appended_entry_ids"] == [entry.id]
@@ -279,6 +454,203 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_append_uses_task_attributed_counts_when_provider_reports_zero_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        entry = runtime.journal.record(
+            "The user also prefers deterministic fixtures for pytest.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-zero-stats-append",
+        )
+
+        class _ZeroStatsAppendProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                append_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_APPEND_TOOL_NAME,
+                    {
+                        "memory_id": target.id,
+                        "content": "Prefer deterministic fixtures for pytest.",
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                append_payload = json.loads(append_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest appended the new preference into the canonical testing memory.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest appended the new preference into the canonical testing memory.",
+                                "created_memory_ids": [append_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _ZeroStatsAppendProvider())
+
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["tool_calls_executed"] == 2
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == [
+            "internal_get_next_ingest_batch",
+            INGEST_APPEND_TOOL_NAME,
+        ]
+        assert result["provider_reported_tool_calls"] == 0
+        assert result["provider_reported_mutations"] == 0
+        assert result["provider_reported_tool_names_used"] == []
+        assert result["appended_memory_ids"] == [target.id]
+        assert result["matched_memory_ids"] == [target.id]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_create_uses_task_attributed_counts_when_provider_reports_zero_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        entry = runtime.journal.record(
+            "The user wants truthful ingest telemetry for create paths too.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-zero-stats-create",
+        )
+
+        class _ZeroStatsCreateProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                create_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_CREATE_TOOL_NAME,
+                    {
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
+                        "title": "Truthful ingest telemetry",
+                        "content": "- [2026-03-19 00:00] The user wants truthful ingest telemetry for create paths too.",
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                create_payload = json.loads(create_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest created a new memory.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest created a new memory.",
+                                "created_memory_ids": [create_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _ZeroStatsCreateProvider())
+
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["tool_calls_executed"] == 2
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == [
+            "internal_get_next_ingest_batch",
+            INGEST_CREATE_TOOL_NAME,
+        ]
+        assert result["provider_reported_tool_calls"] == 0
+        assert result["provider_reported_mutations"] == 0
+        assert result["provider_reported_tool_names_used"] == []
+        assert len(result["created_memory_ids"]) == 1
+        assert result["touched_memory_ids"] == result["created_memory_ids"]
+        assert result["appended_memory_ids"] == []
+        assert result["matched_memory_ids"] == []
+        assert result["entry_dispositions"] == [
+            {
+                "entry_id": entry.id,
+                "disposition": "created",
+                "finalization_status": "recoverable",
+                "memory_id": result["created_memory_ids"][0],
+                "memory_title": "Truthful ingest telemetry",
+            }
+        ]
     finally:
         runtime.close()
 
@@ -373,6 +745,23 @@ async def test_ingest_handler_agentic_releases_unhandled_claimed_entries(monkeyp
         assert result["recoverable_entry_ids"] == [first_entry.id]
         assert result["released_entry_ids"] == [second_entry.id]
         assert result["processed_entry_ids"] == [first_entry.id]
+        assert result["entry_dispositions"] == [
+            {
+                "entry_id": first_entry.id,
+                "disposition": "appended",
+                "finalization_status": "recoverable",
+                "memory_id": target.id,
+                "memory_title": target.title,
+            },
+            {
+                "entry_id": second_entry.id,
+                "disposition": "released_unhandled",
+                "finalization_status": "released",
+            },
+        ]
+        assert result["touched_memory_ids"] == [target.id]
+        assert result["appended_memory_ids"] == [target.id]
+        assert result["matched_memory_ids"] == [target.id]
         assert [entry.id for entry in pending_entries] == [second_entry.id]
         assert runtime.journal.count_by_status() == {"pending": 1, "recoverable": 1}
         assert runtime.repository.get_memory(target.id) is not None
@@ -450,7 +839,7 @@ async def test_ingest_handler_skips_agentic_provider_for_low_novelty_routed_batc
 
 
 @pytest.mark.asyncio
-async def test_ingest_handler_raises_when_agentic_provider_uses_no_tools_while_entries_are_pending(
+async def test_ingest_handler_falls_back_when_agentic_provider_uses_no_tools_while_entries_are_pending(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -499,11 +888,21 @@ async def test_ingest_handler_raises_when_agentic_provider_uses_no_tools_while_e
                     },
                 )
 
-        with pytest.raises(RuntimeError, match="ingest_agentic_no_tool_calls_with_pending_entries"):
-            await handle_ingest_system1_task(runtime, task, _NoToolAgenticProvider())
+        result = await handle_ingest_system1_task(runtime, task, _NoToolAgenticProvider())
 
         pending_entries = runtime.journal.get_pending(workspace_id=runtime.workspace_id)
-        assert [pending.id for pending in pending_entries] == [entry.id]
+        records = runtime.repository.list_memories(workspace_id=runtime.workspace_id)
+
+        assert result["created_memory_ids"]
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["deleted_entry_ids"] == []
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["released_entry_ids"] == []
+        assert result["meaningful_actions"] == 1
+        assert result.get("execution_mode") is None
+        assert pending_entries == []
+        assert len(records) == 1
+        assert records[0].metadata["ingest_task_id"] == task.id
     finally:
         runtime.close()
 
@@ -793,7 +1192,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert deduplicator_task.priority == task_priority(DEDUPLICATOR_TASK_NAME)
     assert curator_task is not None
     assert curator_task.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
-    assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 10800.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 3600.0
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -865,7 +1264,7 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
 
 
-def test_bootstrap_background_tasks_uses_three_hour_curator_cadence(monkeypatch, db_manager) -> None:
+def test_bootstrap_background_tasks_uses_one_hour_curator_cadence(monkeypatch, db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     from mcp_memory.context import ApplicationContext
 
@@ -887,7 +1286,7 @@ def test_bootstrap_background_tasks_uses_three_hour_curator_cadence(monkeypatch,
     scheduled = queue.find_open_task(CURATOR_TASK_NAME, None)
     assert scheduled is not None
     assert scheduled.available_at == pytest.approx(max(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME], 20000.0))
-    assert scheduled.data["interval_seconds"] == 10800.0
+    assert scheduled.data["interval_seconds"] == 3600.0
 
 
 def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatch, db_manager) -> None:
@@ -2876,6 +3275,197 @@ async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monk
         assert provider.prompts
         assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
         assert record.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_same_run_fails_over_to_next_agentic_route_on_ordinary_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.config is not None
+
+    class _AgenticProvider:
+        def __init__(self, *, provider_key: str, error: Exception | None = None, summary: str | None = None) -> None:
+            self._provider_key = provider_key
+            self._error = error
+            self._summary = summary
+            self.prompts: list[str] = []
+            self.usage_contexts: list[dict[str, str | None]] = []
+
+        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+            self.usage_contexts.append(
+                {
+                    "task_name": task_name,
+                    "task_id": task_id,
+                    "workspace_id": workspace_id,
+                }
+            )
+            return self
+
+        def supports_agentic(self) -> bool:
+            return True
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            if self._error is not None:
+                raise self._error
+            return AgenticRunResult(status="success", summary=self._summary)
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        first_provider = _AgenticProvider(provider_key="copilot-strong", error=RuntimeError("Exit code -15"))
+        fallback_provider = _AgenticProvider(
+            provider_key="gemini-cheap",
+            summary="Curator completed maintenance via fallback route.",
+        )
+        runtime.config.provider_routing.task_routes[CURATOR_TASK_NAME] = ["copilot-strong", "gemini-cheap"]
+        runtime.ai_provider_registry = {
+            "copilot-strong": {"agentic": first_provider},
+            "gemini-cheap": {"agentic": fallback_provider},
+        }
+        task = TaskRecord(
+            id="memory-curator-failover-task",
+            task_name=CURATOR_TASK_NAME,
+            data={"workspace_id": runtime.workspace_id},
+            workspace_id=runtime.workspace_id,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        )
+
+        selected = _provider_for_task(runtime, None, None, CURATOR_TASK_NAME, task)
+        result = await handle_memory_curator_task(runtime, task, selected)
+
+        assert result["summary"] == "Curator completed maintenance via fallback route."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert len(first_provider.prompts) == 1
+        assert len(fallback_provider.prompts) == 1
+        assert first_provider.usage_contexts == [
+            {
+                "task_name": CURATOR_TASK_NAME,
+                "task_id": task.id,
+                "workspace_id": runtime.workspace_id,
+            }
+        ]
+        assert fallback_provider.usage_contexts == [
+            {
+                "task_name": CURATOR_TASK_NAME,
+                "task_id": task.id,
+                "workspace_id": runtime.workspace_id,
+            }
+        ]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_does_not_same_run_failover_on_retry_delay_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.config is not None
+
+    class _RetryLaterError(RuntimeError):
+        def __init__(self, message: str, *, retry_delay_seconds: float) -> None:
+            super().__init__(message)
+            self.retry_delay_seconds = retry_delay_seconds
+
+    class _AgenticProvider:
+        def __init__(self, *, provider_key: str, error: Exception | None = None, summary: str | None = None) -> None:
+            self._provider_key = provider_key
+            self._error = error
+            self._summary = summary
+            self.prompts: list[str] = []
+
+        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+            return self
+
+        def supports_agentic(self) -> bool:
+            return True
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            if self._error is not None:
+                raise self._error
+            return AgenticRunResult(status="success", summary=self._summary)
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        first_provider = _AgenticProvider(
+            provider_key="copilot-strong",
+            error=_RetryLaterError("provider backoff", retry_delay_seconds=45.0),
+        )
+        fallback_provider = _AgenticProvider(
+            provider_key="gemini-cheap",
+            summary="Curator completed maintenance via fallback route.",
+        )
+        runtime.config.provider_routing.task_routes[CURATOR_TASK_NAME] = ["copilot-strong", "gemini-cheap"]
+        runtime.ai_provider_registry = {
+            "copilot-strong": {"agentic": first_provider},
+            "gemini-cheap": {"agentic": fallback_provider},
+        }
+        task = TaskRecord(
+            id="memory-curator-no-failover-task",
+            task_name=CURATOR_TASK_NAME,
+            data={"workspace_id": runtime.workspace_id},
+            workspace_id=runtime.workspace_id,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        )
+
+        selected = _provider_for_task(runtime, None, None, CURATOR_TASK_NAME, task)
+
+        with pytest.raises(_RetryLaterError, match="provider backoff"):
+            await handle_memory_curator_task(runtime, task, selected)
+
+        assert len(first_provider.prompts) == 1
+        assert fallback_provider.prompts == []
     finally:
         runtime.close()
 

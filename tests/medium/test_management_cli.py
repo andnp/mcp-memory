@@ -987,6 +987,179 @@ def test_task_recent_runs_and_sampling_summary_commands(monkeypatch, tmp_path: P
     assert summary_payload["grouping"][0]["name"] == "fifo"
 
 
+def test_task_recent_runs_json_preserves_ingest_audit_metadata(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        task = runtime.task_queue.enqueue(
+            "ingest-system1",
+            task_id="recent-run-ingest-audit",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.complete(
+            task.id,
+            completed_at=12.0,
+            run_result={
+                "claimed_entry_ids": [101, 102],
+                "processed_entry_ids": [101],
+                "released_entry_ids": [102],
+                "meaningful_actions": 1,
+                "tool_calls_executed": 2,
+                "mutations": 1,
+                "provider_reported_tool_calls": 3,
+                "provider_reported_mutations": 2,
+                "touched_memory_ids": ["memory-created", "memory-existing"],
+                "appended_memory_ids": ["memory-existing"],
+                "matched_memory_ids": ["memory-existing"],
+                "provider_reported_touched_memory_ids": ["memory-created", "memory-existing"],
+                "provider_reported_matched_memory_ids": ["memory-existing"],
+                "entry_dispositions": [
+                    {
+                        "entry_id": 101,
+                        "disposition": "created",
+                        "finalization_status": "recoverable",
+                        "memory_id": "memory-created",
+                    },
+                    {
+                        "entry_id": 102,
+                        "disposition": "released_unhandled",
+                        "finalization_status": "released",
+                    },
+                ],
+                "provider_reported_entry_outcomes": [
+                    {
+                        "entry_id": 101,
+                        "disposition": "created",
+                        "memory_id": "memory-created",
+                        "reason": "Captured the concrete thought.",
+                    }
+                ],
+            },
+        )
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace), "--json"])
+
+    payload = json.loads(result.output)
+    ingest_run = next(run for run in payload["runs"] if run["task_id"] == "recent-run-ingest-audit")
+    assert result.exit_code == 0
+    assert ingest_run["ingest_audit"]["claimed_count"] == 2
+    assert ingest_run["ingest_audit"]["handled_count"] == 1
+    assert ingest_run["ingest_audit"]["released_count"] == 1
+    assert ingest_run["ingest_audit"]["mutations"] == 1
+    assert ingest_run["ingest_audit"]["provider_reported_mutations"] == 2
+    assert ingest_run["ingest_audit"]["touched_memory_ids"] == ["memory-created", "memory-existing"]
+    assert ingest_run["ingest_audit"]["appended_memory_ids"] == ["memory-existing"]
+    assert ingest_run["ingest_audit"]["matched_memory_ids"] == ["memory-existing"]
+    assert ingest_run["ingest_audit"]["entry_dispositions"][1]["disposition"] == "released_unhandled"
+    assert ingest_run["ingest_audit"]["provider_reported_entry_outcomes"][0]["memory_id"] == "memory-created"
+    assert ingest_run["result"]["provider_reported_tool_calls"] == 3
+
+
+def test_task_recent_runs_human_output_shows_compact_ingest_hints(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        task = runtime.task_queue.enqueue(
+            "ingest-system1",
+            task_id="recent-run-ingest-hints",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.complete(
+            task.id,
+            completed_at=11.0,
+            run_result={
+                "claimed_entry_ids": [201, 202],
+                "processed_entry_ids": [201],
+                "released_entry_ids": [202],
+                "mutations": 1,
+                "touched_memory_ids": ["memory-1"],
+            },
+        )
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Recent Agent Runs" in result.output
+    assert "handled=1" in result.output
+    assert "released=1" in result.output
+    assert "mut=1" in result.output
+    assert "touched=1" in result.output
+
+
+def test_task_show_returns_full_run_result_json(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        task = runtime.task_queue.enqueue(
+            "ingest-system1",
+            task_id="task-show-ingest",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.complete(
+            task.id,
+            completed_at=12.0,
+            run_result={
+                "claimed_entry_ids": [301],
+                "processed_entry_ids": [301],
+                "meaningful_actions": 1,
+                "entry_dispositions": [
+                    {
+                        "entry_id": 301,
+                        "disposition": "created",
+                        "finalization_status": "recoverable",
+                        "memory_id": "memory-301",
+                    }
+                ],
+                "touched_memory_ids": ["memory-301"],
+            },
+        )
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["task", "show", "task-show-ingest", "--workspace-root", str(workspace), "--json"])
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["task"]["id"] == "task-show-ingest"
+    assert payload["runs"][0]["task_id"] == "task-show-ingest"
+    assert payload["runs"][0]["result"]["entry_dispositions"][0]["memory_id"] == "memory-301"
+    assert payload["runs"][0]["ingest_audit"]["entry_dispositions"][0]["disposition"] == "created"
+
+
 def test_conversation_commands_render_and_return_json(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 

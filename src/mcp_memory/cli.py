@@ -492,17 +492,45 @@ def _format_run_result_metadata(metadata) -> str | None:
     return ", ".join(parts) if parts else None
 
 
+def _format_ingest_audit_hint(ingest_audit) -> str | None:
+    if ingest_audit is None:
+        return None
+    has_signal = any(
+        [
+            getattr(ingest_audit, "claimed_count", 0) > 0,
+            getattr(ingest_audit, "handled_count", 0) > 0,
+            getattr(ingest_audit, "released_count", 0) > 0,
+            getattr(ingest_audit, "touched_count", 0) > 0,
+            getattr(ingest_audit, "mutations", None) is not None,
+            bool(getattr(ingest_audit, "entry_dispositions", [])),
+        ]
+    )
+    if not has_signal:
+        return None
+    parts = [
+        f"handled={ingest_audit.handled_count}",
+        f"released={ingest_audit.released_count}",
+        f"mut={ingest_audit.mutations if ingest_audit.mutations is not None else 0}",
+        f"touched={ingest_audit.touched_count}",
+    ]
+    if getattr(ingest_audit, "provider_reported_mutations", None) is not None:
+        parts.append(f"provider_mut={ingest_audit.provider_reported_mutations}")
+    return "\n".join(parts)
+
+
 def _render_recent_agent_runs_table(payload) -> None:
     table = Table(title="Recent Agent Runs")
+    table.add_column("Task ID", no_wrap=True)
     table.add_column("Task", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Duration", justify="right", no_wrap=True)
     table.add_column("Completed", no_wrap=True)
     table.add_column("Selection")
     table.add_column("Grouping")
+    table.add_column("Ingest", overflow="fold")
     table.add_column("Result")
     if not payload.runs:
-        table.add_row("-", "-", "-", "-", "-", "-", "No recent runs")
+        table.add_row("-", "-", "-", "-", "-", "-", "-", "No recent runs")
     for run in payload.runs:
         selection = []
         grouping = []
@@ -523,15 +551,67 @@ def _render_recent_agent_runs_table(payload) -> None:
         if run.result_metadata.group_count is not None:
             grouping.append(f"groups={run.result_metadata.group_count}")
         table.add_row(
+            run.task_id or "-",
             run.task_name,
             run.status,
             f"{run.duration_seconds:.2f}s",
             _format_timestamp(run.completed_at),
             " ".join(selection) or "-",
             " ".join(grouping) or "-",
+            _format_ingest_audit_hint(run.ingest_audit) or "-",
             run.result_summary or "-",
         )
     console.print(table)
+    ingest_hints = [
+        (run.task_id or run.task_name, _format_ingest_audit_hint(run.ingest_audit))
+        for run in payload.runs
+    ]
+    ingest_hints = [(label, hint) for label, hint in ingest_hints if hint is not None]
+    if ingest_hints:
+        console.print("[bold]Ingest audit hints[/]")
+        for label, hint in ingest_hints:
+            console.print(f"- {label}: {hint.replace(chr(10), ' ')}")
+
+
+def _render_task_detail(payload) -> None:
+    task = payload.task
+    console.print(f"[bold]Task ID:[/] {task['id']}")
+    console.print(f"[bold]Task:[/] {task['task_name']}")
+    console.print(f"[bold]Status:[/] {task['status']}")
+    console.print(f"[bold]Workspace:[/] {task['workspace_id'] or '-'}")
+    console.print(f"[bold]Updated:[/] {_format_timestamp(task.get('updated_at'))}")
+    if not payload.runs:
+        console.print("[yellow]No persisted task runs found.[/]")
+        return
+
+    _render_recent_agent_runs_table(type("_Payload", (), {"runs": payload.runs})())
+    for index, run in enumerate(payload.runs, start=1):
+        console.print(f"\n[bold]Stored run {index}[/]")
+        console.print(
+            f"status={run.status} completed={_format_timestamp(run.completed_at)} duration={run.duration_seconds:.2f}s error={run.error_text or '-'}"
+        )
+        ingest_hint = _format_ingest_audit_hint(run.ingest_audit)
+        if ingest_hint is not None:
+            console.print(f"ingest:\n{ingest_hint}")
+        if run.ingest_audit.entry_dispositions:
+            dispositions = Table(title=f"Entry Dispositions ({len(run.ingest_audit.entry_dispositions)})")
+            dispositions.add_column("Entry", justify="right", no_wrap=True)
+            dispositions.add_column("Disposition", no_wrap=True)
+            dispositions.add_column("Finalization", no_wrap=True)
+            dispositions.add_column("Memory", no_wrap=True)
+            dispositions.add_column("Reason")
+            for disposition in run.ingest_audit.entry_dispositions:
+                dispositions.add_row(
+                    str(disposition.entry_id),
+                    disposition.disposition,
+                    disposition.finalization_status or "-",
+                    disposition.memory_id or "-",
+                    disposition.reason or "-",
+                )
+            console.print(dispositions)
+        if run.result is not None:
+            console.print("[bold]Stored result[/]")
+            console.print_json(json.dumps(run.result, sort_keys=True))
 
 
 def _build_sampling_summary(payload) -> dict[str, list[dict[str, object]]]:
@@ -589,7 +669,7 @@ def _render_sampling_summary(payload) -> None:
         selection_table.add_row("-", "0", "0", "No strategy metadata recorded")
     for row in summary["selection"]:
         tasks = row.get("tasks")
-        tasks_text = ", ".join(tasks) if isinstance(tasks, list) else "-"
+        tasks_text = ", ".join(task for task in tasks if isinstance(task, str)) if isinstance(tasks, list) else "-"
         selection_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
     console.print(selection_table)
 
@@ -602,7 +682,7 @@ def _render_sampling_summary(payload) -> None:
         grouping_table.add_row("-", "0", "0", "No grouping metadata recorded")
     for row in summary["grouping"]:
         tasks = row.get("tasks")
-        tasks_text = ", ".join(tasks) if isinstance(tasks, list) else "-"
+        tasks_text = ", ".join(task for task in tasks if isinstance(task, str)) if isinstance(tasks, list) else "-"
         grouping_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
     console.print(grouping_table)
 
@@ -1106,7 +1186,10 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
     """Show recent completed background task runs and their sampling metadata."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(limit=limit)
+        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(
+            limit=limit,
+            detail_level="full",
+        )
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
@@ -1148,6 +1231,25 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
             return
         console.print(f"[green]{payload['status']}[/]: {task_id}")
         console.print(f"signal_sent={payload['signal_sent']} status={payload['task']['status']}")
+    except Exception as exc:
+        _exit_cli_error(exc)
+    finally:
+        runtime.close()
+
+
+@task_group.command(name="show")
+@workspace_root_option
+@click.argument("task_id")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
+    """Show one task and its persisted run result details."""
+    runtime = create_runtime(workspace_root_override=workspace_root)
+    try:
+        payload = _build_management_service(runtime, workspace_id=None).get_task_detail(task_id)
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_task_detail(payload)
     except Exception as exc:
         _exit_cli_error(exc)
     finally:
