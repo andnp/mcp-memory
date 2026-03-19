@@ -9,7 +9,6 @@ import re
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
@@ -28,6 +27,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     sampling_payload,
     support_counts_for_candidates,
 )
+import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
@@ -37,7 +37,6 @@ from mcp_memory.core.task_handlers.constants import (
 )
 from mcp_memory.core.task_handlers.agentic_guardrails import (
     build_curator_guardrails,
-    build_deduplicator_guardrails,
     build_reflection_synthesis_guardrails,
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
@@ -45,16 +44,12 @@ from mcp_memory.core.tasks import TaskRecord
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
-FACT_DEDUPLICATION_THRESHOLD = 0.72
-OBSERVATION_ABSORPTION_THRESHOLD = 0.62
 DEFRAGMENTER_GROUP_SIMILARITY_THRESHOLD = 0.45
 GRAPH_LINKER_AI_MIN_CANDIDATES = 12
 GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
 CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
 DEFRAGMENTER_AI_MIN_GROUP_SIZE = 3
 DEFRAGMENTER_AI_MIN_SOURCE_LINES = 200
-DEDUPLICATOR_AI_MIN_COMBINED_LINES = 20
-DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
 DEDUPLICATOR_MAX_SEED_RECORDS = 8
 DEDUPLICATOR_SIZE_ANOMALY_SEED_RECORDS = 2
 DEDUPLICATOR_OBSERVATION_SEED_RECORDS = 4
@@ -475,7 +470,6 @@ async def handle_deduplicator_task(
     )
     seed_records = seed_batch.records
     facts = [record for record in seed_records if record.type == "fact"]
-    observations = [record for record in seed_records if record.type == "observation"]
     if not facts:
         return sampling_payload(
             seed_batch,
@@ -498,45 +492,21 @@ async def handle_deduplicator_task(
             extra=_normalize_deduplicator_agentic_result(agentic_result, seed_records),
         )
 
-    active_facts = [record for record in candidates if record.type == "fact"]
-    embedding_by_id = _embed_records(ctx, [*active_facts, *observations])
-    merged = 0
-    archived = 0
-    absorbed_observations = 0
-    claimed_sources: set[str] = set()
-
-    for group in _collect_similar_fact_groups(facts, embedding_by_id):
-        canonical = _choose_canonical_fact(ctx, group)
-        for source in group:
-            if source.id == canonical.id or source.id in claimed_sources:
-                continue
-            canonical = await _merge_into_canonical_fact(ctx, canonical, source, task, provider)
-            claimed_sources.add(source.id)
-            merged += 1
-            archived += 1
-
-    active_facts_by_id = {record.id: record for record in active_facts}
-    for observation in observations:
-        if observation.id in claimed_sources:
-            continue
-        target = _find_best_fact_target(observation, active_facts, embedding_by_id)
-        if target is None:
-            continue
-        refreshed = active_facts_by_id.get(target.id, target)
-        merged_target = await _merge_into_canonical_fact(ctx, refreshed, observation, task, provider)
-        active_facts_by_id[merged_target.id] = merged_target
-        active_facts = list(active_facts_by_id.values())
-        claimed_sources.add(observation.id)
-        absorbed_observations += 1
-        archived += 1
+    deterministic_result = await _deduplicator_merge.run_deterministic_deduplicator_pass(
+        ctx,
+        task,
+        candidates,
+        seed_records,
+        provider,
+    )
 
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
         seed_records=seed_records,
-        merged=merged,
-        archived=archived,
-        absorbed_observations=absorbed_observations,
+        merged=deterministic_result["merged"],
+        archived=deterministic_result["archived"],
+        absorbed_observations=deterministic_result["absorbed_observations"],
     )
 
 
@@ -862,37 +832,6 @@ async def _provider_normalize_tags(provider: Any, record, normalized_tags: list[
     return _normalize_tag_values([str(tag) for tag in provider_tags]) or normalized_tags
 
 
-def _embed_records(ctx: ApplicationContext, records: list) -> dict[str, list[float]]:
-    embedder = getattr(ctx, "embedder", None)
-    if embedder is None:
-        return {}
-    payloads = [_record_embedding_text(record) for record in records]
-    embeddings = embedder.embed(payloads)
-    return {
-        record.id: embedding
-        for record, embedding in zip(records, embeddings, strict=False)
-    }
-
-
-def _collect_similar_fact_groups(facts: list, embedding_by_id: dict[str, list[float]]) -> list[list]:
-    groups: list[list] = []
-    used: set[str] = set()
-    for fact in facts:
-        if fact.id in used:
-            continue
-        group = [fact]
-        used.add(fact.id)
-        for other in facts:
-            if other.id in used or other.id == fact.id:
-                continue
-            if _memory_similarity(fact, other, embedding_by_id) >= FACT_DEDUPLICATION_THRESHOLD:
-                group.append(other)
-                used.add(other.id)
-        if len(group) >= 2:
-            groups.append(group)
-    return groups
-
-
 def _select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
     return _select_curator_seed_batch(ctx, task).records
 
@@ -1091,133 +1030,6 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
 
 def _should_use_provider_for_defragment_group(group: list, source_lines: int) -> bool:
     return len(group) >= DEFRAGMENTER_AI_MIN_GROUP_SIZE and source_lines >= DEFRAGMENTER_AI_MIN_SOURCE_LINES
-
-
-def _choose_canonical_fact(ctx: ApplicationContext, facts: list):
-    assert ctx.repository is not None
-    repository = ctx.repository
-    return max(
-        facts,
-        key=lambda record: (
-            repository.count_incoming_links(record.id),
-            record.access_score,
-            record.updated_at,
-            record.created_at,
-        ),
-    )
-
-
-def _find_best_fact_target(observation, facts: list, embedding_by_id: dict[str, list[float]]):
-    best_score = 0.0
-    best_target = None
-    for fact in facts:
-        score = _memory_similarity(observation, fact, embedding_by_id)
-        if score >= OBSERVATION_ABSORPTION_THRESHOLD and score > best_score:
-            best_score = score
-            best_target = fact
-    return best_target
-
-
-async def _merge_into_canonical_fact(
-    ctx: ApplicationContext,
-    canonical,
-    source,
-    task: TaskRecord,
-    provider: Any = None,
-):
-    assert ctx.repository is not None
-    merged_title, merged_content = await _build_merged_fact_content(
-        canonical,
-        source,
-        provider if _should_use_provider_for_merge(canonical, source) else None,
-    )
-    merged_tags = _normalize_tag_values([*canonical.tags, *source.tags])
-    merged_metadata = dict(canonical.metadata)
-    merged_source_ids = merged_metadata.get("merged_source_ids", [])
-    if not isinstance(merged_source_ids, list):
-        merged_source_ids = []
-    merged_metadata["merged_source_ids"] = sorted({*map(str, merged_source_ids), source.id})
-    merged_metadata["deduplicator_task_id"] = task.id
-    updated = ctx.repository.update_memory(
-        canonical.id,
-        title=merged_title,
-        content=merged_content,
-        tags=merged_tags,
-        metadata=merged_metadata,
-        workspace_ids=sorted({*canonical.workspace_ids, *source.workspace_ids}),
-    )
-    if updated is None:
-        return canonical
-    ctx.repository.add_link(updated.id, source.id, "SUPERSEDES", "Auto-merged into canonical fact memory.")
-    ctx.repository.update_memory(source.id, status="archived")
-    return updated
-
-
-async def _build_merged_fact_content(canonical, source, provider: Any = None) -> tuple[str, str]:
-    if provider is not None:
-        prompt = (
-            "Merge these two memories into one canonical fact. Return JSON with title and content.\n"
-            f"{build_deduplicator_guardrails()}\n"
-            'Return only: {"title": "...", "content": "..."}\n\n'
-            f"Canonical title: {canonical.title}\nCanonical content:\n{canonical.content}\n\n"
-            f"Incoming title: {source.title}\nIncoming content:\n{source.content}"
-        )
-        response = provider.ask(prompt)
-        if isawaitable(response):
-            response = await response
-        title = str(response.get("title", "")).strip()
-        content = str(response.get("content", "")).strip()
-        if title and content:
-            return title, content
-
-    if source.content.strip() in canonical.content:
-        return canonical.title, canonical.content
-
-    merged_lines = [canonical.content.strip()]
-    addition = source.summary or source.content.strip()
-    if addition and addition not in canonical.content:
-        merged_lines.append(f"Merged from {source.title}:\n{addition}")
-    return canonical.title, "\n\n".join(part for part in merged_lines if part)
-
-
-def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> float:
-    shared_tags = _shared_meaningful_tags(left.tags, right.tags)
-    lexical_similarity = _topic_token_overlap(left.title + " " + left.content, right.title + " " + right.content)
-    semantic_similarity = 0.0
-    if left.id in embedding_by_id and right.id in embedding_by_id:
-        semantic_similarity = cosine_similarity(embedding_by_id[left.id], embedding_by_id[right.id])
-    if not shared_tags and lexical_similarity < 0.12:
-        semantic_similarity = 0.0
-    tag_bonus = 0.15 if shared_tags else 0.0
-    return max(lexical_similarity, semantic_similarity + tag_bonus)
-
-
-def _should_use_provider_for_merge(canonical, source) -> bool:
-    if getattr(source, "type", None) == "observation":
-        return False
-
-    canonical_content = canonical.content.strip()
-    source_content = source.content.strip()
-    if not canonical_content or not source_content:
-        return False
-    if source_content in canonical_content or canonical_content in source_content:
-        return False
-    combined_lines = _count_text_lines(canonical_content) + _count_text_lines(source_content)
-    if combined_lines < DEDUPLICATOR_AI_MIN_COMBINED_LINES:
-        return False
-    overlap = _token_overlap(
-        canonical.title + " " + canonical_content,
-        source.title + " " + source_content,
-    )
-    return overlap < DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD
-
-
-def _record_embedding_text(record) -> str:
-    parts = [record.title, record.summary or "", record.content]
-    if record.tags:
-        parts.append("tags: " + ", ".join(record.tags))
-    parts.append(f"type: {record.type}")
-    return "\n".join(part for part in parts if part)
 
 
 def _iter_candidate_pairs(candidates: Iterable) -> Iterable[tuple[Any, Any]]:
