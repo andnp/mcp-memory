@@ -1411,6 +1411,254 @@ def test_bootstrap_background_tasks_preserves_idle_paused_recurring_maintenance(
     assert queue.find_open_task(CURATOR_TASK_NAME, None) is None
 
 
+def test_project_manager_only_stales_old_active_plans_in_task_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        stale_timestamp = (datetime.now(UTC) - timedelta(days=90)).isoformat()
+        current_workspace_plan = runtime.repository.create_memory(
+            title="Old workspace plan",
+            content="This plan should go stale.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+            created_at=stale_timestamp,
+            updated_at=stale_timestamp,
+        )
+        other_workspace_plan = runtime.repository.create_memory(
+            title="Old other workspace plan",
+            content="This plan belongs elsewhere.",
+            workspace_ids=["workspace-other"],
+            memory_type="plan",
+            created_at=stale_timestamp,
+            updated_at=stale_timestamp,
+        )
+        fresh_workspace_plan = runtime.repository.create_memory(
+            title="Fresh workspace plan",
+            content="This plan should stay active.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+        )
+        assert current_workspace_plan is not None
+        assert other_workspace_plan is not None
+        assert fresh_workspace_plan is not None
+
+        result = handle_project_manager_task(
+            runtime,
+            TaskRecord(
+                id="project-manager-workspace-scope",
+                task_name=PROJECT_MANAGER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        assert result == {"updated": 1}
+        assert runtime.repository.get_memory(current_workspace_plan.id).status == "stale"
+        assert runtime.repository.get_memory(other_workspace_plan.id).status == "active"
+        assert runtime.repository.get_memory(fresh_workspace_plan.id).status == "active"
+    finally:
+        runtime.close()
+
+
+def test_fact_checker_restores_degraded_links_when_file_reappears(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        memory = runtime.repository.create_memory(
+            title="Repairable ext link",
+            content="Tracks a file that will return.",
+            workspace_ids=[runtime.workspace_id or "global"],
+        )
+        assert memory is not None
+        runtime.repository.add_link(memory.id, "ext:docs/plan.md", "REFERENCES")
+
+        first = handle_fact_checker_task(
+            runtime,
+            TaskRecord(
+                id="fact-checker-first-pass",
+                task_name=FACT_CHECKER_TASK_NAME,
+                data={
+                    "workspace_id": runtime.workspace_id,
+                    "workspace_root": str(workspace),
+                },
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        repaired_file = workspace / "docs" / "plan.md"
+        repaired_file.parent.mkdir(parents=True, exist_ok=True)
+        repaired_file.write_text("restored", encoding="utf-8")
+
+        second = handle_fact_checker_task(
+            runtime,
+            TaskRecord(
+                id="fact-checker-second-pass",
+                task_name=FACT_CHECKER_TASK_NAME,
+                data={
+                    "workspace_id": runtime.workspace_id,
+                    "workspace_root": str(workspace),
+                },
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        assert first == {"degraded": 1, "restored": 0}
+        assert second == {"degraded": 0, "restored": 1}
+        assert runtime.repository.get_memory(memory.id).status == "active"
+    finally:
+        runtime.close()
+
+
+def test_sweeper_preserves_unexpired_recoverable_entries_and_is_idempotent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.db_manager is not None
+    assert runtime.journal is not None
+
+    class _VectorStoreSpy:
+        def __init__(self) -> None:
+            self.deleted: list[tuple[str, str, str | None]] = []
+
+        def delete(self, *, source_kind: str, source_id: str, model_name: str | None) -> None:
+            self.deleted.append((source_kind, source_id, model_name))
+
+    runtime.vector_store = _VectorStoreSpy()
+    runtime.embedder = None
+
+    try:
+        cutoff_timestamp = (datetime.now(UTC) - timedelta(days=8)).timestamp()
+        future_recoverable_until = (datetime.now(UTC) + timedelta(days=1)).timestamp()
+        conn = runtime.db_manager.get_connection()
+        conn.execute(
+            "INSERT INTO tasks (id, task_name, workspace_id, data, status, priority, retries_count, max_retries, created_at, updated_at, available_at, completed_at, last_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "old-sweeper-completed-task",
+                "sweeper",
+                runtime.workspace_id,
+                "{}",
+                "completed",
+                100,
+                0,
+                3,
+                cutoff_timestamp,
+                cutoff_timestamp,
+                cutoff_timestamp,
+                cutoff_timestamp,
+                None,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",
+            ("processed note", runtime.workspace_id, cutoff_timestamp, "processed"),
+        )
+        expired_id = conn.execute(
+            "INSERT INTO system1_journal (content, workspace_id, timestamp, status, recoverable_until) VALUES (?, ?, ?, ?, ?)",
+            ("expired recoverable note", runtime.workspace_id, cutoff_timestamp, "recoverable", cutoff_timestamp),
+        ).lastrowid
+        preserved_id = conn.execute(
+            "INSERT INTO system1_journal (content, workspace_id, timestamp, status, recoverable_until) VALUES (?, ?, ?, ?, ?)",
+            (
+                "still recoverable note",
+                runtime.workspace_id,
+                cutoff_timestamp,
+                "recoverable",
+                future_recoverable_until,
+            ),
+        ).lastrowid
+        conn.commit()
+
+        task = TaskRecord(
+            id="sweeper-idempotence-task",
+            task_name=SWEEPER_TASK_NAME,
+            data={"workspace_id": runtime.workspace_id},
+            workspace_id=runtime.workspace_id,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        )
+
+        first = handle_sweeper_task(runtime, task)
+        second = handle_sweeper_task(runtime, task)
+
+        remaining_recoverable = conn.execute(
+            "SELECT id FROM system1_journal WHERE status = 'recoverable' ORDER BY id ASC"
+        ).fetchall()
+
+        assert first == {"deleted_tasks": 1, "deleted_journal_entries": 2}
+        assert second == {"deleted_tasks": 0, "deleted_journal_entries": 0}
+        assert [row[0] for row in remaining_recoverable] == [preserved_id]
+        assert runtime.journal.count_by_status() == {"recoverable": 1}
+        assert runtime.vector_store.deleted == [("thought", str(expired_id), None)]
+    finally:
+        runtime.close()
+
+
 def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
     monkeypatch,
     tmp_path: Path,
