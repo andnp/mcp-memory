@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import signal
 
 import pytest
 import mcp_memory.daemon as daemon_module
@@ -319,6 +320,22 @@ def test_stop_daemon_reports_sigkill_escalation(monkeypatch, tmp_path: Path) -> 
     assert stopped.signal_sequence == ("SIGTERM", "SIGKILL")
     assert stopped.escalated_to_sigkill is True
     assert sent_signals == [15, 9]
+
+
+def test_signal_daemon_process_prefers_process_group(monkeypatch) -> None:
+    sent_group_signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: 777)
+    monkeypatch.setattr("mcp_memory.daemon.os.killpg", lambda pgid, sig: sent_group_signals.append((pgid, sig)))
+    monkeypatch.setattr(
+        "mcp_memory.daemon.os.kill",
+        lambda pid, sig: (_ for _ in ()).throw(AssertionError("pid-scoped kill should not be used when pgid exists")),
+    )
+
+    process_group_id = daemon_module._signal_daemon_process(3456, signal.SIGTERM)
+
+    assert process_group_id == 777
+    assert sent_group_signals == [(777, signal.SIGTERM)]
 
 
 def test_terminate_daemon_process_uses_fresh_deadline_after_sigkill(monkeypatch) -> None:

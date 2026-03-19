@@ -26,6 +26,10 @@ from mcp_memory.daemon_process import (
 from mcp_memory.daemon_transport import probe_daemon_socket as _probe_daemon_socket
 from mcp_memory.daemon_transport import remove_daemon_socket as _remove_daemon_socket
 from mcp_memory.mcp.runtime import resolve_runtime_spec
+from mcp_memory.process_termination import ProcessTerminationResult as _DaemonTerminationResult
+from mcp_memory.process_termination import send_process_signal as _send_process_signal
+from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
+from mcp_memory.process_termination import wait_for_process_exit as _shared_wait_for_process_exit
 
 
 logger = logging.getLogger(__name__)
@@ -36,13 +40,6 @@ class _DaemonProcess:
     pid: int
     executable: str | None
     command: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class _DaemonTerminationResult:
-    signal_sequence: tuple[str, ...] = ()
-    process_group_id: int | None = None
-    escalated_to_sigkill: bool = False
 
 
 @dataclass(frozen=True)
@@ -254,11 +251,12 @@ def _wait_for_process_exit(
     deadline: float,
     poll_interval_seconds: float,
 ) -> None:
-    while time.monotonic() < deadline:
-        if not _is_process_running(pid):
-            return
-        time.sleep(poll_interval_seconds)
-    raise RuntimeError(f"Timed out waiting for daemon process exit: pid={pid}")
+    _shared_wait_for_process_exit(
+        pid,
+        deadline=deadline,
+        poll_interval_seconds=poll_interval_seconds,
+        is_process_running=_is_process_running,
+    )
 
 
 def _terminate_daemon_process(
@@ -267,58 +265,18 @@ def _terminate_daemon_process(
     deadline: float,
     poll_interval_seconds: float,
 ) -> _DaemonTerminationResult:
-    wait_timeout_seconds = max(deadline - time.monotonic(), poll_interval_seconds)
-    signal_sequence = [signal.SIGTERM.name]
-    process_group_id = _signal_daemon_process(pid, signal.SIGTERM)
-    try:
-        _wait_for_process_exit(
-            pid,
-            deadline=deadline,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-        return _DaemonTerminationResult(
-            signal_sequence=tuple(signal_sequence),
-            process_group_id=process_group_id,
-            escalated_to_sigkill=False,
-        )
-    except RuntimeError:
-        if not _is_process_running(pid):
-            return _DaemonTerminationResult(
-                signal_sequence=tuple(signal_sequence),
-                process_group_id=process_group_id,
-                escalated_to_sigkill=False,
-            )
-        process_group_id = _signal_daemon_process(pid, signal.SIGKILL) or process_group_id
-        signal_sequence.append(signal.SIGKILL.name)
-        _wait_for_process_exit(
-            pid,
-            deadline=time.monotonic() + wait_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-        return _DaemonTerminationResult(
-            signal_sequence=tuple(signal_sequence),
-            process_group_id=process_group_id,
-            escalated_to_sigkill=True,
-        )
+    return _terminate_process_with_scope(
+        pid,
+        deadline=deadline,
+        poll_interval_seconds=poll_interval_seconds,
+        is_process_running=_is_process_running,
+        send_signal=_signal_daemon_process,
+        wait_for_exit=_wait_for_process_exit,
+    )
 
 
 def _signal_daemon_process(pid: int, sig: signal.Signals) -> int | None:
-    try:
-        process_group_id = os.getpgid(pid)
-    except (AttributeError, ProcessLookupError, OSError):
-        process_group_id = None
-
-    if process_group_id is not None and process_group_id > 0:
-        try:
-            os.killpg(process_group_id, sig)
-            return process_group_id
-        except (AttributeError, ProcessLookupError, OSError):
-            pass
-
-    try:
-        os.kill(pid, sig)
-    except ProcessLookupError:
-        return process_group_id
+    process_group_id, _ = _send_process_signal(pid, sig, scope="process_group")
     return process_group_id
 
 

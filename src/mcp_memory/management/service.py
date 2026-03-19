@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import signal
 import time
 
 from mcp_memory.context import ApplicationContext
@@ -31,6 +30,9 @@ from mcp_memory.management.models import (
     TaskListPayload,
 )
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.process_termination import send_process_signal as _send_process_signal
+from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
+from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.serialization import (
     compact_memory_record_payload,
@@ -465,24 +467,25 @@ class ManagementService:
 
 
 def _terminate_process(pid: int) -> bool:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return False
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline:
-        if not _is_process_alive(pid):
-            return True
-        time.sleep(0.05)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return not _is_process_alive(pid)
+    termination = _terminate_process_with_scope(
+        pid,
+        deadline=time.monotonic() + 1.0,
+        poll_interval_seconds=0.05,
+        is_process_running=_is_process_alive,
+        send_signal=lambda process_id, sig: _send_process_signal(
+            process_id,
+            sig,
+            scope="pid",
+            suppress_permission_errors=True,
+        ),
+        wait_for_exit=lambda process_id, *, deadline, poll_interval_seconds: _wait_for_process_exit(
+            process_id,
+            deadline=deadline,
+            poll_interval_seconds=poll_interval_seconds,
+            is_process_running=_is_process_alive,
+        ),
+    )
+    return termination.signal_sent
 
 
 def _is_process_alive(pid: int) -> bool:

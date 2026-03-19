@@ -274,15 +274,31 @@ def test_management_service_can_record_thought_into_journal(db_manager) -> None:
 
 
 def test_terminate_process_escalates_to_sigkill_when_sigterm_does_not_exit(monkeypatch) -> None:
-    sent_signals: list[int] = []
-    alive_states = iter([True, True, False])
+    sent_signals: list[tuple[str, str, bool]] = []
+    wait_deadlines: list[float] = []
+    alive_states = iter([True])
 
-    monkeypatch.setattr("mcp_memory.management.service.os.kill", lambda pid, sig: sent_signals.append(sig))
-    monkeypatch.setattr("mcp_memory.management.service.time.sleep", lambda _: None)
-    monkeypatch.setattr("mcp_memory.management.service.time.monotonic", iter([0.0, 0.2, 0.4, 1.2]).__next__)
+    monkeypatch.setattr("mcp_memory.management.service.time.monotonic", iter([0.0, 0.2, 0.4]).__next__)
     monkeypatch.setattr("mcp_memory.management.service._is_process_alive", lambda pid: next(alive_states))
+    monkeypatch.setattr(
+        "mcp_memory.management.service._send_process_signal",
+        lambda pid, sig, *, scope, suppress_permission_errors=False: sent_signals.append(
+            (sig.name, scope, suppress_permission_errors)
+        ) or (None, True),
+    )
+
+    def _fake_wait(process_id: int, *, deadline: float, poll_interval_seconds: float, is_process_running) -> None:
+        wait_deadlines.append(deadline)
+        if len(wait_deadlines) == 1:
+            raise RuntimeError("timeout")
+
+    monkeypatch.setattr("mcp_memory.management.service._wait_for_process_exit", _fake_wait)
 
     result = __import__("mcp_memory.management.service", fromlist=["_terminate_process"])._terminate_process(1234)
 
     assert result is True
-    assert sent_signals == [15, 9]
+    assert sent_signals == [
+        ("SIGTERM", "pid", True),
+        ("SIGKILL", "pid", True),
+    ]
+    assert wait_deadlines == pytest.approx([1.0, 1.2])
