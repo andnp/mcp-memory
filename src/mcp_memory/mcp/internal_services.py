@@ -39,7 +39,7 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "repository_not_initialized"}
 
     from mcp_memory.core.task_handlers.constants import DEDUPLICATOR_TASK_NAME
-    from mcp_memory.core.task_handlers.maintenance import _select_deduplicator_seed_batch
+    from mcp_memory.core.task_handlers.deduplicator_support import select_deduplicator_seed_batch
 
     task_id = optional_string(arguments, "task_id") or f"{DEDUPLICATOR_TASK_NAME}:internal"
     strategy = optional_string(arguments, "strategy")
@@ -54,7 +54,7 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
         )
         if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
-    seed_batch = _select_deduplicator_seed_batch(
+    seed_batch = select_deduplicator_seed_batch(
         ctx,
         candidates,
         task_id=task_id,
