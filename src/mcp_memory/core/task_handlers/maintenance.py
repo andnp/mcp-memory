@@ -52,6 +52,8 @@ DEDUPLICATOR_STRATEGY_WEIGHTS = {
     ANOMALY_STRATEGY: 2,
     COOLDOWN_ESCAPE_STRATEGY: 2,
 }
+CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS = 10
+CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND = 8
 GRAPH_LINKER_ALLOWED_STRATEGIES = (
     SEMANTIC_STRATEGY,
     GRAPH_BRIDGE_STRATEGY,
@@ -370,10 +372,13 @@ async def handle_memory_curator_task(
     prompt = (
         f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
         "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
+        "Work in high-impact maintenance mode: prefer several coherent improvements in one run when the store clearly supports them, not just the first safe fix.\n"
+        "Treat the seed memories as a starting frontier, not a hard boundary; use search/list/read tools to widen the working set when the seeds hint at nearby duplicates, contradictions, or oversized clusters.\n"
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
         f"{build_curator_guardrails()}\n"
         f"Treat memories above {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting oversized memories into smaller focused records with links such as DEPENDS_ON or AMENDS instead of continuing to append or merge them into one blob.\n"
         f"Avoid creating or growing memories past {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
+        "Before stopping, check whether at least one additional worthwhile maintenance action is still visible through search/list/read; no-op is fine only when another step would be low-value or unsafe.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
@@ -386,10 +391,13 @@ async def handle_memory_curator_task(
                 f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
                 "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
                 "Search, read, list, split, merge, archive, create, update, delete, and link records as needed.\n"
+                "Treat the provided seed memories as a starting frontier; widen your search beyond them when they imply adjacent duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
+                "Aim for multiple coherent, high-value maintenance actions in one run when justified instead of stopping after the first easy mutation.\n"
                 "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
                 f"{build_curator_guardrails()}\n"
                 f"Treat memories above {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
                 "When you create, merge, or materially rewrite a memory and you already understand it, include or refresh a concise summary in the same tool call instead of relying on a later standalone summarizer.\n"
+                "Before finishing, do one more quick search/list/read pass to confirm there is not an adjacent high-value maintenance opportunity still sitting nearby.\n"
                 "Do not claim work you did not actually execute through MCP tools.\n"
                 "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
                 f"Sampling strategy: {seed_batch.strategy_used}\n"
@@ -422,7 +430,8 @@ async def handle_memory_curator_task(
             "internal_create_memory_link",
             "internal_delete_memory_link",
         ],
-        max_rounds=6,
+        max_rounds=CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS,
+        max_tool_calls_per_round=CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND,
     )
     summary = _curator_support.normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
     return sampling_payload(
@@ -453,6 +462,7 @@ async def _provider_normalize_tags(provider: Any, record, normalized_tags: list[
 
 # Temporary compatibility aliases for the extraction slices.
 CURATOR_MAX_MEMORY_CHARS = _curator_support.CURATOR_MAX_MEMORY_CHARS
+CURATOR_MAX_SEED_RECORDS = _curator_support.CURATOR_MAX_SEED_RECORDS
 DEFRAGMENTER_ALLOWED_STRATEGIES = _defragmenter_support.DEFRAGMENTER_ALLOWED_STRATEGIES
 DEFRAGMENTER_STRATEGY_WEIGHTS = _defragmenter_support.DEFRAGMENTER_STRATEGY_WEIGHTS
 _select_curator_seed_records = _curator_support.select_curator_seed_records
@@ -548,5 +558,3 @@ def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type
         link.target_id == target_id
         for link in ctx.repository.get_links(source_id, direction="outgoing", link_type=link_type)
     )
-
-

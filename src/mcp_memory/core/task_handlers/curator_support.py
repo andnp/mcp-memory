@@ -19,9 +19,10 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
 )
 from mcp_memory.core.tasks import TaskRecord
 
-CURATOR_MAX_SEED_RECORDS = 8
-CURATOR_SIZE_ANOMALY_SEED_RECORDS = 2
-CURATOR_RECENCY_SEED_RECORDS = 2
+CURATOR_MAX_SEED_RECORDS = 16
+CURATOR_SIZE_ANOMALY_SEED_RECORDS = 4
+CURATOR_RECENCY_SEED_RECORDS = 4
+CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
 CURATOR_MAX_MEMORY_CHARS = 4000
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
@@ -87,7 +88,7 @@ def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Samp
         candidates,
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,
-        limit=min(len(candidates), CURATOR_MAX_SEED_RECORDS * 2),
+        limit=min(len(candidates), CURATOR_MAX_SEED_RECORDS * CURATOR_CANDIDATE_POOL_MULTIPLIER),
         support_counts=build_support_counts(ctx, candidates),
     )
     sampled_candidates = sampled_batch.records

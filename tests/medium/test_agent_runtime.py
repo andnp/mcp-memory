@@ -37,6 +37,7 @@ from mcp_memory.core.agent_runtime import (
 from mcp_memory.core.providers import AgenticRunResult, CopilotCLIAgenticProvider
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
+    CURATOR_MAX_SEED_RECORDS,
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
     _select_curator_seed_records,
 )
@@ -3230,6 +3231,8 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert result["tool_calls_executed"] == 1
         assert result["mutations"] == 1
         assert provider.prompts
+        assert "Work in high-impact maintenance mode" in provider.prompts[0]
+        assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]
         assert "read_count" not in provider.prompts[0]
@@ -3548,6 +3551,8 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["execution_mode"] == "agentic_mcp"
         assert provider.prompts
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
+        assert "Aim for multiple coherent, high-value maintenance actions in one run" in provider.prompts[0]
+        assert "Treat the provided seed memories as a starting frontier" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
         assert record.id in provider.prompts[0]
@@ -3867,7 +3872,7 @@ async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch,
         assert "Very long architecture reflection title that should be shortened before being s" in prompt
         assert "Very long architecture reflection title that should be shortened before being sent to Gemini for curator work" not in prompt
         assert "…" in prompt
-        assert len(prompt) < 6000
+        assert len(prompt) < 7000
     finally:
         runtime.close()
 
@@ -4053,7 +4058,7 @@ def test_memory_curator_recent_records_are_seeded_when_available(monkeypatch, tm
 
         seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
 
-        assert len(seed_records) == 8
+        assert len(seed_records) == min(9, CURATOR_MAX_SEED_RECORDS)
         assert recent.id in {record.id for record in seed_records}
     finally:
         runtime.close()
@@ -4072,7 +4077,7 @@ def test_memory_curator_recency_quota_is_capped(monkeypatch, tmp_path: Path) -> 
         base_time = datetime(2026, 2, 1, tzinfo=UTC)
         older_ids: list[str] = []
         recent_ids: list[str] = []
-        for index in range(6):
+        for index in range(12):
             older = runtime.repository.create_memory(
                 title=f"Older observation {index}",
                 content="short observation",
@@ -4101,8 +4106,8 @@ def test_memory_curator_recency_quota_is_capped(monkeypatch, tmp_path: Path) -> 
         seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
         seeded_ids = {record.id for record in seed_records}
 
-        assert len(seed_records) == 8
-        assert len(seeded_ids.intersection(recent_ids)) == 2
+        assert len(seed_records) == CURATOR_MAX_SEED_RECORDS
+        assert len(seeded_ids.intersection(recent_ids)) == 4
         assert seeded_ids.issuperset(older_ids)
     finally:
         runtime.close()
@@ -4154,7 +4159,7 @@ def test_memory_curator_anomaly_seeds_survive_recency_bias(monkeypatch, tmp_path
         seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
         seeded_ids = {record.id for record in seed_records}
 
-        assert len(seed_records) == 8
+        assert len(seed_records) == min(10, CURATOR_MAX_SEED_RECORDS)
         assert first_anomaly.id in seeded_ids
         assert second_anomaly.id in seeded_ids
     finally:
@@ -4203,8 +4208,8 @@ def test_memory_curator_fill_still_includes_older_candidates_after_recency_quota
         seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
         seeded_ids = {record.id for record in seed_records}
 
-        assert len(seed_records) == 8
-        assert len(seeded_ids.intersection(recent_ids)) == 4
+        assert len(seed_records) == min(10, CURATOR_MAX_SEED_RECORDS)
+        assert len(seeded_ids.intersection(recent_ids)) == 6
         assert seeded_ids.issuperset(older_ids)
     finally:
         runtime.close()
@@ -4259,7 +4264,7 @@ def test_memory_curator_size_anomaly_pass_can_surface_largest_memory(monkeypatch
             ),
         )
 
-        assert len(seed_records) == 8
+        assert len(seed_records) == min(10, CURATOR_MAX_SEED_RECORDS)
         assert largest.id in {record.id for record in seed_records}
     finally:
         runtime.close()
