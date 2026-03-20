@@ -3232,6 +3232,7 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert result["mutations"] == 1
         assert provider.prompts
         assert "Work in high-impact maintenance mode" in provider.prompts[0]
+        assert "internal_get_next_curator_batch" in provider.prompts[0]
         assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]
@@ -3552,6 +3553,7 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert provider.prompts
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "Aim for multiple coherent, high-value maintenance actions in one run" in provider.prompts[0]
+        assert "internal_get_next_curator_batch" in provider.prompts[0]
         assert "Treat the provided seed memories as a starting frontier" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]

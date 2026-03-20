@@ -95,6 +95,59 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
     }
 
 
+def internal_get_next_curator_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
+    from mcp_memory.core.task_handlers.curator_support import (
+        CURATOR_MAX_SEED_RECORDS,
+        select_curator_seed_batch,
+    )
+    from mcp_memory.core.tasks import TaskRecord
+
+    task_id = optional_string(arguments, "task_id") or f"{CURATOR_TASK_NAME}:internal"
+    strategy = optional_string(arguments, "strategy")
+    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    limit = optional_positive_int(arguments, "limit", CURATOR_MAX_SEED_RECORDS)
+    exclude_memory_ids = set(string_list(arguments, "exclude_memory_ids"))
+    task = TaskRecord(
+        id=task_id,
+        task_name=CURATOR_TASK_NAME,
+        data={"workspace_id": workspace_id, **({"strategy": strategy} if strategy else {})},
+        workspace_id=workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+    seed_batch = select_curator_seed_batch(
+        ctx,
+        task,
+        seed_limit=limit,
+        exclude_memory_ids=exclude_memory_ids,
+    )
+    return {
+        "status": "ok",
+        "requested_strategy": seed_batch.requested_strategy,
+        "strategy": seed_batch.strategy_used,
+        "strategy_used": seed_batch.strategy_used,
+        "strategy_fallback_reason": seed_batch.strategy_fallback_reason,
+        "candidate_count": seed_batch.candidate_count,
+        "excluded_memory_ids": sorted(exclude_memory_ids),
+        "has_more": seed_batch.candidate_count > len(seed_batch.records),
+        "sampled_memory_ids": [record.id for record in seed_batch.records],
+        "records": [compact_memory_record_payload(record).model_dump() for record in seed_batch.records],
+    }
+
+
 def internal_append_memory_content_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
@@ -409,5 +462,3 @@ def internal_delete_memory_link_service(ctx: ApplicationContext, arguments: dict
     if not deleted:
         return {"status": "error", "error": "link_not_found"}
     return {"status": "ok"}
-
-

@@ -52,6 +52,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_read_memory_record",
         "internal_list_memory_records",
         "internal_get_next_dedup_batch",
+        "internal_get_next_curator_batch",
         "internal_get_next_ingest_batch",
         "internal_ingest_append_memory",
         "internal_ingest_create_memory",
@@ -196,7 +197,7 @@ async def test_call_internal_memory_tool_can_append_workspace_ids_and_metadata(m
 
 
 @pytest.mark.asyncio
-async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monkeypatch, tmp_path: Path) -> None:
+async def test_call_internal_memory_tool_can_fetch_dedup_curator_and_ingest_batches(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -227,6 +228,11 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
             "internal_get_next_dedup_batch",
             {"task_id": "dedup-batch-test", "strategy": "anomaly", "limit": 20},
         )
+        curator_result = await call_internal_memory_tool(
+            runtime,
+            "internal_get_next_curator_batch",
+            {"task_id": "curator-batch-test", "strategy": "anomaly", "limit": 5, "exclude_memory_ids": [fact.id]},
+        )
         ingest_result = await call_internal_memory_tool(
             runtime,
             "internal_get_next_ingest_batch",
@@ -234,6 +240,7 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
         )
 
         dedup_payload = json.loads(dedup_result[0].text)
+        curator_payload = json.loads(curator_result[0].text)
         ingest_payload = json.loads(ingest_result[0].text)
 
         assert dedup_payload["status"] == "ok"
@@ -245,6 +252,16 @@ async def test_call_internal_memory_tool_can_fetch_dedup_and_ingest_batches(monk
         assert dedup_payload["strategy_fallback_reason"] is None
         assert dedup_payload["candidate_count"] >= len(dedup_payload["records"])
         assert dedup_payload["sampled_memory_ids"]
+
+        assert curator_payload["status"] == "ok"
+        assert curator_payload["requested_strategy"] == "anomaly"
+        assert curator_payload["strategy"] == "anomaly"
+        assert curator_payload["strategy_used"] == "anomaly"
+        assert curator_payload["strategy_fallback_reason"] is None
+        assert curator_payload["excluded_memory_ids"] == [fact.id]
+        assert curator_payload["records"]
+        assert all(record["id"] != fact.id for record in curator_payload["records"])
+        assert curator_payload["sampled_memory_ids"]
 
         assert ingest_payload["status"] == "ok"
         assert ingest_payload["task_id"] == "agentic-ingest-batch"

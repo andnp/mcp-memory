@@ -18,6 +18,7 @@ class CopilotCLIAgenticProvider(CopilotCLIProvider):
         "internal_read_memory_record",
         "internal_list_memory_records",
         "internal_get_next_dedup_batch",
+        "internal_get_next_curator_batch",
         "internal_get_next_ingest_batch",
         "internal_ingest_append_memory",
         "internal_ingest_create_memory",

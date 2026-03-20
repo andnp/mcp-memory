@@ -23,6 +23,7 @@ CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 4
 CURATOR_RECENCY_SEED_RECORDS = 4
 CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
+CURATOR_MAX_BATCH_RECORDS = 24
 CURATOR_MAX_MEMORY_CHARS = 4000
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
@@ -63,8 +64,16 @@ def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> li
     return select_curator_seed_batch(ctx, task).records
 
 
-def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> SamplingBatch:
+def select_curator_seed_batch(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    *,
+    seed_limit: int | None = None,
+    exclude_memory_ids: set[str] | None = None,
+) -> SamplingBatch:
     assert ctx.repository is not None
+    limit = _normalize_curator_seed_limit(seed_limit)
+    excluded_ids = exclude_memory_ids or set()
     candidates = [
         record
         for record in ctx.repository.list_memories(
@@ -72,6 +81,7 @@ def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Samp
             limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
         )
         if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+        and record.id not in excluded_ids
     ]
     if not candidates:
         return SamplingBatch(
@@ -88,7 +98,7 @@ def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Samp
         candidates,
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,
-        limit=min(len(candidates), CURATOR_MAX_SEED_RECORDS * CURATOR_CANDIDATE_POOL_MULTIPLIER),
+        limit=min(len(candidates), max(limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER),
         support_counts=build_support_counts(ctx, candidates),
     )
     sampled_candidates = sampled_batch.records
@@ -121,15 +131,15 @@ def select_curator_seed_batch(ctx: ApplicationContext, task: TaskRecord) -> Samp
     extend_unique_seed_records(
         seed_records,
         sort_recent_curator_candidates(candidates),
-        min(CURATOR_MAX_SEED_RECORDS, len(seed_records) + CURATOR_RECENCY_SEED_RECORDS),
+        min(limit, len(seed_records) + CURATOR_RECENCY_SEED_RECORDS),
     )
-    extend_unique_seed_records(seed_records, prioritized_candidates, CURATOR_MAX_SEED_RECORDS)
+    extend_unique_seed_records(seed_records, prioritized_candidates, limit)
     return SamplingBatch(
         requested_strategy=sampled_batch.requested_strategy,
         strategy_used=sampled_batch.strategy_used,
         strategy_fallback_reason=sampled_batch.strategy_fallback_reason,
         candidate_count=sampled_batch.candidate_count,
-        records=seed_records[:CURATOR_MAX_SEED_RECORDS],
+        records=seed_records[:limit],
     )
 
 
@@ -180,6 +190,12 @@ def should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
 
 def build_support_counts(ctx: ApplicationContext, candidates: list) -> dict[str, int]:
     return support_counts_for_candidates(ctx, candidates)
+
+
+def _normalize_curator_seed_limit(value: int | None) -> int:
+    if value is None:
+        return CURATOR_MAX_SEED_RECORDS
+    return max(1, min(int(value), CURATOR_MAX_BATCH_RECORDS))
 
 
 def _sort_curator_timestamp(value: object) -> str:

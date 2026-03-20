@@ -373,6 +373,7 @@ async def handle_memory_curator_task(
         f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
         "Your goal is to improve the memory store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
         "Work in high-impact maintenance mode: prefer several coherent improvements in one run when the store clearly supports them, not just the first safe fix.\n"
+        f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{seed_batch.strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the current frontier before mutating.\n"
         "Treat the seed memories as a starting frontier, not a hard boundary; use search/list/read tools to widen the working set when the seeds hint at nearby duplicates, contradictions, or oversized clusters.\n"
         "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
         f"{build_curator_guardrails()}\n"
@@ -391,6 +392,7 @@ async def handle_memory_curator_task(
                 f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
                 "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
                 "Search, read, list, split, merge, archive, create, update, delete, and link records as needed.\n"
+                f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{seed_batch.strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the active frontier before mutating.\n"
                 "Treat the provided seed memories as a starting frontier; widen your search beyond them when they imply adjacent duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
                 "Aim for multiple coherent, high-value maintenance actions in one run when justified instead of stopping after the first easy mutation.\n"
                 "Prefer safe operations with clear lineage. Archive before delete whenever possible.\n"
@@ -420,6 +422,7 @@ async def handle_memory_curator_task(
             "internal_search_memory_records",
             "internal_read_memory_record",
             "internal_list_memory_records",
+            "internal_get_next_curator_batch",
             "internal_append_memory_content",
             "internal_archive_memory_record",
             "internal_merge_memory_into_canonical",
@@ -518,6 +521,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
     if not isinstance(value, dict):
         return 0
     read_only_tool_names = {
+        "mcp_mcp-memory-internal_internal_get_next_curator_batch",
         "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
         "mcp_mcp-memory-internal_internal_read_memory_record",
         "mcp_mcp-memory-internal_internal_search_memory_records",

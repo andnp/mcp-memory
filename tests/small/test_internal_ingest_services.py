@@ -300,6 +300,7 @@ def test_internal_tool_registry_keeps_ingest_names_and_aliases_stable() -> None:
     tool_names = {tool.name for tool in get_internal_maintenance_tools()}
 
     assert "internal_get_next_ingest_batch" in tool_names
+    assert "internal_get_next_curator_batch" in tool_names
     assert "internal_ingest_append_memory" in tool_names
     assert "internal_ingest_create_memory" in tool_names
     assert "internal_ingest_append_memory" in services

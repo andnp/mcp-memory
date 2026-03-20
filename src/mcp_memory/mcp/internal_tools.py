@@ -58,6 +58,20 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_get_next_curator_batch",
+            description="Return the next curator-ranked maintenance batch of active candidate memories, optionally excluding records already reviewed in this run.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "strategy": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                    "exclude_memory_ids": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        ),
+        Tool(
             name="internal_get_next_ingest_batch",
             description="Claim the next pending System 1 journal entries for one task and return grouped ingest batches.",
             inputSchema={
