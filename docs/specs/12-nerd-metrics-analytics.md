@@ -1,7 +1,7 @@
 # Specification: Nerd Metrics Analytics
 
-**Status:** Draft  
-**Scope:** Management API `/api/metrics/nerd`  
+**Status:** Draft
+**Scope:** Management API `/api/metrics/nerd`
 **Rollout:** Phased, additive, backend-first
 
 ## 1. Purpose
