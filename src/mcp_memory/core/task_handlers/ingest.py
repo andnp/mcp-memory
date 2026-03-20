@@ -8,6 +8,10 @@ from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
+from mcp_memory.core.ingest_provenance import (
+    build_ingest_appended_metadata,
+    build_ingest_created_metadata,
+)
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
 from mcp_memory.core.task_handlers.ingest_support import (
@@ -630,12 +634,12 @@ def _execute_ingest_actions(
                 else None
             ),
             workspace_ids=_resolve_entry_workspace_ids(selected_entries, workspace_id),
-            tags=["auto-ingested", "system1"],
+            tags=[],
             memory_type="observation",
-            metadata={
-                "source_entry_ids": [entry.id for entry in selected_entries],
-                "ingest_task_id": task.id,
-            },
+            metadata=build_ingest_created_metadata(
+                task_id=task.id,
+                entry_ids=[entry.id for entry in selected_entries],
+            ),
         )
         assert record is not None
         created_ids.append(record.id)
@@ -663,16 +667,15 @@ def _append_entries_to_existing_memory(
     assert ctx.repository is not None
     addition = _format_entries(entries)
     merged_content = target.content if addition in target.content else f"{target.content.rstrip()}\n\n{addition}".strip()
-    metadata = dict(target.metadata)
-    appended_entry_ids = metadata.get("appended_entry_ids", [])
-    if not isinstance(appended_entry_ids, list):
-        appended_entry_ids = []
-    metadata["appended_entry_ids"] = sorted({*map(int, [item for item in appended_entry_ids if isinstance(item, int)]), *[entry.id for entry in entries]})
-    metadata["ingest_task_id"] = task.id
+    metadata = build_ingest_appended_metadata(
+        task_id=task.id,
+        entry_ids=[entry.id for entry in entries],
+        metadata=target.metadata,
+    )
     updated = ctx.repository.update_memory(
         target.id,
         content=merged_content,
-        tags=sorted({*target.tags, "system1-appended"}),
+        tags=sorted(set(target.tags)),
         metadata=metadata,
     )
     assert updated is not None
@@ -691,12 +694,12 @@ def _fallback_ingest_entries(
         title=_build_title(entries),
         content=_format_entries(entries),
         workspace_ids=workspace_ids,
-        tags=["auto-ingested", "system1"],
+        tags=[],
         memory_type="observation",
-        metadata={
-            "source_entry_ids": [entry.id for entry in entries],
-            "ingest_task_id": task.id,
-        },
+        metadata=build_ingest_created_metadata(
+            task_id=task.id,
+            entry_ids=[entry.id for entry in entries],
+        ),
     )
     assert record is not None
     _enqueue_summary_task(ctx, _primary_workspace_id(workspace_ids), record.id)

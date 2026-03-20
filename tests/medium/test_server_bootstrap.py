@@ -317,13 +317,15 @@ async def test_call_internal_ingest_tools_preserve_ingest_invariants(monkeypatch
         assert "deterministic fixtures" in append_payload["record"]["content"]
         assert set(append_payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
         assert append_payload["record"]["metadata"]["appended_entry_ids"] == [1, 2]
+        assert append_payload["record"]["metadata"]["appended_via_ingest"] is True
         assert append_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
-        assert "system1-appended" in append_payload["record"]["tags"]
+        assert append_payload["record"]["tags"] == ["testing"]
 
         assert create_payload["status"] == "ok"
+        assert create_payload["record"]["metadata"]["created_via_ingest"] is True
         assert create_payload["record"]["metadata"]["source_entry_ids"] == [3, 4]
         assert create_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
-        assert set(create_payload["record"]["tags"]) == {"auto-ingested", "pytest", "system1"}
+        assert create_payload["record"]["tags"] == ["pytest"]
         assert any(
             task.task_name == "summarize-memory" and task.data.get("memory_id") == created_id
             for task in created_summary_tasks

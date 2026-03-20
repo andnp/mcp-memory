@@ -7,6 +7,7 @@ import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.management.service import ManagementService
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -69,6 +70,8 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.memory_lifecycle.by_status == {}
     assert nerd_metrics.composition.by_workspace == []
     assert nerd_metrics.composition.by_tag == []
+    assert nerd_metrics.composition.by_content_tag == []
+    assert nerd_metrics.composition.by_provenance_tag == []
     assert nerd_metrics.composition.by_type == []
     assert nerd_metrics.composition.by_status == []
     assert [bucket.count for bucket in nerd_metrics.distributions.created_age_buckets] == [0, 0, 0, 0, 0]
@@ -345,6 +348,101 @@ def test_management_service_nerd_metrics_composition_distributions_and_timelines
     assert sum(bucket.created_count for bucket in nerd_metrics.timelines.memory_activity) == 3
     assert sum(bucket.updated_count for bucket in nerd_metrics.timelines.memory_activity) == 3
     assert nerd_metrics.timelines.memory_activity[-1].total_content_bytes == 9_120
+
+
+def test_management_service_classifies_provenance_process_tags_and_splits_composition(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    repository.create_memory(
+        title="Tagged fact",
+        content="Tagged content.",
+        workspace_ids=["workspace-a"],
+        tags=[
+            "alpha",
+            "system1",
+            "system1-appended",
+            "auto-ingested",
+            "auto-defragmented",
+            "merged-by-deduplicator",
+            "deduplicator-task-123",
+            "planner-session",
+            "code-session",
+            "workflow",
+            "testing-strategy",
+            "user-preferences",
+            "coding-standards",
+            "documentation-style",
+            "memory-operating-model",
+            "startup",
+        ],
+        memory_type="fact",
+    )
+    repository.create_memory(
+        title="Second tagged fact",
+        content="More tagged content.",
+        workspace_ids=["workspace-a"],
+        tags=["alpha", "beta", "manual-review"],
+        memory_type="fact",
+    )
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+
+    assert is_provenance_process_tag("system1") is True
+    assert is_provenance_process_tag("system1-appended") is True
+    assert is_provenance_process_tag("auto-ingested") is True
+    assert is_provenance_process_tag("auto-defragmented") is True
+    assert is_provenance_process_tag("merged-by-deduplicator") is True
+    assert is_provenance_process_tag("deduplicator-task-123") is True
+    assert is_provenance_process_tag("planner-session") is True
+    assert is_provenance_process_tag("code-session") is True
+    assert is_provenance_process_tag("workflow") is True
+    assert is_provenance_process_tag("testing-strategy") is True
+    assert is_provenance_process_tag("user-preferences") is True
+    assert is_provenance_process_tag("coding-standards") is True
+    assert is_provenance_process_tag("documentation-style") is True
+    assert is_provenance_process_tag("memory-operating-model") is True
+    assert is_provenance_process_tag("startup") is True
+    assert is_provenance_process_tag("alpha") is False
+
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_content_tag] == [
+        ("alpha", 2),
+        ("beta", 1),
+        ("manual-review", 1),
+    ]
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_provenance_tag] == [
+        ("auto-defragmented", 1),
+        ("auto-ingested", 1),
+        ("code-session", 1),
+        ("coding-standards", 1),
+        ("deduplicator-task-123", 1),
+        ("documentation-style", 1),
+        ("memory-operating-model", 1),
+        ("merged-by-deduplicator", 1),
+        ("planner-session", 1),
+        ("startup", 1),
+        ("other", 5),
+    ]
+    assert [(item.key, item.count) for item in nerd_metrics.composition.by_tag] == [
+        ("alpha", 2),
+        ("auto-defragmented", 1),
+        ("auto-ingested", 1),
+        ("beta", 1),
+        ("code-session", 1),
+        ("coding-standards", 1),
+        ("deduplicator-task-123", 1),
+        ("documentation-style", 1),
+        ("manual-review", 1),
+        ("memory-operating-model", 1),
+        ("other", 8),
+    ]
 
 
 def test_management_service_graph_topology_counts_cross_workspace_links(db_manager) -> None:

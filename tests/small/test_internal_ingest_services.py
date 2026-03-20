@@ -97,11 +97,12 @@ def test_internal_ingest_create_normalizes_mixed_duplicate_entry_ids_and_records
     record = ctx.repository.get_memory(payload["record"]["id"])
     assert record is not None
     assert record.metadata == {
+        "created_via_ingest": True,
         "source": "unit-test",
         "source_entry_ids": [11, 12, 13],
         "ingest_task_id": "ingest-create-task",
     }
-    assert record.tags == ["auto-ingested", "ingest-flow", "system1", "testing"]
+    assert record.tags == ["ingest-flow", "testing"]
 
     task = ctx.task_queue.get_task("ingest-create-task")
     assert task.data[INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY] == [11, 12, 13]
@@ -204,11 +205,12 @@ def test_internal_ingest_append_alias_preserves_side_effects_and_target_errors(d
     assert updated is not None
     assert updated.content.endswith("Newly appended ingest detail.")
     assert updated.metadata == {
+        "appended_via_ingest": True,
         "appended_entry_ids": [20, 21, 22],
         "ingest_task_id": "ingest-append-task",
         "note": "kept",
     }
-    assert updated.tags == ["existing", "new-tag", "system1-appended"]
+    assert updated.tags == ["existing", "new-tag"]
     assert updated.workspace_ids == ["workspace-a", "workspace-b"]
 
     task = ctx.task_queue.get_task("ingest-append-task")

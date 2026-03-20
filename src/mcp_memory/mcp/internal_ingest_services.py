@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingest_provenance import (
+    build_ingest_appended_metadata,
+    build_ingest_created_metadata,
+)
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
@@ -107,17 +111,18 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     metadata_override = optional_object(arguments, "metadata") or {}
     merged_metadata = _merge_memory_metadata(
         record.metadata,
-        {
-            **metadata_override,
-            "appended_entry_ids": entry_ids,
-            "ingest_task_id": task_id,
-        },
+        metadata_override,
+    )
+    merged_metadata = build_ingest_appended_metadata(
+        task_id=task_id,
+        entry_ids=entry_ids,
+        metadata=merged_metadata,
     )
     updated = ctx.repository.update_memory(
         memory_id,
         content=_append_content(record.content, content),
         summary=optional_string(arguments, "summary") if "summary" in arguments else None,
-        tags=_normalize_tags([*record.tags, *tags, "system1-appended"]),
+        tags=_normalize_tags([*record.tags, *tags]),
         workspace_ids=sorted({*record.workspace_ids, *workspace_ids}),
         metadata=merged_metadata,
     )
@@ -167,12 +172,12 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         memory_type=optional_string(arguments, "memory_type") or "observation",
         status=optional_string(arguments, "status") or "active",
         workspace_ids=workspace_ids,
-        tags=_normalize_tags([*string_list(arguments, "tags"), "auto-ingested", "system1"]),
-        metadata={
-            **metadata_override,
-            "source_entry_ids": entry_ids,
-            "ingest_task_id": task_id,
-        },
+        tags=_normalize_tags([*string_list(arguments, "tags")]),
+        metadata=build_ingest_created_metadata(
+            task_id=task_id,
+            entry_ids=entry_ids,
+            metadata=metadata_override,
+        ),
     )
     assert record is not None
     _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))

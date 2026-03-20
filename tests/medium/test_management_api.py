@@ -323,6 +323,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2}
         ]
         assert {item["key"] for item in nerd_metrics["composition"]["by_tag"]} == {"api", "dashboard"}
+        assert {item["key"] for item in nerd_metrics["composition"]["by_content_tag"]} == {"api", "dashboard"}
+        assert nerd_metrics["composition"]["by_provenance_tag"] == []
         assert nerd_metrics["composition"]["by_status"] == [
             {"key": "active", "label": "active", "count": 2}
         ]

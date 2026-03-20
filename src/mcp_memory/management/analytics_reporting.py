@@ -125,6 +125,27 @@ _MAINTENANCE_FAMILY_BY_TASK = {
     for family_key, family_label, task_names in _MAINTENANCE_FAMILY_DEFS
     for task_name in task_names
 }
+_PROVENANCE_TAG_PREFIXES: tuple[str, ...] = (
+    "system1",
+    "auto-",
+    "merged-by-",
+    "deduplicator-task-",
+)
+_PROVENANCE_TAG_SUFFIXES: tuple[str, ...] = (
+    "-session",
+    "-process",
+)
+_PROVENANCE_PROCESS_TAGS: frozenset[str] = frozenset(
+    {
+        "workflow",
+        "testing-strategy",
+        "user-preferences",
+        "coding-standards",
+        "documentation-style",
+        "memory-operating-model",
+        "startup",
+    }
+)
 
 
 @dataclass
@@ -454,6 +475,8 @@ def build_composition(memory_rows) -> NerdCompositionPayload:
 
     workspace_counts: Counter[str] = Counter()
     tag_counts: Counter[str] = Counter()
+    content_tag_counts: Counter[str] = Counter()
+    provenance_tag_counts: Counter[str] = Counter()
     type_counts: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
 
@@ -461,11 +484,24 @@ def build_composition(memory_rows) -> NerdCompositionPayload:
         type_counts[str(row["type"])] += 1
         status_counts[str(row["status"])] += 1
         workspace_counts.update(split_csv_values(row["workspace_ids_csv"]))
-        tag_counts.update(split_csv_values(row["tags_csv"]))
+        tags = split_csv_values(row["tags_csv"])
+        tag_counts.update(tags)
+        for tag in tags:
+            if is_provenance_process_tag(tag):
+                provenance_tag_counts[tag] += 1
+            else:
+                content_tag_counts[tag] += 1
 
     return NerdCompositionPayload(
         by_workspace=_count_buckets(workspace_counts),
         by_tag=_count_buckets(tag_counts, limit=_TAG_LIMIT, other_key="other", other_label="Other"),
+        by_content_tag=_count_buckets(content_tag_counts, limit=_TAG_LIMIT, other_key="other", other_label="Other"),
+        by_provenance_tag=_count_buckets(
+            provenance_tag_counts,
+            limit=_TAG_LIMIT,
+            other_key="other",
+            other_label="Other",
+        ),
         by_type=_count_buckets(type_counts),
         by_status=_count_buckets(status_counts),
     )
@@ -907,6 +943,17 @@ def _percentile(values: list[float], ratio: float) -> float:
     sorted_values = sorted(values)
     index = max(math.ceil(len(sorted_values) * ratio) - 1, 0)
     return float(sorted_values[index])
+
+
+def is_provenance_process_tag(tag: str) -> bool:
+    normalized = tag.strip().lower()
+    if not normalized:
+        return False
+    return (
+        normalized in _PROVENANCE_PROCESS_TAGS
+        or normalized.startswith(_PROVENANCE_TAG_PREFIXES)
+        or normalized.endswith(_PROVENANCE_TAG_SUFFIXES)
+    )
 
 
 def _count_buckets(

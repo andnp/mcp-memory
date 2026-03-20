@@ -234,6 +234,8 @@ class NerdCountBucketPayload(BaseModel):
 class NerdCompositionPayload(BaseModel):
     by_workspace: list[NerdCountBucketPayload] = Field(default_factory=list)
     by_tag: list[NerdCountBucketPayload] = Field(default_factory=list)
+    by_content_tag: list[NerdCountBucketPayload] = Field(default_factory=list)
+    by_provenance_tag: list[NerdCountBucketPayload] = Field(default_factory=list)
     by_type: list[NerdCountBucketPayload] = Field(default_factory=list)
     by_status: list[NerdCountBucketPayload] = Field(default_factory=list)
 

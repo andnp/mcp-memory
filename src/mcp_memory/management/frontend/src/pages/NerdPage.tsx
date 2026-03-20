@@ -789,9 +789,9 @@ export function NerdPage() {
         <SectionHeading
           eyebrow="Composition"
           title="What the memory base is made of"
-          description="Workspace, tag, type, and status breakdowns from the scoped nerd metrics payload."
+          description="Workspace, content-tag, provenance/process-tag, type, and status breakdowns from the scoped nerd metrics payload."
         />
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
           <CountBreakdownTable
             title="By workspace"
             subtitle="Visible memories by workspace association"
@@ -799,10 +799,16 @@ export function NerdPage() {
             emptyMessage="No workspace composition data yet."
           />
           <CountBreakdownTable
-            title="By tag"
-            subtitle="Top tags in the visible memory set"
-            rows={nerdQuery.data.composition.by_tag}
-            emptyMessage="No tag composition data yet."
+            title="Content tags"
+            subtitle="Top domain/content tags in the visible memory set"
+            rows={nerdQuery.data.composition.by_content_tag}
+            emptyMessage="No content-tag composition data yet."
+          />
+          <CountBreakdownTable
+            title="Provenance / process tags"
+            subtitle="System/process markers split from content tags"
+            rows={nerdQuery.data.composition.by_provenance_tag}
+            emptyMessage="No provenance/process-tag composition data yet."
           />
           <CountBreakdownTable
             title="By type"

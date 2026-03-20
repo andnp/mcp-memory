@@ -239,6 +239,8 @@ export interface CountBucket {
 export interface Composition {
   by_workspace: CountBucket[];
   by_tag: CountBucket[];
+  by_content_tag: CountBucket[];
+  by_provenance_tag: CountBucket[];
   by_type: CountBucket[];
   by_status: CountBucket[];
 }

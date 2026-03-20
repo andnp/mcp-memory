@@ -250,6 +250,9 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
         assert runtime.journal.count_by_status() == {"recoverable": 2}
         assert len(records) == 1
         assert records[0].type == "observation"
+        assert records[0].tags == []
+        assert records[0].metadata["created_via_ingest"] is True
+        assert records[0].metadata["source_entry_ids"] == result["claimed_entry_ids"]
         assert records[0].metadata["ingest_task_id"] == "ingest-test"
         summary_task = runtime.task_queue.find_open_task(
             SUMMARIZE_MEMORY_TASK_NAME,
@@ -316,6 +319,9 @@ async def test_ingest_handler_can_append_directly_into_existing_memory(monkeypat
         assert result["released_entry_ids"] == []
         assert updated is not None
         assert "deterministic fixtures" in updated.content
+        assert updated.tags == ["testing"]
+        assert updated.metadata["appended_via_ingest"] is True
+        assert updated.metadata["appended_entry_ids"] == [result["claimed_entry_ids"][0]]
         assert len(memories) == 1
         assert runtime.journal.count_by_status() == {"recoverable": 1}
     finally:
@@ -444,6 +450,8 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["matched_memory_ids"] == [target.id]
         assert updated is not None
         assert "deterministic fixtures" in updated.content
+        assert updated.tags == ["testing"]
+        assert updated.metadata["appended_via_ingest"] is True
         assert updated.metadata["appended_entry_ids"] == [entry.id]
         assert updated.metadata["ingest_task_id"] == task.id
         assert runtime.journal.count_by_status() == {"recoverable": 1}
