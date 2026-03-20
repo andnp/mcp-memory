@@ -183,10 +183,12 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
         workspace_id="workspace-test",
         batch_size=10,
         grouping_strategy="fifo",
+        max_batches_per_run=8,
     )
 
     assert "Preserve concrete symbols, file paths, thresholds, IDs, error strings, config keys, and commit refs" in prompt
     assert "When uncertain, prefer narrow concrete observations over broad abstraction." in prompt
+    assert "Aim to drain the queue for this task in one run" in prompt
     assert "Include explicit per-entry outcomes for every claimed entry" in prompt
     assert '"entry_outcomes": [{"entry_id": 123, "disposition": "created"|"appended"|"matched_existing"|"ignored"|"no_mutation"' in prompt
     assert "Do not make vague claims like 'matched existing canonical memories'" in prompt
@@ -463,6 +465,105 @@ async def test_ingest_handler_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in provider.prompts[0]
         assert "Do not delete or release journal claims yourself" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_provider_can_drain_multiple_batches_in_one_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.journal.record("First queue thought", workspace_id=runtime.workspace_id)
+        second = runtime.journal.record("Second queue thought", workspace_id=runtime.workspace_id)
+        third = runtime.journal.record("Third queue thought", workspace_id=runtime.workspace_id)
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id, "batch_size": 2, "max_batches_per_run": 4},
+            available_at=0.0,
+            task_id="ingest-agentic-multi-batch",
+        )
+
+        class _MultiBatchAgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                created_ids: list[str] = []
+                for expected_count, title in ((2, "Batch one memory"), (1, "Batch two memory")):
+                    batch_result = await call_internal_memory_tool(
+                        runtime,
+                        "internal_get_next_ingest_batch",
+                        {"task_id": task.id, "batch_size": 2, "grouping_strategy": "fifo"},
+                    )
+                    batch_payload = json.loads(batch_result[0].text)
+                    claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                    assert len(claimed_entry_ids) == expected_count
+                    create_result = await call_internal_memory_tool(
+                        runtime,
+                        INGEST_CREATE_TOOL_NAME,
+                        {
+                            "task_id": task.id,
+                            "entry_ids": claimed_entry_ids,
+                            "title": title,
+                            "content": "\n".join(
+                                f"- handled {entry_id}" for entry_id in claimed_entry_ids
+                            ),
+                            "workspace_ids": [runtime.workspace_id],
+                            "tags": ["testing"],
+                        },
+                    )
+                    create_payload = json.loads(create_result[0].text)
+                    created_ids.append(create_payload["record"]["id"])
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest drained multiple batches in one run.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest drained multiple batches in one run.",
+                                "created_memory_ids": created_ids,
+                                "meaningful_actions": 2,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 4,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_get_next_ingest_batch": {"count": 2},
+                                    f"mcp_mcp-memory-internal_{INGEST_CREATE_TOOL_NAME}": {"count": 2},
+                                },
+                            }
+                        },
+                    },
+                )
+
+        provider = _MultiBatchAgenticProvider()
+        result = await handle_ingest_system1_task(runtime, task, provider)
+
+        assert result["claimed_entry_ids"] == [first.id, second.id, third.id]
+        assert sorted(result["recoverable_entry_ids"]) == [first.id, second.id, third.id]
+        assert result["released_entry_ids"] == []
+        assert result["meaningful_actions"] == 2
+        assert result["tool_calls_executed"] == 4
+        assert result["mutations"] == 2
+        assert result["provider_reported_tool_calls"] == 4
+        assert result["provider_reported_mutations"] == 2
+        assert result["tool_names_used"] == ["internal_get_next_ingest_batch", INGEST_CREATE_TOOL_NAME]
+        assert len(result["created_memory_ids"]) == 2
+        assert runtime.journal.count_by_status() == {"recoverable": 3}
+        assert provider.prompts
+        assert "Aim to drain the queue for this task in one run" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -4450,16 +4551,10 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
         await worker.stop(0.1)
 
         pending_counts = runtime.journal.count_by_status()
-        assert pending_counts.get("pending", 0) == 25
+        assert pending_counts.get("pending", 0) == 0
         assert pending_counts.get("claimed", 0) == 0
-        assert pending_counts.get("processed", 0) == 0
-        delayed_tasks = runtime.task_queue.list_tasks(
-            status="pending",
-            workspace_id=runtime.workspace_id,
-            limit=5,
-        )
-        assert len(delayed_tasks) == 1
-        assert delayed_tasks[0].available_at > delayed_tasks[0].updated_at
+        assert pending_counts.get("recoverable", 0) == 45
+        assert runtime.task_queue.find_open_task(SYSTEM1_INGEST_TASK_NAME, runtime.workspace_id) is None
     finally:
         runtime.close()
 

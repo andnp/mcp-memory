@@ -46,6 +46,7 @@ INGEST_GROUPING_STRATEGIES = (
 )
 INGEST_APPEND_TOOL_NAME = "internal_ingest_append_memory"
 INGEST_CREATE_TOOL_NAME = "internal_ingest_create_memory"
+DEFAULT_INGEST_MAX_BATCHES_PER_RUN = 8
 
 
 async def handle_ingest_system1_task(
@@ -62,12 +63,14 @@ async def handle_ingest_system1_task(
             released_ids=[],
             meaningful_actions=0,
         )
+    journal = ctx.journal
 
     journal_workspace_id = resolve_pending_workspace_id(
-        ctx.journal,
+        journal,
         task.data.get("journal_workspace_id", task.workspace_id),
     )
-    pending_count_before_run = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
+    max_batches_per_run = max(1, int(task.data.get("max_batches_per_run", DEFAULT_INGEST_MAX_BATCHES_PER_RUN)))
+    pending_count_before_run = journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
     workspace_id = _resolve_workspace_id(ctx, task)
     grouping_strategy_requested = _requested_grouping_strategy(task.data)
     grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
@@ -110,6 +113,7 @@ async def handle_ingest_system1_task(
                     workspace_id=workspace_id,
                     batch_size=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
                     grouping_strategy=grouping_strategy_used,
+                    max_batches_per_run=max_batches_per_run,
                 )
             )
             normalized = _normalize_ingest_agentic_result(agentic_result)
@@ -121,7 +125,7 @@ async def handle_ingest_system1_task(
                 and meaningful_actions <= 0
                 and not normalized["created_memory_ids"]
             ):
-                ctx.journal.release_claims(task.id)
+                journal.release_claims(task.id)
             else:
                 semantic_entry_dispositions = _recorded_ingest_entry_dispositions(ctx, task.id)
                 handled_entry_ids = _recorded_ingest_handled_entry_ids(ctx, task.id)
@@ -158,29 +162,78 @@ async def handle_ingest_system1_task(
                     "provider_reported_matched_memory_ids": normalized["matched_memory_ids"],
                 }
         except BaseException:
-            ctx.journal.release_claims(task.id)
+            journal.release_claims(task.id)
             raise
 
-    entries = ctx.journal.claim_pending(
-        task_id=task.id,
-        limit=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
-        workspace_id=journal_workspace_id,
-    )
-    if not entries:
-        return {
-            **_build_ingest_result(
-                created_ids=[],
-                claimed_ids=[],
-                deleted_ids=[],
-                recoverable_ids=[],
-                released_ids=[],
-                meaningful_actions=0,
-            ),
+    created_ids: list[str] = []
+    claimed_ids: list[int] = []
+    recoverable_ids: list[int] = []
+    released_ids: list[int] = []
+    meaningful_actions = 0
+    semantic_entry_dispositions: list[dict[str, Any]] = []
+    batches_processed = 0
+
+    try:
+        while batches_processed < max_batches_per_run:
+            entries = journal.claim_pending(
+                task_id=task.id,
+                limit=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
+                workspace_id=journal_workspace_id,
+            )
+            if not entries:
+                break
+
+            batch_result = await _process_ingest_batch(
+                ctx,
+                task,
+                provider,
+                workspace_id=workspace_id,
+                grouping_strategy=grouping_strategy_used,
+                entries=entries,
+            )
+            batches_processed += 1
+            created_ids.extend(batch_result["created_ids"])
+            claimed_ids.extend(batch_result["claimed_ids"])
+            recoverable_ids.extend(batch_result["recoverable_ids"])
+            released_ids.extend(batch_result["released_ids"])
+            semantic_entry_dispositions.extend(batch_result["entry_dispositions"])
+            meaningful_actions += batch_result["meaningful_actions"]
+
+            if batch_result["meaningful_actions"] <= 0:
+                break
+            if journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0) <= 0:
+                break
+
+        return _build_ingest_result(
+            created_ids=created_ids,
+            claimed_ids=sorted(set(claimed_ids)),
+            deleted_ids=[],
+            recoverable_ids=sorted(set(recoverable_ids)),
+            released_ids=sorted(set(released_ids)),
+            meaningful_actions=meaningful_actions,
+            semantic_entry_dispositions=semantic_entry_dispositions,
+        ) | {
             "requested_grouping_strategy": grouping_strategy_requested,
             "grouping_strategy_used": grouping_strategy_used,
             "grouping_fallback_reason": grouping_fallback_reason,
+            "batches_processed": batches_processed,
+            "pending_remaining": journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0),
         }
+    except BaseException:
+        journal.release_claims(task.id)
+        raise
 
+
+async def _process_ingest_batch(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    provider: Any,
+    *,
+    workspace_id: str,
+    grouping_strategy: str,
+    entries,
+) -> dict[str, Any]:
+    assert ctx.journal is not None
     claimed_ids = [entry.id for entry in entries]
     created_ids: list[str] = []
     handled_ids: list[int] = []
@@ -191,84 +244,77 @@ async def handle_ingest_system1_task(
         entries,
         workspace_id,
         task_id=task.id,
-        grouping_strategy=grouping_strategy_used,
+        grouping_strategy=grouping_strategy,
     )
 
-    try:
-        for group in grouped_entries:
-            actions = None
-            tool_mutations = 0
-            if provider is not None:
-                try:
-                    actions, tool_mutations = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
-                except Exception:
-                    actions = None
-                    tool_mutations = 0
+    for group in grouped_entries:
+        actions = None
+        tool_mutations = 0
+        if provider is not None:
+            try:
+                actions, tool_mutations = await _analyze_ingest_actions(ctx, provider, workspace_id, group)
+            except Exception:
+                actions = None
+                tool_mutations = 0
 
-            group_created_ids: list[str] = []
-            group_handled_ids: list[int] = []
-            group_meaningful_actions = 0
-            group_entry_dispositions: list[dict[str, Any]] = []
-            if actions:
-                group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _execute_ingest_actions(
-                    ctx,
-                    task,
-                    workspace_id,
-                    group,
-                    actions,
-                )
+        group_created_ids: list[str] = []
+        group_handled_ids: list[int] = []
+        group_meaningful_actions = 0
+        group_entry_dispositions: list[dict[str, Any]] = []
+        if actions:
+            group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _execute_ingest_actions(
+                ctx,
+                task,
+                workspace_id,
+                group,
+                actions,
+            )
 
-            if not group_handled_ids:
-                group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _fallback_ingest_entries(
-                    ctx,
-                    task,
-                    workspace_id,
-                    group,
-                )
+        if not group_handled_ids:
+            group_created_ids, group_handled_ids, group_meaningful_actions, group_entry_dispositions = _fallback_ingest_entries(
+                ctx,
+                task,
+                workspace_id,
+                group,
+            )
 
-            created_ids.extend(group_created_ids)
-            handled_ids.extend(group_handled_ids)
-            semantic_entry_dispositions.extend(group_entry_dispositions)
-            meaningful_actions += group_meaningful_actions + tool_mutations
+        created_ids.extend(group_created_ids)
+        handled_ids.extend(group_handled_ids)
+        semantic_entry_dispositions.extend(group_entry_dispositions)
+        meaningful_actions += group_meaningful_actions + tool_mutations
 
-        if meaningful_actions <= 0:
-            released_ids = ctx.journal.release_claims(task.id)
-            return _build_ingest_result(
-                created_ids=created_ids,
-                claimed_ids=claimed_ids,
-                deleted_ids=[],
-                recoverable_ids=[],
-                released_ids=released_ids,
-                meaningful_actions=meaningful_actions,
-                semantic_entry_dispositions=semantic_entry_dispositions,
-            ) | {
-                "requested_grouping_strategy": grouping_strategy_requested,
-                "grouping_strategy_used": grouping_strategy_used,
-                "grouping_fallback_reason": grouping_fallback_reason,
-            }
+    if meaningful_actions <= 0:
+        released_ids = ctx.journal.release_claims(task.id)
+        return {
+            "created_ids": created_ids,
+            "claimed_ids": claimed_ids,
+            "recoverable_ids": [],
+            "released_ids": released_ids,
+            "meaningful_actions": meaningful_actions,
+            "entry_dispositions": semantic_entry_dispositions,
+        }
 
-        claimed_ids, recoverable_ids, released_ids = _finalize_claimed_ingest_entries(
-            ctx,
-            task_id=task.id,
-            handled_entry_ids=handled_ids,
-        )
-
-        return _build_ingest_result(
+    batch_claimed_ids, batch_recoverable_ids, batch_released_ids = _finalize_claimed_ingest_entries(
+        ctx,
+        task_id=task.id,
+        handled_entry_ids=handled_ids,
+    )
+    return {
+        "created_ids": created_ids,
+        "claimed_ids": batch_claimed_ids,
+        "recoverable_ids": batch_recoverable_ids,
+        "released_ids": batch_released_ids,
+        "meaningful_actions": meaningful_actions,
+        "entry_dispositions": _build_ingest_result(
             created_ids=created_ids,
-            claimed_ids=claimed_ids,
+            claimed_ids=batch_claimed_ids,
             deleted_ids=[],
-            recoverable_ids=recoverable_ids,
-            released_ids=released_ids,
+            recoverable_ids=batch_recoverable_ids,
+            released_ids=batch_released_ids,
             meaningful_actions=meaningful_actions,
             semantic_entry_dispositions=semantic_entry_dispositions,
-        ) | {
-            "requested_grouping_strategy": grouping_strategy_requested,
-            "grouping_strategy_used": grouping_strategy_used,
-            "grouping_fallback_reason": grouping_fallback_reason,
-        }
-    except BaseException:
-        ctx.journal.release_claims(task.id)
-        raise
+        )["entry_dispositions"],
+    }
 
 
 async def _analyze_ingest_actions(
@@ -424,11 +470,13 @@ def _build_ingest_agent_prompt(
     workspace_id: str,
     batch_size: int,
     grouping_strategy: str,
+    max_batches_per_run: int,
 ) -> str:
     return (
         "You are the ingest-system1 maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
         f"Start with internal_get_next_ingest_batch using task_id='{task.id}', batch_size={batch_size}, and grouping_strategy='{grouping_strategy}'.\n"
+        f"Aim to drain the queue for this task in one run by repeating internal_get_next_ingest_batch after each handled batch until has_more is false, no meaningful mutation is possible, or you have already processed {max_batches_per_run} batches in this run.\n"
         f"{build_ingest_guardrails()}\n"
         "Only process journal entries claimed for this task.\n"
         "Use internal_search_memory_records, internal_read_memory_record, and internal_list_memory_records to find append targets before mutating memories.\n"
