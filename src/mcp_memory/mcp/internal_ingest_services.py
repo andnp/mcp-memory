@@ -11,6 +11,8 @@ from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _enqueue_summary_task,
+    _memory_write_quality_error,
+    _memory_write_quality_warnings,
     _merge_memory_metadata,
     _normalize_tags,
 )
@@ -106,9 +108,26 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     if record.status != "active":
         return {"status": "error", "error": "memory_not_active"}
 
+    summary = optional_string(arguments, "summary") if "summary" in arguments else record.summary
+    quality_error = _memory_write_quality_error(
+        title=record.title,
+        content=content,
+        summary=optional_string(arguments, "summary"),
+    )
+    if quality_error is not None:
+        return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
+
     tags = string_list(arguments, "tags") if "tags" in arguments else []
     workspace_ids = string_list(arguments, "workspace_ids") if "workspace_ids" in arguments else []
     metadata_override = optional_object(arguments, "metadata") or {}
+    merged_content = _append_content(record.content, content)
+    merged_tags = _normalize_tags([*record.tags, *tags])
+    warnings = _memory_write_quality_warnings(
+        summary=summary,
+        memory_type=record.type,
+        tags=merged_tags,
+        content=merged_content,
+    )
     merged_metadata = _merge_memory_metadata(
         record.metadata,
         metadata_override,
@@ -120,9 +139,9 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
     )
     updated = ctx.repository.update_memory(
         memory_id,
-        content=_append_content(record.content, content),
+        content=merged_content,
         summary=optional_string(arguments, "summary") if "summary" in arguments else None,
-        tags=_normalize_tags([*record.tags, *tags]),
+        tags=merged_tags,
         workspace_ids=sorted({*record.workspace_ids, *workspace_ids}),
         metadata=merged_metadata,
     )
@@ -148,7 +167,10 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         tool_name="internal_ingest_append_memory",
         mutation=True,
     )
-    return {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
+    payload = {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -165,14 +187,21 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         return {"status": "error", "error": "invalid_ingest_payload", "detail": str(exc)}
     workspace_ids = string_list(arguments, "workspace_ids") or ([ctx.workspace_id] if ctx.workspace_id is not None else ["workspace-unknown"])
     metadata_override = optional_object(arguments, "metadata") or {}
+    summary = optional_string(arguments, "summary")
+    memory_type = optional_string(arguments, "memory_type") or "observation"
+    tags = _normalize_tags([*string_list(arguments, "tags")])
+    quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)
+    if quality_error is not None:
+        return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
+    warnings = _memory_write_quality_warnings(summary=summary, memory_type=memory_type, tags=tags, content=content)
     record = ctx.repository.create_memory(
         title=title,
         content=content,
-        summary=optional_string(arguments, "summary"),
-        memory_type=optional_string(arguments, "memory_type") or "observation",
+        summary=summary,
+        memory_type=memory_type,
         status=optional_string(arguments, "status") or "active",
         workspace_ids=workspace_ids,
-        tags=_normalize_tags([*string_list(arguments, "tags")]),
+        tags=tags,
         metadata=build_ingest_created_metadata(
             task_id=task_id,
             entry_ids=entry_ids,
@@ -201,7 +230,10 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         tool_name="internal_ingest_create_memory",
         mutation=True,
     )
-    return {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
+    payload = {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def _normalize_ingest_entry_ids(arguments: dict[str, Any], field_name: str) -> list[int]:

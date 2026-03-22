@@ -139,6 +139,46 @@ def test_internal_ingest_create_normalizes_mixed_duplicate_entry_ids_and_records
     assert summary_task.priority == SUMMARIZE_MEMORY_PRIORITY
 
 
+def test_internal_ingest_create_rejects_routine_completion_trace_payload(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    _start_running_ingest_task(ctx, "ingest-completion-trace")
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-completion-trace",
+            "entry_ids": [31],
+            "title": "task_complete: deduplicator 123",
+            "content": "Task: deduplicator\nTask ID: 123\nTask name: deduplicator\nMerged: 0\nArchived: 0\nAbsorbed_observations: 0",
+        },
+    )
+
+    assert payload == {
+        "status": "error",
+        "error": "low_value_memory_rejected",
+        "detail": "routine completion/status traces must use task_complete instead of creating memories",
+    }
+
+
+def test_internal_ingest_create_emits_warnings_for_untagged_generic_observation(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    _start_running_ingest_task(ctx, "ingest-warning-task")
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-warning-task",
+            "entry_ids": [41],
+            "title": "Broad observation",
+            "content": "A durable but loosely structured observation.",
+            "summary": "Covers several related findings.",
+        },
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["warnings"] == ["generic_summary", "observation_missing_tags"]
+
+
 def test_internal_ingest_append_alias_preserves_side_effects_and_target_errors(db_manager) -> None:
     ctx = _build_ctx(db_manager)
     _start_running_ingest_task(ctx, "ingest-append-task")
@@ -237,6 +277,51 @@ def test_internal_ingest_append_alias_preserves_side_effects_and_target_errors(d
     ]
 
 
+def test_internal_ingest_append_rejects_routine_completion_trace_and_warns_on_oversized_memory(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    _start_running_ingest_task(ctx, "ingest-append-guardrails")
+    assert ctx.repository is not None
+
+    target = ctx.repository.create_memory(
+        title="Durable target",
+        content="Base body.",
+        workspace_ids=[ctx.workspace_id or "workspace-a"],
+        memory_type="observation",
+        tags=["durable"],
+    )
+    assert target is not None
+
+    rejected = internal_tool_services()["internal_ingest_append_memory"](
+        ctx,
+        {
+            "memory_id": target.id,
+            "content": "Task ID: dedup-123\nTask name: deduplicator\nCompletion marker\nMerged: 0\nArchived: 0",
+            "task_id": "ingest-append-guardrails",
+            "entry_ids": [51],
+            "summary": "Task ID: dedup-123",
+        },
+    )
+
+    assert rejected == {
+        "status": "error",
+        "error": "low_value_memory_rejected",
+        "detail": "routine completion/status traces must use task_complete instead of creating memories",
+    }
+
+    warned = internal_tool_services()["internal_ingest_append_memory"](
+        ctx,
+        {
+            "memory_id": target.id,
+            "content": "x" * 4_100,
+            "task_id": "ingest-append-guardrails",
+            "entry_ids": [52],
+        },
+    )
+
+    assert warned["status"] == "ok"
+    assert warned["warnings"] == ["memory_needs_split"]
+
+
 def test_internal_get_next_ingest_batch_keeps_payload_shape_and_non_mutating_tool_tracking(db_manager) -> None:
     ctx = _build_ctx(db_manager)
     _start_running_ingest_task(ctx, "ingest-batch-task")
@@ -333,6 +418,89 @@ def test_internal_task_complete_returns_completion_ack(db_manager) -> None:
         "summary": "Completed one merge and one retag.",
         "completion_recorded": True,
     }
+
+
+def test_internal_create_memory_record_rejects_routine_completion_trace_payload(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+
+    payload = internal_tool_services()["internal_create_memory_record"](
+        ctx,
+        {
+            "title": "task_complete_record: curator abc",
+            "content": "Task: memory-curator\nTask ID: abc\nTask name: memory-curator\nSummary: no-op pass\nMerged: 0\nArchived: 0",
+        },
+    )
+
+    assert payload == {
+        "status": "error",
+        "error": "low_value_memory_rejected",
+        "detail": "routine completion/status traces must use task_complete instead of creating memories",
+    }
+
+
+def test_internal_append_and_update_services_apply_guardrails(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    assert ctx.repository is not None
+
+    record = ctx.repository.create_memory(
+        title="Working memory",
+        content="Initial durable content.",
+        workspace_ids=[ctx.workspace_id or "workspace-a"],
+        memory_type="observation",
+        tags=["quality"],
+    )
+    assert record is not None
+
+    append_rejected = internal_tool_services()["internal_append_memory_content"](
+        ctx,
+        {
+            "memory_id": record.id,
+            "content": "Task ID: curator-2\nTask name: memory-curator\nCompletion marker\nArchived: 0",
+            "summary": "Task ID: curator-2",
+        },
+    )
+    assert append_rejected == {
+        "status": "error",
+        "error": "low_value_memory_rejected",
+        "detail": "routine completion/status traces must use task_complete instead of creating memories",
+    }
+
+    append_warned = internal_tool_services()["internal_append_memory_content"](
+        ctx,
+        {
+            "memory_id": record.id,
+            "content": "y" * 4_100,
+        },
+    )
+    assert append_warned["status"] == "ok"
+    assert append_warned["warnings"] == ["memory_needs_split"]
+
+    update_rejected = internal_tool_services()["internal_update_memory_record"](
+        ctx,
+        {
+            "memory_id": record.id,
+            "title": "task_complete: curator-2",
+            "content": "Task ID: curator-2\nTask name: memory-curator\nMerged: 0\nArchived: 0",
+            "summary": "Task ID: curator-2",
+        },
+    )
+    assert update_rejected == {
+        "status": "error",
+        "error": "low_value_memory_rejected",
+        "detail": "routine completion/status traces must use task_complete instead of creating memories",
+    }
+
+    update_warned = internal_tool_services()["internal_update_memory_record"](
+        ctx,
+        {
+            "memory_id": record.id,
+            "content": "z" * 4_100,
+            "summary": "Covers several related findings.",
+            "tags": [],
+        },
+    )
+    assert update_warned["status"] == "ok"
+    assert update_warned["warnings"] == ["generic_summary", "observation_missing_tags", "memory_needs_split"]
 
 
 def test_task_complete_alias_returns_completion_ack(db_manager) -> None:

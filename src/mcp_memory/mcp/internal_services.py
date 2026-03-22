@@ -15,6 +15,8 @@ from mcp_memory.mcp.internal_ingest_services import (
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _enqueue_summary_task,
+    _memory_write_quality_error,
+    _memory_write_quality_warnings,
     _merge_memory_metadata,
     _normalize_tags,
 )
@@ -170,11 +172,26 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
     if record is None:
         return {"status": "error", "error": "memory_not_found"}
 
+    quality_error = _memory_write_quality_error(
+        title=record.title,
+        content=content,
+        summary=optional_string(arguments, "summary"),
+    )
+    if quality_error is not None:
+        return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
+
     merged_content = _append_content(record.content, content)
     tags = arguments.get("tags")
     merged_tags = record.tags
     if isinstance(tags, list):
         merged_tags = _normalize_tags([*record.tags, *[str(tag) for tag in tags]])
+    merged_summary = optional_string(arguments, "summary") if "summary" in arguments else record.summary
+    warnings = _memory_write_quality_warnings(
+        summary=merged_summary,
+        memory_type=record.type,
+        tags=merged_tags,
+        content=merged_content,
+    )
     workspace_ids = string_list(arguments, "workspace_ids") if "workspace_ids" in arguments else None
     metadata_override = optional_object(arguments, "metadata") if "metadata" in arguments else None
     merged_metadata = _merge_memory_metadata(record.metadata, metadata_override)
@@ -188,7 +205,10 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
     )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
-    return {"status": "ok", "record": memory_record_payload(updated)}
+    payload = {"status": "ok", "record": memory_record_payload(updated)}
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def internal_archive_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -365,20 +385,32 @@ def internal_create_memory_record_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "repository_not_initialized"}
 
     workspace_ids = string_list(arguments, "workspace_ids") or ([ctx.workspace_id] if ctx.workspace_id is not None else [])
+    title = require_string(arguments, "title")
+    content = require_string(arguments, "content")
+    summary = optional_string(arguments, "summary")
+    memory_type = optional_string(arguments, "memory_type") or "observation"
+    tags = string_list(arguments, "tags")
+    quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)
+    if quality_error is not None:
+        return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
+    warnings = _memory_write_quality_warnings(summary=summary, memory_type=memory_type, tags=tags, content=content)
     record = ctx.repository.create_memory(
-        title=require_string(arguments, "title"),
-        content=require_string(arguments, "content"),
-        summary=optional_string(arguments, "summary"),
-        memory_type=optional_string(arguments, "memory_type") or "observation",
+        title=title,
+        content=content,
+        summary=summary,
+        memory_type=memory_type,
         status=optional_string(arguments, "status") or "active",
         workspace_ids=workspace_ids,
-        tags=string_list(arguments, "tags"),
+        tags=tags,
         metadata=optional_object(arguments, "metadata"),
     )
     assert record is not None
     if optional_bool(arguments, "enqueue_summary_task"):
         _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
-    return {"status": "ok", "record": memory_record_payload(record)}
+    payload = {"status": "ok", "record": memory_record_payload(record)}
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def internal_update_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -386,7 +418,8 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "repository_not_initialized"}
 
     memory_id = require_string(arguments, "memory_id")
-    if ctx.repository.get_memory(memory_id) is None:
+    record = ctx.repository.get_memory(memory_id)
+    if record is None:
         return {"status": "error", "error": "memory_not_found"}
 
     updatable_fields = [
@@ -402,6 +435,22 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
     if not any(field in arguments for field in updatable_fields):
         return {"status": "error", "error": "no_updates_requested"}
 
+    title = optional_string(arguments, "title") if "title" in arguments else record.title
+    content = optional_string(arguments, "content") if "content" in arguments else record.content
+    summary = optional_string(arguments, "summary") if "summary" in arguments else record.summary
+    memory_type = optional_string(arguments, "memory_type") if "memory_type" in arguments else record.type
+    tags = string_list(arguments, "tags") if "tags" in arguments else record.tags
+
+    quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)
+    if quality_error is not None:
+        return {"status": "error", "error": "low_value_memory_rejected", "detail": quality_error}
+    warnings = _memory_write_quality_warnings(
+        summary=summary,
+        memory_type=memory_type,
+        tags=tags,
+        content=content,
+    )
+
     updated = ctx.repository.update_memory(
         memory_id,
         title=optional_string(arguments, "title"),
@@ -415,7 +464,10 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
     )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
-    return {"status": "ok", "record": memory_record_payload(updated)}
+    payload = {"status": "ok", "record": memory_record_payload(updated)}
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def internal_delete_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
