@@ -299,6 +299,7 @@ def test_internal_tool_registry_keeps_ingest_names_and_aliases_stable() -> None:
     services = internal_tool_services()
     tool_names = {tool.name for tool in get_internal_maintenance_tools()}
 
+    assert "task_complete" in tool_names
     assert "internal_task_complete" in tool_names
     assert "internal_get_next_ingest_batch" in tool_names
     assert "internal_get_next_curator_batch" in tool_names
@@ -306,6 +307,7 @@ def test_internal_tool_registry_keeps_ingest_names_and_aliases_stable() -> None:
     assert "internal_ingest_create_memory" in tool_names
     assert "internal_ingest_append_memory" in services
     assert "internal_ingest_create_memory" in services
+    assert "task_complete" in services
     assert "internal_append_to_existing_memory_for_ingest" in services
     assert "internal_create_memory_record_for_ingest" in services
     assert services["internal_ingest_append_memory"] is services["internal_append_to_existing_memory_for_ingest"]
@@ -329,5 +331,26 @@ def test_internal_task_complete_returns_completion_ack(db_manager) -> None:
         "task_id": "curator-task-1",
         "task_name": "memory-curator",
         "summary": "Completed one merge and one retag.",
+        "completion_recorded": True,
+    }
+
+
+def test_task_complete_alias_returns_completion_ack(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+
+    payload = internal_tool_services()["task_complete"](
+        ctx,
+        {
+            "task_id": "curator-task-2",
+            "task_name": "memory-curator",
+            "summary": "Completed one archive.",
+        },
+    )
+
+    assert payload == {
+        "status": "ok",
+        "task_id": "curator-task-2",
+        "task_name": "memory-curator",
+        "summary": "Completed one archive.",
         "completion_recorded": True,
     }

@@ -359,6 +359,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
         return 0
     by_name_payload = cast(dict[Any, Any], value)
     read_only_tool_names = {
+        "mcp_mcp-memory-internal_task_complete",
         "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
         "mcp_mcp-memory-internal_internal_search_memory_records",
         "mcp_mcp-memory-internal_internal_read_memory_record",

@@ -45,6 +45,18 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="task_complete",
+            description="Record a lightweight completion marker for the current maintenance task without mutating memories.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "task_name": {"type": "string"},
+                    "summary": {"type": "string"},
+                },
+            },
+        ),
+        Tool(
             name="internal_task_complete",
             description="Record a lightweight completion marker for the current maintenance task without mutating memories.",
             inputSchema={

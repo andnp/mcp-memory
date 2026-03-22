@@ -66,6 +66,7 @@ def internal_tool_services() -> dict[str, ToolService]:
         "internal_search_memory_records": internal_search_memory_records_service,
         "internal_read_memory_record": internal_read_memory_record_service,
         "internal_list_memory_records": internal_list_memory_records_service,
+        "task_complete": internal_task_complete_service,
         "internal_task_complete": internal_task_complete_service,
         "internal_get_next_dedup_batch": internal_get_next_dedup_batch_service,
         "internal_get_next_curator_batch": internal_get_next_curator_batch_service,

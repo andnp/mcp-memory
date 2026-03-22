@@ -3205,7 +3205,7 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "internal_get_next_dedup_batch" in provider.prompts[0]
         assert "internal_merge_memory_into_canonical" in provider.prompts[0]
-        assert "internal_task_complete" in provider.prompts[0]
+        assert "task_complete" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Merge only when the records describe the same durable concept" in provider.prompts[0]
         assert "deduplicator_task_id='deduplicator-agentic-task'" in provider.prompts[0]
@@ -3440,7 +3440,7 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert provider.prompts
         assert "Work in high-impact maintenance mode" in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
-        assert "internal_task_complete" in provider.prompts[0]
+        assert "task_complete" in provider.prompts[0]
         assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]

@@ -381,7 +381,7 @@ async def handle_memory_curator_task(
         f"Avoid creating or growing memories past {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
         "Before stopping, check whether at least one additional worthwhile maintenance action is still visible through search/list/read; no-op is fine only when another step would be low-value or unsafe.\n"
         "Use the internal maintenance tools to inspect and mutate the store.\n"
-        f"When your pass is complete, call internal_task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
+        f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
         "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
     )
@@ -402,7 +402,7 @@ async def handle_memory_curator_task(
                 "When you create, merge, or materially rewrite a memory and you already understand it, include or refresh a concise summary in the same tool call instead of relying on a later standalone summarizer.\n"
                 "Before finishing, do one more quick search/list/read pass to confirm there is not an adjacent high-value maintenance opportunity still sitting nearby.\n"
                 "Do not claim work you did not actually execute through MCP tools.\n"
-                f"When your pass is complete, call internal_task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
+                f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
                 "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
                 f"Sampling strategy: {seed_batch.strategy_used}\n"
                 f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
@@ -425,6 +425,7 @@ async def handle_memory_curator_task(
             "internal_read_memory_record",
             "internal_list_memory_records",
             "internal_get_next_curator_batch",
+            "task_complete",
             "internal_task_complete",
             "internal_append_memory_content",
             "internal_archive_memory_record",
@@ -524,6 +525,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
     if not isinstance(value, dict):
         return 0
     read_only_tool_names = {
+        "mcp_mcp-memory-internal_task_complete",
         "mcp_mcp-memory-internal_internal_get_next_curator_batch",
         "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
         "mcp_mcp-memory-internal_internal_read_memory_record",
