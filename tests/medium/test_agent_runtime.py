@@ -1954,6 +1954,77 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_periodically_recovers_dead_subprocess_tasks(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="midrun-dead-provider-task",
+    )
+    assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-midrun-dead", updated_at=2.0)
+    repository.record_conversation(
+        request_id="req-midrun-dead",
+        attempt=1,
+        task_name=SYSTEM1_INGEST_TASK_NAME,
+        task_id=task.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=9999,
+        prompt_text="ingest pending thoughts",
+        response_text="",
+        parsed=None,
+        status="running",
+        error_text=None,
+        started_at=1.0,
+        completed_at=1.0,
+    )
+
+    calls = 0
+    original = SQLiteTaskQueue.recover_abandoned_running_tasks
+
+    def recover(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return []
+        kwargs.pop("stale_after_seconds", None)
+        kwargs.pop("now", None)
+        return original(self, stale_after_seconds=0.0, now=5.0)
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None},
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=0.0,
+    )
+
+    await worker.start()
+    try:
+        for _ in range(30):
+            if queue.get_task(task.id).status == "failed":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop(0.05)
+
+    failed = queue.get_task(task.id)
+    conversation = repository.get_conversation("req-midrun-dead")[0]
+
+    assert failed.status == "failed"
+    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert conversation.status == "error"
+    assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+
+
+@pytest.mark.asyncio
 async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -3134,6 +3205,7 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "internal_get_next_dedup_batch" in provider.prompts[0]
         assert "internal_merge_memory_into_canonical" in provider.prompts[0]
+        assert "internal_task_complete" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Merge only when the records describe the same durable concept" in provider.prompts[0]
         assert "deduplicator_task_id='deduplicator-agentic-task'" in provider.prompts[0]
@@ -3368,6 +3440,7 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert provider.prompts
         assert "Work in high-impact maintenance mode" in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
+        assert "internal_task_complete" in provider.prompts[0]
         assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]

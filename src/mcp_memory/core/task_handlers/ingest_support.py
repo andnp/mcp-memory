@@ -363,6 +363,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
         "mcp_mcp-memory-internal_internal_search_memory_records",
         "mcp_mcp-memory-internal_internal_read_memory_record",
         "mcp_mcp-memory-internal_internal_list_memory_records",
+        "mcp_mcp-memory-internal_internal_task_complete",
     }
     total = 0
     for name, payload in by_name_payload.items():

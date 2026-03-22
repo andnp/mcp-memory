@@ -56,6 +56,19 @@ def internal_list_memory_records_service(ctx: ApplicationContext, arguments: dic
     }
 
 
+def internal_task_complete_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    summary = optional_string(arguments, "summary")
+    task_id = optional_string(arguments, "task_id")
+    task_name = optional_string(arguments, "task_name")
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "task_name": task_name,
+        "summary": summary,
+        "completion_recorded": True,
+    }
+
+
 def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}

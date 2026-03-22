@@ -105,6 +105,7 @@ def build_deduplicator_agent_prompt(task: TaskRecord, seed_records: list, *, str
         "Only fall back to separate update/archive/link calls when you are creating a brand new canonical fact first and then merging other records into it.\n"
         "Prefer safe, minimal merges. Do not merge records unless the content overlap is strong and the resulting canonical memory stays coherent.\n"
         "Do not claim work you did not actually execute through MCP tools.\n"
+        f"When your pass is complete, call internal_task_complete with task_id='{task.id}', task_name='deduplicator', and a short summary before your final JSON response.\n"
         'When finished, output final JSON only in the form {"summary": "...", "merged": N, "archived": N, "absorbed_observations": N}.\n\n'
         f"Sampling strategy: {strategy_used}\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
@@ -249,6 +250,7 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
         "mcp_mcp-memory-internal_internal_read_memory_record",
         "mcp_mcp-memory-internal_internal_search_memory_records",
         "mcp_mcp-memory-internal_internal_list_memory_records",
+        "mcp_mcp-memory-internal_internal_task_complete",
     }
     total = 0
     for name, payload in value.items():
