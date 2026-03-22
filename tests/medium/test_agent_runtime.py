@@ -1400,6 +1400,7 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     from mcp_memory.context import ApplicationContext
 
     monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 200.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     task = queue.enqueue(
         PROJECT_MANAGER_TASK_NAME,
@@ -1424,6 +1425,7 @@ def test_bootstrap_background_tasks_uses_one_hour_curator_cadence(monkeypatch, d
     from mcp_memory.context import ApplicationContext
 
     monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 20000.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     task = queue.enqueue(
         CURATOR_TASK_NAME,
@@ -1449,6 +1451,7 @@ def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatc
     from mcp_memory.context import ApplicationContext
 
     monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 1500.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     completed = queue.enqueue(
         CURATOR_TASK_NAME,
@@ -1479,6 +1482,23 @@ def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatc
     assert refreshed.status == "pending"
     assert refreshed.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
     assert refreshed.available_at == pytest.approx(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME])
+
+
+def test_bootstrap_background_tasks_applies_jitter_to_new_recurring_tasks(monkeypatch, db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    from mcp_memory.context import ApplicationContext
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 200.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 30.0)
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    bootstrap_background_tasks(ctx)
+
+    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
+    assert scheduled is not None
+    assert scheduled.available_at == pytest.approx(230.0)
+    assert scheduled.data["trigger"] == "recurring_schedule"
+    assert scheduled.data["jitter_seconds"] == pytest.approx(30.0)
 
 
 def test_bootstrap_background_tasks_preserves_idle_paused_recurring_maintenance(monkeypatch, db_manager) -> None:
@@ -1513,6 +1533,7 @@ def test_bootstrap_background_tasks_preserves_idle_paused_recurring_maintenance(
 
     monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 5000.0)
     monkeypatch.setattr("mcp_memory.core.maintenance_idle.time.time", lambda: 5000.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue, journal=journal)
 
@@ -1582,10 +1603,17 @@ def test_project_manager_only_stales_old_active_plans_in_task_workspace(
             ),
         )
 
+        current_workspace_plan_record = runtime.repository.get_memory(current_workspace_plan.id)
+        other_workspace_plan_record = runtime.repository.get_memory(other_workspace_plan.id)
+        fresh_workspace_plan_record = runtime.repository.get_memory(fresh_workspace_plan.id)
+
         assert result == {"updated": 1}
-        assert runtime.repository.get_memory(current_workspace_plan.id).status == "stale"
-        assert runtime.repository.get_memory(other_workspace_plan.id).status == "active"
-        assert runtime.repository.get_memory(fresh_workspace_plan.id).status == "active"
+        assert current_workspace_plan_record is not None
+        assert other_workspace_plan_record is not None
+        assert fresh_workspace_plan_record is not None
+        assert current_workspace_plan_record.status == "stale"
+        assert other_workspace_plan_record.status == "active"
+        assert fresh_workspace_plan_record.status == "active"
     finally:
         runtime.close()
 
@@ -1663,9 +1691,12 @@ def test_fact_checker_restores_degraded_links_when_file_reappears(
             ),
         )
 
+        refreshed_memory = runtime.repository.get_memory(memory.id)
+
         assert first == {"degraded": 1, "restored": 0}
         assert second == {"degraded": 0, "restored": 1}
-        assert runtime.repository.get_memory(memory.id).status == "active"
+        assert refreshed_memory is not None
+        assert refreshed_memory.status == "active"
     finally:
         runtime.close()
 

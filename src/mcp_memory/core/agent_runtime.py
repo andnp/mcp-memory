@@ -10,6 +10,8 @@ from mcp_memory.core.maintenance_idle import should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
+from mcp_memory.core.recurring_jitter import read_recurring_jitter_seconds
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
@@ -177,10 +179,11 @@ def _ensure_recurring_task_scheduled(
     workspace_id: str | None,
     interval_seconds: float,
 ) -> None:
+    current_time = time.time()
     summary = task_queue.summarize_task_runs([task_name], workspace_id=workspace_id)[0]
-    expected_available_at = None
+    base_available_at = current_time
     if summary.last_completed_at is not None:
-        expected_available_at = max(summary.last_completed_at + interval_seconds, time.time())
+        base_available_at = max(summary.last_completed_at + interval_seconds, current_time)
 
     existing = task_queue.find_open_task(task_name, workspace_id)
     if existing is not None:
@@ -189,6 +192,12 @@ def _ensure_recurring_task_scheduled(
             next_data = dict(existing.data)
             next_available_at = None
             needs_update = False
+            jitter_seconds = read_recurring_jitter_seconds(existing.data)
+            if jitter_seconds is None:
+                jitter_seconds = compute_recurring_jitter_seconds(interval_seconds)
+                next_data["jitter_seconds"] = jitter_seconds
+                needs_update = True
+            expected_available_at = base_available_at + jitter_seconds
             if existing.priority != priority:
                 needs_update = True
             if _is_recurring_task(existing.data):
@@ -198,7 +207,7 @@ def _ensure_recurring_task_scheduled(
                 if next_data.get("interval_seconds") != interval_seconds:
                     next_data["interval_seconds"] = interval_seconds
                     needs_update = True
-                if expected_available_at is not None and abs(existing.available_at - expected_available_at) > 1e-6:
+                if abs(existing.available_at - expected_available_at) > 1e-6:
                     next_available_at = expected_available_at
                     needs_update = True
             if needs_update:
@@ -213,6 +222,9 @@ def _ensure_recurring_task_scheduled(
     if journal is not None and should_preserve_idle_pause(summary, journal):
         return
 
+    jitter_seconds = compute_recurring_jitter_seconds(interval_seconds)
+    expected_available_at = base_available_at + jitter_seconds
+
     task_queue.enqueue_unique(
         task_name=task_name,
         workspace_id=workspace_id,
@@ -222,6 +234,7 @@ def _ensure_recurring_task_scheduled(
             "workspace_id": workspace_id,
             "trigger": "recurring_schedule",
             "interval_seconds": interval_seconds,
+            "jitter_seconds": jitter_seconds,
         },
     )
 

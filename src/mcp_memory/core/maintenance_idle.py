@@ -4,21 +4,13 @@ import time
 from typing import Any
 
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.maintenance_schedule import MAINTENANCE_TASK_NAMES, RECURRING_TASK_INTERVAL_SECONDS
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
 
 
 AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS = 3600.0
-AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES = (
-    "project-manager",
-    "fact-checker",
-    "graph-linker",
-    "conflict-detector",
-    "defragmenter",
-    "deduplicator",
-    "taxonomist",
-    "sweeper",
-    "memory-curator",
-)
+AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES = MAINTENANCE_TASK_NAMES
 AUTONOMOUS_MAINTENANCE_TRIGGERS = {"recurring_schedule", "recurring_follow_up"}
 
 
@@ -122,37 +114,44 @@ def resume_paused_recurring_maintenance(
         existing = task_queue.find_open_task(task_name, None)
         if existing is not None:
             if existing.status == "pending" and _is_autonomous_recurring_data(existing.data):
+                interval_seconds = _interval_seconds_from_result(task_name, summary.last_result)
+                jitter_seconds = compute_recurring_jitter_seconds(interval_seconds)
                 resumed_tasks.append(
                     task_queue.update_pending_task(
                         existing.id,
-                        data=_build_resumed_task_data(task_name, summary.last_result),
-                        available_at=current_time,
+                        data=_build_resumed_task_data(task_name, summary.last_result, jitter_seconds=jitter_seconds),
+                        available_at=current_time + jitter_seconds,
                         priority=_task_priority_from_result(summary.last_result, existing.priority),
                     )
                 )
             continue
 
+        interval_seconds = _interval_seconds_from_result(task_name, summary.last_result)
+        jitter_seconds = compute_recurring_jitter_seconds(interval_seconds)
         resumed_task, _ = task_queue.enqueue_unique(
             task_name,
-            _build_resumed_task_data(task_name, summary.last_result),
+            _build_resumed_task_data(task_name, summary.last_result, jitter_seconds=jitter_seconds),
             None,
             _task_priority_from_result(summary.last_result),
             3,
-            current_time,
+            current_time + jitter_seconds,
         )
         resumed_tasks.append(resumed_task)
 
     return resumed_tasks
 
 
-def _build_resumed_task_data(task_name: str, last_result: dict[str, Any]) -> dict[str, Any]:
+def _build_resumed_task_data(task_name: str, last_result: dict[str, Any], *, jitter_seconds: float) -> dict[str, Any]:
     data: dict[str, Any] = {
         "workspace_id": None,
         "trigger": "recurring_resume",
+        "jitter_seconds": jitter_seconds,
     }
     raw_interval_seconds = last_result.get("interval_seconds")
     if isinstance(raw_interval_seconds, (int, float)) and not isinstance(raw_interval_seconds, bool):
         data["interval_seconds"] = float(raw_interval_seconds)
+    elif task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES:
+        data["interval_seconds"] = _interval_seconds_from_result(task_name, last_result)
     return data
 
 
@@ -177,3 +176,10 @@ def _task_priority_from_result(last_result: dict[str, Any], default: int = 100) 
     if isinstance(raw_priority, float):
         return int(raw_priority)
     return default
+
+
+def _interval_seconds_from_result(task_name: str, last_result: dict[str, Any]) -> float:
+    raw_interval_seconds = last_result.get("interval_seconds")
+    if isinstance(raw_interval_seconds, (int, float)) and not isinstance(raw_interval_seconds, bool):
+        return float(raw_interval_seconds)
+    return RECURRING_TASK_INTERVAL_SECONDS[task_name]

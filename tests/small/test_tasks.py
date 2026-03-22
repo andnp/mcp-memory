@@ -9,7 +9,10 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.journal_operations import RecordThoughtOperation
-from mcp_memory.core.maintenance_idle import AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS
+from mcp_memory.core.maintenance_idle import (
+    AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
+    resume_paused_recurring_maintenance,
+)
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
     CURATOR_TASK_NAME,
@@ -651,6 +654,7 @@ async def test_runtime_task_worker_does_not_pause_manual_maintenance_runs_when_i
 def test_record_thought_operation_resumes_paused_recurring_maintenance(db_manager, monkeypatch) -> None:
     queue = SQLiteTaskQueue(db_manager)
     journal = System1Journal(db_manager)
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     paused = queue.enqueue(
         CURATOR_TASK_NAME,
@@ -690,6 +694,70 @@ def test_record_thought_operation_resumes_paused_recurring_maintenance(db_manage
             "workspace_id": None,
         }
     ]
+
+
+def test_resume_paused_recurring_maintenance_applies_jitter(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    paused = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME],
+        },
+        available_at=0.0,
+        task_id="paused-curator-jitter",
+    )
+    assert queue.claim_next(now=10.0) is not None
+    queue.complete(
+        paused.id,
+        completed_at=20.0,
+        run_result={
+            "paused_for_idle": True,
+            "idle_seconds": AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 5.0,
+            "last_thought_at": 5.0,
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME],
+        },
+    )
+
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.compute_recurring_jitter_seconds", lambda interval_seconds: 12.0)
+
+    resumed = resume_paused_recurring_maintenance(queue, now=200.0)[0]
+
+    assert resumed.available_at == pytest.approx(212.0)
+    assert resumed.data["trigger"] == "recurring_resume"
+    assert resumed.data["jitter_seconds"] == pytest.approx(12.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_recurring_follow_up_applies_jitter(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    monkeypatch.setattr("mcp_memory.core.task_worker.compute_recurring_jitter_seconds", lambda interval_seconds: 18.0)
+
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None, "trigger": "recurring_schedule", "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]},
+        available_at=0.0,
+        task_id="curator-follow-up-jitter",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+
+    worker = RuntimeTaskWorker(ctx, handlers={CURATOR_TASK_NAME: lambda ctx, task: None}, poll_interval_seconds=0.01)
+    completed_task = queue.complete(task.id, completed_at=140.0, run_result={"mutations": 1})
+
+    await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+
+    follow_up = queue.find_open_task(CURATOR_TASK_NAME, None)
+    assert follow_up is not None
+    assert follow_up.id != task.id
+    assert follow_up.available_at == pytest.approx(140.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] + 18.0)
+    assert follow_up.data["trigger"] == "recurring_follow_up"
+    assert follow_up.data["jitter_seconds"] == pytest.approx(18.0)
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from mcp_memory.core.maintenance_idle import (
     build_idle_pause_result,
     should_pause_autonomous_recurring_maintenance,
 )
+from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
 from mcp_memory.core.tasks import TaskRecord
@@ -213,7 +214,8 @@ class RuntimeTaskWorker:
         if interval_seconds is None or terminal_task.status not in {"completed", "failed"}:
             return
 
-        next_available_at = (terminal_task.completed_at or terminal_task.updated_at) + interval_seconds
+        jitter_seconds = compute_recurring_jitter_seconds(interval_seconds)
+        next_available_at = (terminal_task.completed_at or terminal_task.updated_at) + interval_seconds + jitter_seconds
         await asyncio.to_thread(
             task_queue.enqueue_unique,
             task.task_name,
@@ -221,6 +223,7 @@ class RuntimeTaskWorker:
                 "workspace_id": None,
                 "trigger": "recurring_follow_up",
                 "interval_seconds": interval_seconds,
+                "jitter_seconds": jitter_seconds,
             },
             None,
             task_priority(task.task_name),
