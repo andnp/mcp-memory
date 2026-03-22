@@ -126,9 +126,9 @@ async def handle_graph_linker_task(
                 proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
                 created = _apply_graph_link_proposals(ctx, proposed_pairs)
             except Exception:
-                _release_taxonomist_work_item(ctx, review_item.id)
+                _release_work_item(ctx, review_item.id)
                 raise
-            _complete_taxonomist_work_item(ctx, review_item.id)
+            _complete_work_item(ctx, review_item.id)
             return {
                 "created": created,
                 "claimed_work_item_count": 1,
@@ -224,9 +224,9 @@ async def handle_conflict_detector_task(
                 proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
                 created = _apply_conflict_proposals(ctx, proposed_pairs)
             except Exception:
-                _release_taxonomist_work_item(ctx, review_item.id)
+                _release_work_item(ctx, review_item.id)
                 raise
-            _complete_taxonomist_work_item(ctx, review_item.id)
+            _complete_work_item(ctx, review_item.id)
             return {
                 "created": created,
                 "claimed_work_item_count": 1,
@@ -392,7 +392,7 @@ async def handle_deduplicator_task(
             seed_records = _dedup_review_seed_records(ctx, review_item.payload)
             facts = [record for record in seed_records if record.type == "fact"]
             if not facts:
-                _complete_taxonomist_work_item(ctx, review_item.id)
+                _complete_work_item(ctx, review_item.id)
                 return {
                     "summary": None,
                     "merged": 0,
@@ -413,9 +413,9 @@ async def handle_deduplicator_task(
                         )
                     )
                 except Exception:
-                    _release_taxonomist_work_item(ctx, review_item.id)
+                    _release_work_item(ctx, review_item.id)
                     raise
-                _complete_taxonomist_work_item(ctx, review_item.id)
+                _complete_work_item(ctx, review_item.id)
                 normalized = _normalize_deduplicator_agentic_result(agentic_result, seed_records)
                 normalized["claimed_work_item_count"] = 1
                 return sampling_payload(
@@ -654,13 +654,13 @@ async def handle_tag_normalizer_task(
     for work_item in claimed_work_items:
         memory_id = _taxonomist_work_memory_id(work_item.payload)
         if memory_id is None:
-            _complete_taxonomist_work_item(ctx, work_item.id)
+            _complete_work_item(ctx, work_item.id)
             finalized_work_item_ids.add(work_item.id)
             continue
 
         record = ctx.repository.get_memory(memory_id)
         if record is None:
-            _complete_taxonomist_work_item(ctx, work_item.id)
+            _complete_work_item(ctx, work_item.id)
             finalized_work_item_ids.add(work_item.id)
             continue
 
@@ -681,7 +681,7 @@ async def handle_tag_normalizer_task(
             if created:
                 seeded_enrichment_count += 1
 
-        _complete_taxonomist_work_item(ctx, work_item.id)
+        _complete_work_item(ctx, work_item.id)
         finalized_work_item_ids.add(work_item.id)
 
     for record in candidates:
@@ -699,7 +699,7 @@ async def handle_tag_normalizer_task(
     for work_item in claimed_work_items:
         if work_item.id in finalized_work_item_ids:
             continue
-        _release_taxonomist_work_item(ctx, work_item.id)
+        _release_work_item(ctx, work_item.id)
 
     return sampling_payload(
         sampled_batch,
@@ -744,7 +744,7 @@ async def _run_taxonomist_agentic_pass(
                 retry_delay_seconds=reason.retry_delay_seconds,
             )
             for work_item in running_items:
-                _defer_taxonomist_work_item(
+                _defer_work_item(
                     ctx,
                     work_item.id,
                     error=reason.reason_code,
@@ -759,11 +759,11 @@ async def _run_taxonomist_agentic_pass(
                 "summary": None,
             }
         for work_item in running_items:
-            _release_taxonomist_work_item(ctx, work_item.id)
+            _release_work_item(ctx, work_item.id)
         raise
 
     for work_item in _list_taxonomist_running_work_items(ctx, task_id=task.id, workspace_id=workspace_id):
-        _release_taxonomist_work_item(ctx, work_item.id)
+        _release_work_item(ctx, work_item.id)
     normalized = _normalize_taxonomist_agentic_result(agentic_result)
     return {
         "updated": _count_taxonomist_updated_records(ctx, candidate_memory_ids),
@@ -819,7 +819,7 @@ async def _run_taxonomist_json_pass(
                         reason_category=reason.reason_category,
                         retry_delay_seconds=reason.retry_delay_seconds,
                     )
-                    _defer_taxonomist_work_item(
+                    _defer_work_item(
                         ctx,
                         work_item.id,
                         error=reason.reason_code,
@@ -831,19 +831,19 @@ async def _run_taxonomist_json_pass(
                 raise
         if normalized_tags == record.tags:
             if work_item is not None:
-                _complete_taxonomist_work_item(ctx, work_item.id)
+                _complete_work_item(ctx, work_item.id)
                 finalized_work_item_ids.add(work_item.id)
             continue
         refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
         if refreshed is not None:
             updated += 1
         if work_item is not None:
-            _complete_taxonomist_work_item(ctx, work_item.id)
+            _complete_work_item(ctx, work_item.id)
             finalized_work_item_ids.add(work_item.id)
     for work_item in claimed_work_items:
         if work_item.id in finalized_work_item_ids:
             continue
-        _release_taxonomist_work_item(ctx, work_item.id)
+        _release_work_item(ctx, work_item.id)
     return {
         "updated": updated,
         "provider_calls_used": provider_calls_used,
@@ -870,7 +870,7 @@ async def handle_memory_curator_task(
         if seed_records:
             seed_batch = _curator_review_sampling_batch(claimed_review_item.payload, seed_records)
         else:
-            _complete_taxonomist_work_item(ctx, claimed_review_item.id)
+            _complete_work_item(ctx, claimed_review_item.id)
             claimed_review_item = None
             seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
             seed_records = seed_batch.records
@@ -943,10 +943,10 @@ async def handle_memory_curator_task(
             )
         except Exception:
             if claimed_review_item is not None:
-                _release_taxonomist_work_item(ctx, claimed_review_item.id)
+                _release_work_item(ctx, claimed_review_item.id)
             raise
         if claimed_review_item is not None:
-            _complete_taxonomist_work_item(ctx, claimed_review_item.id)
+            _complete_work_item(ctx, claimed_review_item.id)
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
@@ -984,10 +984,10 @@ async def handle_memory_curator_task(
         )
     except Exception:
         if claimed_review_item is not None:
-            _release_taxonomist_work_item(ctx, claimed_review_item.id)
+            _release_work_item(ctx, claimed_review_item.id)
         raise
     if claimed_review_item is not None:
-        _complete_taxonomist_work_item(ctx, claimed_review_item.id)
+        _complete_work_item(ctx, claimed_review_item.id)
     summary = _curator_support.normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
     return sampling_payload(
         seed_batch,
@@ -1652,14 +1652,14 @@ def _normalize_taxonomist_agentic_result(agentic_result: Any) -> dict[str, Any]:
     return {"summary": summary}
 
 
-def _complete_taxonomist_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
+def _complete_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None:
         return
     work_items.complete_item(work_item_id)
 
 
-def _defer_taxonomist_work_item(
+def _defer_work_item(
     ctx: ApplicationContext,
     work_item_id: str,
     *,
@@ -1676,7 +1676,7 @@ def _defer_taxonomist_work_item(
     )
 
 
-def _release_taxonomist_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
+def _release_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None:
         return
