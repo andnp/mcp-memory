@@ -113,6 +113,97 @@ def internal_get_work_batch_service(ctx: ApplicationContext, arguments: dict) ->
     }
 
 
+def internal_heartbeat_work_item_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    task_id = require_string(arguments, "task_id")
+    work_item_id = require_string(arguments, "work_item_id")
+    lease_ttl_seconds = float(optional_positive_int(arguments, "lease_ttl_seconds", 1800))
+    record = work_items.heartbeat_item(
+        work_item_id,
+        lease_owner=task_id,
+        lease_ttl_seconds=lease_ttl_seconds,
+    )
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "record": {
+            "id": record.id,
+            "family_key": record.family_key,
+            "execution_lane": record.execution_lane,
+            "workspace_id": record.workspace_id,
+            "payload": record.payload,
+            "status": record.status,
+            "priority": record.priority,
+            "attempt_count": record.attempt_count,
+            "lease_owner": record.lease_owner,
+            "lease_expires_at": record.lease_expires_at,
+        },
+    }
+
+
+def internal_complete_work_item_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    work_item_id = require_string(arguments, "work_item_id")
+    record = work_items.complete_item(work_item_id)
+    return {
+        "status": "ok",
+        "record": {
+            "id": record.id,
+            "status": record.status,
+            "completed_at": record.completed_at,
+            "last_error": record.last_error,
+        },
+    }
+
+
+def internal_defer_work_item_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    work_item_id = require_string(arguments, "work_item_id")
+    error = require_string(arguments, "error")
+    retry_delay_seconds = float(optional_positive_int(arguments, "retry_delay_seconds", 0))
+    record = work_items.defer_item(
+        work_item_id,
+        error=error,
+        retry_delay_seconds=retry_delay_seconds,
+    )
+    return {
+        "status": "ok",
+        "record": {
+            "id": record.id,
+            "status": record.status,
+            "available_at": record.available_at,
+            "last_error": record.last_error,
+        },
+    }
+
+
+def internal_release_work_item_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    work_item_id = require_string(arguments, "work_item_id")
+    record = work_items.release_item(work_item_id)
+    return {
+        "status": "ok",
+        "record": {
+            "id": record.id,
+            "status": record.status,
+            "lease_owner": record.lease_owner,
+            "lease_expires_at": record.lease_expires_at,
+        },
+    }
+
+
 def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
@@ -477,10 +568,13 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
     if not any(field in arguments for field in updatable_fields):
         return {"status": "error", "error": "no_updates_requested"}
 
-    title = optional_string(arguments, "title") if "title" in arguments else record.title
-    content = optional_string(arguments, "content") if "content" in arguments else record.content
+    requested_title = optional_string(arguments, "title") if "title" in arguments else None
+    requested_content = optional_string(arguments, "content") if "content" in arguments else None
+    requested_memory_type = optional_string(arguments, "memory_type") if "memory_type" in arguments else None
+    title = requested_title if requested_title is not None else record.title
+    content = requested_content if requested_content is not None else record.content
     summary = optional_string(arguments, "summary") if "summary" in arguments else record.summary
-    memory_type = optional_string(arguments, "memory_type") if "memory_type" in arguments else record.type
+    memory_type = requested_memory_type if requested_memory_type is not None else record.type
     tags = string_list(arguments, "tags") if "tags" in arguments else record.tags
 
     quality_error = _memory_write_quality_error(title=title, content=content, summary=summary)

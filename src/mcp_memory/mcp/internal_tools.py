@@ -132,6 +132,54 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_heartbeat_work_item",
+            description="Extend the lease for one claimed durable work item owned by the current task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "work_item_id": {"type": "string"},
+                    "lease_ttl_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["task_id", "work_item_id"],
+            },
+        ),
+        Tool(
+            name="internal_complete_work_item",
+            description="Mark one claimed durable work item as completed and clear its lease.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "work_item_id": {"type": "string"},
+                },
+                "required": ["work_item_id"],
+            },
+        ),
+        Tool(
+            name="internal_defer_work_item",
+            description="Defer one claimed durable work item with an error/reason and retry delay.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "work_item_id": {"type": "string"},
+                    "error": {"type": "string"},
+                    "retry_delay_seconds": {"type": "integer", "minimum": 0},
+                },
+                "required": ["work_item_id", "error"],
+            },
+        ),
+        Tool(
+            name="internal_release_work_item",
+            description="Release one claimed durable work item back to pending without marking it complete.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "work_item_id": {"type": "string"},
+                },
+                "required": ["work_item_id"],
+            },
+        ),
+        Tool(
             name="internal_ingest_append_memory",
             description="Append ingest content into an existing active memory while preserving ingest lineage metadata, workspace_ids, and system1-appended tagging.",
             inputSchema={

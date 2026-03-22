@@ -128,10 +128,9 @@ class SQLiteWorkItemRepository:
             clauses = [
                 "family_key = ?",
                 "execution_lane = ?",
-                "status IN ('pending', 'deferred')",
-                "available_at <= ?",
+                "((status IN ('pending', 'deferred') AND available_at <= ?) OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
             ]
-            params: list[object] = [family_key, execution_lane, current_time]
+            params: list[object] = [family_key, execution_lane, current_time, current_time]
             if workspace_id is None:
                 clauses.append("workspace_id IS NULL")
             elif workspace_id != "*":
@@ -178,6 +177,32 @@ class SQLiteWorkItemRepository:
             conn.rollback()
             raise
         return [self._row_to_record(row) for row in claimed_rows]
+
+    def heartbeat_item(
+        self,
+        item_id: str,
+        *,
+        lease_owner: str,
+        lease_ttl_seconds: float = DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
+        heartbeated_at: float | None = None,
+    ) -> WorkItemRecord:
+        now = time.time() if heartbeated_at is None else heartbeated_at
+        lease_expires_at = now + lease_ttl_seconds
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            """
+            UPDATE work_items
+            SET updated_at = ?,
+                lease_expires_at = ?
+            WHERE id = ? AND status = ? AND lease_owner = ?
+            """,
+            (now, lease_expires_at, item_id, WORK_ITEM_STATUS_RUNNING, lease_owner),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise ValueError(f"Work item {item_id} is not running for lease owner {lease_owner}")
+        conn.commit()
+        return self.get_item(item_id)
 
     def complete_item(
         self,
