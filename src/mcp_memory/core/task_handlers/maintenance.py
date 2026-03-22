@@ -118,22 +118,20 @@ async def handle_graph_linker_task(
         return {"created": 0}
 
     if provider is not None:
-        claimed_review_items = _claim_graph_link_review_work_batch(ctx, task=task, limit=1)
-        if claimed_review_items:
-            review_item = claimed_review_items[0]
-            try:
-                candidates = _graph_link_review_candidates(ctx, review_item.payload)
-                proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
-                created = _apply_graph_link_proposals(ctx, proposed_pairs)
-            except Exception:
-                _release_work_item(ctx, review_item.id)
-                raise
-            _complete_work_item(ctx, review_item.id)
-            return {
-                "created": created,
-                "claimed_work_item_count": 1,
-                "execution_mode": "agentic_review",
-            }
+        claimed_review_result = await _run_claimed_review_work_item(
+            ctx,
+            task=task,
+            family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
+            load_candidates=_graph_link_review_candidates,
+            propose_pairs=lambda review_candidates: _relationship_proposals.propose_graph_links(
+                ctx,
+                review_candidates,
+                provider,
+            ),
+            apply_pairs=lambda proposed_pairs: _apply_graph_link_proposals(ctx, proposed_pairs),
+        )
+        if claimed_review_result is not None:
+            return claimed_review_result
 
     all_candidates = ctx.repository.list_memories(
         workspace_id=_resolve_workspace_id(ctx, task),
@@ -216,22 +214,20 @@ async def handle_conflict_detector_task(
         return {"created": 0}
 
     if provider is not None:
-        claimed_review_items = _claim_conflict_review_work_batch(ctx, task=task, limit=1)
-        if claimed_review_items:
-            review_item = claimed_review_items[0]
-            try:
-                candidates = _conflict_review_candidates(ctx, review_item.payload)
-                proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
-                created = _apply_conflict_proposals(ctx, proposed_pairs)
-            except Exception:
-                _release_work_item(ctx, review_item.id)
-                raise
-            _complete_work_item(ctx, review_item.id)
-            return {
-                "created": created,
-                "claimed_work_item_count": 1,
-                "execution_mode": "agentic_review",
-            }
+        claimed_review_result = await _run_claimed_review_work_item(
+            ctx,
+            task=task,
+            family_key=WORK_FAMILY_CONFLICT_REVIEW,
+            load_candidates=_conflict_review_candidates,
+            propose_pairs=lambda review_candidates: _relationship_proposals.propose_conflicts(
+                ctx,
+                review_candidates,
+                provider,
+            ),
+            apply_pairs=lambda proposed_pairs: _apply_conflict_proposals(ctx, proposed_pairs),
+        )
+        if claimed_review_result is not None:
+            return claimed_review_result
 
     all_candidates = [
         record
@@ -1263,6 +1259,52 @@ def _work_item_result_metadata(
     if created_work_item is not None:
         metadata["created_work_item_id"] = created_work_item.id
     return metadata
+
+
+async def _run_claimed_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    family_key: str,
+    load_candidates: Callable[[ApplicationContext, dict[str, Any]], list[Any]],
+    propose_pairs: Callable[[list[Any]], Awaitable[Any]],
+    apply_pairs: Callable[[Any], int],
+) -> dict[str, Any] | None:
+    claimed_review_items = _claim_work_batch(
+        ctx,
+        task=task,
+        family_key=family_key,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        limit=1,
+    )
+    if not claimed_review_items:
+        return None
+
+    review_item = claimed_review_items[0]
+    try:
+        candidates = load_candidates(ctx, review_item.payload)
+        proposed_pairs = await propose_pairs(candidates)
+        created = apply_pairs(proposed_pairs)
+    except Exception:
+        _release_work_item(ctx, review_item.id)
+        raise
+
+    _complete_work_item(ctx, review_item.id)
+    result = {
+        "created": created,
+        "claimed_work_item_count": 1,
+        "execution_mode": "agentic_review",
+    }
+    result.update(
+        _work_item_result_metadata(
+            family_key=family_key,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            seed_source="claimed_review_work_item",
+            seed_records=candidates,
+            claimed_work_item=review_item,
+        )
+    )
+    return result
 
 
 def _claim_dedup_review_work_batch(

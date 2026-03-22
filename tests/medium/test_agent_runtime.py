@@ -2432,6 +2432,11 @@ async def test_graph_linker_consumes_seeded_review_work_items(monkeypatch, tmp_p
         assert result["created"] == 1
         assert result["claimed_work_item_count"] == 1
         assert result["execution_mode"] == "agentic_review"
+        assert result["work_item_family"] == "graph_link_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "claimed_review_work_item"
+        assert result["seed_record_count"] == 13
+        assert result["claimed_work_item_id"] == review_items[0].id
         assert provider.call_count == 1
         assert len(links) == 1
         assert links[0].target_id == records[1].id
@@ -2755,6 +2760,11 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
         assert result["created"] == 2
         assert result["claimed_work_item_count"] == 1
         assert result["execution_mode"] == "agentic_review"
+        assert result["work_item_family"] == "conflict_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "claimed_review_work_item"
+        assert result["seed_record_count"] == 16
+        assert result["claimed_work_item_id"] == review_items[0].id
         assert provider.call_count == 1
         assert any(link.target_id == records[1].id and link.link_type == "CONTRADICTS" for link in outgoing)
         assert any(link.source_id == records[0].id and link.link_type == "CONTRADICTS" for link in incoming)
