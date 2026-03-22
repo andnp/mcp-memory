@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -236,6 +236,26 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS work_items (
+            id TEXT PRIMARY KEY,
+            family_key TEXT NOT NULL,
+            execution_lane TEXT NOT NULL,
+            workspace_id TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            priority INTEGER NOT NULL DEFAULT 100,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            available_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            claimed_at REAL,
+            completed_at REAL,
+            lease_owner TEXT,
+            lease_expires_at REAL,
+            idempotency_key TEXT UNIQUE,
+            last_error TEXT
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
             title,
@@ -376,6 +396,29 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_items (
+            id TEXT PRIMARY KEY,
+            family_key TEXT NOT NULL,
+            execution_lane TEXT NOT NULL,
+            workspace_id TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            priority INTEGER NOT NULL DEFAULT 100,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            available_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            claimed_at REAL,
+            completed_at REAL,
+            lease_owner TEXT,
+            lease_expires_at REAL,
+            idempotency_key TEXT UNIQUE,
+            last_error TEXT
+        )
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -449,6 +492,12 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON provider_policy_events(event_kind, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_provider_policy_events_provider_created_at
             ON provider_policy_events(provider_key, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_work_items_ready
+            ON work_items(status, family_key, execution_lane, available_at, priority, created_at);
+        CREATE INDEX IF NOT EXISTS idx_work_items_workspace_ready
+            ON work_items(workspace_id, status, family_key, execution_lane, available_at, priority, created_at);
+        CREATE INDEX IF NOT EXISTS idx_work_items_lease_owner
+            ON work_items(lease_owner, status, lease_expires_at);
         """
     )
     conn.execute(

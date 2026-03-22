@@ -42,6 +42,7 @@ from mcp_memory.core.task_handlers.agentic_guardrails import (
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_TAGGING
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -337,6 +338,18 @@ async def handle_taxonomist_task(
     provider_calls_used = 0
     provider_deferred_reason_code: str | None = None
     provider_deferred_retry_delay_seconds: float | None = None
+    claimed_work_items = _claim_taxonomist_work_batch(
+        ctx,
+        task=task,
+        candidates=candidates,
+        limit=provider_call_budget,
+    )
+    claimed_by_memory_id = {
+        _taxonomist_work_memory_id(record.payload): record
+        for record in claimed_work_items
+        if _taxonomist_work_memory_id(record.payload) is not None
+    }
+    finalized_work_item_ids: set[str] = set()
     for record in candidates:
         normalized_tags = _normalize_tag_values(record.tags)
         if normalized_tags != record.tags:
@@ -344,7 +357,8 @@ async def handle_taxonomist_task(
             if refreshed is not None:
                 updated += 1
             continue
-        if provider is not None and not record.tags and provider_calls_used < provider_call_budget:
+        work_item = claimed_by_memory_id.get(record.id)
+        if provider is not None and work_item is not None and provider_calls_used < provider_call_budget:
             try:
                 normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
                 provider_calls_used += 1
@@ -361,14 +375,31 @@ async def handle_taxonomist_task(
                         reason_category=reason.reason_category,
                         retry_delay_seconds=reason.retry_delay_seconds,
                     )
+                    _defer_taxonomist_work_item(
+                        ctx,
+                        work_item.id,
+                        error=reason.reason_code,
+                        retry_delay_seconds=reason.retry_delay_seconds,
+                    )
+                    finalized_work_item_ids.add(work_item.id)
                     provider = None
                     continue
                 raise
         if normalized_tags == record.tags:
+            if work_item is not None:
+                _complete_taxonomist_work_item(ctx, work_item.id)
+                finalized_work_item_ids.add(work_item.id)
             continue
         refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
         if refreshed is not None:
             updated += 1
+        if work_item is not None:
+            _complete_taxonomist_work_item(ctx, work_item.id)
+            finalized_work_item_ids.add(work_item.id)
+    for work_item in claimed_work_items:
+        if work_item.id in finalized_work_item_ids:
+            continue
+        _release_taxonomist_work_item(ctx, work_item.id)
     return sampling_payload(
         sampled_batch,
         sampled_records=candidates,
@@ -377,6 +408,7 @@ async def handle_taxonomist_task(
         provider_call_budget=provider_call_budget,
         provider_deferred_reason_code=provider_deferred_reason_code,
         provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+        claimed_work_item_count=len(claimed_work_items),
     )
 
 
@@ -550,6 +582,74 @@ def _record_taxonomist_provider_deferred_event(
         reason_code=reason_code,
         retry_delay_seconds=retry_delay_seconds,
     )
+
+
+def _claim_taxonomist_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    candidates: list[Any],
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    for record in candidates:
+        if record.tags:
+            continue
+        work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_TAGGING,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=_resolve_workspace_id(ctx, task),
+            priority=task.priority,
+            idempotency_key=f"memory_tagging:{record.id}",
+            payload={"memory_id": record.id, "workspace_id": _resolve_workspace_id(ctx, task)},
+        )
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_MEMORY_TAGGING,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _taxonomist_work_memory_id(payload: dict[str, Any]) -> str | None:
+    memory_id = payload.get("memory_id")
+    if isinstance(memory_id, str) and memory_id.strip():
+        return memory_id
+    return None
+
+
+def _complete_taxonomist_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return
+    work_items.complete_item(work_item_id)
+
+
+def _defer_taxonomist_work_item(
+    ctx: ApplicationContext,
+    work_item_id: str,
+    *,
+    error: str,
+    retry_delay_seconds: float | None,
+) -> None:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return
+    work_items.defer_item(
+        work_item_id,
+        error=error,
+        retry_delay_seconds=0.0 if retry_delay_seconds is None else float(retry_delay_seconds),
+    )
+
+
+def _release_taxonomist_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return
+    work_items.release_item(work_item_id)
 
 
 # Temporary compatibility aliases for the extraction slices.

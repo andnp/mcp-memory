@@ -2783,7 +2783,12 @@ async def test_taxonomist_uses_provider_for_untagged_records(monkeypatch, tmp_pa
         updated = runtime.repository.get_memory(record.id)
         assert result["updated"] == 1
         assert provider.call_count == 1
+        assert result["claimed_work_item_count"] == 1
         assert updated is not None and updated.tags == ["auth", "testing"]
+        assert runtime.work_items is not None
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+        assert [item.status for item in work_items] == ["completed"]
+        assert work_items[0].payload == {"memory_id": record.id, "workspace_id": runtime.workspace_id}
     finally:
         runtime.close()
 
@@ -2843,9 +2848,15 @@ async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypa
         assert result["updated"] == 1
         assert result["provider_calls_used"] == 1
         assert result["provider_call_budget"] == 1
+        assert result["claimed_work_item_count"] == 1
         assert provider.call_count == 1
         assert updated_first is not None and updated_first.tags == ["auth", "testing"]
         assert updated_second is not None and updated_second.tags == []
+        assert runtime.work_items is not None
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+        assert len(work_items) == 2
+        assert {item.payload["memory_id"] for item in work_items} == {first.id, second.id}
+        assert {item.status for item in work_items} == {"completed", "pending"}
     finally:
         runtime.close()
 
@@ -2925,12 +2936,17 @@ async def test_taxonomist_soft_fails_provider_rate_limit_and_keeps_task_successf
         assert result["provider_calls_used"] == 0
         assert result["provider_deferred_reason_code"] == "model_burst_limit_exceeded"
         assert result["provider_deferred_retry_delay_seconds"] == 600.0
+        assert result["claimed_work_item_count"] == 1
         assert provider.call_count == 1
         assert updated_tagged is not None and updated_tagged.tags == ["auth", "testing"]
         assert updated_untagged is not None and updated_untagged.tags == []
         assert [tuple(row) for row in event_rows] == [
             ("provider_deferred", "model_burst_limit_exceeded", 600.0)
         ]
+        assert runtime.work_items is not None
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+        assert [item.status for item in work_items] == ["deferred"]
+        assert work_items[0].last_error == "model_burst_limit_exceeded"
     finally:
         runtime.close()
 

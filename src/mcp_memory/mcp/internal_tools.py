@@ -116,6 +116,22 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_get_work_batch",
+            description="Claim the next durable work-item batch for one family and execution lane.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "family_key": {"type": "string"},
+                    "execution_lane": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                    "lease_ttl_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["task_id", "family_key", "execution_lane"],
+            },
+        ),
+        Tool(
             name="internal_ingest_append_memory",
             description="Append ingest content into an existing active memory while preserving ingest lineage metadata, workspace_ids, and system1-appended tagging.",
             inputSchema={

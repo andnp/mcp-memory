@@ -71,6 +71,48 @@ def internal_task_complete_service(ctx: ApplicationContext, arguments: dict) -> 
     }
 
 
+def internal_get_work_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    task_id = require_string(arguments, "task_id")
+    family_key = require_string(arguments, "family_key")
+    execution_lane = require_string(arguments, "execution_lane")
+    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    limit = optional_positive_int(arguments, "limit", 20)
+    lease_ttl_seconds = float(optional_positive_int(arguments, "lease_ttl_seconds", 1800))
+    records = work_items.claim_batch(
+        family_key=family_key,
+        execution_lane=execution_lane,
+        lease_owner=task_id,
+        limit=limit,
+        workspace_id=workspace_id,
+        lease_ttl_seconds=lease_ttl_seconds,
+    )
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "family_key": family_key,
+        "execution_lane": execution_lane,
+        "records": [
+            {
+                "id": record.id,
+                "family_key": record.family_key,
+                "execution_lane": record.execution_lane,
+                "workspace_id": record.workspace_id,
+                "payload": record.payload,
+                "status": record.status,
+                "priority": record.priority,
+                "attempt_count": record.attempt_count,
+                "lease_owner": record.lease_owner,
+                "lease_expires_at": record.lease_expires_at,
+            }
+            for record in records
+        ],
+    }
+
+
 def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
