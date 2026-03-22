@@ -39,6 +39,17 @@ class ProviderBackoffError(RuntimeError):
         self.retry_delay_seconds = retry_delay_seconds
 
 
+def looks_like_interactive_auth_prompt(text: str | None) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = text.lower()
+    return (
+        "opening authentication page in your browser" in lowered
+        or "do you want to continue? [y/n]" in lowered
+        or "interactive authentication required" in lowered
+    )
+
+
 class JSONCLIProvider:
     provider_name = "JSON CLI"
 
@@ -230,6 +241,34 @@ class JSONCLIProvider:
                     }
                 )
                 return response
+            if looks_like_interactive_auth_prompt(stdout_text) or looks_like_interactive_auth_prompt(stderr_text):
+                response = AIResponse(
+                    raw_text=stdout_text or stderr_text,
+                    parsed=None,
+                    error="Interactive authentication required",
+                    subprocess_pid=proc.pid,
+                    returncode=returncode,
+                )
+                completed_at = time.time()
+                self._notify(
+                    {
+                        "event": "finished",
+                        "attempt": attempt,
+                        "status": "auth_required",
+                        "prompt": prompt,
+                        "subprocess_pid": proc.pid,
+                        "returncode": returncode,
+                        "raw_text": response.raw_text,
+                        "parsed": response.parsed,
+                        "error": response.error,
+                        "reason_category": "auth",
+                        "reason_code": "interactive_auth_required",
+                        "started_at": started_at,
+                        "completed_at": completed_at,
+                        "duration_seconds": max(completed_at - started_at, 0.0),
+                    }
+                )
+                return response
             response = self._parse_response(stdout_text)
             response.subprocess_pid = proc.pid
             response.returncode = returncode
@@ -358,6 +397,10 @@ def build_cli_failure_exception(
     attempts: int,
     last_error: str | None,
 ) -> RuntimeError:
+    from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
+
+    if looks_like_interactive_auth_prompt(last_error):
+        return ProviderAuthenticationRequired(provider_name, error_text=last_error)
     message = f"{provider_name} failed after {attempts} attempts: {last_error}"
     retry_delay_seconds = recommended_retry_delay_seconds(last_error)
     if retry_delay_seconds is None:

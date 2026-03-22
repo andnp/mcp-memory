@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
@@ -194,9 +195,9 @@ class InstrumentedAIProvider:
                 parsed=_coerce_parsed(payload.get("parsed")),
                 status=str(payload.get("status", "error")),
                 error_text=_coerce_text(payload.get("error")),
-                reason_category=None,
-                reason_code=None,
-                retry_delay_seconds=None,
+                reason_category=_coerce_text(payload.get("reason_category")),
+                reason_code=_coerce_text(payload.get("reason_code")),
+                retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
@@ -290,6 +291,15 @@ class InstrumentedAIProvider:
                 self._task_queue.clear_running_process(self._task_id)
             raise
         self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
+        completed_at = time.time()
+        self._usage_repository.finalize_running_conversation(
+            request_id=request_id,
+            status=_extract_status(last_event, fallback="success"),
+            error_text=None,
+            completed_at=completed_at,
+            response_text=_extract_raw_text(last_event) or json.dumps(response, sort_keys=True),
+            parsed=response,
+        )
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
@@ -299,15 +309,15 @@ class InstrumentedAIProvider:
             provider_name=self._provider_name,
             model_name=self._model_name,
             status=_extract_status(last_event, fallback="success"),
-            duration_seconds=max(time.time() - started_at, 0.0),
-            created_at=time.time(),
+            duration_seconds=max(completed_at - started_at, 0.0),
+            created_at=completed_at,
             error_text=None,
             reason_category=None,
             reason_code=None,
             retry_delay_seconds=None,
         )
         if self._task_queue is not None and self._task_id is not None:
-            self._task_queue.clear_running_process(self._task_id)
+            self._task_queue.clear_running_process(self._task_id, updated_at=completed_at)
         return response
 
     async def ask(self, prompt: str) -> dict:
@@ -398,9 +408,9 @@ class InstrumentedAIProvider:
                 parsed=_coerce_parsed(payload.get("parsed")),
                 status=str(payload.get("status", "error")),
                 error_text=_coerce_text(payload.get("error")),
-                reason_category=None,
-                reason_code=None,
-                retry_delay_seconds=None,
+                reason_category=_coerce_text(payload.get("reason_category")),
+                reason_code=_coerce_text(payload.get("reason_code")),
+                retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
@@ -493,6 +503,15 @@ class InstrumentedAIProvider:
                 self._task_queue.clear_running_process(self._task_id)
             raise
         self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
+        completed_at = time.time()
+        self._usage_repository.finalize_running_conversation(
+            request_id=request_id,
+            status=_extract_status(last_event, fallback=result.status),
+            error_text=None if result.status == "success" else result.summary,
+            completed_at=completed_at,
+            response_text=_extract_raw_text(last_event) or result.raw_text or result.summary or "",
+            parsed=result.parsed,
+        )
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
@@ -502,15 +521,15 @@ class InstrumentedAIProvider:
             provider_name=self._provider_name,
             model_name=self._model_name,
             status=_extract_status(last_event, fallback=result.status),
-            duration_seconds=max(time.time() - started_at, 0.0),
-            created_at=time.time(),
+            duration_seconds=max(completed_at - started_at, 0.0),
+            created_at=completed_at,
             error_text=None if result.status == "success" else result.summary,
             reason_category=None if result.status == "success" else "execution",
             reason_code=None if result.status == "success" else "agent_run_unsuccessful",
             retry_delay_seconds=None,
         )
         if self._task_queue is not None and self._task_id is not None:
-            self._task_queue.clear_running_process(self._task_id)
+            self._task_queue.clear_running_process(self._task_id, updated_at=completed_at)
         return result
 
 
@@ -532,6 +551,14 @@ def _coerce_text(value: object) -> str | None:
     if isinstance(value, str):
         return value
     return str(value)
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        return float(value)
+    return None
 
 
 def _extract_subprocess_pid(event: dict | None) -> int | None:

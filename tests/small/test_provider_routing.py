@@ -3,15 +3,19 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.agent_runtime import _provider_for_task
 from mcp_memory.core.provider_policy import (
+    AgenticRouteFailoverProvider,
     ProviderSelectionInputs,
     ProviderSelectionRequest,
     select_provider_for_inputs,
     select_provider_for_request,
 )
+from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.route_audit import build_task_route_audit
 
@@ -506,3 +510,24 @@ def test_select_provider_for_request_records_real_route_skip_but_route_audit_doe
     )
 
     assert unavailable.skipped == [None]
+
+
+@pytest.mark.asyncio
+async def test_agentic_route_failover_provider_skips_to_next_route_on_auth_required() -> None:
+    class _AuthRequiredProvider:
+        async def run_agent(self, prompt: str):
+            raise ProviderAuthenticationRequired("Gemini CLI Agentic", error_text="Interactive authentication required")
+
+    class _HealthyProvider:
+        async def run_agent(self, prompt: str):
+            return {"provider": "fallback", "prompt": prompt}
+
+    provider = AgenticRouteFailoverProvider(
+        [_AuthRequiredProvider(), _HealthyProvider()],
+        route_keys=["gemini-cheap", "copilot-mini"],
+        task_name="deduplicator",
+    )
+
+    result = await provider.run_agent("continue with fallback")
+
+    assert result == {"provider": "fallback", "prompt": "continue with fallback"}

@@ -20,6 +20,7 @@ from mcp_memory.core.providers import (
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
+from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
 from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
@@ -176,6 +177,25 @@ async def test_gemini_cli_provider_raises_backoff_error_for_quota_exhaustion(
         await provider.ask("retry this request")
 
     assert exc_info.value.retry_delay_seconds == pytest.approx(13847.179189666)
+
+
+@pytest.mark.asyncio
+async def test_gemini_cli_provider_raises_authentication_required_for_browser_auth_prompt(
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stdout_text="Opening authentication page in your browser. Do you want to continue? [Y/n]:"
+        )
+    )
+
+    provider = GeminiCLIProvider(command="gemini", max_retries=0)
+
+    with pytest.raises(ProviderAuthenticationRequired) as exc_info:
+        await provider.ask("retry this request")
+
+    assert exc_info.value.provider_name == "Gemini CLI"
+    assert exc_info.value.error_text == "Interactive authentication required"
 
 
 @pytest.mark.asyncio
@@ -922,6 +942,93 @@ async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conver
 
 
 @pytest.mark.asyncio
+async def test_instrumented_provider_finalizes_running_conversation_on_success_without_finished_event(db_manager) -> None:
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 2121,
+                    "started_at": 10.0,
+                }
+            )
+            return {"ok": True}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="memory-curator", task_id="task-success-no-finish", workspace_id="workspace-a")
+
+    result = await provider.ask("finish without observer terminal event")
+    conversation = repository.list_conversations(task_name="memory-curator", limit=1)[0]
+
+    assert result == {"ok": True}
+    assert conversation.task_id == "task-success-no-finish"
+    assert conversation.status == "success"
+    assert conversation.parsed == {"ok": True}
+    assert conversation.response_text == '{"ok": true}'
+
+
+@pytest.mark.asyncio
+async def test_instrumented_agentic_provider_finalizes_running_conversation_on_success_without_finished_event(db_manager) -> None:
+    class _AgenticProvider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _AgenticProvider(observer)
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 5252,
+                    "started_at": 20.0,
+                }
+            )
+            return AgenticRunResult(
+                status="success",
+                summary="done",
+                raw_text='{"summary":"done"}',
+                parsed={"summary": "done"},
+            )
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _AgenticProvider(),
+        usage_repository=repository,
+        provider_key="copilot-mini:agentic",
+        provider_name="Copilot CLI Agentic",
+        model_name="gpt-5-mini",
+    ).with_usage_context(task_name="deduplicator", task_id="task-agentic-success-no-finish", workspace_id="workspace-a")
+
+    result = await provider.run_agent("agentic finish without observer terminal event")
+    conversation = repository.list_conversations(task_name="deduplicator", limit=1)[0]
+
+    assert result.status == "success"
+    assert conversation.task_id == "task-agentic-success-no-finish"
+    assert conversation.status == "success"
+    assert conversation.parsed == {"summary": "done"}
+    assert conversation.response_text == '{"summary":"done"}'
+
+
+@pytest.mark.asyncio
 async def test_instrumented_provider_finalizes_running_conversation_on_error(db_manager) -> None:
     class _Provider:
         def __init__(self, observer=None) -> None:
@@ -966,6 +1073,45 @@ async def test_instrumented_provider_finalizes_running_conversation_on_error(db_
     assert conversations[0].status == "error"
     assert conversations[0].task_id == "task-error"
     assert conversations[0].error_text == "Provider subprocess 4242 exited unexpectedly"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_auth_required_reason_for_browser_auth_prompt(
+    db_manager,
+    install_fake_subprocess,
+) -> None:
+    install_fake_subprocess.add(
+        FakeAsyncProcess(
+            stdout_text="Opening authentication page in your browser. Do you want to continue? [Y/n]:"
+        )
+    )
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        GeminiCLIProvider(command="gemini", model="gemini-3-flash-preview", max_retries=0),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="taxonomist", task_id="task-auth", workspace_id="workspace-a")
+
+    with pytest.raises(ProviderAuthenticationRequired):
+        await provider.ask("taxonomy pass")
+
+    usage_row = db_manager.get_connection().execute(
+        "SELECT status, reason_category, reason_code, error_text FROM provider_usage ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conversation = repository.list_conversations(task_name="taxonomist", limit=1)[0]
+
+    assert usage_row is not None
+    assert usage_row["status"] == "auth_required"
+    assert usage_row["reason_category"] == "auth"
+    assert usage_row["reason_code"] == "interactive_auth_required"
+    assert usage_row["error_text"] == "Interactive authentication required"
+    assert conversation.status == "auth_required"
+    assert conversation.reason_category == "auth"
+    assert conversation.reason_code == "interactive_auth_required"
+    assert conversation.response_text == "Opening authentication page in your browser. Do you want to continue? [Y/n]:"
 
 
 @pytest.mark.asyncio

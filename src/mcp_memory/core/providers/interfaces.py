@@ -74,6 +74,17 @@ class ProviderAdmissionDeferred(RuntimeError):
         self.same_run_failover_eligible = True
 
 
+class ProviderAuthenticationRequired(RuntimeError):
+    def __init__(self, provider_name: str, *, error_text: str | None = None) -> None:
+        message = f"provider_authentication_required: provider_name={provider_name}"
+        if error_text:
+            message += f" detail={error_text}"
+        super().__init__(message)
+        self.provider_name = provider_name
+        self.error_text = error_text
+        self.same_run_failover_eligible = True
+
+
 class JSONTaskProvider(Protocol):
     async def ask_json(self, prompt: str) -> dict:
         ...

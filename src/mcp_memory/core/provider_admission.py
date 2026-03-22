@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
+from mcp_memory.core.providers._json_cli import looks_like_interactive_auth_prompt
 from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
+from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
 from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -159,6 +161,12 @@ def classify_provider_failure(
             retry_delay_seconds=exc.retry_delay_seconds,
             error_text=str(exc),
         )
+    if isinstance(exc, ProviderAuthenticationRequired):
+        return ProviderOutcomeReason(
+            reason_code="interactive_auth_required",
+            reason_category="auth",
+            error_text=exc.error_text or str(exc),
+        )
 
     error_text = str(exc)
     retry_delay_seconds = getattr(exc, "retry_delay_seconds", None)
@@ -184,7 +192,7 @@ def classify_provider_failure(
     if normalized_status == "timeout":
         return ProviderOutcomeReason("provider_timeout", "transport", error_text=error_text)
     if normalized_status == "parse_error":
-        if _looks_like_interactive_auth_prompt(combined_text):
+        if looks_like_interactive_auth_prompt(combined_text):
             return ProviderOutcomeReason("interactive_auth_required", "auth", error_text=error_text)
         return ProviderOutcomeReason("invalid_json_response", "response", error_text=error_text)
     if "command not found" in combined_text:
@@ -202,7 +210,3 @@ def should_persist_admission_backoff(reason: ProviderOutcomeReason) -> bool:
         and isinstance(reason.retry_delay_seconds, (int, float))
         and float(reason.retry_delay_seconds) > 0.0
     )
-
-
-def _looks_like_interactive_auth_prompt(text: str) -> bool:
-    return "opening authentication page in your browser" in text or "do you want to continue? [y/n]" in text

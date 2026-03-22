@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from inspect import isawaitable, iscoroutinefunction
 import logging
+import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
@@ -29,21 +30,27 @@ class RuntimeTaskWorker:
         handler_factory: Callable[[], dict[str, Callable[[ApplicationContext, TaskRecord], Any]]] | None = None,
         poll_interval_seconds: float = 0.1,
         retry_delay_seconds: float = 0.0,
+        abandoned_recovery_interval_seconds: float = 30.0,
+        abandoned_task_stale_after_seconds: float = 60.0,
     ) -> None:
         self._ctx = ctx
         self._handlers = handlers or {}
         self._handler_factory = handler_factory
         self._poll_interval_seconds = poll_interval_seconds
         self._retry_delay_seconds = retry_delay_seconds
+        self._abandoned_recovery_interval_seconds = abandoned_recovery_interval_seconds
+        self._abandoned_task_stale_after_seconds = abandoned_task_stale_after_seconds
         self._stop_event = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
         self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
+        self._next_abandoned_recovery_at = 0.0
 
     async def start(self) -> None:
         if self._runner is not None and not self._runner.done():
             return
 
         self._stop_event = asyncio.Event()
+        self._next_abandoned_recovery_at = 0.0
         logger.info(
             "Starting runtime task worker",
             extra={
@@ -75,6 +82,7 @@ class RuntimeTaskWorker:
 
         recovered_tasks = await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
+            stale_after_seconds=self._abandoned_task_stale_after_seconds,
         )
         for recovered_task in recovered_tasks:
             await asyncio.to_thread(self._reconcile_task_conversations, recovered_task)
@@ -83,6 +91,7 @@ class RuntimeTaskWorker:
             await asyncio.to_thread(journal.release_orphaned_claims)
 
         while not self._stop_event.is_set():
+            await self._recover_abandoned_tasks(task_queue)
             task = await asyncio.to_thread(
                 task_queue.claim_next,
             )
@@ -91,6 +100,19 @@ class RuntimeTaskWorker:
                 continue
 
             await self._process_task(task)
+
+    async def _recover_abandoned_tasks(self, task_queue) -> None:
+        current_time = time.time()
+        if current_time < self._next_abandoned_recovery_at:
+            return
+        self._next_abandoned_recovery_at = current_time + self._abandoned_recovery_interval_seconds
+        recovered_tasks = await asyncio.to_thread(
+            task_queue.recover_abandoned_running_tasks,
+            stale_after_seconds=self._abandoned_task_stale_after_seconds,
+            now=current_time,
+        )
+        for recovered_task in recovered_tasks:
+            await asyncio.to_thread(self._reconcile_task_conversations, recovered_task)
 
     async def _process_task(self, task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)

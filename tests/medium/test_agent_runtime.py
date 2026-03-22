@@ -34,7 +34,9 @@ from mcp_memory.core.agent_runtime import (
     handle_taxonomist_task,
     _provider_for_task,
 )
+from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult, CopilotCLIAgenticProvider
+from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
     CURATOR_MAX_SEED_RECORDS,
@@ -54,6 +56,7 @@ from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp import runtime as runtime_module
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from tests.sdk.providers import FakeAIProvider
 
 
