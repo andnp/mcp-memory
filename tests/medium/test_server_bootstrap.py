@@ -56,6 +56,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_get_next_dedup_batch",
         "internal_get_next_curator_batch",
         "internal_get_next_ingest_batch",
+        "internal_get_work_batch",
         "internal_ingest_append_memory",
         "internal_ingest_create_memory",
         "internal_append_memory_content",

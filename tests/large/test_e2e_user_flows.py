@@ -28,6 +28,13 @@ def _payload_text(response) -> dict:
     return json.loads(response[0].text)
 
 
+def _disable_background_providers(runtime) -> None:
+    runtime.ai_provider_registry = {}
+    runtime.ai_provider = None
+    runtime.ai_json_provider = None
+    runtime.ai_agent_provider = None
+
+
 @pytest.mark.asyncio
 async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tmp_path: Path) -> None:
     home_path = tmp_path / "home"
@@ -39,6 +46,7 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home_path))
 
     runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    _disable_background_providers(runtime)
     assert runtime.task_queue is not None
     assert runtime.repository is not None
     assert runtime.workspace_id is not None
@@ -107,6 +115,7 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
         runtime_one.close()
 
     runtime_two = create_runtime(workspace_root_override=None, cwd=workspace)
+    _disable_background_providers(runtime_two)
     try:
         assert runtime_two.workspace_id is not None
         search_payload = _payload_text(
