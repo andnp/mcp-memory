@@ -156,12 +156,20 @@ export function ActivityPage() {
                       <div className="truncate" title={conversation.provider_name}>{conversation.provider_name}</div>
                       <div className="mt-1 truncate text-[10px] text-muted" title={conversation.model_name}>{conversation.model_name}</div>
                     </td>
-                    <td>{conversation.status}</td>
+                    <td>
+                      <div>{conversation.status}</div>
+                      {conversation.reason_code ? (
+                        <div className="mt-1 text-[10px] text-muted">
+                          {conversation.reason_category ?? 'reason'} · {conversation.reason_code}
+                        </div>
+                      ) : null}
+                    </td>
                     <td>
                       <div className="text-[10px] text-muted">P</div>
                       <div className="mt-0.5 max-w-[24rem] truncate" title={conversation.prompt_text}>{conversation.prompt_text}</div>
                       <div className="mt-1.5 text-[10px] text-muted">R</div>
                       <div className="mt-0.5 max-w-[24rem] truncate" title={conversation.response_text}>{conversation.response_text}</div>
+                      {conversation.error_text ? <div className="mt-1.5 max-w-[24rem] truncate text-[10px] text-danger" title={conversation.error_text}>{conversation.error_text}</div> : null}
                     </td>
                   </tr>
                 ))}

@@ -21,6 +21,8 @@ from mcp_memory.core.providers import (
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
 from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
+from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
+from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from tests.sdk.providers import FakeAsyncProcess
@@ -599,6 +601,118 @@ async def test_instrumented_provider_enforces_daily_budget_before_call(db_manage
 
     assert exc_info.value.provider_key == "copilot-mini"
     assert exc_info.value.daily_call_limit == 1
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_enforces_model_burst_limit_before_call(db_manager) -> None:
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"ok": True, "prompt": prompt}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    repository.record_call(
+        task_name="graph-linker",
+        task_id="task-a",
+        request_id="req-a",
+        subprocess_pid=None,
+        provider_key="copilot-mini",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        status="success",
+        duration_seconds=0.1,
+        created_at=time.time(),
+        error_text=None,
+    )
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-strong",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        daily_call_limit=20,
+        model_burst_call_limit=1,
+        model_burst_window_seconds=600.0,
+    )
+
+    with pytest.raises(ProviderRateLimitExceeded) as exc_info:
+        await provider.ask("cheap but burst-limited")
+
+    assert exc_info.value.model_name == "gpt-5-mini"
+    assert exc_info.value.calls_in_window == 1
+    assert exc_info.value.burst_call_limit == 1
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_exposes_structured_admission_decision(db_manager) -> None:
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            return {"ok": True, "prompt": prompt}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    repository.record_call(
+        task_name="graph-linker",
+        task_id="task-a",
+        request_id="req-a",
+        subprocess_pid=None,
+        provider_key="copilot-mini",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        status="success",
+        duration_seconds=0.1,
+        created_at=time.time(),
+        error_text=None,
+    )
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-strong",
+        provider_name="Copilot CLI",
+        model_name="gpt-5-mini",
+        daily_call_limit=20,
+        model_burst_call_limit=1,
+        model_burst_window_seconds=600.0,
+    )
+
+    decision = provider.admission_decision()
+
+    assert decision.allowed is False
+    assert decision.reason == "model_burst_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_persists_upstream_backoff_and_later_reports_admission_denial(db_manager) -> None:
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            raise ProviderBackoffError("quota will reset after 1m", retry_delay_seconds=60.0)
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(task_name="memory-curator", task_id="task-backoff", workspace_id="workspace-a")
+
+    with pytest.raises(ProviderBackoffError):
+        await provider.ask("trigger backoff")
+
+    state = repository.get_active_admission_state(
+        provider_key="gemini-cli",
+        model_name="gemini-3-flash-preview",
+    )
+    assert state is not None
+    assert state.reason_code == "provider_quota_exhausted"
+
+    with pytest.raises(ProviderAdmissionDeferred, match="provider_admission_deferred"):
+        await provider.ask("blocked while backoff active")
+
+    rows = db_manager.get_connection().execute(
+        "SELECT status, reason_category, reason_code FROM provider_usage ORDER BY id DESC LIMIT 2"
+    ).fetchall()
+    assert [row["status"] for row in rows] == ["skipped", "error"]
+    assert rows[0]["reason_category"] == "upstream"
+    assert rows[0]["reason_code"] == "provider_quota_exhausted"
 
 
 @pytest.mark.asyncio

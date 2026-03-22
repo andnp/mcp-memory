@@ -854,6 +854,36 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
     )
     db_manager.get_connection().execute(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "workspace-a",
+            "memory-curator",
+            "gemini-cli",
+            "Gemini CLI",
+            "gemini-3-flash-preview",
+            "skipped",
+            0.0,
+            time.time(),
+            "quota reset pending",
+            "upstream",
+            "provider_quota_exhausted",
+            90.0,
+        ),
+    )
+    db_manager.get_connection().execute(
+        "INSERT OR REPLACE INTO provider_admission_state (provider_key, model_name, reason_category, reason_code, error_text, retry_delay_seconds, active_until, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "gemini-cli",
+            "gemini-3-flash-preview",
+            "upstream",
+            "provider_quota_exhausted",
+            "quota reset pending",
+            90.0,
+            time.time() + 90.0,
+            time.time(),
+        ),
+    )
+    db_manager.get_connection().execute(
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, time.time(), None),
     )
@@ -886,6 +916,9 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.provider_usage[0].provider_key == "gemini-cli"
     assert overview.provider_usage[0].task_name == "memory-curator"
     assert overview.provider_usage[0].calls_last_hour == 1
+    assert overview.provider_usage[0].skips_last_day == 1
+    assert overview.provider_usage[0].top_skip_reason_last_day == "provider_quota_exhausted"
+    assert overview.provider_usage[0].active_admission_reason == "provider_quota_exhausted"
     assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli"}
     assert overview.tasks.failed_count == 1
     deduplicator = next(agent for agent in overview.agent_runs if agent.task_name == "deduplicator")

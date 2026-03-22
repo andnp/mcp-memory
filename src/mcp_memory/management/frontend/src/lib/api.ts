@@ -27,9 +27,21 @@ export interface RecentAgentRun {
 export interface ProviderUsage {
   task_name: string | null;
   provider_key: string;
+  provider_name: string;
   model_name: string;
+  calls_last_hour: number;
   calls_last_day: number;
+  failures_last_hour: number;
   failures_last_day: number;
+  skips_last_hour: number;
+  skips_last_day: number;
+  avg_duration_last_hour: number;
+  avg_duration_last_day: number;
+  top_failure_reason_last_day: string | null;
+  top_skip_reason_last_day: string | null;
+  active_admission_reason: string | null;
+  active_admission_category: string | null;
+  active_retry_delay_seconds: number | null;
 }
 
 export interface RecentMemory {
@@ -152,6 +164,9 @@ export interface AIConversation {
   model_name: string;
   status: string;
   error_text: string | null;
+  reason_category?: string | null;
+  reason_code?: string | null;
+  retry_delay_seconds?: number | null;
   started_at: number;
   completed_at: number;
   duration_seconds: number;
@@ -312,6 +327,51 @@ export interface GrowthDynamics {
   workspace_contribution_share: ShareSeries[];
 }
 
+export interface RetrievalSummary {
+  search_invocations: number;
+  search_hits: number;
+  zero_result_searches: number;
+  read_events: number;
+  unique_search_memories: number;
+  unique_read_memories: number;
+}
+
+export interface RetrievalMemoryRow {
+  memory_id: string;
+  title: string;
+  memory_type: string;
+  status: string;
+  tags: string[];
+  read_count: number;
+  search_count: number;
+  total_count: number;
+  last_read_at: number | null;
+  last_search_at: number | null;
+}
+
+export interface RetrievalTagRow {
+  key: string;
+  label: string;
+  read_count: number;
+  search_count: number;
+  total_count: number;
+}
+
+export interface RetrievalTagTimeline {
+  key: string;
+  label: string;
+  read_buckets: TimeCountBucket[];
+  search_buckets: TimeCountBucket[];
+}
+
+export interface RetrievalMetrics {
+  summary: RetrievalSummary;
+  top_read_memories: RetrievalMemoryRow[];
+  top_search_memories: RetrievalMemoryRow[];
+  top_tags: RetrievalTagRow[];
+  tag_timelines: RetrievalTagTimeline[];
+}
+
 export interface MaintenanceSummaryRow {
   key: string;
   label: string;
@@ -419,6 +479,7 @@ export interface NerdMetricsResponse {
   maintenance: MaintenanceMetrics;
   lifecycle_trends: LifecycleTrends;
   growth_dynamics: GrowthDynamics;
+  retrieval: RetrievalMetrics;
   maintenance_summary: MaintenanceSummary;
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];

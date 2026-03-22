@@ -122,4 +122,5 @@ def _select_provider_for_audit(
             workspace_id=workspace_id,
         ),
         agentic_task_names=set(DEFAULT_AGENTIC_TASK_NAMES),
+        record_admission_skips=False,
     )

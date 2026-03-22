@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import logging
 from typing import Any, Awaitable, Callable, cast
 
+from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_policy import is_deterministic_task
 from mcp_memory.core.tasks import TaskRecord
@@ -100,6 +101,7 @@ def select_provider_for_request(
     request: ProviderSelectionRequest,
     *,
     agentic_task_names: set[str],
+    record_admission_skips: bool = True,
 ):
     task_name = request.task_name
     if is_deterministic_task(inputs.config, task_name):
@@ -135,13 +137,21 @@ def select_provider_for_request(
             if selected_provider is None:
                 continue
             found_routed_provider = True
-            if not _budget_available(selected_provider):
+            bound_provider = bind_provider_context(selected_provider, request=request)
+            admission = _provider_admission_decision(selected_provider)
+            if not admission.allowed:
+                if record_admission_skips:
+                    _record_admission_skip(bound_provider, admission)
                 logger.debug(
-                    "Provider route skipped because daily budget is exhausted",
-                    extra={"task_name": task_name, "route_key": route_key},
+                    "Provider route skipped because admission control denied availability",
+                    extra={
+                        "task_name": task_name,
+                        "route_key": route_key,
+                        "reason": admission.reason,
+                        "retry_delay_seconds": admission.retry_delay_seconds,
+                    },
                 )
                 continue
-            bound_provider = bind_provider_context(selected_provider, request=request)
             if first_routed_provider is None:
                 first_routed_provider = bound_provider
                 if not prefer_agentic or not _supports_agentic_execution(bound_provider):
@@ -176,10 +186,13 @@ def select_provider_for_request(
             extra={"task_name": task_name, "prefer_agentic": prefer_agentic},
         )
         return None
-    if not _budget_available(selected_provider):
+    admission = _provider_admission_decision(selected_provider)
+    if not admission.allowed:
+        if record_admission_skips:
+            _record_admission_skip(bind_provider_context(selected_provider, request=request), admission)
         logger.warning(
-            "Legacy fallback provider is over budget",
-            extra={"task_name": task_name},
+            "Legacy fallback provider is unavailable due to admission control",
+            extra={"task_name": task_name, "reason": admission.reason},
         )
         return None
     return bind_provider_context(selected_provider, request=request)
@@ -214,6 +227,21 @@ def _budget_available(provider: Any) -> bool:
     return bool(budget_available())
 
 
+def _provider_admission_decision(provider: Any) -> ProviderAdmissionDecision:
+    admission_decision = getattr(provider, "admission_decision", None)
+    if callable(admission_decision):
+        decision = admission_decision()
+        if isinstance(decision, ProviderAdmissionDecision):
+            return decision
+    return ProviderAdmissionDecision(allowed=_budget_available(provider))
+
+
+def _record_admission_skip(provider: Any, admission: ProviderAdmissionDecision) -> None:
+    recorder = getattr(provider, "record_admission_skip", None)
+    if callable(recorder):
+        recorder(admission)
+
+
 def select_provider_from_bundle(bundle: dict[str, Any], *, prefer_agentic: bool):
     if prefer_agentic and bundle.get("agentic") is not None:
         return bundle.get("agentic")
@@ -229,6 +257,8 @@ def _supports_agentic_execution(provider: Any) -> bool:
 
 
 def _is_same_run_failover_eligible_error(exc: Exception) -> bool:
+    if bool(getattr(exc, "same_run_failover_eligible", False)):
+        return True
     retry_delay_seconds = getattr(exc, "retry_delay_seconds", None)
     return not isinstance(retry_delay_seconds, (int, float))
 

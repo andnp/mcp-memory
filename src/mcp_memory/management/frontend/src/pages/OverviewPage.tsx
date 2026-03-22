@@ -44,6 +44,23 @@ function queueTimingText(readyInSeconds: number, overdueSeconds: number): string
   return `ready in ${formatAge(readyInSeconds)}`;
 }
 
+function providerReasonSummary(usage: {
+  top_failure_reason_last_day: string | null;
+  top_skip_reason_last_day: string | null;
+  active_admission_reason: string | null;
+}): string {
+  if (usage.active_admission_reason) {
+    return `active ${usage.active_admission_reason}`;
+  }
+  if (usage.top_skip_reason_last_day) {
+    return `skip ${usage.top_skip_reason_last_day}`;
+  }
+  if (usage.top_failure_reason_last_day) {
+    return `fail ${usage.top_failure_reason_last_day}`;
+  }
+  return 'healthy';
+}
+
 export function OverviewPage() {
   const [commandResult, setCommandResult] = useState<string | null>(null);
   const overviewQuery = useQuery({
@@ -193,7 +210,7 @@ export function OverviewPage() {
                     <th>Task</th>
                     <th>Provider</th>
                     <th>Calls 24h</th>
-                    <th className="hidden md:table-cell">Failures 24h</th>
+                    <th className="hidden md:table-cell">Failures / skips</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -203,9 +220,10 @@ export function OverviewPage() {
                       <td>
                         <div className="truncate" title={usage.provider_key}>{usage.provider_key}</div>
                         <div className="mt-1 truncate text-[10px] text-muted" title={usage.model_name}>{usage.model_name}</div>
+                        <div className="mt-1 truncate text-[10px] text-muted" title={providerReasonSummary(usage)}>{providerReasonSummary(usage)}</div>
                       </td>
                       <td>{usage.calls_last_day}</td>
-                      <td className="hidden md:table-cell">{usage.failures_last_day}</td>
+                      <td className="hidden md:table-cell">{usage.failures_last_day} / {usage.skips_last_day}</td>
                     </tr>
                   ))}
                 </tbody>

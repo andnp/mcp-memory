@@ -5,8 +5,11 @@ import time
 from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
+from mcp_memory.core.provider_admission import build_provider_admission_exception
+from mcp_memory.core.provider_admission import classify_provider_failure
+from mcp_memory.core.provider_admission import evaluate_provider_admission
+from mcp_memory.core.provider_admission import should_persist_admission_backoff
 from mcp_memory.core.providers.interfaces import AgenticRunResult
-from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
@@ -25,6 +28,8 @@ class InstrumentedAIProvider:
         task_queue = None,
         budget_key: str | None = None,
         daily_call_limit: int | None = None,
+        model_burst_call_limit: int | None = None,
+        model_burst_window_seconds: float | None = None,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
@@ -37,6 +42,8 @@ class InstrumentedAIProvider:
         self._task_queue = task_queue
         self._budget_key = budget_key or provider_key
         self._daily_call_limit = daily_call_limit
+        self._model_burst_call_limit = model_burst_call_limit
+        self._model_burst_window_seconds = model_burst_window_seconds
 
     def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
         return InstrumentedAIProvider(
@@ -51,38 +58,83 @@ class InstrumentedAIProvider:
             task_queue=self._task_queue,
             budget_key=self._budget_key,
             daily_call_limit=self._daily_call_limit,
+            model_burst_call_limit=self._model_burst_call_limit,
+            model_burst_window_seconds=self._model_burst_window_seconds,
+        )
+
+    def admission_decision(self, *, now: float | None = None):
+        return evaluate_provider_admission(
+            self._usage_repository,
+            provider_key=self._provider_key,
+            budget_key=self._budget_key,
+            model_name=self._model_name,
+            daily_call_limit=self._daily_call_limit,
+            model_burst_call_limit=self._model_burst_call_limit,
+            model_burst_window_seconds=self._model_burst_window_seconds,
+            now=now,
         )
 
     def budget_available(self, *, now: float | None = None) -> bool:
-        if self._daily_call_limit is None:
-            return True
-        calls_last_day = self._usage_repository.count_recent_calls(
-            provider_keys=[self._budget_key, f"{self._budget_key}:agentic"],
-            now=now,
-        )
-        return calls_last_day < self._daily_call_limit
+        return self.admission_decision(now=now).allowed
 
-    def _enforce_daily_budget(self) -> None:
-        if self._daily_call_limit is None:
+    def _enforce_rate_limits(self) -> None:
+        decision = self.admission_decision()
+        if decision.allowed:
             return
-        calls_last_day = self._usage_repository.count_recent_calls(
-            provider_keys=[self._budget_key, f"{self._budget_key}:agentic"],
+        raise build_provider_admission_exception(
+            decision,
+            provider_key=self._budget_key,
+            model_name=self._model_name,
         )
-        if calls_last_day >= self._daily_call_limit:
-            raise ProviderBudgetExceeded(
-                self._budget_key,
-                calls_last_day=calls_last_day,
-                daily_call_limit=self._daily_call_limit,
-            )
+
+    def record_admission_skip(self, decision, *, now: float | None = None) -> None:
+        created_at = time.time() if now is None else now
+        self._usage_repository.record_call(
+            task_name=self._task_name,
+            task_id=self._task_id,
+            request_id=None,
+            subprocess_pid=None,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            status="skipped",
+            duration_seconds=0.0,
+            created_at=created_at,
+            error_text=decision.error_text,
+            reason_category=decision.reason_category,
+            reason_code=decision.reason,
+            retry_delay_seconds=decision.retry_delay_seconds,
+        )
 
     def supports_agentic(self) -> bool:
         return callable(getattr(self._provider, "run_agent", None))
 
     async def ask_json(self, prompt: str) -> dict:
-        self._enforce_daily_budget()
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
+
+        try:
+            self._enforce_rate_limits()
+        except Exception as exc:
+            classification = classify_provider_failure(exc)
+            self._usage_repository.record_call(
+                task_name=self._task_name,
+                task_id=self._task_id,
+                request_id=request_id,
+                subprocess_pid=None,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                status="skipped",
+                duration_seconds=0.0,
+                created_at=started_at,
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
+            )
+            raise
 
         def _observer(payload: dict) -> None:
             nonlocal last_event
@@ -109,6 +161,9 @@ class InstrumentedAIProvider:
                     parsed=None,
                     status="running",
                     error_text=None,
+                    reason_category=None,
+                    reason_code=None,
+                    retry_delay_seconds=None,
                     started_at=started_value,
                     completed_at=started_value,
                 )
@@ -139,6 +194,9 @@ class InstrumentedAIProvider:
                 parsed=_coerce_parsed(payload.get("parsed")),
                 status=str(payload.get("status", "error")),
                 error_text=_coerce_text(payload.get("error")),
+                reason_category=None,
+                reason_code=None,
+                retry_delay_seconds=None,
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
@@ -169,11 +227,17 @@ class InstrumentedAIProvider:
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                retry_delay_seconds=None,
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
                 status=_extract_status(last_event, fallback="cancelled"),
                 error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                retry_delay_seconds=None,
                 completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
@@ -181,6 +245,11 @@ class InstrumentedAIProvider:
             raise
         except Exception as exc:
             completed_at = time.time()
+            classification = classify_provider_failure(
+                exc,
+                event_status=_extract_status(last_event, fallback="error"),
+                raw_text=_extract_raw_text(last_event),
+            )
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -192,17 +261,35 @@ class InstrumentedAIProvider:
                 status=_extract_status(last_event, fallback="error"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
-                error_text=str(exc),
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
                 status=_extract_status(last_event, fallback="error"),
-                error_text=str(exc),
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
                 completed_at=completed_at,
             )
+            if should_persist_admission_backoff(classification):
+                self._usage_repository.upsert_admission_state(
+                    provider_key=self._provider_key,
+                    model_name=self._model_name,
+                    reason_category=classification.reason_category,
+                    reason_code=classification.reason_code,
+                    error_text=classification.error_text,
+                    retry_delay_seconds=classification.retry_delay_seconds,
+                    active_until=completed_at + float(classification.retry_delay_seconds or 0.0),
+                    updated_at=completed_at,
+                )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
             raise
+        self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
@@ -215,6 +302,9 @@ class InstrumentedAIProvider:
             duration_seconds=max(time.time() - started_at, 0.0),
             created_at=time.time(),
             error_text=None,
+            reason_category=None,
+            reason_code=None,
+            retry_delay_seconds=None,
         )
         if self._task_queue is not None and self._task_id is not None:
             self._task_queue.clear_running_process(self._task_id)
@@ -224,10 +314,31 @@ class InstrumentedAIProvider:
         return await self.ask_json(prompt)
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
-        self._enforce_daily_budget()
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
+
+        try:
+            self._enforce_rate_limits()
+        except Exception as exc:
+            classification = classify_provider_failure(exc)
+            self._usage_repository.record_call(
+                task_name=self._task_name,
+                task_id=self._task_id,
+                request_id=request_id,
+                subprocess_pid=None,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                status="skipped",
+                duration_seconds=0.0,
+                created_at=started_at,
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
+            )
+            raise
 
         def _observer(payload: dict) -> None:
             nonlocal last_event
@@ -254,6 +365,9 @@ class InstrumentedAIProvider:
                     parsed=None,
                     status="running",
                     error_text=None,
+                    reason_category=None,
+                    reason_code=None,
+                    retry_delay_seconds=None,
                     started_at=started_value,
                     completed_at=started_value,
                 )
@@ -284,6 +398,9 @@ class InstrumentedAIProvider:
                 parsed=_coerce_parsed(payload.get("parsed")),
                 status=str(payload.get("status", "error")),
                 error_text=_coerce_text(payload.get("error")),
+                reason_category=None,
+                reason_code=None,
+                retry_delay_seconds=None,
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
@@ -313,11 +430,17 @@ class InstrumentedAIProvider:
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                retry_delay_seconds=None,
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
                 status=_extract_status(last_event, fallback="cancelled"),
                 error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                retry_delay_seconds=None,
                 completed_at=completed_at,
             )
             if self._task_queue is not None and self._task_id is not None:
@@ -325,6 +448,11 @@ class InstrumentedAIProvider:
             raise
         except Exception as exc:
             completed_at = time.time()
+            classification = classify_provider_failure(
+                exc,
+                event_status=_extract_status(last_event, fallback="error"),
+                raw_text=_extract_raw_text(last_event),
+            )
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
@@ -336,17 +464,35 @@ class InstrumentedAIProvider:
                 status=_extract_status(last_event, fallback="error"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
-                error_text=str(exc),
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
                 status=_extract_status(last_event, fallback="error"),
-                error_text=str(exc),
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
                 completed_at=completed_at,
             )
+            if should_persist_admission_backoff(classification):
+                self._usage_repository.upsert_admission_state(
+                    provider_key=self._provider_key,
+                    model_name=self._model_name,
+                    reason_category=classification.reason_category,
+                    reason_code=classification.reason_code,
+                    error_text=classification.error_text,
+                    retry_delay_seconds=classification.retry_delay_seconds,
+                    active_until=completed_at + float(classification.retry_delay_seconds or 0.0),
+                    updated_at=completed_at,
+                )
             if self._task_queue is not None and self._task_id is not None:
                 self._task_queue.clear_running_process(self._task_id)
             raise
+        self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
@@ -359,6 +505,9 @@ class InstrumentedAIProvider:
             duration_seconds=max(time.time() - started_at, 0.0),
             created_at=time.time(),
             error_text=None if result.status == "success" else result.summary,
+            reason_category=None if result.status == "success" else "execution",
+            reason_code=None if result.status == "success" else "agent_run_unsuccessful",
+            retry_delay_seconds=None,
         )
         if self._task_queue is not None and self._task_id is not None:
             self._task_queue.clear_running_process(self._task_id)
@@ -396,3 +545,10 @@ def _extract_status(event: dict | None, *, fallback: str) -> str:
         return fallback
     status = event.get("status")
     return str(status) if isinstance(status, str) and status else fallback
+
+
+def _extract_raw_text(event: dict | None) -> str | None:
+    if event is None:
+        return None
+    raw_text = event.get("raw_text")
+    return raw_text if isinstance(raw_text, str) else None

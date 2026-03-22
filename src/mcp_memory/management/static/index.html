@@ -76,7 +76,7 @@
       <h2>AI Provider Usage</h2>
       <table>
         <thead>
-          <tr><th>Task</th><th>Provider</th><th>Model</th><th>Calls (1h)</th><th>Calls (24h)</th><th>Failures (1h)</th><th>Failures (24h)</th><th>Avg Duration (1h)</th><th>Avg Duration (24h)</th></tr>
+          <tr><th>Task</th><th>Provider</th><th>Model</th><th>Calls (1h)</th><th>Calls (24h)</th><th>Fail / skip (1h)</th><th>Fail / skip (24h)</th><th>Avg Duration (1h)</th><th>Avg Duration (24h)</th><th>Top reason</th></tr>
         </thead>
         <tbody id="provider-usage"></tbody>
       </table>
@@ -397,12 +397,13 @@
           <td>${usage.model_name}</td>
           <td>${usage.calls_last_hour}</td>
           <td>${usage.calls_last_day}</td>
-          <td>${usage.failures_last_hour}</td>
-          <td>${usage.failures_last_day}</td>
+          <td>${usage.failures_last_hour} / ${usage.skips_last_hour}</td>
+          <td>${usage.failures_last_day} / ${usage.skips_last_day}</td>
           <td>${usage.avg_duration_last_hour.toFixed(2)}s</td>
           <td>${usage.avg_duration_last_day.toFixed(2)}s</td>
+          <td>${usage.active_admission_reason ?? usage.top_skip_reason_last_day ?? usage.top_failure_reason_last_day ?? '-'}</td>
         </tr>
-      `).join('') || '<tr><td colspan="9" class="muted">No provider usage recorded yet.</td></tr>';
+      `).join('') || '<tr><td colspan="10" class="muted">No provider usage recorded yet.</td></tr>';
 
       document.getElementById('recent-agent-runs').innerHTML = payload.recent_agent_runs.map((run) => `
         <tr>

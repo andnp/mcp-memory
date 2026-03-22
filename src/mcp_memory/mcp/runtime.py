@@ -133,6 +133,8 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 task_queue=task_queue,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
+                model_burst_call_limit=spec.config.provider_routing.model_burst_call_limit,
+                model_burst_window_seconds=spec.config.provider_routing.model_burst_window_seconds,
             )
         agentic_provider = build_agentic_ai_provider(ai_config, spec.config, spec.workspace_root)
         if agentic_provider is not None and _provider_command_available(agentic_provider):
@@ -146,6 +148,8 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 task_queue=task_queue,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
+                model_burst_call_limit=spec.config.provider_routing.model_burst_call_limit,
+                model_burst_window_seconds=spec.config.provider_routing.model_burst_window_seconds,
             )
         if bundle:
             registry[profile_key] = bundle

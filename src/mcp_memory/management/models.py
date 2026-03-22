@@ -311,6 +311,51 @@ class NerdGrowthDynamicsPayload(BaseModel):
     workspace_contribution_share: list[NerdShareSeriesPayload] = Field(default_factory=list)
 
 
+class NerdRetrievalSummaryPayload(BaseModel):
+    search_invocations: int = 0
+    search_hits: int = 0
+    zero_result_searches: int = 0
+    read_events: int = 0
+    unique_search_memories: int = 0
+    unique_read_memories: int = 0
+
+
+class NerdRetrievalMemoryRowPayload(BaseModel):
+    memory_id: str
+    title: str
+    memory_type: str
+    status: str
+    tags: list[str] = Field(default_factory=list)
+    read_count: int = 0
+    search_count: int = 0
+    total_count: int = 0
+    last_read_at: float | None = None
+    last_search_at: float | None = None
+
+
+class NerdRetrievalTagRowPayload(BaseModel):
+    key: str
+    label: str
+    read_count: int = 0
+    search_count: int = 0
+    total_count: int = 0
+
+
+class NerdRetrievalTagTimelinePayload(BaseModel):
+    key: str
+    label: str
+    read_buckets: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+    search_buckets: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+
+
+class NerdRetrievalPayload(BaseModel):
+    summary: NerdRetrievalSummaryPayload = Field(default_factory=NerdRetrievalSummaryPayload)
+    top_read_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
+    top_search_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
+    top_tags: list[NerdRetrievalTagRowPayload] = Field(default_factory=list)
+    tag_timelines: list[NerdRetrievalTagTimelinePayload] = Field(default_factory=list)
+
+
 class NerdMaintenanceSummaryRowPayload(BaseModel):
     key: str
     label: str
@@ -467,6 +512,7 @@ class NerdMetricsPayload(BaseModel):
     maintenance: NerdMaintenancePayload = Field(default_factory=NerdMaintenancePayload)
     lifecycle_trends: NerdLifecycleTrendsPayload = Field(default_factory=NerdLifecycleTrendsPayload)
     growth_dynamics: NerdGrowthDynamicsPayload = Field(default_factory=NerdGrowthDynamicsPayload)
+    retrieval: NerdRetrievalPayload = Field(default_factory=NerdRetrievalPayload)
     maintenance_summary: NerdMaintenanceSummaryPayload = Field(default_factory=NerdMaintenanceSummaryPayload)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
     graph_topology: GraphTopologyPayload = Field(default_factory=GraphTopologyPayload)
@@ -487,8 +533,15 @@ class ProviderUsagePayload(BaseModel):
     calls_last_day: int
     failures_last_hour: int
     failures_last_day: int
+    skips_last_hour: int = 0
+    skips_last_day: int = 0
     avg_duration_last_hour: float
     avg_duration_last_day: float
+    top_failure_reason_last_day: str | None = None
+    top_skip_reason_last_day: str | None = None
+    active_admission_reason: str | None = None
+    active_admission_category: str | None = None
+    active_retry_delay_seconds: float | None = None
 
 
 class AIConversationPayload(BaseModel):
@@ -507,6 +560,9 @@ class AIConversationPayload(BaseModel):
     parsed: dict | None = None
     status: str
     error_text: str | None = None
+    reason_category: str | None = None
+    reason_code: str | None = None
+    retry_delay_seconds: float | None = None
     started_at: float
     completed_at: float
     duration_seconds: float

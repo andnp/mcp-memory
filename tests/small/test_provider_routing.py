@@ -20,9 +20,13 @@ class _FakeProvider:
     def __init__(self, name: str, *, available: bool = True) -> None:
         self.name = name
         self.available = available
+        self.skipped: list[str | None] = []
 
     def budget_available(self) -> bool:
         return self.available
+
+    def record_admission_skip(self, decision) -> None:
+        self.skipped.append(decision.reason)
 
     def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
         return {
@@ -127,6 +131,53 @@ def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic(
             "gemini-cheap": {
                 "agentic": _FakeProvider("gemini-cheap-agentic", available=True),
             }
+        },
+    )
+    task = TaskRecord(
+        id="dedup-task",
+        task_name="deduplicator",
+        data={},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    selected = _provider_for_task(ctx, None, None, "deduplicator", task)
+
+    assert selected == {
+        "provider": "gemini-cheap-agentic",
+        "task_name": "deduplicator",
+        "task_id": "dedup-task",
+        "workspace_id": "workspace-a",
+    }
+
+
+def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -> None:
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                task_routes={"deduplicator": ["copilot-mini", "gemini-cheap"]},
+                profiles={
+                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+                model_burst_call_limit=1,
+                model_burst_window_seconds=600.0,
+            ),
+        ),
+        ai_provider_registry={
+            "copilot-mini": {"agentic": _FakeProvider("copilot-mini-agentic", available=False)},
+            "gemini-cheap": {"agentic": _FakeProvider("gemini-cheap-agentic", available=True)},
         },
     )
     task = TaskRecord(
@@ -392,3 +443,66 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
             "workspace_id": "workspace-a",
         }
     ]
+
+
+def test_select_provider_for_request_records_real_route_skip_but_route_audit_does_not() -> None:
+    class _BoundSkippingProvider(SimpleNamespace):
+        def record_admission_skip(self, decision) -> None:
+            self.skipped.append(decision.reason)
+
+    class _SkippingProvider(_FakeProvider):
+        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+            return _BoundSkippingProvider(
+                provider=self.name,
+                task_name=task_name,
+                task_id=task_id,
+                workspace_id=workspace_id,
+                skipped=self.skipped,
+            )
+
+    unavailable = _SkippingProvider("copilot-mini", available=False)
+    fallback = _FakeProvider("gemini-cheap", available=True)
+    config = Config(
+        ai=AIConfig(provider="none"),
+        provider_routing=ProviderRoutingConfig(
+            task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
+            profiles={
+                "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            },
+        ),
+    )
+    inputs = ProviderSelectionInputs(
+        config=config,
+        ai_provider_registry={
+            "copilot-mini": {"json": unavailable},
+            "gemini-cheap": {"json": fallback},
+        },
+    )
+
+    selected = select_provider_for_request(
+        inputs,
+        None,
+        None,
+        ProviderSelectionRequest(task_name="graph-linker", task_id="task-1", workspace_id="workspace-a"),
+        agentic_task_names=set(),
+    )
+
+    assert selected == {
+        "provider": "gemini-cheap",
+        "task_name": "graph-linker",
+        "task_id": "task-1",
+        "workspace_id": "workspace-a",
+    }
+    assert unavailable.skipped == [None]
+
+    select_provider_for_request(
+        inputs,
+        None,
+        None,
+        ProviderSelectionRequest(task_name="graph-linker", task_id="audit:graph-linker", workspace_id="workspace-a"),
+        agentic_task_names=set(),
+        record_admission_skips=False,
+    )
+
+    assert unavailable.skipped == [None]

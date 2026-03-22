@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -160,7 +160,10 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             duration_seconds REAL NOT NULL DEFAULT 0,
             created_at REAL NOT NULL,
-            error_text TEXT
+            error_text TEXT,
+            reason_category TEXT,
+            reason_code TEXT,
+            retry_delay_seconds REAL
         );
 
         CREATE TABLE IF NOT EXISTS ai_conversations (
@@ -179,10 +182,39 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             parsed_json TEXT,
             status TEXT NOT NULL,
             error_text TEXT,
+            reason_category TEXT,
+            reason_code TEXT,
+            retry_delay_seconds REAL,
             started_at REAL NOT NULL,
             completed_at REAL NOT NULL,
             duration_seconds REAL NOT NULL DEFAULT 0,
             UNIQUE(request_id, attempt)
+        );
+
+        CREATE TABLE IF NOT EXISTS provider_admission_state (
+            provider_key TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            reason_category TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            error_text TEXT,
+            retry_delay_seconds REAL,
+            active_until REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (provider_key, model_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_tool_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invocation_id TEXT NOT NULL,
+            workspace_id TEXT,
+            caller_kind TEXT NOT NULL,
+            event_kind TEXT NOT NULL,
+            memory_id TEXT,
+            query_text TEXT,
+            result_rank INTEGER,
+            result_count INTEGER,
+            created_at REAL NOT NULL,
+            FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -265,6 +297,44 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "duration_seconds", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "provider_usage", "created_at", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "provider_usage", "error_text", "TEXT")
+    ensure_column(conn, "provider_usage", "reason_category", "TEXT")
+    ensure_column(conn, "provider_usage", "reason_code", "TEXT")
+    ensure_column(conn, "provider_usage", "retry_delay_seconds", "REAL")
+    ensure_column(conn, "ai_conversations", "reason_category", "TEXT")
+    ensure_column(conn, "ai_conversations", "reason_code", "TEXT")
+    ensure_column(conn, "ai_conversations", "retry_delay_seconds", "REAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_admission_state (
+            provider_key TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            reason_category TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            error_text TEXT,
+            retry_delay_seconds REAL,
+            active_until REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (provider_key, model_name)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_tool_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invocation_id TEXT NOT NULL,
+            workspace_id TEXT,
+            caller_kind TEXT NOT NULL,
+            event_kind TEXT NOT NULL,
+            memory_id TEXT,
+            query_text TEXT,
+            result_rank INTEGER,
+            result_count INTEGER,
+            created_at REAL NOT NULL,
+            FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
+        )
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -312,6 +382,8 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON provider_usage(workspace_id, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created_at
             ON provider_usage(provider_key, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_usage_reason_created_at
+            ON provider_usage(reason_code, created_at DESC, id DESC);
 
         CREATE INDEX IF NOT EXISTS idx_ai_conversations_request_id
             ON ai_conversations(request_id);
@@ -319,6 +391,15 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON ai_conversations(workspace_id, completed_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_ai_conversations_task_created_at
             ON ai_conversations(task_name, completed_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_provider_admission_state_active_until
+            ON provider_admission_state(active_until DESC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_tool_events_workspace_kind_created_at
+            ON memory_tool_events(workspace_id, event_kind, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_tool_events_memory_kind_created_at
+            ON memory_tool_events(memory_id, event_kind, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_tool_events_invocation_kind
+            ON memory_tool_events(invocation_id, event_kind);
         """
     )
     conn.execute(

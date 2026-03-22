@@ -84,8 +84,15 @@ def build_provider_usage(provider_usage_repo, workspace_id: str | None) -> list[
             calls_last_day=summary.calls_last_day,
             failures_last_hour=summary.failures_last_hour,
             failures_last_day=summary.failures_last_day,
+            skips_last_hour=summary.skips_last_hour,
+            skips_last_day=summary.skips_last_day,
             avg_duration_last_hour=summary.avg_duration_last_hour,
             avg_duration_last_day=summary.avg_duration_last_day,
+            top_failure_reason_last_day=summary.top_failure_reason_last_day,
+            top_skip_reason_last_day=summary.top_skip_reason_last_day,
+            active_admission_reason=summary.active_admission_reason,
+            active_admission_category=summary.active_admission_category,
+            active_retry_delay_seconds=summary.active_retry_delay_seconds,
         )
         for summary in provider_usage_repo.summarize_usage(workspace_id=workspace_id)
     ]
