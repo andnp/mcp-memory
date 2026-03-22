@@ -25,6 +25,7 @@ from mcp_memory.core.sampling import (
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
+    SamplingBatch,
     sampling_payload,
 )
 import mcp_memory.core.task_handlers.curator_support as _curator_support
@@ -42,7 +43,16 @@ from mcp_memory.core.task_handlers.agentic_guardrails import (
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_TAGGING
+from mcp_memory.work_item_store import (
+    WORK_FAMILY_CONFLICT_REVIEW,
+    EXECUTION_LANE_AGENTIC,
+    EXECUTION_LANE_DETERMINISTIC,
+    WORK_FAMILY_GRAPH_LINK_REVIEW,
+    WORK_FAMILY_MEMORY_CURATION_REVIEW,
+    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+    WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
+    WORK_FAMILY_MEMORY_TAGGING,
+)
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -107,6 +117,24 @@ async def handle_graph_linker_task(
     if ctx.repository is None:
         return {"created": 0}
 
+    if provider is not None:
+        claimed_review_items = _claim_graph_link_review_work_batch(ctx, task=task, limit=1)
+        if claimed_review_items:
+            review_item = claimed_review_items[0]
+            try:
+                candidates = _graph_link_review_candidates(ctx, review_item.payload)
+                proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
+                created = _apply_graph_link_proposals(ctx, proposed_pairs)
+            except Exception:
+                _release_taxonomist_work_item(ctx, review_item.id)
+                raise
+            _complete_taxonomist_work_item(ctx, review_item.id)
+            return {
+                "created": created,
+                "claimed_work_item_count": 1,
+                "execution_mode": "agentic_review",
+            }
+
     all_candidates = ctx.repository.list_memories(
         workspace_id=_resolve_workspace_id(ctx, task),
         status="active",
@@ -125,14 +153,58 @@ async def handle_graph_linker_task(
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
-    created = 0
-    for source_id, target_id, link_type, context in proposed_pairs:
-        if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
-            continue
-        ctx.repository.add_link(source_id, target_id, link_type, context)
-        created += 1
+    created = _apply_graph_link_proposals(ctx, proposed_pairs)
 
     return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
+
+
+async def handle_graph_link_discovery_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"created": 0, "seeded_work_item_count": 0}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    all_candidates = ctx.repository.list_memories(
+        workspace_id=workspace_id,
+        status="active",
+        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+    )
+    sampled_batch = _sample_maintenance_candidates(
+        ctx,
+        task,
+        all_candidates,
+        allowed_strategies=GRAPH_LINKER_ALLOWED_STRATEGIES,
+        strategy_weights=GRAPH_LINKER_STRATEGY_WEIGHTS,
+        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+    )
+    candidates = sampled_batch.records
+    if len(candidates) < 2:
+        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
+
+    fallback_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider=None)
+    created = _apply_graph_link_proposals(ctx, fallback_pairs)
+    seeded_work_item_count = 0
+    if (
+        len(fallback_pairs) < _relationship_proposals.GRAPH_LINKER_FALLBACK_LINK_TARGET
+        and len(candidates) > _relationship_proposals.GRAPH_LINKER_AI_MIN_CANDIDATES
+    ):
+        _, created_item = _enqueue_graph_link_review_work_item(
+            ctx,
+            task=task,
+            workspace_id=workspace_id,
+            candidates=candidates,
+            strategy_used=sampled_batch.strategy_used,
+        )
+        seeded_work_item_count = 1 if created_item else 0
+
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        created=created,
+        seeded_work_item_count=seeded_work_item_count,
+    )
 
 
 async def handle_conflict_detector_task(
@@ -142,6 +214,24 @@ async def handle_conflict_detector_task(
 ) -> dict[str, Any]:
     if ctx.repository is None:
         return {"created": 0}
+
+    if provider is not None:
+        claimed_review_items = _claim_conflict_review_work_batch(ctx, task=task, limit=1)
+        if claimed_review_items:
+            review_item = claimed_review_items[0]
+            try:
+                candidates = _conflict_review_candidates(ctx, review_item.payload)
+                proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
+                created = _apply_conflict_proposals(ctx, proposed_pairs)
+            except Exception:
+                _release_taxonomist_work_item(ctx, review_item.id)
+                raise
+            _complete_taxonomist_work_item(ctx, review_item.id)
+            return {
+                "created": created,
+                "claimed_work_item_count": 1,
+                "execution_mode": "agentic_review",
+            }
 
     all_candidates = [
         record
@@ -165,18 +255,59 @@ async def handle_conflict_detector_task(
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
-    created = 0
-    for left_id, right_id, context in proposed_pairs:
-        if left_id == right_id:
-            continue
-        if not _has_link(ctx, left_id, right_id, "CONTRADICTS"):
-            ctx.repository.add_link(left_id, right_id, "CONTRADICTS", context)
-            created += 1
-        if not _has_link(ctx, right_id, left_id, "CONTRADICTS"):
-            ctx.repository.add_link(right_id, left_id, "CONTRADICTS", context)
-            created += 1
+    created = _apply_conflict_proposals(ctx, proposed_pairs)
 
     return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
+
+
+async def handle_conflict_screening_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"created": 0, "seeded_work_item_count": 0}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    all_candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=workspace_id,
+            status="active",
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if record.type in {"fact", "plan"}
+    ]
+    sampled_batch = _sample_maintenance_candidates(
+        ctx,
+        task,
+        all_candidates,
+        allowed_strategies=CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
+        strategy_weights=CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
+        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+    )
+    candidates = sampled_batch.records
+    if len(candidates) < 2:
+        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
+
+    fallback_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider=None)
+    created = _apply_conflict_proposals(ctx, fallback_pairs)
+    seeded_work_item_count = 0
+    if not fallback_pairs and len(candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
+        _, created_item = _enqueue_conflict_review_work_item(
+            ctx,
+            task=task,
+            workspace_id=workspace_id,
+            candidates=candidates,
+            strategy_used=sampled_batch.strategy_used,
+        )
+        seeded_work_item_count = 1 if created_item else 0
+
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        created=created,
+        seeded_work_item_count=seeded_work_item_count,
+    )
 
 
 async def handle_defragmenter_task(
@@ -254,6 +385,45 @@ async def handle_deduplicator_task(
     if ctx.repository is None:
         return {"merged": 0, "archived": 0, "absorbed_observations": 0}
 
+    if provider is not None:
+        claimed_review_items = _claim_dedup_review_work_batch(ctx, task=task, limit=1)
+        if claimed_review_items:
+            review_item = claimed_review_items[0]
+            seed_records = _dedup_review_seed_records(ctx, review_item.payload)
+            facts = [record for record in seed_records if record.type == "fact"]
+            if not facts:
+                _complete_taxonomist_work_item(ctx, review_item.id)
+                return {
+                    "summary": None,
+                    "merged": 0,
+                    "archived": 0,
+                    "absorbed_observations": 0,
+                    "claimed_work_item_count": 1,
+                    "execution_mode": "agentic_review",
+                }
+            run_agent = getattr(provider, "run_agent", None)
+            supports_agentic = getattr(provider, "supports_agentic", None)
+            if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
+                try:
+                    agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+                        _build_deduplicator_agent_prompt(
+                            task,
+                            seed_records,
+                            strategy_used=_dedup_review_strategy(review_item.payload),
+                        )
+                    )
+                except Exception:
+                    _release_taxonomist_work_item(ctx, review_item.id)
+                    raise
+                _complete_taxonomist_work_item(ctx, review_item.id)
+                normalized = _normalize_deduplicator_agentic_result(agentic_result, seed_records)
+                normalized["claimed_work_item_count"] = 1
+                return sampling_payload(
+                    _dedup_review_sampling_batch(review_item.payload, seed_records),
+                    sampled_records=seed_records,
+                    extra=normalized,
+                )
+
     workspace_id = _resolve_workspace_id(ctx, task)
     candidates = [
         record
@@ -312,6 +482,55 @@ async def handle_deduplicator_task(
     )
 
 
+async def handle_dedup_prep_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"seeded_work_item_count": 0}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=workspace_id,
+            status="active",
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+    ]
+    seed_batch = _select_deduplicator_seed_batch(
+        ctx,
+        candidates,
+        task_id=task.id,
+        strategy=_requested_sampling_strategy(task),
+    )
+    seed_records = seed_batch.records
+    facts = [record for record in seed_records if record.type == "fact"]
+    if not facts:
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            seed_records=seed_records,
+            seeded_work_item_count=0,
+        )
+
+    _, created = _enqueue_dedup_review_work_item(
+        ctx,
+        task=task,
+        workspace_id=workspace_id,
+        seed_records=seed_records,
+        strategy_used=seed_batch.strategy_used,
+        candidate_count=seed_batch.candidate_count,
+    )
+    return sampling_payload(
+        seed_batch,
+        sampled_records=seed_records,
+        seed_records=seed_records,
+        seeded_work_item_count=1 if created else 0,
+    )
+
+
 async def handle_taxonomist_task(
     ctx: ApplicationContext,
     task: TaskRecord,
@@ -339,16 +558,7 @@ async def handle_taxonomist_task(
     provider_calls_used = 0
     provider_deferred_reason_code: str | None = None
     provider_deferred_retry_delay_seconds: float | None = None
-    untagged_candidates: list[Any] = []
-    for record in candidates:
-        normalized_tags = _normalize_tag_values(record.tags)
-        if normalized_tags != record.tags:
-            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
-            if refreshed is not None:
-                updated += 1
-            continue
-        if not normalized_tags:
-            untagged_candidates.append(record)
+    untagged_candidates = [record for record in candidates if not _normalize_tag_values(record.tags)]
 
     seeded_work_items = _seed_taxonomist_work_items(
         ctx,
@@ -402,6 +612,102 @@ async def handle_taxonomist_task(
         provider_deferred_reason_code=provider_deferred_reason_code,
         provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
         claimed_work_item_count=json_result["claimed_work_item_count"],
+    )
+
+
+async def handle_tag_normalizer_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"updated": 0, "seeded_enrichment_count": 0}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    all_candidates = ctx.repository.list_memories(
+        workspace_id=workspace_id,
+        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+    )
+    sampled_batch = _sample_maintenance_candidates(
+        ctx,
+        task,
+        all_candidates,
+        allowed_strategies=TAXONOMIST_ALLOWED_STRATEGIES,
+        strategy_weights=TAXONOMIST_STRATEGY_WEIGHTS,
+        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+    )
+    candidates = sampled_batch.records
+    normalization_candidates = [record for record in candidates if _needs_tag_normalization(record.tags)]
+    seeded_work_items = _seed_tag_normalizer_work_items(
+        ctx,
+        task=task,
+        candidates=normalization_candidates,
+    )
+    claimed_work_items = _claim_tag_normalizer_work_batch(
+        ctx,
+        task=task,
+        limit=min(len(normalization_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+    )
+
+    updated = 0
+    seeded_enrichment_count = 0
+    finalized_work_item_ids: set[str] = set()
+    for work_item in claimed_work_items:
+        memory_id = _taxonomist_work_memory_id(work_item.payload)
+        if memory_id is None:
+            _complete_taxonomist_work_item(ctx, work_item.id)
+            finalized_work_item_ids.add(work_item.id)
+            continue
+
+        record = ctx.repository.get_memory(memory_id)
+        if record is None:
+            _complete_taxonomist_work_item(ctx, work_item.id)
+            finalized_work_item_ids.add(work_item.id)
+            continue
+
+        normalized_tags = _normalize_tag_values(record.tags)
+        if normalized_tags != record.tags:
+            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
+            if refreshed is not None:
+                updated += 1
+                record = refreshed
+
+        if not record.tags:
+            _, created = _enqueue_taxonomist_enrichment_work_item(
+                ctx,
+                task=task,
+                memory_id=record.id,
+                workspace_id=workspace_id,
+            )
+            if created:
+                seeded_enrichment_count += 1
+
+        _complete_taxonomist_work_item(ctx, work_item.id)
+        finalized_work_item_ids.add(work_item.id)
+
+    for record in candidates:
+        if record.tags:
+            continue
+        _, created = _enqueue_taxonomist_enrichment_work_item(
+            ctx,
+            task=task,
+            memory_id=record.id,
+            workspace_id=workspace_id,
+        )
+        if created:
+            seeded_enrichment_count += 1
+
+    for work_item in claimed_work_items:
+        if work_item.id in finalized_work_item_ids:
+            continue
+        _release_taxonomist_work_item(ctx, work_item.id)
+
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        updated=updated,
+        seeded_work_item_count=len(seeded_work_items),
+        claimed_work_item_count=len(claimed_work_items),
+        seeded_enrichment_count=seeded_enrichment_count,
     )
 
 
@@ -557,8 +863,21 @@ async def handle_memory_curator_task(
     if provider is None:
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "provider_not_configured"}
 
-    seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
-    seed_records = seed_batch.records
+    claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
+    claimed_review_item = claimed_review_items[0] if claimed_review_items else None
+    if claimed_review_item is not None:
+        seed_records = _curator_review_seed_records(ctx, claimed_review_item.payload)
+        if seed_records:
+            seed_batch = _curator_review_sampling_batch(claimed_review_item.payload, seed_records)
+        else:
+            _complete_taxonomist_work_item(ctx, claimed_review_item.id)
+            claimed_review_item = None
+            seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
+            seed_records = seed_batch.records
+    else:
+        seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
+        seed_records = seed_batch.records
+
     if not seed_records:
         return sampling_payload(
             seed_batch,
@@ -566,6 +885,7 @@ async def handle_memory_curator_task(
             summary=None,
             tool_calls_executed=0,
             mutations=0,
+            claimed_work_item_count=0,
             reason="no_seed_records",
         )
 
@@ -592,57 +912,72 @@ async def handle_memory_curator_task(
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
-        agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-            (
-                f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
-                "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
-                f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{seed_batch.strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the active frontier before mutating.\n"
-                "Treat the provided seed memories as a starting frontier; widen only when they imply nearby duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
-                "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
-                f"{build_curator_guardrails()}\n"
-                f"Treat memories above {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
-                "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
-                "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
-                "Before finishing, do one more quick search/list/read pass for any adjacent high-value maintenance opportunity.\n"
-                "Do not claim work you did not actually execute through MCP tools.\n"
-                f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
-                "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
-                f"Sampling strategy: {seed_batch.strategy_used}\n"
-                f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+        try:
+            agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+                (
+                    f"You are the {CURATOR_TASK_NAME} maintenance agent for the global memory store.\n"
+                    "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
+                    f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{seed_batch.strategy_used}', and exclude_memory_ids={json.dumps([record.id for record in seed_records], sort_keys=True)} so you can widen beyond the current frontier only when justified.\n"
+                    "Treat the provided seed memories as a starting frontier and the active frontier for this run; widen only when they imply nearby duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
+                    "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
+                    f"{build_curator_guardrails()}\n"
+                    f"Treat memories above {_curator_support.CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+                    "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
+                    "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
+                    "Before finishing, do one more quick search/list/read pass for any adjacent high-value maintenance opportunity.\n"
+                    "Do not claim work you did not actually execute through MCP tools.\n"
+                    f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='{CURATOR_TASK_NAME}', and a short summary before your final JSON response.\n"
+                    "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
+                    f"Sampling strategy: {seed_batch.strategy_used}\n"
+                    f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+                )
             )
-        )
+        except Exception:
+            if claimed_review_item is not None:
+                _release_taxonomist_work_item(ctx, claimed_review_item.id)
+            raise
+        if claimed_review_item is not None:
+            _complete_taxonomist_work_item(ctx, claimed_review_item.id)
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
             seed_records=seed_records,
             summary=agentic_result.summary,
             execution_mode="agentic_mcp",
+            claimed_work_item_count=1 if claimed_review_item is not None else 0,
         )
 
-    loop_result = await run_internal_tool_loop(
-        ctx,
-        provider,
-        prompt=prompt,
-        allowed_tool_names=[
-            "internal_search_memory_records",
-            "internal_read_memory_record",
-            "internal_list_memory_records",
-            "internal_get_next_curator_batch",
-            "task_complete",
-            "internal_task_complete",
-            "internal_append_memory_content",
-            "internal_archive_memory_record",
-            "internal_merge_memory_into_canonical",
-            "internal_split_memory_record",
-            "internal_create_memory_record",
-            "internal_update_memory_record",
-            "internal_delete_memory_record",
-            "internal_create_memory_link",
-            "internal_delete_memory_link",
-        ],
-        max_rounds=CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS,
-        max_tool_calls_per_round=CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND,
-    )
+    try:
+        loop_result = await run_internal_tool_loop(
+            ctx,
+            provider,
+            prompt=prompt,
+            allowed_tool_names=[
+                "internal_search_memory_records",
+                "internal_read_memory_record",
+                "internal_list_memory_records",
+                "internal_get_next_curator_batch",
+                "task_complete",
+                "internal_task_complete",
+                "internal_append_memory_content",
+                "internal_archive_memory_record",
+                "internal_merge_memory_into_canonical",
+                "internal_split_memory_record",
+                "internal_create_memory_record",
+                "internal_update_memory_record",
+                "internal_delete_memory_record",
+                "internal_create_memory_link",
+                "internal_delete_memory_link",
+            ],
+            max_rounds=CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS,
+            max_tool_calls_per_round=CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND,
+        )
+    except Exception:
+        if claimed_review_item is not None:
+            _release_taxonomist_work_item(ctx, claimed_review_item.id)
+        raise
+    if claimed_review_item is not None:
+        _complete_taxonomist_work_item(ctx, claimed_review_item.id)
     summary = _curator_support.normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
     return sampling_payload(
         seed_batch,
@@ -650,9 +985,45 @@ async def handle_memory_curator_task(
         seed_records=seed_records,
         summary=summary,
         execution_mode="json_tool_loop",
+        claimed_work_item_count=1 if claimed_review_item is not None else 0,
         tool_calls_executed=loop_result.tool_calls_executed,
         mutations=loop_result.mutating_tool_calls,
         tool_names_used=loop_result.tool_names_used,
+    )
+
+
+async def handle_curator_frontier_task(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+) -> dict[str, Any]:
+    if ctx.repository is None:
+        return {"seeded_work_item_count": 0}
+
+    workspace_id = _resolve_workspace_id(ctx, task)
+    seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
+    seed_records = seed_batch.records
+    if not seed_records:
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            seed_records=seed_records,
+            seeded_work_item_count=0,
+            reason="no_seed_records",
+        )
+
+    _, created = _enqueue_curator_review_work_item(
+        ctx,
+        task=task,
+        workspace_id=workspace_id,
+        seed_records=seed_records,
+        strategy_used=seed_batch.strategy_used,
+        candidate_count=seed_batch.candidate_count,
+    )
+    return sampling_payload(
+        seed_batch,
+        sampled_records=seed_records,
+        seed_records=seed_records,
+        seeded_work_item_count=1 if created else 0,
     )
 
 
@@ -725,6 +1096,327 @@ def _record_taxonomist_provider_deferred_event(
     )
 
 
+def _apply_graph_link_proposals(
+    ctx: ApplicationContext,
+    proposed_pairs: list[tuple[str, str, str, str]],
+) -> int:
+    if ctx.repository is None:
+        return 0
+    created = 0
+    for source_id, target_id, link_type, context in proposed_pairs:
+        if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
+            continue
+        ctx.repository.add_link(source_id, target_id, link_type, context)
+        created += 1
+    return created
+
+
+def _apply_conflict_proposals(
+    ctx: ApplicationContext,
+    proposed_pairs: list[tuple[str, str, str]],
+) -> int:
+    if ctx.repository is None:
+        return 0
+    created = 0
+    for left_id, right_id, context in proposed_pairs:
+        if left_id == right_id:
+            continue
+        if not _has_link(ctx, left_id, right_id, "CONTRADICTS"):
+            ctx.repository.add_link(left_id, right_id, "CONTRADICTS", context)
+            created += 1
+        if not _has_link(ctx, right_id, left_id, "CONTRADICTS"):
+            ctx.repository.add_link(right_id, left_id, "CONTRADICTS", context)
+            created += 1
+    return created
+
+
+def _claim_dedup_review_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _claim_graph_link_review_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _claim_conflict_review_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_CONFLICT_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _enqueue_graph_link_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str,
+    candidates: list[Any],
+    strategy_used: str | None,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    candidate_ids = sorted(record.id for record in candidates)
+    return work_items.enqueue_unique(
+        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"graph_link_review:{'|'.join(candidate_ids)}",
+        payload={
+            "workspace_id": workspace_id,
+            "candidate_memory_ids": candidate_ids,
+            "strategy_used": strategy_used,
+        },
+    )
+
+
+def _enqueue_conflict_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str,
+    candidates: list[Any],
+    strategy_used: str | None,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    candidate_ids = sorted(record.id for record in candidates)
+    return work_items.enqueue_unique(
+        family_key=WORK_FAMILY_CONFLICT_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"conflict_review:{'|'.join(candidate_ids)}",
+        payload={
+            "workspace_id": workspace_id,
+            "candidate_memory_ids": candidate_ids,
+            "strategy_used": strategy_used,
+        },
+    )
+
+
+def _enqueue_dedup_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str,
+    seed_records: list[Any],
+    strategy_used: str | None,
+    candidate_count: int,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    seed_ids = sorted(record.id for record in seed_records)
+    return work_items.enqueue_unique(
+        family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"memory_dedup_review:{'|'.join(seed_ids)}",
+        payload={
+            "workspace_id": workspace_id,
+            "seed_memory_ids": seed_ids,
+            "strategy_used": strategy_used,
+            "candidate_count": candidate_count,
+        },
+    )
+
+
+def _claim_curator_review_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _enqueue_curator_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str | None,
+    seed_records: list[Any],
+    strategy_used: str | None,
+    candidate_count: int,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    seed_ids = sorted(record.id for record in seed_records)
+    return work_items.enqueue_unique(
+        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"memory_curation_review:{'|'.join(seed_ids)}",
+        payload={
+            "workspace_id": workspace_id,
+            "seed_memory_ids": seed_ids,
+            "strategy_used": strategy_used,
+            "candidate_count": candidate_count,
+        },
+    )
+
+
+def _curator_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    seed_ids = payload.get("seed_memory_ids")
+    if not isinstance(seed_ids, list):
+        return []
+    records: list[Any] = []
+    for memory_id in seed_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        records.append(record)
+    return records
+
+
+def _curator_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
+    requested_strategy = payload.get("strategy_used")
+    if not isinstance(requested_strategy, str):
+        requested_strategy = None
+    candidate_count = payload.get("candidate_count")
+    if not isinstance(candidate_count, int):
+        candidate_count = len(seed_records)
+    return SamplingBatch(
+        requested_strategy=requested_strategy,
+        strategy_used=requested_strategy or "none",
+        strategy_fallback_reason=None,
+        candidate_count=candidate_count,
+        records=seed_records,
+    )
+
+
+def _graph_link_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    candidate_ids = payload.get("candidate_memory_ids")
+    if not isinstance(candidate_ids, list):
+        return []
+    candidates: list[Any] = []
+    for memory_id in candidate_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        candidates.append(record)
+    return candidates
+
+
+def _conflict_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    candidate_ids = payload.get("candidate_memory_ids")
+    if not isinstance(candidate_ids, list):
+        return []
+    candidates: list[Any] = []
+    for memory_id in candidate_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active" or record.type not in {"fact", "plan"}:
+            continue
+        candidates.append(record)
+    return candidates
+
+
+def _dedup_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    seed_ids = payload.get("seed_memory_ids")
+    if not isinstance(seed_ids, list):
+        return []
+    records: list[Any] = []
+    for memory_id in seed_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        records.append(record)
+    return records
+
+
+def _dedup_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
+    requested_strategy = payload.get("strategy_used")
+    if not isinstance(requested_strategy, str):
+        requested_strategy = None
+    candidate_count = payload.get("candidate_count")
+    if not isinstance(candidate_count, int):
+        candidate_count = len(seed_records)
+    return SamplingBatch(
+        requested_strategy=requested_strategy,
+        strategy_used=requested_strategy or "none",
+        strategy_fallback_reason=None,
+        candidate_count=candidate_count,
+        records=seed_records,
+    )
+
+
+def _dedup_review_strategy(payload: dict[str, Any]) -> str:
+    strategy = payload.get("strategy_used")
+    if isinstance(strategy, str) and strategy.strip():
+        return strategy
+    return "none"
+
+
 def _claim_taxonomist_work_batch(
     ctx: ApplicationContext,
     *,
@@ -745,7 +1437,48 @@ def _claim_taxonomist_work_batch(
     )
 
 
+def _claim_tag_normalizer_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_batch(
+        family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
+        execution_lane=EXECUTION_LANE_DETERMINISTIC,
+        lease_owner=task.id,
+        limit=limit,
+        workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
 def _seed_taxonomist_work_items(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    candidates: list[Any],
+) -> dict[str, Any]:
+    if getattr(ctx, "work_items", None) is None:
+        return {}
+    workspace_id = _resolve_workspace_id(ctx, task)
+    seeded: dict[str, Any] = {}
+    for record in candidates:
+        if record.tags:
+            continue
+        work_item, _ = _enqueue_taxonomist_enrichment_work_item(
+            ctx,
+            task=task,
+            memory_id=record.id,
+            workspace_id=workspace_id,
+        )
+        seeded[record.id] = work_item
+    return seeded
+
+
+def _seed_tag_normalizer_work_items(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
@@ -757,18 +1490,51 @@ def _seed_taxonomist_work_items(
     workspace_id = _resolve_workspace_id(ctx, task)
     seeded: dict[str, Any] = {}
     for record in candidates:
-        if record.tags:
+        normalized_tags = _normalize_tag_values(record.tags)
+        if normalized_tags == record.tags:
             continue
+        signature = _tag_normalization_signature(record.tags)
         work_item, _ = work_items.enqueue_unique(
-            family_key=WORK_FAMILY_MEMORY_TAGGING,
-            execution_lane=EXECUTION_LANE_AGENTIC,
+            family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
+            execution_lane=EXECUTION_LANE_DETERMINISTIC,
             workspace_id=workspace_id,
             priority=task.priority,
-            idempotency_key=f"memory_tagging:{record.id}",
-            payload={"memory_id": record.id, "workspace_id": workspace_id},
+            idempotency_key=f"memory_tag_normalization:{record.id}:{signature}",
+            payload={"memory_id": record.id, "workspace_id": workspace_id, "observed_tags": list(record.tags)},
         )
         seeded[record.id] = work_item
     return seeded
+
+
+def _enqueue_taxonomist_enrichment_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    memory_id: str,
+    workspace_id: str,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    return work_items.enqueue_unique(
+        family_key=WORK_FAMILY_MEMORY_TAGGING,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"memory_tagging:{memory_id}",
+        payload={"memory_id": memory_id, "workspace_id": workspace_id},
+    )
+
+
+def _needs_tag_normalization(tags: list[str]) -> bool:
+    normalized_tags = _normalize_tag_values(tags)
+    return bool(tags) and normalized_tags != tags
+
+
+def _tag_normalization_signature(tags: list[str]) -> str:
+    if not tags:
+        return "untagged"
+    return "|".join(tag.strip() for tag in tags)
 
 
 def _taxonomist_work_memory_id(payload: dict[str, Any]) -> str | None:

@@ -8,27 +8,37 @@ import pytest
 from mcp_memory.core.agent_runtime import (
     AGENTIC_TASK_NAMES,
     CONFLICT_DETECTOR_TASK_NAME,
+    CONFLICT_SCREENING_TASK_NAME,
+    CURATOR_FRONTIER_TASK_NAME,
     CURATOR_TASK_NAME,
+    DEDUP_PREP_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
+    GRAPH_LINK_DISCOVERY_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
     RECURRING_TASK_INTERVAL_SECONDS,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
+    TAG_NORMALIZER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
     bootstrap_background_tasks,
     build_runtime_task_worker,
     handle_defragmenter_task,
     handle_conflict_detector_task,
+    handle_conflict_screening_task,
+    handle_curator_frontier_task,
+    handle_dedup_prep_task,
     handle_memory_curator_task,
     handle_deduplicator_task,
     handle_fact_checker_task,
+    handle_graph_link_discovery_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
     handle_project_manager_task,
+    handle_tag_normalizer_task,
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
@@ -1361,11 +1371,16 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 9}
+    assert queue.count_by_status() == {"pending": 14}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
+    assert queue.find_open_task(CURATOR_FRONTIER_TASK_NAME, None) is not None
+    assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is not None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
+    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is not None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
+    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is not None
+    assert queue.find_open_task(TAG_NORMALIZER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
@@ -2220,6 +2235,156 @@ async def test_graph_linker_skips_provider_when_fallback_is_sufficient(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_graph_link_discovery_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        for index in range(13):
+            record = runtime.repository.create_memory(
+                title=f"isolated-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+
+        result = await handle_graph_link_discovery_task(
+            runtime,
+            TaskRecord(
+                id="graph-link-discovery-task",
+                task_name=GRAPH_LINK_DISCOVERY_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        review_items = runtime.work_items.list_items(family_key="graph_link_review", limit=5)
+
+        assert result["created"] == 0
+        assert result["seeded_work_item_count"] == 1
+        assert [item.status for item in review_items] == ["pending"]
+        assert len(review_items[0].payload["candidate_memory_ids"]) == 13
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_graph_linker_consumes_seeded_review_work_items(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        records = []
+        for index in range(13):
+            record = runtime.repository.create_memory(
+                title=f"isolated-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+            records.append(record)
+
+        discovery_result = await handle_graph_link_discovery_task(
+            runtime,
+            TaskRecord(
+                id="graph-link-discovery-review-seed",
+                task_name=GRAPH_LINK_DISCOVERY_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+        assert discovery_result["seeded_work_item_count"] == 1
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "links": [
+                        {
+                            "source_id": records[0].id,
+                            "target_id": records[1].id,
+                            "link_type": "DEPENDS_ON",
+                            "context": "provider detected dependency",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-review-consumer",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        links = runtime.repository.get_links(records[0].id, direction="outgoing")
+        review_items = runtime.work_items.list_items(family_key="graph_link_review", limit=5)
+
+        assert result["created"] == 1
+        assert result["claimed_work_item_count"] == 1
+        assert result["execution_mode"] == "agentic_review"
+        assert provider.call_count == 1
+        assert len(links) == 1
+        assert links[0].target_id == records[1].id
+        assert [item.status for item in review_items] == ["completed"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_graph_linker_escalates_to_provider_with_internal_tool_prompt(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -2393,6 +2558,156 @@ async def test_graph_linker_treats_variant_link_type_spellings_as_existing_links
 
 
 @pytest.mark.asyncio
+async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        for index in range(16):
+            record = runtime.repository.create_memory(
+                title=f"isolated-conflict-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+
+        result = await handle_conflict_screening_task(
+            runtime,
+            TaskRecord(
+                id="conflict-screening-task",
+                task_name=CONFLICT_SCREENING_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
+
+        assert result["created"] == 0
+        assert result["seeded_work_item_count"] == 1
+        assert [item.status for item in review_items] == ["pending"]
+        assert len(review_items[0].payload["candidate_memory_ids"]) == 16
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        records = []
+        for index in range(16):
+            record = runtime.repository.create_memory(
+                title=f"isolated-conflict-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+            records.append(record)
+
+        screening_result = await handle_conflict_screening_task(
+            runtime,
+            TaskRecord(
+                id="conflict-screening-review-seed",
+                task_name=CONFLICT_SCREENING_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+        assert screening_result["seeded_work_item_count"] == 1
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "conflicts": [
+                        {
+                            "left_id": records[0].id,
+                            "right_id": records[1].id,
+                            "context": "provider detected semantic conflict",
+                        }
+                    ]
+                }
+            ]
+        )
+
+        result = await handle_conflict_detector_task(
+            runtime,
+            TaskRecord(
+                id="conflict-detector-review-consumer",
+                task_name=CONFLICT_DETECTOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        outgoing = runtime.repository.get_links(records[0].id, direction="outgoing")
+        incoming = runtime.repository.get_links(records[1].id, direction="incoming")
+        review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
+
+        assert result["created"] == 2
+        assert result["claimed_work_item_count"] == 1
+        assert result["execution_mode"] == "agentic_review"
+        assert provider.call_count == 1
+        assert any(link.target_id == records[1].id and link.link_type == "CONTRADICTS" for link in outgoing)
+        assert any(link.source_id == records[0].id and link.link_type == "CONTRADICTS" for link in incoming)
+        assert [item.status for item in review_items] == ["completed"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -2464,7 +2779,7 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
 
 
 @pytest.mark.asyncio
-async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_path: Path) -> None:
+async def test_defragmenter_and_tag_normalizer_update_memory_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -2517,11 +2832,11 @@ async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_
                 last_error=None,
             ),
         )
-        tax_result = await handle_taxonomist_task(
+        tax_result = await handle_tag_normalizer_task(
             runtime,
             TaskRecord(
-                id="taxonomist-task",
-                task_name=TAXONOMIST_TASK_NAME,
+            id="tag-normalizer-task",
+            task_name=TAG_NORMALIZER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id, "strategy": "never-surfaced"},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -2687,7 +3002,7 @@ async def test_defragmenter_does_not_group_records_from_generic_system_tags_alon
 
 
 @pytest.mark.asyncio
-async def test_taxonomist_skips_provider_when_deterministic_normalization_suffices(monkeypatch, tmp_path: Path) -> None:
+async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_records(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -2695,6 +3010,7 @@ async def test_taxonomist_skips_provider_when_deterministic_normalization_suffic
     workspace.mkdir(parents=True, exist_ok=True)
     runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.repository is not None
+    assert runtime.work_items is not None
 
     try:
         record = runtime.repository.create_memory(
@@ -2704,14 +3020,20 @@ async def test_taxonomist_skips_provider_when_deterministic_normalization_suffic
             memory_type="fact",
             tags=["Tests", "Authn"],
         )
-        assert record is not None
+        untagged = runtime.repository.create_memory(
+            title="Untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert record is not None and untagged is not None
 
-        provider = FakeAIProvider(responses=[{"tags": ["provider"]}])
-        result = await handle_taxonomist_task(
+        result = await handle_tag_normalizer_task(
             runtime,
             TaskRecord(
-                id="taxonomist-deterministic-task",
-                task_name=TAXONOMIST_TASK_NAME,
+                id="tag-normalizer-deterministic-task",
+                task_name=TAG_NORMALIZER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -2726,13 +3048,19 @@ async def test_taxonomist_skips_provider_when_deterministic_normalization_suffic
                 completed_at=None,
                 last_error=None,
             ),
-            provider,
         )
 
         updated = runtime.repository.get_memory(record.id)
         assert result["updated"] == 1
-        assert provider.call_count == 0
         assert updated is not None and updated.tags == ["auth", "testing"]
+        assert result["seeded_enrichment_count"] == 1
+        normalization_items = runtime.work_items.list_items(family_key="memory_tag_normalization", limit=5)
+        enrichment_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+        assert [item.status for item in normalization_items] == ["completed"]
+        assert [item.status for item in enrichment_items] == ["pending"]
+        assert [item.payload for item in enrichment_items] == [
+            {"memory_id": untagged.id, "workspace_id": runtime.workspace_id}
+        ]
     finally:
         runtime.close()
 
@@ -2992,7 +3320,7 @@ async def test_taxonomist_soft_fails_provider_rate_limit_and_keeps_task_successf
             content="A fact with messy tags.",
             workspace_ids=[runtime.workspace_id or "global"],
             memory_type="fact",
-            tags=["Tests", "Authn"],
+            tags=["auth", "testing"],
         )
         untagged = runtime.repository.create_memory(
             title="Untagged fact",
@@ -3046,7 +3374,7 @@ async def test_taxonomist_soft_fails_provider_rate_limit_and_keeps_task_successf
             ("taxonomist-provider-backoff-task",),
         ).fetchall()
 
-        assert result["updated"] == 1
+        assert result["updated"] == 0
         assert result["provider_calls_used"] == 0
         assert result["provider_deferred_reason_code"] == "model_burst_limit_exceeded"
         assert result["provider_deferred_retry_delay_seconds"] == 600.0
@@ -3147,6 +3475,202 @@ async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkey
             for link in fact_links
         )
         assert any(link.target_id == new_observation.id and link.link_type == "SUPERSEDES" for link in fact_links)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        second = runtime.repository.create_memory(
+            title="Duplicate auth fact copy",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        observation = runtime.repository.create_memory(
+            title="Auth observation",
+            content="Observed another note about JWT enforcement.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth"],
+        )
+        assert first is not None and second is not None and observation is not None
+
+        result = await handle_dedup_prep_task(
+            runtime,
+            TaskRecord(
+                id="dedup-prep-task",
+                task_name=DEDUP_PREP_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
+
+        assert result["seeded_work_item_count"] == 1
+        assert [item.status for item in review_items] == ["pending"]
+        assert set(review_items[0].payload["seed_memory_ids"]) >= {first.id, second.id}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="Duplicate auth fact",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        second = runtime.repository.create_memory(
+            title="Duplicate auth fact copy",
+            content="JWTs are required for all clients.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert first is not None and second is not None
+
+        prep_result = await handle_dedup_prep_task(
+            runtime,
+            TaskRecord(
+                id="dedup-prep-review-seed",
+                task_name=DEDUP_PREP_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+        assert prep_result["seeded_work_item_count"] == 1
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_merge_memory_into_canonical",
+                    {
+                        "canonical_memory_id": first.id,
+                        "source_memory_id": second.id,
+                        "metadata": {"deduplicator_task_id": "deduplicator-seeded-review"},
+                    },
+                )
+                return AgenticRunResult(
+                    status="success",
+                    summary="Deduplicator merged duplicate facts via seeded MCP review.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Deduplicator merged duplicate facts via seeded MCP review.",
+                                "merged": 1,
+                                "archived": 1,
+                                "absorbed_observations": 0,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 1,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 1}
+                                },
+                            }
+                        },
+                    },
+                )
+
+        provider = _AgenticProvider()
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-seeded-review",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        canonical = runtime.repository.get_memory(first.id)
+        archived = runtime.repository.get_memory(second.id)
+        review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
+
+        assert result["merged"] == 1
+        assert result["archived"] == 1
+        assert result["claimed_work_item_count"] == 1
+        assert result["execution_mode"] == "agentic_mcp"
+        assert canonical is not None
+        assert archived is not None and archived.status == "archived"
+        assert [item.status for item in review_items] == ["completed"]
+        assert provider.prompts
+        assert "internal_get_next_dedup_batch" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -4073,6 +4597,138 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
         assert record.id in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_curator_frontier_seeds_agentic_review_work_item(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        result = await handle_curator_frontier_task(
+            runtime,
+            TaskRecord(
+                id="curator-frontier-task",
+                task_name=CURATOR_FRONTIER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=85,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        queued = runtime.work_items.list_items(family_key="memory_curation_review", limit=10)
+
+        assert result["seeded_work_item_count"] == 1
+        assert queued
+        assert queued[0].family_key == "memory_curation_review"
+        assert queued[0].payload["seed_memory_ids"] == [record.id]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(status="success", summary="Curator completed seeded maintenance via MCP tools.")
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key="memory_curation_review",
+            execution_lane="agentic",
+            workspace_id=runtime.workspace_id,
+            priority=95,
+            idempotency_key=f"memory_curation_review:{record.id}",
+            payload={
+                "workspace_id": runtime.workspace_id,
+                "seed_memory_ids": [record.id],
+                "strategy_used": "anomaly",
+                "candidate_count": 1,
+            },
+        )
+        assert created is True
+
+        provider = _AgenticProvider()
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-seeded-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=95,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed = runtime.work_items.get_item(work_item.id)
+
+        assert result["summary"] == "Curator completed seeded maintenance via MCP tools."
+        assert result["claimed_work_item_count"] == 1
+        assert result["execution_mode"] == "agentic_mcp"
+        assert refreshed.status == "completed"
+        assert provider.prompts
+        assert f'"{record.id}"' in provider.prompts[0]
+        assert "exclude_memory_ids" in provider.prompts[0]
     finally:
         runtime.close()
 
