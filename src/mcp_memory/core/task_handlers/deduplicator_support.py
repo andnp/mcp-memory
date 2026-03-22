@@ -139,6 +139,46 @@ def normalize_deduplicator_agentic_result(agentic_result: Any, seed_records: lis
     }
 
 
+def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    seed_ids = payload.get("seed_memory_ids")
+    if not isinstance(seed_ids, list):
+        return []
+    records: list[Any] = []
+    for memory_id in seed_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        records.append(record)
+    return records
+
+
+def review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> SamplingBatch:
+    requested_strategy = payload.get("strategy_used")
+    if not isinstance(requested_strategy, str):
+        requested_strategy = None
+    candidate_count = payload.get("candidate_count")
+    if not isinstance(candidate_count, int):
+        candidate_count = len(seed_records)
+    return SamplingBatch(
+        requested_strategy=requested_strategy,
+        strategy_used=requested_strategy or "none",
+        strategy_fallback_reason=None,
+        candidate_count=candidate_count,
+        records=seed_records,
+    )
+
+
+def review_strategy(payload: dict[str, Any]) -> str:
+    strategy = payload.get("strategy_used")
+    if isinstance(strategy, str) and strategy.strip():
+        return strategy
+    return "none"
+
+
 def _select_deduplicator_seed_records(candidates: list) -> list:
     if not candidates:
         return []

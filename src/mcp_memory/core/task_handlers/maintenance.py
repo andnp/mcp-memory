@@ -36,7 +36,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     release_work_item as _release_work_item,
     run_claimed_review_work_item as _run_claimed_review_work_item,
     run_sparse_frontier_review_task as _run_sparse_frontier_review_task,
-    sampling_batch_from_work_payload as _sampling_batch_from_work_payload,
     work_item_result_metadata as _work_item_result_metadata,
 )
 import mcp_memory.core.task_handlers.curator_support as _curator_support
@@ -401,7 +400,7 @@ async def handle_deduplicator_task(
         claimed_review_items = _claim_dedup_review_work_batch(ctx, task=task, limit=1)
         if claimed_review_items:
             review_item = claimed_review_items[0]
-            seed_records = _dedup_review_seed_records(ctx, review_item.payload)
+            seed_records = _deduplicator_support.review_seed_records(ctx, review_item.payload)
             facts = [record for record in seed_records if record.type == "fact"]
             if not facts:
                 _complete_work_item(ctx, review_item.id)
@@ -421,7 +420,7 @@ async def handle_deduplicator_task(
                         _build_deduplicator_agent_prompt(
                             task,
                             seed_records,
-                            strategy_used=_dedup_review_strategy(review_item.payload),
+                            strategy_used=_deduplicator_support.review_strategy(review_item.payload),
                         )
                     )
                 except Exception:
@@ -431,7 +430,7 @@ async def handle_deduplicator_task(
                 normalized = _normalize_deduplicator_agentic_result(agentic_result, seed_records)
                 normalized["claimed_work_item_count"] = 1
                 return sampling_payload(
-                    _dedup_review_sampling_batch(review_item.payload, seed_records),
+                    _deduplicator_support.review_sampling_batch(review_item.payload, seed_records),
                     sampled_records=seed_records,
                     extra=normalized,
                 )
@@ -885,9 +884,9 @@ async def handle_memory_curator_task(
     claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
     claimed_review_item = claimed_review_items[0] if claimed_review_items else None
     if claimed_review_item is not None:
-        seed_records = _curator_review_seed_records(ctx, claimed_review_item.payload)
+        seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
         if seed_records:
-            seed_batch = _curator_review_sampling_batch(claimed_review_item.payload, seed_records)
+            seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
         else:
             _complete_work_item(ctx, claimed_review_item.id)
             claimed_review_item = None
@@ -1317,14 +1316,6 @@ def _enqueue_curator_review_work_item(
     )
 
 
-def _curator_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    return _payload_memory_records(ctx, payload, payload_memory_ids_key="seed_memory_ids")
-
-
-def _curator_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
-    return _sampling_batch_from_work_payload(payload, seed_records)
-
-
 def _graph_link_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
     return _payload_memory_records(ctx, payload, payload_memory_ids_key="candidate_memory_ids")
 
@@ -1336,21 +1327,6 @@ def _conflict_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]
         payload_memory_ids_key="candidate_memory_ids",
         allowed_types={"fact", "plan"},
     )
-
-
-def _dedup_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    return _payload_memory_records(ctx, payload, payload_memory_ids_key="seed_memory_ids")
-
-
-def _dedup_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
-    return _sampling_batch_from_work_payload(payload, seed_records)
-
-
-def _dedup_review_strategy(payload: dict[str, Any]) -> str:
-    strategy = payload.get("strategy_used")
-    if isinstance(strategy, str) and strategy.strip():
-        return strategy
-    return "none"
 
 
 def _claim_taxonomist_work_batch(

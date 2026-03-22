@@ -157,6 +157,39 @@ def curator_seed_payload_item(record) -> dict[str, Any]:
     }
 
 
+def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    seed_ids = payload.get("seed_memory_ids")
+    if not isinstance(seed_ids, list):
+        return []
+    records: list[Any] = []
+    for memory_id in seed_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        records.append(record)
+    return records
+
+
+def review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> SamplingBatch:
+    requested_strategy = payload.get("strategy_used")
+    if not isinstance(requested_strategy, str):
+        requested_strategy = None
+    candidate_count = payload.get("candidate_count")
+    if not isinstance(candidate_count, int):
+        candidate_count = len(seed_records)
+    return SamplingBatch(
+        requested_strategy=requested_strategy,
+        strategy_used=requested_strategy or "none",
+        strategy_fallback_reason=None,
+        candidate_count=candidate_count,
+        records=seed_records,
+    )
+
+
 def extend_unique_seed_records(seed_records: list[Any], candidates: list[Any], limit: int) -> None:
     seen_ids = {record.id for record in seed_records}
     for record in candidates:
