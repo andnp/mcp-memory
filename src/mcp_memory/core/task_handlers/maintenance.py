@@ -878,10 +878,19 @@ async def handle_memory_curator_task(
         seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
         seed_records = seed_batch.records
 
+    work_item_metadata = _work_item_result_metadata(
+        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        seed_source="claimed_review_work_item" if claimed_review_item is not None else "sampled_frontier",
+        seed_records=seed_records,
+        claimed_work_item=claimed_review_item,
+    )
+
     if not seed_records:
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
+            extra=work_item_metadata,
             summary=None,
             tool_calls_executed=0,
             mutations=0,
@@ -942,6 +951,7 @@ async def handle_memory_curator_task(
             seed_batch,
             sampled_records=seed_records,
             seed_records=seed_records,
+            extra=work_item_metadata,
             summary=agentic_result.summary,
             execution_mode="agentic_mcp",
             claimed_work_item_count=1 if claimed_review_item is not None else 0,
@@ -983,6 +993,7 @@ async def handle_memory_curator_task(
         seed_batch,
         sampled_records=seed_records,
         seed_records=seed_records,
+        extra=work_item_metadata,
         summary=summary,
         execution_mode="json_tool_loop",
         claimed_work_item_count=1 if claimed_review_item is not None else 0,
@@ -1011,7 +1022,7 @@ async def handle_curator_frontier_task(
             reason="no_seed_records",
         )
 
-    _, created = _enqueue_curator_review_work_item(
+    created_work_item, created = _enqueue_curator_review_work_item(
         ctx,
         task=task,
         workspace_id=workspace_id,
@@ -1023,6 +1034,13 @@ async def handle_curator_frontier_task(
         seed_batch,
         sampled_records=seed_records,
         seed_records=seed_records,
+        extra=_work_item_result_metadata(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            seed_source="frontier_seed",
+            seed_records=seed_records,
+            created_work_item=created_work_item if created else None,
+        ),
         seeded_work_item_count=1 if created else 0,
     )
 
@@ -1130,21 +1148,135 @@ def _apply_conflict_proposals(
     return created
 
 
-def _claim_dedup_review_work_batch(
+def _claim_work_batch(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
+    family_key: str,
+    execution_lane: str,
     limit: int,
 ) -> list[Any]:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None or limit < 1:
         return []
     return work_items.claim_batch(
-        family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
+        family_key=family_key,
+        execution_lane=execution_lane,
         lease_owner=task.id,
         limit=limit,
         workspace_id=_resolve_workspace_id(ctx, task),
+    )
+
+
+def _enqueue_review_work_item(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    family_key: str,
+    execution_lane: str,
+    workspace_id: str | None,
+    idempotency_prefix: str,
+    payload_memory_ids_key: str,
+    memory_ids: list[str],
+    strategy_used: str | None,
+    candidate_count: int | None = None,
+) -> tuple[Any, bool]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        raise ValueError("work_items repository is not configured")
+    sorted_memory_ids = sorted(memory_ids)
+    payload: dict[str, Any] = {
+        "workspace_id": workspace_id,
+        payload_memory_ids_key: sorted_memory_ids,
+        "strategy_used": strategy_used,
+    }
+    if candidate_count is not None:
+        payload["candidate_count"] = candidate_count
+    return work_items.enqueue_unique(
+        family_key=family_key,
+        execution_lane=execution_lane,
+        workspace_id=workspace_id,
+        priority=task.priority,
+        idempotency_key=f"{idempotency_prefix}:{'|'.join(sorted_memory_ids)}",
+        payload=payload,
+    )
+
+
+def _payload_memory_records(
+    ctx: ApplicationContext,
+    payload: dict[str, Any],
+    *,
+    payload_memory_ids_key: str,
+    allowed_types: set[str] | None = None,
+) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    memory_ids = payload.get(payload_memory_ids_key)
+    if not isinstance(memory_ids, list):
+        return []
+    records: list[Any] = []
+    for memory_id in memory_ids:
+        if not isinstance(memory_id, str):
+            continue
+        record = ctx.repository.get_memory(memory_id)
+        if record is None or record.status != "active":
+            continue
+        if allowed_types is not None and record.type not in allowed_types:
+            continue
+        records.append(record)
+    return records
+
+
+def _sampling_batch_from_work_payload(payload: dict[str, Any], records: list[Any]) -> SamplingBatch:
+    requested_strategy = payload.get("strategy_used")
+    if not isinstance(requested_strategy, str):
+        requested_strategy = None
+    candidate_count = payload.get("candidate_count")
+    if not isinstance(candidate_count, int):
+        candidate_count = len(records)
+    return SamplingBatch(
+        requested_strategy=requested_strategy,
+        strategy_used=requested_strategy or "none",
+        strategy_fallback_reason=None,
+        candidate_count=candidate_count,
+        records=records,
+    )
+
+
+def _work_item_result_metadata(
+    *,
+    family_key: str,
+    execution_lane: str,
+    seed_source: str,
+    seed_records: list[Any],
+    claimed_work_item: Any | None = None,
+    created_work_item: Any | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "work_item_family": family_key,
+        "work_item_execution_lane": execution_lane,
+        "seed_source": seed_source,
+        "seed_record_count": len(seed_records),
+    }
+    if claimed_work_item is not None:
+        metadata["claimed_work_item_id"] = claimed_work_item.id
+    if created_work_item is not None:
+        metadata["created_work_item_id"] = created_work_item.id
+    return metadata
+
+
+def _claim_dedup_review_work_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    limit: int,
+) -> list[Any]:
+    return _claim_work_batch(
+        ctx,
+        task=task,
+        family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        limit=limit,
     )
 
 
@@ -1154,15 +1286,12 @@ def _claim_graph_link_review_work_batch(
     task: TaskRecord,
     limit: int,
 ) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
+    return _claim_work_batch(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
-        lease_owner=task.id,
         limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
     )
 
 
@@ -1172,15 +1301,12 @@ def _claim_conflict_review_work_batch(
     task: TaskRecord,
     limit: int,
 ) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
+    return _claim_work_batch(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_CONFLICT_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
-        lease_owner=task.id,
         limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
     )
 
 
@@ -1192,21 +1318,17 @@ def _enqueue_graph_link_review_work_item(
     candidates: list[Any],
     strategy_used: str | None,
 ) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    candidate_ids = sorted(record.id for record in candidates)
-    return work_items.enqueue_unique(
+    return _enqueue_review_work_item(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"graph_link_review:{'|'.join(candidate_ids)}",
-        payload={
-            "workspace_id": workspace_id,
-            "candidate_memory_ids": candidate_ids,
-            "strategy_used": strategy_used,
-        },
+        idempotency_prefix="graph_link_review",
+        payload_memory_ids_key="candidate_memory_ids",
+        memory_ids=[record.id for record in candidates],
+        strategy_used=strategy_used,
+        candidate_count=len(candidates),
     )
 
 
@@ -1218,21 +1340,17 @@ def _enqueue_conflict_review_work_item(
     candidates: list[Any],
     strategy_used: str | None,
 ) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    candidate_ids = sorted(record.id for record in candidates)
-    return work_items.enqueue_unique(
+    return _enqueue_review_work_item(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_CONFLICT_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"conflict_review:{'|'.join(candidate_ids)}",
-        payload={
-            "workspace_id": workspace_id,
-            "candidate_memory_ids": candidate_ids,
-            "strategy_used": strategy_used,
-        },
+        idempotency_prefix="conflict_review",
+        payload_memory_ids_key="candidate_memory_ids",
+        memory_ids=[record.id for record in candidates],
+        strategy_used=strategy_used,
+        candidate_count=len(candidates),
     )
 
 
@@ -1245,22 +1363,17 @@ def _enqueue_dedup_review_work_item(
     strategy_used: str | None,
     candidate_count: int,
 ) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    seed_ids = sorted(record.id for record in seed_records)
-    return work_items.enqueue_unique(
+    return _enqueue_review_work_item(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"memory_dedup_review:{'|'.join(seed_ids)}",
-        payload={
-            "workspace_id": workspace_id,
-            "seed_memory_ids": seed_ids,
-            "strategy_used": strategy_used,
-            "candidate_count": candidate_count,
-        },
+        idempotency_prefix="memory_dedup_review",
+        payload_memory_ids_key="seed_memory_ids",
+        memory_ids=[record.id for record in seed_records],
+        strategy_used=strategy_used,
+        candidate_count=candidate_count,
     )
 
 
@@ -1270,15 +1383,12 @@ def _claim_curator_review_work_batch(
     task: TaskRecord,
     limit: int,
 ) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
+    return _claim_work_batch(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
-        lease_owner=task.id,
         limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
     )
 
 
@@ -1291,123 +1401,47 @@ def _enqueue_curator_review_work_item(
     strategy_used: str | None,
     candidate_count: int,
 ) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    seed_ids = sorted(record.id for record in seed_records)
-    return work_items.enqueue_unique(
+    return _enqueue_review_work_item(
+        ctx,
+        task=task,
         family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"memory_curation_review:{'|'.join(seed_ids)}",
-        payload={
-            "workspace_id": workspace_id,
-            "seed_memory_ids": seed_ids,
-            "strategy_used": strategy_used,
-            "candidate_count": candidate_count,
-        },
+        idempotency_prefix="memory_curation_review",
+        payload_memory_ids_key="seed_memory_ids",
+        memory_ids=[record.id for record in seed_records],
+        strategy_used=strategy_used,
+        candidate_count=candidate_count,
     )
 
 
 def _curator_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    if ctx.repository is None:
-        return []
-    seed_ids = payload.get("seed_memory_ids")
-    if not isinstance(seed_ids, list):
-        return []
-    records: list[Any] = []
-    for memory_id in seed_ids:
-        if not isinstance(memory_id, str):
-            continue
-        record = ctx.repository.get_memory(memory_id)
-        if record is None or record.status != "active":
-            continue
-        records.append(record)
-    return records
+    return _payload_memory_records(ctx, payload, payload_memory_ids_key="seed_memory_ids")
 
 
 def _curator_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
-    requested_strategy = payload.get("strategy_used")
-    if not isinstance(requested_strategy, str):
-        requested_strategy = None
-    candidate_count = payload.get("candidate_count")
-    if not isinstance(candidate_count, int):
-        candidate_count = len(seed_records)
-    return SamplingBatch(
-        requested_strategy=requested_strategy,
-        strategy_used=requested_strategy or "none",
-        strategy_fallback_reason=None,
-        candidate_count=candidate_count,
-        records=seed_records,
-    )
+    return _sampling_batch_from_work_payload(payload, seed_records)
 
 
 def _graph_link_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    if ctx.repository is None:
-        return []
-    candidate_ids = payload.get("candidate_memory_ids")
-    if not isinstance(candidate_ids, list):
-        return []
-    candidates: list[Any] = []
-    for memory_id in candidate_ids:
-        if not isinstance(memory_id, str):
-            continue
-        record = ctx.repository.get_memory(memory_id)
-        if record is None or record.status != "active":
-            continue
-        candidates.append(record)
-    return candidates
+    return _payload_memory_records(ctx, payload, payload_memory_ids_key="candidate_memory_ids")
 
 
 def _conflict_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    if ctx.repository is None:
-        return []
-    candidate_ids = payload.get("candidate_memory_ids")
-    if not isinstance(candidate_ids, list):
-        return []
-    candidates: list[Any] = []
-    for memory_id in candidate_ids:
-        if not isinstance(memory_id, str):
-            continue
-        record = ctx.repository.get_memory(memory_id)
-        if record is None or record.status != "active" or record.type not in {"fact", "plan"}:
-            continue
-        candidates.append(record)
-    return candidates
+    return _payload_memory_records(
+        ctx,
+        payload,
+        payload_memory_ids_key="candidate_memory_ids",
+        allowed_types={"fact", "plan"},
+    )
 
 
 def _dedup_review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    if ctx.repository is None:
-        return []
-    seed_ids = payload.get("seed_memory_ids")
-    if not isinstance(seed_ids, list):
-        return []
-    records: list[Any] = []
-    for memory_id in seed_ids:
-        if not isinstance(memory_id, str):
-            continue
-        record = ctx.repository.get_memory(memory_id)
-        if record is None or record.status != "active":
-            continue
-        records.append(record)
-    return records
+    return _payload_memory_records(ctx, payload, payload_memory_ids_key="seed_memory_ids")
 
 
 def _dedup_review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> Any:
-    requested_strategy = payload.get("strategy_used")
-    if not isinstance(requested_strategy, str):
-        requested_strategy = None
-    candidate_count = payload.get("candidate_count")
-    if not isinstance(candidate_count, int):
-        candidate_count = len(seed_records)
-    return SamplingBatch(
-        requested_strategy=requested_strategy,
-        strategy_used=requested_strategy or "none",
-        strategy_fallback_reason=None,
-        candidate_count=candidate_count,
-        records=seed_records,
-    )
+    return _sampling_batch_from_work_payload(payload, seed_records)
 
 
 def _dedup_review_strategy(payload: dict[str, Any]) -> str:

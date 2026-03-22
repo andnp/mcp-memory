@@ -4702,7 +4702,12 @@ async def test_curator_frontier_seeds_agentic_review_work_item(monkeypatch, tmp_
         queued = runtime.work_items.list_items(family_key="memory_curation_review", limit=10)
 
         assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "memory_curation_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] == 1
         assert queued
+        assert result["created_work_item_id"] == queued[0].id
         assert queued[0].family_key == "memory_curation_review"
         assert queued[0].payload["seed_memory_ids"] == [record.id]
     finally:
@@ -4781,6 +4786,11 @@ async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch
         assert result["summary"] == "Curator completed seeded maintenance via MCP tools."
         assert result["claimed_work_item_count"] == 1
         assert result["execution_mode"] == "agentic_mcp"
+        assert result["work_item_family"] == "memory_curation_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "claimed_review_work_item"
+        assert result["seed_record_count"] == 1
+        assert result["claimed_work_item_id"] == work_item.id
         assert refreshed.status == "completed"
         assert provider.prompts
         assert f'"{record.id}"' in provider.prompts[0]
