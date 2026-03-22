@@ -689,6 +689,28 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
     assert workspace_overview.json()["memories"]["total"] == 2
 
 
+def test_daemon_lifespan_ensures_dashboard_frontend_is_built(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    ensured_static_roots: list[Path] = []
+    monkeypatch.setattr(
+        "mcp_memory.daemon_app._ensure_dashboard_frontend_ready",
+        lambda static_root: ensured_static_roots.append(static_root),
+    )
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+
+    with TestClient(app):
+        pass
+
+    assert ensured_static_roots
+    assert ensured_static_roots[0].name == "static"
+
+
 def test_management_api_accepts_30_day_nerd_metrics_window(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

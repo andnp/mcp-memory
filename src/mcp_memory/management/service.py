@@ -72,6 +72,10 @@ class ManagementService:
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"
         self._dashboard_asset_root = self._dashboard_static_root / "dist" / "assets"
 
+    @property
+    def dashboard_static_root(self) -> Path:
+        return self._dashboard_static_root
+
     def get_health(self):
         embedder_status = build_embedding_status(self._embedder)
         return HealthPayload(

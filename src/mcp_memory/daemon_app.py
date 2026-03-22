@@ -24,6 +24,7 @@ from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, Daemo
 from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
 from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
+from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
@@ -32,6 +33,22 @@ from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_
 logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
+
+
+def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
+    result = ensure_dashboard_frontend_built(static_root=static_root)
+    if result.status == "up_to_date":
+        logger.debug("Dashboard frontend bundle is up to date")
+        return
+    if result.status == "built":
+        logger.info("Dashboard frontend rebuilt at startup from %s", result.frontend_root)
+        return
+    logger.warning(
+        "Dashboard frontend build step did not complete cleanly: status=%s returncode=%s message=%s",
+        result.status,
+        result.returncode,
+        result.message,
+    )
 
 
 async def _warm_embedding_model(embedder: Any) -> bool:
@@ -200,6 +217,7 @@ def create_daemon_app(
             hook_service=hook_service,
             metadata_path=metadata_path,
         )
+        await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
         app.state.routes = routes
         app.state.idle_shutdown_task = None
         app.state.backup_task = backup_task
