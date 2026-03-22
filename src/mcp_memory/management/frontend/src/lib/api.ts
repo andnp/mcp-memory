@@ -353,6 +353,28 @@ export interface RetrievalQueryFamilyRow {
   search_hits: number;
   zero_result_searches: number;
   unique_search_memories: number;
+  converted_search_hits: number;
+  conversion_rate: number;
+}
+
+export interface RetrievalFunnel {
+  search_hits: number;
+  converted_search_hits: number;
+  conversion_rate: number;
+}
+
+export interface RetrievalConversionMemoryRow {
+  memory_id: string;
+  title: string;
+  memory_type: string;
+  status: string;
+  tags: string[];
+  read_count: number;
+  search_count: number;
+  converted_search_count: number;
+  conversion_rate: number;
+  last_read_at: number | null;
+  last_search_at: number | null;
 }
 
 export interface RetrievalMemoryRow {
@@ -385,10 +407,13 @@ export interface RetrievalTagTimeline {
 
 export interface RetrievalMetrics {
   summary: RetrievalSummary;
+  funnel: RetrievalFunnel;
   by_caller_kind: RetrievalCallerKindRow[];
   top_query_families: RetrievalQueryFamilyRow[];
+  top_zero_result_query_families: RetrievalQueryFamilyRow[];
   top_read_memories: RetrievalMemoryRow[];
   top_search_memories: RetrievalMemoryRow[];
+  low_conversion_memories: RetrievalConversionMemoryRow[];
   top_tags: RetrievalTagRow[];
   tag_timelines: RetrievalTagTimeline[];
 }

@@ -47,6 +47,8 @@ from mcp_memory.management.models import (
     NerdMaintenanceSummaryRowPayload,
     NerdMetricsPayload,
     NerdRetrievalMemoryRowPayload,
+    NerdRetrievalConversionMemoryRowPayload,
+    NerdRetrievalFunnelPayload,
     NerdRetrievalPayload,
     NerdRetrievalQueryFamilyRowPayload,
     NerdRetrievalSummaryPayload,
@@ -212,6 +214,7 @@ class _RetrievalMemoryAccumulator:
     tags: list[str]
     read_count: int = 0
     search_count: int = 0
+    converted_search_count: int = 0
     last_read_at: float | None = None
     last_search_at: float | None = None
 
@@ -236,6 +239,7 @@ class _RetrievalQueryFamilyAccumulator:
     search_invocations: int = 0
     search_hits: int = 0
     zero_result_searches: int = 0
+    converted_search_hits: int = 0
     unique_search_memory_ids: set[str] = field(default_factory=set)
 
 
@@ -246,6 +250,13 @@ class _RetrievalSearchInvocationAccumulator:
     query_family_label: str
     surfaced_memory_ids: set[str] = field(default_factory=set)
     zero_result: bool = False
+
+
+@dataclass(frozen=True)
+class _RetrievalSearchHitRecord:
+    query_family_key: str
+    memory_id: str
+    created_at: float
 
 
 def build_nerd_metrics(
@@ -952,6 +963,9 @@ def build_retrieval_analytics(
     zero_result_search_invocation_ids: set[str] = set()
     unique_search_memories: set[str] = set()
     unique_read_memories: set[str] = set()
+    read_event_times_by_memory: dict[str, list[float]] = {}
+    search_hit_records: list[_RetrievalSearchHitRecord] = []
+    converted_search_hits = 0
     read_events = 0
     search_hits = 0
 
@@ -1006,12 +1020,32 @@ def build_retrieval_analytics(
             unique_read_memories.add(memory_id)
             read_events += 1
             caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
+            read_event_times_by_memory.setdefault(memory_id, []).append(created_at)
         elif event_kind == "search":
             memory_accumulator.search_count += 1
             memory_accumulator.last_search_at = created_at if memory_accumulator.last_search_at is None else max(memory_accumulator.last_search_at, created_at)
             unique_search_memories.add(memory_id)
             search_hits += 1
             search_invocation_accumulators[invocation_id].surfaced_memory_ids.add(memory_id)
+            search_hit_records.append(
+                _RetrievalSearchHitRecord(
+                    query_family_key=search_invocation_accumulators[invocation_id].query_family_key,
+                    memory_id=memory_id,
+                    created_at=created_at,
+                )
+            )
+
+    for search_hit_record in search_hit_records:
+        read_times = read_event_times_by_memory.get(search_hit_record.memory_id, [])
+        if not any(read_time >= search_hit_record.created_at for read_time in read_times):
+            continue
+        converted_search_hits += 1
+        memory_accumulators[search_hit_record.memory_id].converted_search_count += 1
+        query_family_accumulator = query_family_accumulators.setdefault(
+            search_hit_record.query_family_key,
+            _RetrievalQueryFamilyAccumulator(label=search_hit_record.query_family_key),
+        )
+        query_family_accumulator.converted_search_hits += 1
 
     for search_invocation in search_invocation_accumulators.values():
         caller_kind_accumulator = caller_kind_accumulators.setdefault(
@@ -1062,6 +1096,8 @@ def build_retrieval_analytics(
             search_hits=accumulator.search_hits,
             zero_result_searches=accumulator.zero_result_searches,
             unique_search_memories=len(accumulator.unique_search_memory_ids),
+            converted_search_hits=accumulator.converted_search_hits,
+            conversion_rate=0.0 if accumulator.search_hits == 0 else round(accumulator.converted_search_hits / accumulator.search_hits, 4),
         )
         for family_key, accumulator in sorted(
             query_family_accumulators.items(),
@@ -1073,6 +1109,38 @@ def build_retrieval_analytics(
             ),
         )[:_RETRIEVAL_QUERY_FAMILY_LIMIT]
     ]
+
+    top_zero_result_query_families = [
+        row
+        for row in top_query_families
+        if row.zero_result_searches > 0
+    ]
+
+    low_conversion_memories = [
+        NerdRetrievalConversionMemoryRowPayload(
+            memory_id=memory_id,
+            title=accumulator.title,
+            memory_type=accumulator.memory_type,
+            status=accumulator.status,
+            tags=accumulator.tags,
+            read_count=accumulator.read_count,
+            search_count=accumulator.search_count,
+            converted_search_count=accumulator.converted_search_count,
+            conversion_rate=0.0 if accumulator.search_count == 0 else round(accumulator.converted_search_count / accumulator.search_count, 4),
+            last_read_at=accumulator.last_read_at,
+            last_search_at=accumulator.last_search_at,
+        )
+        for memory_id, accumulator in sorted(
+            memory_accumulators.items(),
+            key=lambda item: (
+                1.0 if item[1].search_count == 0 else round(item[1].converted_search_count / item[1].search_count, 4),
+                -item[1].search_count,
+                item[1].title.lower(),
+                item[0],
+            ),
+        )
+        if accumulator.search_count > 0
+    ][:_RETRIEVAL_QUERY_FAMILY_LIMIT]
 
     top_read_memories = [
         NerdRetrievalMemoryRowPayload(
@@ -1154,10 +1222,17 @@ def build_retrieval_analytics(
             unique_search_memories=len(unique_search_memories),
             unique_read_memories=len(unique_read_memories),
         ),
+        funnel=NerdRetrievalFunnelPayload(
+            search_hits=search_hits,
+            converted_search_hits=converted_search_hits,
+            conversion_rate=0.0 if search_hits == 0 else round(converted_search_hits / search_hits, 4),
+        ),
         by_caller_kind=by_caller_kind,
         top_query_families=top_query_families,
+        top_zero_result_query_families=top_zero_result_query_families,
         top_read_memories=top_read_memories,
         top_search_memories=top_search_memories,
+        low_conversion_memories=low_conversion_memories,
         top_tags=top_tags,
         tag_timelines=tag_timelines,
     )

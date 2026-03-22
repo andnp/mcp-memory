@@ -278,10 +278,17 @@ retrieval: {
     unique_search_memories: int
     unique_read_memories: int
   }
+  funnel: {
+    search_hits: int
+    converted_search_hits: int
+    conversion_rate: float
+  }
   by_caller_kind: RetrievalCallerKindRow[]
   top_query_families: RetrievalQueryFamilyRow[]
+  top_zero_result_query_families: RetrievalQueryFamilyRow[]
   top_read_memories: RetrievalMemoryRow[]
   top_search_memories: RetrievalMemoryRow[]
+  low_conversion_memories: RetrievalConversionMemoryRow[]
   top_tags: RetrievalTagRow[]
   tag_timelines: RetrievalTagTimeline[]
 }
@@ -318,6 +325,22 @@ retrieval: {
 - `search_hits: int`
 - `zero_result_searches: int`
 - `unique_search_memories: int`
+- `converted_search_hits: int`
+- `conversion_rate: float`
+
+`RetrievalConversionMemoryRow`:
+
+- `memory_id: str`
+- `title: str`
+- `memory_type: str`
+- `status: str`
+- `tags: str[]`
+- `read_count: int`
+- `search_count: int`
+- `converted_search_count: int`
+- `conversion_rate: float`
+- `last_read_at: float | null`
+- `last_search_at: float | null`
 
 `RetrievalTagRow`:
 
@@ -342,7 +365,10 @@ Rules:
 - `top_read_memories` is capped at the top 100 visible memories by read-event count within the selected window.
 - `top_search_memories` is capped at the top 100 visible memories by search-hit count within the selected window.
 - `by_caller_kind` groups retrieval traffic by the MCP service caller path (for example `external` vs `internal`).
-- `top_query_families` groups repeated search prompts by normalized query text (trimmed, whitespace-collapsed, case-folded) and is capped at the top 25 query families by invocation count.
+- `funnel` is an honest same-window approximation, not a session-perfect attribution model: a search hit counts as converted when that surfaced memory is later read within the selected window.
+- `top_query_families` groups repeated search prompts by normalized query text (trimmed, whitespace-collapsed, case-folded), includes same-window converted-hit counts and conversion rate, and is capped at the top 25 query families by invocation count.
+- `top_zero_result_query_families` is the zero-result-focused subset of query-family analytics for operator debugging.
+- `low_conversion_memories` highlights surfaced memories with low same-window read-through, sorted from worst conversion toward healthier entries.
 - `top_tags` is capped at the top 25 visible tags by combined retrieval activity.
 - `tag_timelines` is capped at the top 10 visible tags by combined retrieval activity and uses event-time buckets, not memory creation-time approximations.
 - Workspace scoping follows the retrieval event's originating workspace context and then filters to memories currently visible in the scoped request.
@@ -389,6 +415,7 @@ This slice intentionally does **not** cover the deeper graph/search/provider/ope
 
 - Tool-level read/search telemetry persisted from MCP search/read services
 - Caller-kind breakdowns and top repeated query-family tables
+- Search-to-read funnel, zero-result diagnostics, and low-conversion memory leaderboard
 - Top 100 read memories and top 100 search-hit memories
 - Top 25 retrieval tags with read/search split
 - Historical timelines for the top 10 retrieval tags
@@ -411,7 +438,10 @@ At minimum, backend verification must cover:
 - retrieval event persistence for search-hit vs explicit-read separation
 - zero-result search accounting
 - caller-kind grouping for external vs internal retrieval traffic
-- query-family grouping with normalized repeated search text
+- query-family grouping with normalized repeated search text and same-window converted-hit counts
+- funnel math for converted search hits within the selected window
+- zero-result query-family diagnostics
+- low-conversion memory leaderboard ordering
 - top-100 memory ranking for reads and search hits
 - top-25 tag rollups and top-10 tag timelines
 - API contract exposure under `/api/metrics/nerd`

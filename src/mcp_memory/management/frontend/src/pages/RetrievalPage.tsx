@@ -257,6 +257,26 @@ export function RetrievalPage() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
+        <section className="panel p-3">
+          <p className="panel-title">Search → read funnel</p>
+          <h3 className="mt-1 text-base font-semibold text-text">How often surfaced search hits become actual reads</h3>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <article className="metric-card">
+              <p className="panel-title">Search hits</p>
+              <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(retrieval.funnel.search_hits)}</p>
+            </article>
+            <article className="metric-card">
+              <p className="panel-title">Converted hits</p>
+              <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(retrieval.funnel.converted_search_hits)}</p>
+            </article>
+            <article className="metric-card">
+              <p className="panel-title">Conversion rate</p>
+              <p className="mt-1 text-lg font-semibold text-text">{(retrieval.funnel.conversion_rate * 100).toFixed(1)}%</p>
+            </article>
+          </div>
+          <p className="mt-3 text-[11px] text-muted">A converted hit means a surfaced memory was later read in the same window. Helpful signal, not courtroom-grade causality.</p>
+        </section>
+
         <section className="table-shell">
           <div className="border-b border-border px-3 py-2">
             <p className="panel-title">Caller mix</p>
@@ -301,6 +321,8 @@ export function RetrievalPage() {
                 <th>Query family</th>
                 <th>Searches</th>
                 <th>Hits</th>
+                <th>Converted</th>
+                <th>Rate</th>
                 <th>Zero-result</th>
                 <th>Unique memories</th>
               </tr>
@@ -313,12 +335,83 @@ export function RetrievalPage() {
                   </td>
                   <td>{formatStatValue(row.search_invocations)}</td>
                   <td>{formatStatValue(row.search_hits)}</td>
+                  <td>{formatStatValue(row.converted_search_hits)}</td>
+                  <td>{(row.conversion_rate * 100).toFixed(1)}%</td>
                   <td>{formatStatValue(row.zero_result_searches)}</td>
                   <td>{formatStatValue(row.unique_search_memories)}</td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={5} className="text-xs text-muted">No repeated search-query patterns yet.</td>
+                  <td colSpan={7} className="text-xs text-muted">No repeated search-query patterns yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">Zero-result diagnostics</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Which query families keep coming up empty</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Query family</th>
+                <th>Zero-result</th>
+                <th>Searches</th>
+                <th>Hits</th>
+              </tr>
+            </thead>
+            <tbody>
+              {retrieval.top_zero_result_query_families.length ? retrieval.top_zero_result_query_families.map((row) => (
+                <tr key={row.key}>
+                  <td><div className="max-w-[24rem] truncate" title={row.label}>{row.label}</div></td>
+                  <td>{formatStatValue(row.zero_result_searches)}</td>
+                  <td>{formatStatValue(row.search_invocations)}</td>
+                  <td>{formatStatValue(row.search_hits)}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={4} className="text-xs text-muted">No zero-result query families in the selected window.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">Low-conversion memories</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Memories that surface often but still do not get opened much</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Memory</th>
+                <th>Search hits</th>
+                <th>Converted</th>
+                <th>Reads</th>
+                <th>Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {retrieval.low_conversion_memories.length ? retrieval.low_conversion_memories.map((row) => (
+                <tr key={row.memory_id}>
+                  <td>
+                    <Link className="text-accent" to={`/memory/${row.memory_id}`}>{row.title}</Link>
+                    <div className="mt-1 text-[10px] text-muted">{row.memory_type} · {row.status}</div>
+                  </td>
+                  <td>{formatStatValue(row.search_count)}</td>
+                  <td>{formatStatValue(row.converted_search_count)}</td>
+                  <td>{formatStatValue(row.read_count)}</td>
+                  <td>{(row.conversion_rate * 100).toFixed(1)}%</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={5} className="text-xs text-muted">No surfaced memories yet to rank for conversion.</td>
                 </tr>
               )}
             </tbody>

@@ -365,14 +365,39 @@ class NerdRetrievalQueryFamilyRowPayload(BaseModel):
     search_hits: int = 0
     zero_result_searches: int = 0
     unique_search_memories: int = 0
+    converted_search_hits: int = 0
+    conversion_rate: float = 0.0
+
+
+class NerdRetrievalFunnelPayload(BaseModel):
+    search_hits: int = 0
+    converted_search_hits: int = 0
+    conversion_rate: float = 0.0
+
+
+class NerdRetrievalConversionMemoryRowPayload(BaseModel):
+    memory_id: str
+    title: str
+    memory_type: str
+    status: str
+    tags: list[str] = Field(default_factory=list)
+    read_count: int = 0
+    search_count: int = 0
+    converted_search_count: int = 0
+    conversion_rate: float = 0.0
+    last_read_at: float | None = None
+    last_search_at: float | None = None
 
 
 class NerdRetrievalPayload(BaseModel):
     summary: NerdRetrievalSummaryPayload = Field(default_factory=NerdRetrievalSummaryPayload)
+    funnel: NerdRetrievalFunnelPayload = Field(default_factory=NerdRetrievalFunnelPayload)
     by_caller_kind: list[NerdRetrievalCallerKindRowPayload] = Field(default_factory=list)
     top_query_families: list[NerdRetrievalQueryFamilyRowPayload] = Field(default_factory=list)
+    top_zero_result_query_families: list[NerdRetrievalQueryFamilyRowPayload] = Field(default_factory=list)
     top_read_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
     top_search_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
+    low_conversion_memories: list[NerdRetrievalConversionMemoryRowPayload] = Field(default_factory=list)
     top_tags: list[NerdRetrievalTagRowPayload] = Field(default_factory=list)
     tag_timelines: list[NerdRetrievalTagTimelinePayload] = Field(default_factory=list)
 
