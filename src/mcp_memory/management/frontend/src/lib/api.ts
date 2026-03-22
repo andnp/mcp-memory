@@ -320,11 +320,38 @@ export interface LifecycleTrends {
   status_events: CountSeries[];
   never_surfaced_backlog: TimeCountBucket[];
   cold_tail: TimeCountBucket[];
+  quality_signals: CountSeries[];
 }
 
 export interface GrowthDynamics {
   top_tag_trends: CountSeries[];
   workspace_contribution_share: ShareSeries[];
+}
+
+export interface QualityMemoryRow {
+  memory_id: string;
+  title: string;
+  summary: string | null;
+  memory_type: string;
+  status: string;
+  updated_at: string;
+  tags: string[];
+}
+
+export interface QualitySignalDrilldown {
+  key: string;
+  label: string;
+  count: number;
+  records: QualityMemoryRow[];
+}
+
+export interface QualityDrilldown {
+  signals: QualitySignalDrilldown[];
+}
+
+export interface QualityRemediation {
+  stats: NerdStat[];
+  activity: CountSeries[];
 }
 
 export interface RetrievalSummary {
@@ -507,6 +534,36 @@ export interface TaskRouteAudit {
   on_primary_route: boolean | null;
 }
 
+export interface ProviderPolicyTaskRollup {
+  task_name: string;
+  route_exhaustion_count: number;
+  legacy_fallback_denied_count: number;
+  admission_skip_count: number;
+  top_skip_provider_key: string | null;
+  top_skip_model_name: string | null;
+  top_skip_reason_code: string | null;
+  active_admission_provider_count: number;
+}
+
+export interface ProviderPolicyProviderRollup {
+  provider_key: string;
+  provider_name: string;
+  model_name: string;
+  admission_skip_count: number;
+  distinct_task_count: number;
+  top_task_name: string | null;
+  top_reason_code: string | null;
+  active_admission_reason: string | null;
+  active_admission_category: string | null;
+  active_retry_delay_seconds: number | null;
+}
+
+export interface ProviderPolicyMetrics {
+  stats: NerdStat[];
+  by_task: ProviderPolicyTaskRollup[];
+  by_provider: ProviderPolicyProviderRollup[];
+}
+
 export interface NerdMetricsResponse {
   generated_at: number;
   window_hours: number;
@@ -525,10 +582,13 @@ export interface NerdMetricsResponse {
   maintenance: MaintenanceMetrics;
   lifecycle_trends: LifecycleTrends;
   growth_dynamics: GrowthDynamics;
+  quality_drilldown: QualityDrilldown;
+  quality_remediation: QualityRemediation;
   retrieval: RetrievalMetrics;
   maintenance_summary: MaintenanceSummary;
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];
+  provider_policy: ProviderPolicyMetrics;
   alerts: NerdAlert[];
   agent_throughput: AgentThroughputBucket[];
   provider_latency: ProviderLatencyBucket[];

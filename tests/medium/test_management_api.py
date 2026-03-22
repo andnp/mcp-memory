@@ -308,7 +308,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "timelines" in nerd_metrics
         assert "maintenance" in nerd_metrics
         assert "lifecycle_trends" in nerd_metrics
+        assert "quality_signals" in nerd_metrics["lifecycle_trends"]
         assert "growth_dynamics" in nerd_metrics
+        assert "quality_drilldown" in nerd_metrics
+        assert "quality_remediation" in nerd_metrics
         assert "retrieval" in nerd_metrics
         assert "maintenance_summary" in nerd_metrics
         assert nerd_metrics["agent_throughput"]
@@ -374,6 +377,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert any(item["key"] == "compaction" for item in nerd_metrics["maintenance_summary"]["family_delta_series"])
         assert nerd_metrics["search_quality"]["semantic_enabled"] is True
         assert any(item["task_name"] == "memory-curator" for item in nerd_metrics["route_audit"])
+        assert nerd_metrics["provider_policy"]["stats"][0]["key"] == "provider_policy_route_exhaustion_count"
+        assert "by_task" in nerd_metrics["provider_policy"]
+        assert "by_provider" in nerd_metrics["provider_policy"]
         summarize_route = next(item for item in nerd_metrics["route_audit"] if item["task_name"] == "summarize-memory")
         assert summarize_route["task_class"] == "deterministic"
         assert summarize_route["resolved_provider_key"] is None

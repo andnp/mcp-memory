@@ -4,6 +4,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+import mcp_memory.core.provider_policy as provider_policy_module
 
 from mcp_memory.config import AIConfig, Config, ProviderRoutingConfig
 from mcp_memory.context import ApplicationContext
@@ -213,6 +214,7 @@ def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -
 
 
 def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budget(caplog) -> None:
+    provider_policy_module._provider_warning_state.clear()
     ctx = ApplicationContext(
         config=Config(
             ai=AIConfig(provider="none"),
@@ -252,6 +254,94 @@ def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budge
 
     assert selected is None
     assert any("exhausted all configured routes" in message for message in caplog.messages)
+
+
+def test_provider_for_task_throttles_duplicate_routed_warning_logs(caplog) -> None:
+    provider_policy_module._provider_warning_state.clear()
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
+                profiles={
+                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=False)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=False)},
+        },
+    )
+    task = TaskRecord(
+        id="summary-task",
+        task_name="graph-linker",
+        data={"memory_id": "abc"},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first = _provider_for_task(ctx, None, None, "graph-linker", task)
+        second = _provider_for_task(ctx, None, None, "graph-linker", task)
+
+    assert first is None
+    assert second is None
+    assert [record.message for record in caplog.records if "exhausted all configured routes" in record.message] == [
+        "Provider routing exhausted all configured routes"
+    ]
+
+
+def test_provider_for_task_throttles_duplicate_legacy_fallback_warning_logs(caplog) -> None:
+    provider_policy_module._provider_warning_state.clear()
+    default_provider = _FakeProvider("default-provider", available=False)
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            provider_routing=ProviderRoutingConfig(),
+        ),
+        ai_provider_registry={},
+    )
+    task = TaskRecord(
+        id="summary-task",
+        task_name="graph-linker",
+        data={"memory_id": "abc"},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first = _provider_for_task(ctx, default_provider, None, "graph-linker", task)
+        second = _provider_for_task(ctx, default_provider, None, "graph-linker", task)
+
+    assert first is None
+    assert second is None
+    assert [
+        record.message
+        for record in caplog.records
+        if "Legacy fallback provider is unavailable due to admission control" in record.message
+    ] == ["Legacy fallback provider is unavailable due to admission control"]
 
 
 def test_provider_for_deterministic_task_never_selects_provider() -> None:

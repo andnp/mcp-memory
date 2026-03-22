@@ -82,6 +82,13 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.lifecycle_trends.status_events == []
     assert nerd_metrics.lifecycle_trends.never_surfaced_backlog
     assert nerd_metrics.lifecycle_trends.cold_tail
+    assert nerd_metrics.lifecycle_trends.quality_signals == []
+    assert nerd_metrics.quality_drilldown.signals == []
+    assert nerd_metrics.quality_remediation.stats == []
+    assert nerd_metrics.quality_remediation.activity == []
+    assert [stat.value for stat in nerd_metrics.provider_policy.stats] == [0.0, 0.0, 0.0]
+    assert nerd_metrics.provider_policy.by_task == []
+    assert nerd_metrics.provider_policy.by_provider == []
     assert all(bucket.count == 0 for bucket in nerd_metrics.lifecycle_trends.never_surfaced_backlog)
     assert all(bucket.count == 0 for bucket in nerd_metrics.lifecycle_trends.cold_tail)
     assert nerd_metrics.growth_dynamics.top_tag_trends == []
@@ -780,6 +787,94 @@ def test_management_service_nerd_metrics_additive_trends_and_maintenance_summary
     assert sum(bucket.archived_count for bucket in compaction_series.buckets) == 1
 
 
+def test_management_service_nerd_metrics_surface_memory_quality_signals(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    now = time.time() + 60.0
+
+    repository.create_memory(
+        title="task_complete: deduplicator-1",
+        content="Operational closeout should not live here.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Concrete summary.",
+    )
+    repository.create_memory(
+        title="Broad observation",
+        content="Short but durable note.",
+        workspace_ids=["workspace-a"],
+        memory_type="observation",
+        summary="Covers several related findings.",
+    )
+    repository.create_memory(
+        title="Oversized durable memory",
+        content="x" * 4_200,
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Detailed but concrete summary.",
+        tags=["durable"],
+        metadata={"split_from_memory_id": "source-1", "split_group_id": "split-1"},
+    )
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    nerd_metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=now)
+    stats = {stat.key: stat.value for stat in nerd_metrics.stats}
+    alerts = {alert.key: alert for alert in nerd_metrics.alerts}
+
+    assert stats["trace_like_memory_count"] == 1.0
+    assert stats["generic_summary_count"] == 1.0
+    assert stats["untagged_observation_count"] == 1.0
+    assert stats["untagged_observation_rate"] == 1.0
+    assert stats["oversized_memory_count"] == 1.0
+
+    quality_signal_keys = [series.key for series in nerd_metrics.lifecycle_trends.quality_signals]
+    assert quality_signal_keys == [
+        "trace_like_memory_count",
+        "generic_summary_count",
+        "untagged_observation_count",
+        "oversized_memory_count",
+    ]
+    assert [series.buckets[-1].count for series in nerd_metrics.lifecycle_trends.quality_signals] == [1, 1, 1, 1]
+
+    drilldown_counts = {signal.key: signal.count for signal in nerd_metrics.quality_drilldown.signals}
+    assert drilldown_counts == {
+        "trace_like_memory_count": 1,
+        "generic_summary_count": 1,
+        "untagged_observation_count": 1,
+        "oversized_memory_count": 1,
+    }
+    trace_like_records = next(signal.records for signal in nerd_metrics.quality_drilldown.signals if signal.key == "trace_like_memory_count")
+    assert trace_like_records[0].title == "task_complete: deduplicator-1"
+    oversized_records = next(signal.records for signal in nerd_metrics.quality_drilldown.signals if signal.key == "oversized_memory_count")
+    assert oversized_records[0].tags == ["durable"]
+
+    remediation_stats = {stat.key: stat.value for stat in nerd_metrics.quality_remediation.stats}
+    assert remediation_stats == {
+        "tagged_observation_count": 0.0,
+        "concrete_summary_count": 2.0,
+        "split_lineage_count": 1.0,
+    }
+    remediation_activity = {
+        series.key: sum(bucket.count for bucket in series.buckets)
+        for series in nerd_metrics.quality_remediation.activity
+    }
+    assert remediation_activity == {
+        "concrete_summary_updates": 2,
+        "split_lineage_updates": 1,
+    }
+
+    assert alerts["trace_like_memory_count"].severity == "warning"
+    assert alerts["untagged_observation_rate"].severity == "warning"
+    assert alerts["generic_summary_count"].severity == "info"
+    assert alerts["oversized_memory_count"].severity == "info"
+
+
 def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
@@ -848,6 +943,29 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
             args=(),
             exc_info=None,
         )
+    )
+    db_manager.get_connection().executemany(
+        "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "workspace-a",
+                "daemon",
+                "mcp_memory.core.provider_policy",
+                "WARNING",
+                "Provider routing exhausted all configured routes",
+                time.time(),
+                '{"extra":{"task_name":"memory-curator","candidate_routes":["gemini-cheap","copilot-mini"]}}',
+            ),
+            (
+                "workspace-a",
+                "daemon",
+                "mcp_memory.core.provider_policy",
+                "WARNING",
+                "Legacy fallback provider is unavailable due to admission control",
+                time.time(),
+                '{"extra":{"task_name":"memory-curator","reason":"provider_quota_exhausted"}}',
+            ),
+        ],
     )
     db_manager.get_connection().execute(
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -927,17 +1045,17 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert deduplicator.last_result_metadata.sampled_memory_ids == [primary.id]
     assert any(run.result_metadata.strategy_used == "semantic" for run in overview.recent_agent_runs)
     assert overview.failed_tasks[0]["last_error"] == "summary provider offline"
-    assert overview.recent_logs[0].message == "daemon log row"
+    assert any(record.message == "daemon log row" for record in overview.recent_logs)
     assert overview.recent_logs[0].source == "daemon"
     assert [record.id for record in overview.top_read_memories] == [primary.id, secondary.id]
     assert [record.read_count for record in overview.top_read_memories] == [2, 1]
     assert [record.id for record in overview.top_read_memories_active] == [primary.id]
     assert [record.read_count for record in overview.top_read_memories_active] == [2]
-    assert filtered_logs.logs[0].logger_name == "mcp_memory.tests"
-    assert summary.total == 1
-    assert summary.by_level == {"WARNING": 1}
-    assert summary.by_source == {"daemon": 1}
-    assert prune_result.deleted == 0
+    assert any(log.logger_name == "mcp_memory.tests" for log in filtered_logs.logs)
+    assert summary.total == 3
+    assert summary.by_level == {"WARNING": 3}
+    assert summary.by_source == {"daemon": 3}
+    assert prune_result.deleted == 2
     assert prune_result.max_runtime_logs == 1
     assert len(after_prune.logs) == 1
     assert detail.record["id"] == primary.id
@@ -961,6 +1079,21 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert curator_route.recent_provider_key == "gemini-cli"
     assert summarize_route.task_class == "deterministic"
     assert summarize_route.resolved_provider_key is None
+    assert nerd_metrics.provider_policy.stats[0].key == "provider_policy_route_exhaustion_count"
+    assert nerd_metrics.provider_policy.stats[0].value == 1.0
+    assert nerd_metrics.provider_policy.stats[1].value == 1.0
+    assert nerd_metrics.provider_policy.stats[2].value == 1.0
+    provider_policy_task = next(item for item in nerd_metrics.provider_policy.by_task if item.task_name == "memory-curator")
+    assert provider_policy_task.route_exhaustion_count == 1
+    assert provider_policy_task.legacy_fallback_denied_count == 1
+    assert provider_policy_task.admission_skip_count == 1
+    assert provider_policy_task.top_skip_provider_key == "gemini-cli"
+    assert provider_policy_task.top_skip_reason_code == "provider_quota_exhausted"
+    provider_policy_provider = next(item for item in nerd_metrics.provider_policy.by_provider if item.provider_key == "gemini-cli")
+    assert provider_policy_provider.admission_skip_count == 1
+    assert provider_policy_provider.top_task_name == "memory-curator"
+    assert provider_policy_provider.top_reason_code == "provider_quota_exhausted"
+    assert provider_policy_provider.active_admission_reason == "provider_quota_exhausted"
     assert any(stat.key == "orphan_rate" for stat in nerd_metrics.stats)
     assert all(alert.key != "curator_route_fallback" for alert in nerd_metrics.alerts)
 

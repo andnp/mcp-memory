@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import json
 import math
 from statistics import mean, median
 import time
@@ -46,6 +47,13 @@ from mcp_memory.management.models import (
     NerdMaintenanceSummaryPayload,
     NerdMaintenanceSummaryRowPayload,
     NerdMetricsPayload,
+    NerdProviderPolicyPayload,
+    NerdProviderPolicyProviderPayload,
+    NerdProviderPolicyTaskPayload,
+    NerdQualityDrilldownPayload,
+    NerdQualityMemoryRowPayload,
+    NerdQualityRemediationPayload,
+    NerdQualitySignalDrilldownPayload,
     NerdRetrievalMemoryRowPayload,
     NerdRetrievalConversionMemoryRowPayload,
     NerdRetrievalFunnelPayload,
@@ -68,6 +76,7 @@ from mcp_memory.management.reporting_queries import (
     list_memory_tool_event_rows_since,
     list_maintenance_task_run_rows_since,
     list_provider_usage_rows_since,
+    list_runtime_log_rows_since,
     list_scoped_link_rows,
     list_scoped_memory_rows,
     list_task_run_rows_since,
@@ -159,6 +168,17 @@ _PROVENANCE_PROCESS_TAGS: frozenset[str] = frozenset(
         "memory-operating-model",
         "startup",
     }
+)
+_QUALITY_SIGNAL_DEFS: tuple[tuple[str, str], ...] = (
+    ("trace_like_memory_count", "Trace-like memories"),
+    ("generic_summary_count", "Generic summaries"),
+    ("untagged_observation_count", "Untagged observations"),
+    ("oversized_memory_count", "Oversized memories"),
+)
+_QUALITY_REMEDIATION_DEFS: tuple[tuple[str, str], ...] = (
+    ("tagged_observation_updates", "Tagged observation updates"),
+    ("concrete_summary_updates", "Concrete summary updates"),
+    ("split_lineage_updates", "Split-lineage updates"),
 )
 
 
@@ -259,6 +279,41 @@ class _RetrievalSearchHitRecord:
     created_at: float
 
 
+@dataclass(frozen=True)
+class _MemoryQualitySignals:
+    trace_like_memory_count: int = 0
+    generic_summary_count: int = 0
+    untagged_observation_count: int = 0
+    oversized_memory_count: int = 0
+    observation_count: int = 0
+
+    @property
+    def untagged_observation_rate(self) -> float:
+        if self.observation_count <= 0:
+            return 0.0
+        return self.untagged_observation_count / self.observation_count
+
+
+@dataclass
+class _ProviderPolicyTaskAccumulator:
+    route_exhaustion_count: int = 0
+    legacy_fallback_denied_count: int = 0
+    admission_skip_count: int = 0
+    skip_provider_counts: Counter[tuple[str, str, str | None]] = field(default_factory=Counter)
+    active_admission_providers: set[tuple[str, str]] = field(default_factory=set)
+
+
+@dataclass
+class _ProviderPolicyProviderAccumulator:
+    provider_name: str
+    admission_skip_count: int = 0
+    task_counts: Counter[str] = field(default_factory=Counter)
+    reason_counts: Counter[str] = field(default_factory=Counter)
+    active_admission_reason: str | None = None
+    active_admission_category: str | None = None
+    active_retry_delay_seconds: float | None = None
+
+
 def build_nerd_metrics(
     *,
     db_manager,
@@ -287,6 +342,13 @@ def build_nerd_metrics(
     task_rows = list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     maintenance_rows = list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
+    provider_policy_log_rows = list_runtime_log_rows_since(
+        db_manager,
+        cutoff=cutoff,
+        workspace_id=workspace_id,
+        logger_name="mcp_memory.core.provider_policy",
+        level="WARNING",
+    )
     memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
     retrieval_rows = list_memory_tool_event_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
 
@@ -367,6 +429,7 @@ def build_nerd_metrics(
     memory_lifecycle = build_memory_lifecycle(db_manager, workspace_id, memory_rows=memory_rows)
     composition = build_composition(memory_rows)
     distributions = build_distributions(memory_rows, generated_at=generated_at)
+    quality_signals = build_memory_quality_signals(memory_rows)
     timelines = build_timelines(
         memory_rows,
         cutoff=cutoff,
@@ -387,6 +450,13 @@ def build_nerd_metrics(
         bucket_seconds=bucket_seconds,
     )
     growth_dynamics = build_growth_dynamics(
+        memory_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
+    quality_drilldown = build_quality_drilldown(memory_rows)
+    quality_remediation = build_quality_remediation(
         memory_rows,
         cutoff=cutoff,
         generated_at=generated_at,
@@ -418,6 +488,12 @@ def build_nerd_metrics(
         ai_agent_provider=ai_agent_provider,
         ai_provider_registry=ai_provider_registry,
     )
+    provider_policy = build_provider_policy_rollups(
+        provider_rows=provider_rows,
+        provider_policy_log_rows=provider_policy_log_rows,
+        provider_usage_repo=provider_usage_repo,
+        workspace_id=workspace_id,
+    )
 
     executed_provider_rows = len(provider_rows) - provider_skips
     provider_failure_rate = 0.0 if executed_provider_rows <= 0 else provider_failures / executed_provider_rows
@@ -436,6 +512,11 @@ def build_nerd_metrics(
         NerdStatPayload(key="orphan_rate", label="Orphan rate", value=round(graph_topology.orphan_rate, 4), unit="pct"),
         NerdStatPayload(key="cold_memory_rate", label="Cold memory rate", value=round(memory_lifecycle.cold_memory_rate, 4), unit="pct"),
         NerdStatPayload(key="search_fallback_count", label="Search fallback count", value=float(search_quality.fallback_count), unit="count"),
+        NerdStatPayload(key="trace_like_memory_count", label="Trace-like memories", value=float(quality_signals.trace_like_memory_count), unit="count"),
+        NerdStatPayload(key="generic_summary_count", label="Generic summaries", value=float(quality_signals.generic_summary_count), unit="count"),
+        NerdStatPayload(key="untagged_observation_count", label="Untagged observations", value=float(quality_signals.untagged_observation_count), unit="count"),
+        NerdStatPayload(key="untagged_observation_rate", label="Untagged observation rate", value=round(quality_signals.untagged_observation_rate, 4), unit="pct"),
+        NerdStatPayload(key="oversized_memory_count", label="Oversized memories", value=float(quality_signals.oversized_memory_count), unit="count"),
     ]
 
     return NerdMetricsPayload(
@@ -449,6 +530,8 @@ def build_nerd_metrics(
         maintenance=maintenance,
         lifecycle_trends=lifecycle_trends,
         growth_dynamics=growth_dynamics,
+        quality_drilldown=quality_drilldown,
+        quality_remediation=quality_remediation,
         retrieval=retrieval,
         maintenance_summary=maintenance_summary,
         queue_snapshot=queue_snapshot,
@@ -456,6 +539,7 @@ def build_nerd_metrics(
         memory_lifecycle=memory_lifecycle,
         search_quality=search_quality,
         route_audit=route_audit,
+        provider_policy=provider_policy,
         alerts=build_nerd_alerts(
             queue_snapshot=queue_snapshot,
             graph_topology=graph_topology,
@@ -463,9 +547,175 @@ def build_nerd_metrics(
             search_quality=search_quality,
             route_audit=route_audit,
             provider_failure_rate=provider_failure_rate,
+            quality_signals=quality_signals,
         ),
         agent_throughput=agent_throughput,
         provider_latency=provider_latency,
+    )
+
+
+def build_memory_quality_signals(memory_rows) -> _MemoryQualitySignals:
+    trace_like_memory_count = 0
+    generic_summary_count = 0
+    untagged_observation_count = 0
+    oversized_memory_count = 0
+    observation_count = 0
+
+    for row in memory_rows:
+        memory_type = str(row["type"])
+        tags = split_csv_values(row["tags_csv"])
+        content_bytes = int(row["content_bytes"] or 0)
+        quality_keys = set(_quality_signal_keys_for_row(row))
+
+        if "trace_like_memory_count" in quality_keys:
+            trace_like_memory_count += 1
+        if "generic_summary_count" in quality_keys:
+            generic_summary_count += 1
+        if "oversized_memory_count" in quality_keys or content_bytes >= 4_000:
+            oversized_memory_count += 1
+        if memory_type == "observation":
+            observation_count += 1
+            if "untagged_observation_count" in quality_keys or not tags:
+                untagged_observation_count += 1
+
+    return _MemoryQualitySignals(
+        trace_like_memory_count=trace_like_memory_count,
+        generic_summary_count=generic_summary_count,
+        untagged_observation_count=untagged_observation_count,
+        oversized_memory_count=oversized_memory_count,
+        observation_count=observation_count,
+    )
+
+
+def build_provider_policy_rollups(
+    *,
+    provider_rows,
+    provider_policy_log_rows,
+    provider_usage_repo,
+    workspace_id: str | None,
+) -> NerdProviderPolicyPayload:
+    by_task: dict[str, _ProviderPolicyTaskAccumulator] = {}
+    by_provider: dict[tuple[str, str], _ProviderPolicyProviderAccumulator] = {}
+    total_route_exhaustion_count = 0
+    total_legacy_fallback_denied_count = 0
+    total_admission_skip_count = 0
+
+    for row in provider_policy_log_rows:
+        message = str(row["message"])
+        task_name = _runtime_log_task_name(_runtime_log_data(row))
+        accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
+        if message == "Provider routing exhausted all configured routes":
+            accumulator.route_exhaustion_count += 1
+            total_route_exhaustion_count += 1
+        elif message == "Legacy fallback provider is unavailable due to admission control":
+            accumulator.legacy_fallback_denied_count += 1
+            total_legacy_fallback_denied_count += 1
+
+    for row in provider_rows:
+        if str(row["status"]) != "skipped":
+            continue
+        task_name = _coerce_row_str(row["task_name"]) or "unknown"
+        provider_key = str(row["provider_key"])
+        provider_name = str(row["provider_name"])
+        model_name = str(row["model_name"])
+        reason_code = _coerce_row_str(row["reason_code"])
+
+        task_accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
+        task_accumulator.admission_skip_count += 1
+        task_accumulator.skip_provider_counts[(provider_key, model_name, reason_code)] += 1
+
+        provider_accumulator = by_provider.setdefault(
+            (provider_key, model_name),
+            _ProviderPolicyProviderAccumulator(provider_name=provider_name),
+        )
+        provider_accumulator.admission_skip_count += 1
+        provider_accumulator.task_counts[task_name] += 1
+        if reason_code is not None:
+            provider_accumulator.reason_counts[reason_code] += 1
+        total_admission_skip_count += 1
+
+    for summary in provider_usage_repo.summarize_usage(workspace_id=workspace_id):
+        if summary.active_admission_reason is None:
+            continue
+        provider_accumulator = by_provider.setdefault(
+            (summary.provider_key, summary.model_name),
+            _ProviderPolicyProviderAccumulator(provider_name=summary.provider_name),
+        )
+        provider_accumulator.active_admission_reason = summary.active_admission_reason
+        provider_accumulator.active_admission_category = summary.active_admission_category
+        provider_accumulator.active_retry_delay_seconds = summary.active_retry_delay_seconds
+        if summary.task_name is not None:
+            by_task.setdefault(summary.task_name, _ProviderPolicyTaskAccumulator()).active_admission_providers.add(
+                (summary.provider_key, summary.model_name)
+            )
+
+    task_rows = [
+        NerdProviderPolicyTaskPayload(
+            task_name=task_name,
+            route_exhaustion_count=accumulator.route_exhaustion_count,
+            legacy_fallback_denied_count=accumulator.legacy_fallback_denied_count,
+            admission_skip_count=accumulator.admission_skip_count,
+            top_skip_provider_key=_counter_top_value(accumulator.skip_provider_counts, index=0),
+            top_skip_model_name=_counter_top_value(accumulator.skip_provider_counts, index=1),
+            top_skip_reason_code=_counter_top_value(accumulator.skip_provider_counts, index=2),
+            active_admission_provider_count=len(accumulator.active_admission_providers),
+        )
+        for task_name, accumulator in by_task.items()
+        if (
+            accumulator.route_exhaustion_count > 0
+            or accumulator.legacy_fallback_denied_count > 0
+            or accumulator.admission_skip_count > 0
+            or accumulator.active_admission_providers
+        )
+    ]
+    task_rows.sort(
+        key=lambda row: (
+            -(row.route_exhaustion_count + row.legacy_fallback_denied_count + row.admission_skip_count),
+            row.task_name,
+        )
+    )
+
+    provider_rows_payload = [
+        NerdProviderPolicyProviderPayload(
+            provider_key=provider_key,
+            provider_name=accumulator.provider_name,
+            model_name=model_name,
+            admission_skip_count=accumulator.admission_skip_count,
+            distinct_task_count=len(accumulator.task_counts),
+            top_task_name=_string_counter_top_key(accumulator.task_counts),
+            top_reason_code=_string_counter_top_key(accumulator.reason_counts),
+            active_admission_reason=accumulator.active_admission_reason,
+            active_admission_category=accumulator.active_admission_category,
+            active_retry_delay_seconds=accumulator.active_retry_delay_seconds,
+        )
+        for (provider_key, model_name), accumulator in by_provider.items()
+        if accumulator.admission_skip_count > 0 or accumulator.active_admission_reason is not None
+    ]
+    provider_rows_payload.sort(key=lambda row: (-row.admission_skip_count, row.provider_key, row.model_name))
+
+    return NerdProviderPolicyPayload(
+        stats=[
+            NerdStatPayload(
+                key="provider_policy_route_exhaustion_count",
+                label="Route exhaustion warnings",
+                value=float(total_route_exhaustion_count),
+                unit="count",
+            ),
+            NerdStatPayload(
+                key="provider_policy_legacy_fallback_denied_count",
+                label="Legacy fallback denials",
+                value=float(total_legacy_fallback_denied_count),
+                unit="count",
+            ),
+            NerdStatPayload(
+                key="provider_policy_admission_skip_count",
+                label="Admission-control skips",
+                value=float(total_admission_skip_count),
+                unit="count",
+            ),
+        ],
+        by_task=task_rows,
+        by_provider=provider_rows_payload,
     )
 
 
@@ -782,6 +1032,12 @@ def build_lifecycle_trends(
         status_events=status_events,
         never_surfaced_backlog=never_surfaced_backlog,
         cold_tail=cold_tail,
+        quality_signals=_build_quality_signal_series(
+            memory_rows,
+            cutoff=cutoff,
+            generated_at=generated_at,
+            bucket_seconds=bucket_seconds,
+        ),
     )
 
 
@@ -827,6 +1083,111 @@ def build_growth_dynamics(
             extractor=lambda row: split_csv_values(row["workspace_ids_csv"]),
         ),
     )
+
+
+def build_quality_drilldown(memory_rows, *, limit_per_signal: int = 12) -> NerdQualityDrilldownPayload:
+    if not memory_rows:
+        return NerdQualityDrilldownPayload()
+
+    signals: list[NerdQualitySignalDrilldownPayload] = []
+    for key, label in _QUALITY_SIGNAL_DEFS:
+        rows = [row for row in memory_rows if key in _quality_signal_keys_for_row(row)]
+        rows.sort(
+            key=lambda row: (
+                -(_iso_to_timestamp(row["updated_at"]) or 0.0),
+                str(row["title"]).lower(),
+                str(row["id"]),
+            )
+        )
+        signals.append(
+            NerdQualitySignalDrilldownPayload(
+                key=key,
+                label=label,
+                count=len(rows),
+                records=[_build_quality_memory_row(row) for row in rows[:limit_per_signal]],
+            )
+        )
+    return NerdQualityDrilldownPayload(signals=signals)
+
+
+def build_quality_remediation(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdQualityRemediationPayload:
+    if not memory_rows:
+        return NerdQualityRemediationPayload()
+
+    tagged_observation_count = sum(
+        1
+        for row in memory_rows
+        if str(row["type"]) == "observation" and split_csv_values(row["tags_csv"])
+    )
+    concrete_summary_count = sum(
+        1
+        for row in memory_rows
+        if _is_concrete_summary(row["summary"])
+    )
+    split_lineage_count = sum(
+        1
+        for row in memory_rows
+        if _has_split_lineage(_memory_row_metadata(row))
+    )
+
+    stats = [
+        NerdStatPayload(
+            key="tagged_observation_count",
+            label="Tagged observations",
+            value=float(tagged_observation_count),
+            unit="count",
+        ),
+        NerdStatPayload(
+            key="concrete_summary_count",
+            label="Concrete summaries",
+            value=float(concrete_summary_count),
+            unit="count",
+        ),
+        NerdStatPayload(
+            key="split_lineage_count",
+            label="Split-lineage memories",
+            value=float(split_lineage_count),
+            unit="count",
+        ),
+    ]
+
+    remediation_predicates = {
+        "tagged_observation_updates": lambda row: str(row["type"]) == "observation" and bool(split_csv_values(row["tags_csv"])),
+        "concrete_summary_updates": lambda row: _is_concrete_summary(row["summary"]),
+        "split_lineage_updates": lambda row: _has_split_lineage(_memory_row_metadata(row)),
+    }
+
+    activity: list[NerdCountSeriesPayload] = []
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    for key, label in _QUALITY_REMEDIATION_DEFS:
+        predicate = remediation_predicates[key]
+        counts: Counter[int] = Counter()
+        for row in memory_rows:
+            if not predicate(row):
+                continue
+            updated_at = _iso_to_timestamp(row["updated_at"])
+            if updated_at is None or updated_at < cutoff or updated_at > generated_at:
+                continue
+            counts[int(updated_at // bucket_seconds) * bucket_seconds] += 1
+        if not counts:
+            continue
+        activity.append(
+            NerdCountSeriesPayload(
+                key=key,
+                label=label,
+                buckets=[
+                    NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=counts.get(bucket_start, 0))
+                    for bucket_start in bucket_starts
+                ],
+            )
+        )
+    return NerdQualityRemediationPayload(stats=stats, activity=activity)
 
 
 def build_maintenance_summary(
@@ -1264,6 +1625,40 @@ def _format_query_family_label(value: object) -> str:
     return normalized or "(empty query)"
 
 
+def _runtime_log_data(row) -> dict[str, object]:
+    raw_data = row["data_json"]
+    if not isinstance(raw_data, str) or not raw_data.strip():
+        return {}
+    try:
+        decoded = json.loads(raw_data)
+    except ValueError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _runtime_log_task_name(log_data: dict[str, object]) -> str:
+    extra = log_data.get("extra")
+    if isinstance(extra, dict):
+        task_name = extra.get("task_name")
+        if isinstance(task_name, str) and task_name.strip():
+            return task_name.strip()
+    return "unknown"
+
+
+def _counter_top_value(counter: Counter[tuple[str, str, str | None]], *, index: int) -> str | None:
+    if not counter:
+        return None
+    top_key = max(counter.items(), key=lambda item: (item[1], item[0]))[0]
+    value = top_key[index]
+    return value if isinstance(value, str) and value else None
+
+
+def _string_counter_top_key(counter: Counter[str]) -> str | None:
+    if not counter:
+        return None
+    return max(counter.items(), key=lambda item: (item[1], item[0]))[0]
+
+
 def build_nerd_alerts(
     *,
     queue_snapshot: QueueSnapshotPayload,
@@ -1272,6 +1667,7 @@ def build_nerd_alerts(
     search_quality: SearchQualityPayload,
     route_audit,
     provider_failure_rate: float,
+    quality_signals: _MemoryQualitySignals,
 ) -> list[NerdAlertPayload]:
     alerts: list[NerdAlertPayload] = []
     if queue_snapshot.oldest_age_seconds >= 300.0:
@@ -1334,6 +1730,54 @@ def build_nerd_alerts(
                 unit="pct",
             )
         )
+    if quality_signals.trace_like_memory_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="trace_like_memory_count",
+                severity="warning",
+                label="Trace-like memories detected",
+                message="At least one stored memory looks like a routine completion or status trace; route these through task_complete instead.",
+                value=float(quality_signals.trace_like_memory_count),
+                threshold=0.0,
+                unit="count",
+            )
+        )
+    if quality_signals.untagged_observation_rate >= 0.25:
+        alerts.append(
+            NerdAlertPayload(
+                key="untagged_observation_rate",
+                severity="warning",
+                label="Observation tagging coverage low",
+                message="At least 25% of scoped observations are missing tags, which makes retrieval and curation noisier.",
+                value=round(quality_signals.untagged_observation_rate, 4),
+                threshold=0.25,
+                unit="pct",
+            )
+        )
+    if quality_signals.generic_summary_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="generic_summary_count",
+                severity="info",
+                label="Generic summaries present",
+                message="Some stored summaries still use generic language like 'Covers ...'; tighter summaries should improve scanability.",
+                value=float(quality_signals.generic_summary_count),
+                threshold=0.0,
+                unit="count",
+            )
+        )
+    if quality_signals.oversized_memory_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="oversized_memory_count",
+                severity="info",
+                label="Oversized memories detected",
+                message="Some scoped memories exceed the split-warning threshold and may benefit from defragmentation.",
+                value=float(quality_signals.oversized_memory_count),
+                threshold=0.0,
+                unit="count",
+            )
+        )
     curator_route = next((item for item in route_audit if item.task_name == "memory-curator"), None)
     if (
         curator_route is not None
@@ -1361,6 +1805,16 @@ def _percentile(values: list[float], ratio: float) -> float:
     sorted_values = sorted(values)
     index = max(math.ceil(len(sorted_values) * ratio) - 1, 0)
     return float(sorted_values[index])
+
+
+def _normalize_quality_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.strip().lower().split())
+
+
+def _looks_like_trace_title(title: str) -> bool:
+    return title.startswith("task_complete") or title.startswith("task complete") or title.startswith("task_complete_record")
 
 
 def is_provenance_process_tag(tag: str) -> bool:
@@ -1461,6 +1915,36 @@ def _build_backlog_series(
     for bucket_start in bucket_starts:
         running_count += created_counts.get(bucket_start, 0)
         series.append(NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=running_count))
+    return series
+
+
+def _build_quality_signal_series(
+    memory_rows,
+    *,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> list[NerdCountSeriesPayload]:
+    series: list[NerdCountSeriesPayload] = []
+    for key, label in _QUALITY_SIGNAL_DEFS:
+        def predicate(row, signal_key=key) -> bool:
+            return signal_key in _quality_signal_keys_for_row(row)
+
+        if not any(predicate(row) for row in memory_rows):
+            continue
+        series.append(
+            NerdCountSeriesPayload(
+                key=key,
+                label=label,
+                buckets=_build_backlog_series(
+                    memory_rows,
+                    cutoff=cutoff,
+                    generated_at=generated_at,
+                    bucket_seconds=bucket_seconds,
+                    predicate=predicate,
+                ),
+            )
+        )
     return series
 
 
@@ -1575,6 +2059,54 @@ def _build_cumulative_dimension_share_series(
         NerdShareSeriesPayload(key=key, label=label, buckets=buckets_by_key[key])
         for key, label in tracked_keys
     ]
+
+
+def _quality_signal_keys_for_row(row) -> list[str]:
+    keys: list[str] = []
+    if _looks_like_trace_title(_normalize_quality_text(row["title"])):
+        keys.append("trace_like_memory_count")
+    if _normalize_quality_text(row["summary"]).startswith("covers "):
+        keys.append("generic_summary_count")
+    if str(row["type"]) == "observation" and not split_csv_values(row["tags_csv"]):
+        keys.append("untagged_observation_count")
+    if int(row["content_bytes"] or 0) >= 4_000:
+        keys.append("oversized_memory_count")
+    return keys
+
+
+def _build_quality_memory_row(row) -> NerdQualityMemoryRowPayload:
+    return NerdQualityMemoryRowPayload(
+        memory_id=str(row["id"]),
+        title=str(row["title"]),
+        summary=row["summary"] if isinstance(row["summary"], str) else None,
+        memory_type=str(row["type"]),
+        status=str(row["status"]),
+        updated_at=str(row["updated_at"]),
+        tags=split_csv_values(row["tags_csv"]),
+    )
+
+
+def _memory_row_metadata(row) -> dict[str, object]:
+    raw = row["metadata"]
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _has_split_lineage(metadata: dict[str, object]) -> bool:
+    return any(
+        key in metadata
+        for key in ("split_from_memory_id", "split_child_count", "split_child_memory_ids", "split_group_id")
+    )
+
+
+def _is_concrete_summary(value: object) -> bool:
+    normalized = _normalize_quality_text(value)
+    return bool(normalized) and not normalized.startswith("covers ")
 
 
 def _map_dimension_contributions(values: list[str], *, top_keys: list[str], include_other: bool) -> Counter[str]:

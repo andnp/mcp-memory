@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import time
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
@@ -12,6 +13,8 @@ from mcp_memory.core.tasks import TaskRecord
 
 
 logger = logging.getLogger(__name__)
+_PROVIDER_WARNING_MIN_INTERVAL_SECONDS = 600.0
+_provider_warning_state: dict[tuple[str, str | None, tuple[str, ...], str | None], float] = {}
 
 
 @dataclass(frozen=True)
@@ -171,9 +174,11 @@ def select_provider_for_request(
                 )
             return first_routed_provider
         if found_routed_provider:
-            logger.warning(
+            _log_provider_warning_once(
                 "Provider routing exhausted all configured routes",
-                extra={"task_name": task_name, "candidate_routes": candidate_route_keys},
+                warning_kind="routes_exhausted",
+                task_name=task_name,
+                route_keys=candidate_route_keys,
             )
             return None
 
@@ -190,9 +195,12 @@ def select_provider_for_request(
     if not admission.allowed:
         if record_admission_skips:
             _record_admission_skip(bind_provider_context(selected_provider, request=request), admission)
-        logger.warning(
+        _log_provider_warning_once(
             "Legacy fallback provider is unavailable due to admission control",
-            extra={"task_name": task_name, "reason": admission.reason},
+            warning_kind="legacy_fallback_denied",
+            task_name=task_name,
+            route_keys=(),
+            reason=admission.reason,
         )
         return None
     return bind_provider_context(selected_provider, request=request)
@@ -268,3 +276,30 @@ def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionR
     if not callable(binder):
         return selected_provider
     return binder(task_name=request.task_name, task_id=request.task_id, workspace_id=request.workspace_id)
+
+
+def _log_provider_warning_once(
+    message: str,
+    *,
+    warning_kind: str,
+    task_name: str,
+    route_keys: list[str] | tuple[str, ...],
+    reason: str | None = None,
+    now: float | None = None,
+) -> None:
+    current_time = time.time() if now is None else now
+    key = (warning_kind, task_name, tuple(route_keys), reason)
+    previous_logged_at = _provider_warning_state.get(key)
+    if (
+        previous_logged_at is not None
+        and current_time - previous_logged_at < _PROVIDER_WARNING_MIN_INTERVAL_SECONDS
+    ):
+        return
+    _provider_warning_state[key] = current_time
+    extra = {
+        "task_name": task_name,
+        "candidate_routes": list(route_keys),
+    }
+    if reason is not None:
+        extra["reason"] = reason
+    logger.warning(message, extra=extra)

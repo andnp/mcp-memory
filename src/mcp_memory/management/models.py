@@ -304,6 +304,33 @@ class NerdLifecycleTrendsPayload(BaseModel):
     status_events: list[NerdCountSeriesPayload] = Field(default_factory=list)
     never_surfaced_backlog: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
     cold_tail: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
+    quality_signals: list[NerdCountSeriesPayload] = Field(default_factory=list)
+
+
+class NerdQualityMemoryRowPayload(BaseModel):
+    memory_id: str
+    title: str
+    summary: str | None = None
+    memory_type: str
+    status: str
+    updated_at: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class NerdQualitySignalDrilldownPayload(BaseModel):
+    key: str
+    label: str
+    count: int = 0
+    records: list[NerdQualityMemoryRowPayload] = Field(default_factory=list)
+
+
+class NerdQualityDrilldownPayload(BaseModel):
+    signals: list[NerdQualitySignalDrilldownPayload] = Field(default_factory=list)
+
+
+class NerdQualityRemediationPayload(BaseModel):
+    stats: list[NerdStatPayload] = Field(default_factory=list)
+    activity: list[NerdCountSeriesPayload] = Field(default_factory=list)
 
 
 class NerdGrowthDynamicsPayload(BaseModel):
@@ -547,6 +574,36 @@ class TaskRouteAuditPayload(BaseModel):
     on_primary_route: bool | None = None
 
 
+class NerdProviderPolicyTaskPayload(BaseModel):
+    task_name: str
+    route_exhaustion_count: int = 0
+    legacy_fallback_denied_count: int = 0
+    admission_skip_count: int = 0
+    top_skip_provider_key: str | None = None
+    top_skip_model_name: str | None = None
+    top_skip_reason_code: str | None = None
+    active_admission_provider_count: int = 0
+
+
+class NerdProviderPolicyProviderPayload(BaseModel):
+    provider_key: str
+    provider_name: str
+    model_name: str
+    admission_skip_count: int = 0
+    distinct_task_count: int = 0
+    top_task_name: str | None = None
+    top_reason_code: str | None = None
+    active_admission_reason: str | None = None
+    active_admission_category: str | None = None
+    active_retry_delay_seconds: float | None = None
+
+
+class NerdProviderPolicyPayload(BaseModel):
+    stats: list[NerdStatPayload] = Field(default_factory=list)
+    by_task: list[NerdProviderPolicyTaskPayload] = Field(default_factory=list)
+    by_provider: list[NerdProviderPolicyProviderPayload] = Field(default_factory=list)
+
+
 class NerdMetricsPayload(BaseModel):
     generated_at: float
     window_hours: int
@@ -558,6 +615,8 @@ class NerdMetricsPayload(BaseModel):
     maintenance: NerdMaintenancePayload = Field(default_factory=NerdMaintenancePayload)
     lifecycle_trends: NerdLifecycleTrendsPayload = Field(default_factory=NerdLifecycleTrendsPayload)
     growth_dynamics: NerdGrowthDynamicsPayload = Field(default_factory=NerdGrowthDynamicsPayload)
+    quality_drilldown: NerdQualityDrilldownPayload = Field(default_factory=NerdQualityDrilldownPayload)
+    quality_remediation: NerdQualityRemediationPayload = Field(default_factory=NerdQualityRemediationPayload)
     retrieval: NerdRetrievalPayload = Field(default_factory=NerdRetrievalPayload)
     maintenance_summary: NerdMaintenanceSummaryPayload = Field(default_factory=NerdMaintenanceSummaryPayload)
     queue_snapshot: QueueSnapshotPayload = Field(default_factory=QueueSnapshotPayload)
@@ -565,6 +624,7 @@ class NerdMetricsPayload(BaseModel):
     memory_lifecycle: MemoryLifecyclePayload = Field(default_factory=MemoryLifecyclePayload)
     search_quality: SearchQualityPayload = Field(default_factory=SearchQualityPayload)
     route_audit: list[TaskRouteAuditPayload] = Field(default_factory=list)
+    provider_policy: NerdProviderPolicyPayload = Field(default_factory=NerdProviderPolicyPayload)
     alerts: list[NerdAlertPayload] = Field(default_factory=list)
     agent_throughput: list[AgentThroughputBucketPayload] = Field(default_factory=list)
     provider_latency: list[ProviderLatencyBucketPayload] = Field(default_factory=list)

@@ -118,13 +118,41 @@ def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: s
         return []
     conn = db_manager.get_connection()
     query = (
-        "SELECT provider_key, provider_name, model_name, status, duration_seconds, created_at "
+        "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_category, reason_code, retry_delay_seconds "
         "FROM provider_usage WHERE created_at >= ?"
     )
     params: list[object] = [cutoff]
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
+    return conn.execute(query, params).fetchall()
+
+
+def list_runtime_log_rows_since(
+    db_manager,
+    *,
+    cutoff: float,
+    workspace_id: str | None,
+    logger_name: str | None = None,
+    level: str | None = None,
+):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    query = (
+        "SELECT logger_name, level, message, created_at, data_json "
+        "FROM runtime_logs WHERE created_at >= ?"
+    )
+    params: list[object] = [cutoff]
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    if logger_name is not None:
+        query += " AND logger_name = ?"
+        params.append(logger_name)
+    if level is not None:
+        query += " AND level = ?"
+        params.append(level)
     return conn.execute(query, params).fetchall()
 
 
@@ -149,7 +177,7 @@ def list_scoped_memory_rows(db_manager, workspace_id: str | None):
         return []
     conn = db_manager.get_connection()
     query = (
-        "SELECT memories.id, memories.title, memories.type, memories.status, memories.created_at, memories.updated_at, "
+        "SELECT memories.id, memories.title, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.metadata, "
         "memories.last_accessed_at, memories.last_surfaced_at, LENGTH(COALESCE(memories.content, '')) AS content_bytes, "
         "COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv, COALESCE(tag_agg.tags, '') AS tags_csv "
         "FROM memories "

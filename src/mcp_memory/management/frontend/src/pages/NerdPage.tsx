@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
+import { Link } from 'react-router-dom';
 
 import {
   ApiError,
@@ -291,6 +292,13 @@ const NERD_WINDOW_OPTIONS: Record<NerdWindow, { label: string; window_hours: num
 };
 
 const NERD_WINDOW_ORDER: NerdWindow[] = ['24h', '7d', '30d'];
+const QUALITY_STAT_KEYS = [
+  'trace_like_memory_count',
+  'generic_summary_count',
+  'untagged_observation_count',
+  'untagged_observation_rate',
+  'oversized_memory_count',
+] as const;
 
 export function NerdPage() {
   const [selectedScope, setSelectedScope] = useState<NerdMetricsScope>('global');
@@ -336,6 +344,19 @@ export function NerdPage() {
     refetchInterval: 5000,
     retry: false,
   });
+
+  const [selectedQualitySignal, setSelectedQualitySignal] = useState<string>('trace_like_memory_count');
+  const qualityDrilldownSignals = nerdQuery.data?.quality_drilldown.signals ?? [];
+
+  useEffect(() => {
+    if (!qualityDrilldownSignals.length) {
+      return;
+    }
+    if (qualityDrilldownSignals.some((signal) => signal.key === selectedQualitySignal)) {
+      return;
+    }
+    setSelectedQualitySignal(qualityDrilldownSignals[0].key);
+  }, [qualityDrilldownSignals, selectedQualitySignal]);
 
   function handleWorkspaceChange(event: ChangeEvent<HTMLSelectElement>) {
     const workspaceId = event.target.value;
@@ -566,6 +587,70 @@ export function NerdPage() {
     });
   }, [nerdQuery.data]);
 
+  const qualityTrendChart = useMemo(() => {
+    const rows = nerdQuery.data?.lifecycle_trends.quality_signals.flatMap((series) =>
+      series.buckets.map((bucket) => ({
+        bucket_start: bucket.bucket_start,
+        count: bucket.count,
+        label: series.label,
+      })),
+    ) ?? [];
+    if (!rows.length) {
+      return null;
+    }
+    return Plot.plot({
+      height: 250,
+      marginLeft: 56,
+      style: { background: 'transparent', color: '#c9d1d9' },
+      x: { type: 'time', label: 'time' },
+      y: { grid: true, label: 'memories' },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'count',
+          stroke: 'label',
+          strokeWidth: 2,
+        }),
+      ],
+    });
+  }, [nerdQuery.data]);
+
+  const remediationActivityChart = useMemo(() => {
+    const rows = nerdQuery.data?.quality_remediation.activity.flatMap((series) =>
+      series.buckets.map((bucket) => ({
+        bucket_start: bucket.bucket_start,
+        count: bucket.count,
+        label: series.label,
+      })),
+    ) ?? [];
+    if (!rows.length) {
+      return null;
+    }
+    return Plot.plot({
+      height: 250,
+      marginLeft: 56,
+      style: { background: 'transparent', color: '#c9d1d9' },
+      x: { type: 'time', label: 'time' },
+      y: { grid: true, label: 'updated memories' },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'count',
+          stroke: 'label',
+          strokeWidth: 2,
+        }),
+        Plot.dot(rows, {
+          x: (d) => new Date(d.bucket_start * 1000),
+          y: 'count',
+          fill: 'label',
+          r: 3,
+        }),
+      ],
+    });
+  }, [nerdQuery.data]);
+
   const linkTypeChart = useMemo(() => {
     if (!nerdQuery.data) {
       return null;
@@ -637,6 +722,9 @@ export function NerdPage() {
       : 'none',
     calls: `${route.recent_success_count}✓ / ${route.recent_failure_count}✗`,
   }));
+  const providerPolicyStatRows = nerdQuery.data.provider_policy.stats;
+  const providerPolicyTaskRows = nerdQuery.data.provider_policy.by_task;
+  const providerPolicyProviderRows = nerdQuery.data.provider_policy.by_provider;
 
   const queueRows = [
     { label: 'Runnable', value: formatStatValue(nerdQuery.data.queue_snapshot.runnable_count, null) },
@@ -663,6 +751,23 @@ export function NerdPage() {
     label: series.label,
     currentCount: latestCount(series),
     share: latestShare(series),
+  }));
+
+  const qualitySignalRows = nerdQuery.data.lifecycle_trends.quality_signals.map((series) => ({
+    key: series.key,
+    label: series.label,
+    currentCount: latestCount(series),
+    delta: seriesCountDelta(series),
+  }));
+
+  const qualityStatRows = nerdQuery.data.stats.filter((stat) => QUALITY_STAT_KEYS.includes(stat.key as (typeof QUALITY_STAT_KEYS)[number]));
+  const activeQualitySignal = qualityDrilldownSignals.find((signal) => signal.key === selectedQualitySignal) ?? qualityDrilldownSignals[0] ?? null;
+  const remediationStatRows = nerdQuery.data.quality_remediation.stats;
+  const remediationActivityRows = nerdQuery.data.quality_remediation.activity.map((series) => ({
+    key: series.key,
+    label: series.label,
+    total: series.buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+    latest: latestCount(series),
   }));
 
   const familySummaryRows = [...nerdQuery.data.maintenance_summary.by_family]
@@ -1050,6 +1155,195 @@ export function NerdPage() {
 
       <section className="space-y-3">
         <SectionHeading
+          eyebrow="Memory Quality"
+          title="Signal hygiene and drift over time"
+          description="These panels track the exact anti-patterns we just started guarding against: trace-like records, generic summaries, missing tags, and oversized memories." 
+        />
+
+        <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+          {qualityStatRows.map((stat) => (
+            <article key={stat.key} className="metric-card">
+              <p className="panel-title">{stat.label}</p>
+              <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(stat.value, stat.unit)}</p>
+            </article>
+          ))}
+        </section>
+
+        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <section className="panel p-3">
+            <p className="panel-title">Quality drift</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Current-stock trend lines for problematic memories</h3>
+            <p className="mt-1 text-[11px] text-muted">These are cumulative scoped-stock lines, so rising curves mean bad patterns are sticking around instead of being cleaned up.</p>
+            <div className="mt-3">{qualityTrendChart ? <PlotFigure chart={qualityTrendChart} /> : <p className="text-xs text-muted">No quality-signal trend data yet.</p>}</div>
+          </section>
+
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Current signals</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Stock and window delta</h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Signal</th>
+                  <th>Current</th>
+                  <th>Δ window</th>
+                </tr>
+              </thead>
+              <tbody>
+                {qualitySignalRows.length ? (
+                  qualitySignalRows.map((row) => (
+                    <tr key={row.key}>
+                      <td>{row.label}</td>
+                      <td>{formatStatValue(row.currentCount, null)}</td>
+                      <td className={signedDeltaClass(row.delta)}>{formatSignedDelta(row.delta)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={3} className="text-xs text-muted">
+                      No quality drift signals in the selected window.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Signal drill-down</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Select a quality signal to inspect the offending memories</h3>
+            </div>
+            <div className="flex flex-wrap gap-2 border-b border-border px-3 py-3">
+              {qualityDrilldownSignals.map((signal) => {
+                const isActive = signal.key === activeQualitySignal?.key;
+                return (
+                  <button
+                    key={signal.key}
+                    type="button"
+                    onClick={() => setSelectedQualitySignal(signal.key)}
+                    className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${isActive
+                      ? 'border-accent bg-accent text-ink'
+                      : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
+                    }`}
+                  >
+                    {signal.label} · {signal.count}
+                  </button>
+                );
+              })}
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Memory</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeQualitySignal?.records.length ? (
+                  activeQualitySignal.records.map((record) => (
+                    <tr key={`${activeQualitySignal.key}-${record.memory_id}`}>
+                      <td>
+                        <Link className="block truncate font-medium text-accent" to={`/memory/${record.memory_id}`} title={record.title}>{record.title}</Link>
+                        {record.summary ? <div className="mt-1 max-w-[30rem] truncate text-[11px] text-muted" title={record.summary}>{record.summary}</div> : null}
+                        {record.tags.length ? <div className="mt-1 max-w-[30rem] truncate text-[10px] text-muted" title={record.tags.join(', ')}>{record.tags.join(', ')}</div> : null}
+                      </td>
+                      <td>{record.memory_type}</td>
+                      <td>{record.status}</td>
+                      <td className="text-xs text-muted">{record.updated_at}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="text-xs text-muted">
+                      No offending memories are currently visible for this signal.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Operator note</p>
+              <h3 className="mt-1 text-base font-semibold text-text">How to read this section</h3>
+            </div>
+            <div className="space-y-2 px-3 py-3 text-xs text-muted">
+              <p>
+                The drift chart shows <span className="text-text">current bad-stock</span>: if the line rises, low-quality memories are accumulating.
+              </p>
+              <p>
+                The drill-down table is the actionable slice: open the memory, split it, retag it, or tighten the summary.
+              </p>
+              <p>
+                The remediation charts below are <span className="text-text">proxy cleanup activity</span> derived from updated memories that now carry better hygiene markers.
+              </p>
+            </div>
+          </section>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <section className="panel p-3">
+            <p className="panel-title">Remediation proxies</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Recent cleanup-style updates</h3>
+            <p className="mt-1 text-[11px] text-muted">These counts are derived from updated memories with better hygiene markers, so they are best read as remediation proxies rather than audited mutation logs.</p>
+            <div className="mt-3">{remediationActivityChart ? <PlotFigure chart={remediationActivityChart} /> : <p className="text-xs text-muted">No remediation activity proxies in the selected window.</p>}</div>
+          </section>
+
+          <section className="space-y-4">
+            <section className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+              {remediationStatRows.map((stat) => (
+                <article key={stat.key} className="metric-card">
+                  <p className="panel-title">{stat.label}</p>
+                  <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(stat.value, stat.unit)}</p>
+                </article>
+              ))}
+            </section>
+
+            <section className="table-shell">
+              <div className="border-b border-border px-3 py-2">
+                <p className="panel-title">Recent remediation buckets</p>
+                <h3 className="mt-1 text-base font-semibold text-text">Latest bucket and total window counts</h3>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Proxy</th>
+                    <th>Total</th>
+                    <th>Latest bucket</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {remediationActivityRows.length ? (
+                    remediationActivityRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>{row.label}</td>
+                        <td>{formatStatValue(row.total, null)}</td>
+                        <td>{formatStatValue(row.latest, null)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={3} className="text-xs text-muted">
+                        No remediation proxy activity in the selected window.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <SectionHeading
           eyebrow="Maintenance Yield"
           title="What background work actually produced"
           description="Family rollups stay operator-readable while agent-level yield ratios show whether maintenance runs are paying rent."
@@ -1193,6 +1487,112 @@ export function NerdPage() {
           title="Configured vs resolved task routing"
           description="Route audit stays intact so operator-facing analytics still show where background work is supposed to go and where it actually landed."
         />
+
+        <section className="grid gap-2 sm:grid-cols-3">
+          {providerPolicyStatRows.map((stat) => (
+            <article key={stat.key} className="metric-card">
+              <p className="panel-title">{stat.label}</p>
+              <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(stat.value, stat.unit)}</p>
+            </article>
+          ))}
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Provider policy by task</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Windowed route exhaustion, fallback denials, and admission skips</h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Route exhausted</th>
+                  <th>Fallback denied</th>
+                  <th>Admission skips</th>
+                  <th>Top skipped provider</th>
+                </tr>
+              </thead>
+              <tbody>
+                {providerPolicyTaskRows.length ? (
+                  providerPolicyTaskRows.map((row) => (
+                    <tr key={row.task_name}>
+                      <td>
+                        <div className="font-medium text-text">{row.task_name}</div>
+                        <div className="text-[11px] text-muted">
+                          {row.active_admission_provider_count > 0 ? `${row.active_admission_provider_count} active admission gate(s)` : 'No active admissions'}
+                        </div>
+                      </td>
+                      <td>{formatStatValue(row.route_exhaustion_count, null)}</td>
+                      <td>{formatStatValue(row.legacy_fallback_denied_count, null)}</td>
+                      <td>{formatStatValue(row.admission_skip_count, null)}</td>
+                      <td className="text-xs text-muted">
+                        {row.top_skip_provider_key
+                          ? `${row.top_skip_provider_key}${row.top_skip_model_name ? ` (${row.top_skip_model_name})` : ''}${row.top_skip_reason_code ? ` · ${row.top_skip_reason_code}` : ''}`
+                          : '—'}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="text-xs text-muted">
+                      No provider-policy task rollups in the selected window.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          <section className="table-shell">
+            <div className="border-b border-border px-3 py-2">
+              <p className="panel-title">Provider policy by provider</p>
+              <h3 className="mt-1 text-base font-semibold text-text">Who is getting skipped and why</h3>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Skips</th>
+                  <th>Top task</th>
+                  <th>Active admission</th>
+                </tr>
+              </thead>
+              <tbody>
+                {providerPolicyProviderRows.length ? (
+                  providerPolicyProviderRows.map((row) => (
+                    <tr key={`${row.provider_key}:${row.model_name}`}>
+                      <td>
+                        <div className="font-medium text-text">{row.provider_key}</div>
+                        <div className="text-[11px] text-muted">{row.model_name}</div>
+                      </td>
+                      <td>
+                        <div>{formatStatValue(row.admission_skip_count, null)}</div>
+                        <div className="text-[11px] text-muted">{row.distinct_task_count} task(s)</div>
+                      </td>
+                      <td className="text-xs text-muted">
+                        {row.top_task_name ?? '—'}
+                        {row.top_reason_code ? <div className="mt-1 text-[11px]">{row.top_reason_code}</div> : null}
+                      </td>
+                      <td className="text-xs text-muted">
+                        {row.active_admission_reason
+                          ? `${row.active_admission_reason}${row.active_retry_delay_seconds !== null ? ` · retry ${formatStatValue(row.active_retry_delay_seconds, 's')}` : ''}`
+                          : '—'}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="text-xs text-muted">
+                      No provider-level admission rollups in the selected window.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </section>
+
         <section className="table-shell">
           <div className="border-b border-border px-3 py-2">
             <p className="panel-title">Route audit</p>
