@@ -25,8 +25,19 @@ from mcp_memory.core.sampling import (
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
-    SamplingBatch,
     sampling_payload,
+)
+from mcp_memory.core.task_handlers.maintenance_work_items import (
+    claim_work_batch as _claim_work_batch,
+    complete_work_item as _complete_work_item,
+    defer_work_item as _defer_work_item,
+    enqueue_review_work_item as _enqueue_review_work_item,
+    payload_memory_records as _payload_memory_records,
+    release_work_item as _release_work_item,
+    run_claimed_review_work_item as _run_claimed_review_work_item,
+    run_sparse_frontier_review_task as _run_sparse_frontier_review_task,
+    sampling_batch_from_work_payload as _sampling_batch_from_work_payload,
+    work_item_result_metadata as _work_item_result_metadata,
 )
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
@@ -1156,204 +1167,6 @@ def _apply_conflict_proposals(
     return created
 
 
-def _claim_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    family_key: str,
-    execution_lane: str,
-    limit: int,
-) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
-        family_key=family_key,
-        execution_lane=execution_lane,
-        lease_owner=task.id,
-        limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
-    )
-
-
-def _enqueue_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    family_key: str,
-    execution_lane: str,
-    workspace_id: str | None,
-    idempotency_prefix: str,
-    payload_memory_ids_key: str,
-    memory_ids: list[str],
-    strategy_used: str | None,
-    candidate_count: int | None = None,
-) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    sorted_memory_ids = sorted(memory_ids)
-    payload: dict[str, Any] = {
-        "workspace_id": workspace_id,
-        payload_memory_ids_key: sorted_memory_ids,
-        "strategy_used": strategy_used,
-    }
-    if candidate_count is not None:
-        payload["candidate_count"] = candidate_count
-    return work_items.enqueue_unique(
-        family_key=family_key,
-        execution_lane=execution_lane,
-        workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"{idempotency_prefix}:{'|'.join(sorted_memory_ids)}",
-        payload=payload,
-    )
-
-
-def _payload_memory_records(
-    ctx: ApplicationContext,
-    payload: dict[str, Any],
-    *,
-    payload_memory_ids_key: str,
-    allowed_types: set[str] | None = None,
-) -> list[Any]:
-    if ctx.repository is None:
-        return []
-    memory_ids = payload.get(payload_memory_ids_key)
-    if not isinstance(memory_ids, list):
-        return []
-    records: list[Any] = []
-    for memory_id in memory_ids:
-        if not isinstance(memory_id, str):
-            continue
-        record = ctx.repository.get_memory(memory_id)
-        if record is None or record.status != "active":
-            continue
-        if allowed_types is not None and record.type not in allowed_types:
-            continue
-        records.append(record)
-    return records
-
-
-def _sampling_batch_from_work_payload(payload: dict[str, Any], records: list[Any]) -> SamplingBatch:
-    requested_strategy = payload.get("strategy_used")
-    if not isinstance(requested_strategy, str):
-        requested_strategy = None
-    candidate_count = payload.get("candidate_count")
-    if not isinstance(candidate_count, int):
-        candidate_count = len(records)
-    return SamplingBatch(
-        requested_strategy=requested_strategy,
-        strategy_used=requested_strategy or "none",
-        strategy_fallback_reason=None,
-        candidate_count=candidate_count,
-        records=records,
-    )
-
-
-def _work_item_result_metadata(
-    *,
-    family_key: str,
-    execution_lane: str,
-    seed_source: str,
-    seed_records: list[Any],
-    claimed_work_item: Any | None = None,
-    created_work_item: Any | None = None,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {
-        "work_item_family": family_key,
-        "work_item_execution_lane": execution_lane,
-        "seed_source": seed_source,
-        "seed_record_count": len(seed_records),
-    }
-    if claimed_work_item is not None:
-        metadata["claimed_work_item_id"] = claimed_work_item.id
-    if created_work_item is not None:
-        metadata["created_work_item_id"] = created_work_item.id
-    return metadata
-
-
-async def _run_claimed_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    family_key: str,
-    load_candidates: Callable[[ApplicationContext, dict[str, Any]], list[Any]],
-    propose_pairs: Callable[[list[Any]], Awaitable[Any]],
-    apply_pairs: Callable[[Any], int],
-) -> dict[str, Any] | None:
-    claimed_review_items = _claim_work_batch(
-        ctx,
-        task=task,
-        family_key=family_key,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        limit=1,
-    )
-    if not claimed_review_items:
-        return None
-
-    review_item = claimed_review_items[0]
-    try:
-        candidates = load_candidates(ctx, review_item.payload)
-        proposed_pairs = await propose_pairs(candidates)
-        created = apply_pairs(proposed_pairs)
-    except Exception:
-        _release_work_item(ctx, review_item.id)
-        raise
-
-    _complete_work_item(ctx, review_item.id)
-    result = {
-        "created": created,
-        "claimed_work_item_count": 1,
-        "execution_mode": "agentic_review",
-    }
-    result.update(
-        _work_item_result_metadata(
-            family_key=family_key,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            seed_source="claimed_review_work_item",
-            seed_records=candidates,
-            claimed_work_item=review_item,
-        )
-    )
-    return result
-
-
-async def _run_sparse_frontier_review_task(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    sampled_batch: SamplingBatch,
-    candidates: list[Any],
-    family_key: str,
-    propose_pairs: Callable[[list[Any]], Awaitable[Any]],
-    apply_pairs: Callable[[Any], int],
-    should_seed: Callable[[Any, list[Any]], bool],
-    enqueue_review_work_item: Callable[[list[Any]], tuple[Any, bool]],
-) -> dict[str, Any]:
-    created_work_item: Any | None = None
-    fallback_pairs = await propose_pairs(candidates)
-    created = apply_pairs(fallback_pairs)
-    seeded_work_item_count = 0
-    if should_seed(fallback_pairs, candidates):
-        created_work_item, created_item = enqueue_review_work_item(candidates)
-        seeded_work_item_count = 1 if created_item else 0
-
-    return sampling_payload(
-        sampled_batch,
-        sampled_records=candidates,
-        extra=_work_item_result_metadata(
-            family_key=family_key,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            seed_source="frontier_seed",
-            seed_records=candidates,
-            created_work_item=created_work_item if seeded_work_item_count else None,
-        ),
-        created=created,
-        seeded_work_item_count=seeded_work_item_count,
-    )
-
-
 def _claim_dedup_review_work_batch(
     ctx: ApplicationContext,
     *,
@@ -1739,37 +1552,6 @@ def _normalize_taxonomist_agentic_result(agentic_result: Any) -> dict[str, Any]:
             if isinstance(parsed_response, dict):
                 summary = _coerce_text_summary(parsed_response.get("summary")) or summary
     return {"summary": summary}
-
-
-def _complete_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return
-    work_items.complete_item(work_item_id)
-
-
-def _defer_work_item(
-    ctx: ApplicationContext,
-    work_item_id: str,
-    *,
-    error: str,
-    retry_delay_seconds: float | None,
-) -> None:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return
-    work_items.defer_item(
-        work_item_id,
-        error=error,
-        retry_delay_seconds=0.0 if retry_delay_seconds is None else float(retry_delay_seconds),
-    )
-
-
-def _release_work_item(ctx: ApplicationContext, work_item_id: str) -> None:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return
-    work_items.release_item(work_item_id)
 
 
 # Temporary compatibility aliases for the extraction slices.
