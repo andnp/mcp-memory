@@ -123,6 +123,8 @@ class SQLiteWorkItemRepository:
         current_time = time.time() if now is None else now
         lease_expires_at = current_time + lease_ttl_seconds
         conn = self._db.get_connection()
+        if conn.in_transaction:
+            conn.commit()
         conn.execute("BEGIN IMMEDIATE")
         try:
             clauses = [
@@ -308,6 +310,7 @@ class SQLiteWorkItemRepository:
         execution_lane: str | None = None,
         status: str | None = None,
         workspace_id: str | None = None,
+        lease_owner: str | None = None,
         limit: int = 50,
     ) -> list[WorkItemRecord]:
         query = "SELECT * FROM work_items"
@@ -325,6 +328,9 @@ class SQLiteWorkItemRepository:
         if workspace_id is not None:
             clauses.append("workspace_id = ?")
             params.append(workspace_id)
+        if lease_owner is not None:
+            clauses.append("lease_owner = ?")
+            params.append(lease_owner)
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"

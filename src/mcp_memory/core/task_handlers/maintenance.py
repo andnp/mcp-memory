@@ -320,8 +320,9 @@ async def handle_taxonomist_task(
     if ctx.repository is None:
         return {"updated": 0}
 
+    workspace_id = _resolve_workspace_id(ctx, task)
     all_candidates = ctx.repository.list_memories(
-        workspace_id=_resolve_workspace_id(ctx, task),
+        workspace_id=workspace_id,
         limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
     )
     sampled_batch = _sample_maintenance_candidates(
@@ -338,6 +339,144 @@ async def handle_taxonomist_task(
     provider_calls_used = 0
     provider_deferred_reason_code: str | None = None
     provider_deferred_retry_delay_seconds: float | None = None
+    untagged_candidates: list[Any] = []
+    for record in candidates:
+        normalized_tags = _normalize_tag_values(record.tags)
+        if normalized_tags != record.tags:
+            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
+            if refreshed is not None:
+                updated += 1
+            continue
+        if not normalized_tags:
+            untagged_candidates.append(record)
+
+    seeded_work_items = _seed_taxonomist_work_items(
+        ctx,
+        task=task,
+        candidates=untagged_candidates,
+    )
+    if _taxonomist_supports_agentic_execution(provider) and seeded_work_items and provider_call_budget > 0:
+        agentic_result = await _run_taxonomist_agentic_pass(
+            ctx,
+            task=task,
+            provider=provider,
+            workspace_id=workspace_id,
+            candidate_memory_ids={record.id for record in untagged_candidates},
+            seeded_work_items=seeded_work_items,
+            provider_call_budget=provider_call_budget,
+        )
+        updated += agentic_result["updated"]
+        provider_calls_used = agentic_result["provider_calls_used"]
+        provider_deferred_reason_code = agentic_result["provider_deferred_reason_code"]
+        provider_deferred_retry_delay_seconds = agentic_result["provider_deferred_retry_delay_seconds"]
+        return sampling_payload(
+            sampled_batch,
+            sampled_records=candidates,
+            updated=updated,
+            provider_calls_used=provider_calls_used,
+            provider_call_budget=provider_call_budget,
+            provider_deferred_reason_code=provider_deferred_reason_code,
+            provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+            claimed_work_item_count=agentic_result["claimed_work_item_count"],
+            execution_mode="agentic_mcp",
+            summary=agentic_result["summary"],
+        )
+
+    json_result = await _run_taxonomist_json_pass(
+        ctx,
+        task=task,
+        provider=provider,
+        candidates=untagged_candidates,
+        provider_call_budget=provider_call_budget,
+    )
+    updated += json_result["updated"]
+    provider_calls_used = json_result["provider_calls_used"]
+    provider_deferred_reason_code = json_result["provider_deferred_reason_code"]
+    provider_deferred_retry_delay_seconds = json_result["provider_deferred_retry_delay_seconds"]
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        updated=updated,
+        provider_calls_used=provider_calls_used,
+        provider_call_budget=provider_call_budget,
+        provider_deferred_reason_code=provider_deferred_reason_code,
+        provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+        claimed_work_item_count=json_result["claimed_work_item_count"],
+    )
+
+
+async def _run_taxonomist_agentic_pass(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    provider: Any,
+    workspace_id: str,
+    candidate_memory_ids: set[str],
+    seeded_work_items: dict[str, Any],
+    provider_call_budget: int,
+) -> dict[str, Any]:
+    run_agent = getattr(provider, "run_agent", None)
+    assert callable(run_agent)
+    try:
+        agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+            _build_taxonomist_agent_prompt(
+                task,
+                workspace_id=workspace_id,
+                provider_call_budget=provider_call_budget,
+            )
+        )
+    except Exception as exc:
+        running_items = _list_taxonomist_running_work_items(ctx, task_id=task.id, workspace_id=workspace_id)
+        if _is_taxonomist_provider_deferred_error(exc):
+            reason = classify_provider_failure(exc)
+            _record_taxonomist_provider_deferred_event(
+                ctx,
+                task=task,
+                provider=provider,
+                reason_code=reason.reason_code,
+                reason_category=reason.reason_category,
+                retry_delay_seconds=reason.retry_delay_seconds,
+            )
+            for work_item in running_items:
+                _defer_taxonomist_work_item(
+                    ctx,
+                    work_item.id,
+                    error=reason.reason_code,
+                    retry_delay_seconds=reason.retry_delay_seconds,
+                )
+            return {
+                "updated": _count_taxonomist_updated_records(ctx, candidate_memory_ids),
+                "provider_calls_used": 0,
+                "provider_deferred_reason_code": reason.reason_code,
+                "provider_deferred_retry_delay_seconds": reason.retry_delay_seconds,
+                "claimed_work_item_count": _count_claimed_taxonomist_work_items(ctx, seeded_work_items),
+                "summary": None,
+            }
+        for work_item in running_items:
+            _release_taxonomist_work_item(ctx, work_item.id)
+        raise
+
+    for work_item in _list_taxonomist_running_work_items(ctx, task_id=task.id, workspace_id=workspace_id):
+        _release_taxonomist_work_item(ctx, work_item.id)
+    normalized = _normalize_taxonomist_agentic_result(agentic_result)
+    return {
+        "updated": _count_taxonomist_updated_records(ctx, candidate_memory_ids),
+        "provider_calls_used": 1,
+        "provider_deferred_reason_code": None,
+        "provider_deferred_retry_delay_seconds": None,
+        "claimed_work_item_count": _count_claimed_taxonomist_work_items(ctx, seeded_work_items),
+        "summary": normalized["summary"],
+    }
+
+
+async def _run_taxonomist_json_pass(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    provider: Any,
+    candidates: list[Any],
+    provider_call_budget: int,
+) -> dict[str, Any]:
     claimed_work_items = _claim_taxonomist_work_batch(
         ctx,
         task=task,
@@ -350,13 +489,12 @@ async def handle_taxonomist_task(
         if _taxonomist_work_memory_id(record.payload) is not None
     }
     finalized_work_item_ids: set[str] = set()
+    updated = 0
+    provider_calls_used = 0
+    provider_deferred_reason_code: str | None = None
+    provider_deferred_retry_delay_seconds: float | None = None
     for record in candidates:
         normalized_tags = _normalize_tag_values(record.tags)
-        if normalized_tags != record.tags:
-            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
-            if refreshed is not None:
-                updated += 1
-            continue
         work_item = claimed_by_memory_id.get(record.id)
         if provider is not None and work_item is not None and provider_calls_used < provider_call_budget:
             try:
@@ -400,16 +538,13 @@ async def handle_taxonomist_task(
         if work_item.id in finalized_work_item_ids:
             continue
         _release_taxonomist_work_item(ctx, work_item.id)
-    return sampling_payload(
-        sampled_batch,
-        sampled_records=candidates,
-        updated=updated,
-        provider_calls_used=provider_calls_used,
-        provider_call_budget=provider_call_budget,
-        provider_deferred_reason_code=provider_deferred_reason_code,
-        provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
-        claimed_work_item_count=len(claimed_work_items),
-    )
+    return {
+        "updated": updated,
+        "provider_calls_used": provider_calls_used,
+        "provider_deferred_reason_code": provider_deferred_reason_code,
+        "provider_deferred_retry_delay_seconds": provider_deferred_retry_delay_seconds,
+        "claimed_work_item_count": len(claimed_work_items),
+    }
 
 
 async def handle_memory_curator_task(
@@ -546,6 +681,12 @@ def _taxonomist_provider_call_budget(ctx: ApplicationContext, provider: Any) -> 
     return TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET
 
 
+def _taxonomist_supports_agentic_execution(provider: Any) -> bool:
+    run_agent = getattr(provider, "run_agent", None)
+    supports_agentic = getattr(provider, "supports_agentic", None)
+    return callable(run_agent) and (not callable(supports_agentic) or bool(supports_agentic()))
+
+
 def _is_taxonomist_provider_deferred_error(exc: Exception) -> bool:
     return isinstance(
         exc,
@@ -594,17 +735,7 @@ def _claim_taxonomist_work_batch(
     work_items = getattr(ctx, "work_items", None)
     if work_items is None or limit < 1:
         return []
-    for record in candidates:
-        if record.tags:
-            continue
-        work_items.enqueue_unique(
-            family_key=WORK_FAMILY_MEMORY_TAGGING,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            workspace_id=_resolve_workspace_id(ctx, task),
-            priority=task.priority,
-            idempotency_key=f"memory_tagging:{record.id}",
-            payload={"memory_id": record.id, "workspace_id": _resolve_workspace_id(ctx, task)},
-        )
+    _seed_taxonomist_work_items(ctx, task=task, candidates=candidates)
     return work_items.claim_batch(
         family_key=WORK_FAMILY_MEMORY_TAGGING,
         execution_lane=EXECUTION_LANE_AGENTIC,
@@ -614,11 +745,111 @@ def _claim_taxonomist_work_batch(
     )
 
 
+def _seed_taxonomist_work_items(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    candidates: list[Any],
+) -> dict[str, Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {}
+    workspace_id = _resolve_workspace_id(ctx, task)
+    seeded: dict[str, Any] = {}
+    for record in candidates:
+        if record.tags:
+            continue
+        work_item, _ = work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_TAGGING,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=workspace_id,
+            priority=task.priority,
+            idempotency_key=f"memory_tagging:{record.id}",
+            payload={"memory_id": record.id, "workspace_id": workspace_id},
+        )
+        seeded[record.id] = work_item
+    return seeded
+
+
 def _taxonomist_work_memory_id(payload: dict[str, Any]) -> str | None:
     memory_id = payload.get("memory_id")
     if isinstance(memory_id, str) and memory_id.strip():
         return memory_id
     return None
+
+
+def _build_taxonomist_agent_prompt(
+    task: TaskRecord,
+    *,
+    workspace_id: str,
+    provider_call_budget: int,
+) -> str:
+    return (
+        "You are the taxonomist maintenance agent for the global memory store.\n"
+        "Use the workspace-local internal MCP maintenance tools directly.\n"
+        f"Start with internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_id}', and limit={provider_call_budget}.\n"
+        "For each claimed work item, read the target memory, normalize its tags to a concise canonical set, use internal_update_memory_record when the tag set should change, and then finalize the work item.\n"
+        "Use internal_complete_work_item after a successful tag decision, internal_release_work_item when no safe change is needed, and internal_defer_work_item only when a claimed item truly needs delayed retry semantics.\n"
+        "Use internal_heartbeat_work_item if you need to extend a claimed lease before finishing it.\n"
+        "Do not create journal or memory records for routine status traces.\n"
+        "When finished, output final JSON only in the form {\"summary\": \"...\", \"updated_memory_ids\": [\"...\"]}.\n"
+    )
+
+
+def _list_taxonomist_running_work_items(
+    ctx: ApplicationContext,
+    *,
+    task_id: str,
+    workspace_id: str,
+) -> list[Any]:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return []
+    return work_items.list_items(
+        family_key=WORK_FAMILY_MEMORY_TAGGING,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        status="running",
+        workspace_id=workspace_id,
+        lease_owner=task_id,
+        limit=max(TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET, DEFAULT_AGENT_SCAN_LIMIT),
+    )
+
+
+def _count_claimed_taxonomist_work_items(ctx: ApplicationContext, seeded_work_items: dict[str, Any]) -> int:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return 0
+    claimed = 0
+    for work_item in seeded_work_items.values():
+        current = work_items.get_item(work_item.id)
+        if current.attempt_count > 0:
+            claimed += 1
+    return claimed
+
+
+def _count_taxonomist_updated_records(ctx: ApplicationContext, memory_ids: set[str]) -> int:
+    if ctx.repository is None or not memory_ids:
+        return 0
+    updated = 0
+    for memory_id in memory_ids:
+        record = ctx.repository.get_memory(memory_id)
+        if record is None:
+            continue
+        if record.tags:
+            updated += 1
+    return updated
+
+
+def _normalize_taxonomist_agentic_result(agentic_result: Any) -> dict[str, Any]:
+    summary = _coerce_text_summary(getattr(agentic_result, "summary", None))
+    parsed = getattr(agentic_result, "parsed", None)
+    if isinstance(parsed, dict):
+        response = parsed.get("response")
+        if isinstance(response, str):
+            parsed_response = _extract_embedded_json_object(response)
+            if isinstance(parsed_response, dict):
+                summary = _coerce_text_summary(parsed_response.get("summary")) or summary
+    return {"summary": summary}
 
 
 def _complete_taxonomist_work_item(ctx: ApplicationContext, work_item_id: str) -> None:

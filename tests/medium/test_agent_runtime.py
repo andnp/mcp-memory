@@ -2794,6 +2794,120 @@ async def test_taxonomist_uses_provider_for_untagged_records(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_taxonomist_agentic_provider_uses_work_item_lifecycle_tools(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Agentic untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert record is not None
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_work_batch",
+                    {
+                        "task_id": "taxonomist-agentic-task",
+                        "family_key": "memory_tagging",
+                        "execution_lane": "agentic",
+                        "workspace_id": runtime.workspace_id,
+                        "limit": 1,
+                    },
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                work_item = batch_payload["records"][0]
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_read_memory_record",
+                    {"memory_id": record.id},
+                )
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_update_memory_record",
+                    {
+                        "memory_id": record.id,
+                        "tags": ["auth", "testing"],
+                    },
+                )
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_complete_work_item",
+                    {"work_item_id": work_item["id"]},
+                )
+                return AgenticRunResult(
+                    status="success",
+                    summary="Tagged one record through the work-item lifecycle tools.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Tagged one record through the work-item lifecycle tools.",
+                                "updated_memory_ids": [record.id],
+                            }
+                        )
+                    },
+                )
+
+        provider = _AgenticProvider()
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-agentic-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated = runtime.repository.get_memory(record.id)
+        assert result["updated"] == 1
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["provider_calls_used"] == 1
+        assert result["claimed_work_item_count"] == 1
+        assert result["summary"] == "Tagged one record through the work-item lifecycle tools."
+        assert updated is not None and updated.tags == ["auth", "testing"]
+        assert runtime.work_items is not None
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+        assert [item.status for item in work_items] == ["completed"]
+        assert provider.prompts
+        assert "internal_get_work_batch" in provider.prompts[0]
+        assert "internal_complete_work_item" in provider.prompts[0]
+        assert "internal_update_memory_record" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
