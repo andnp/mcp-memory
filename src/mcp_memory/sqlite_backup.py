@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import logging
 import sqlite3
@@ -9,6 +10,7 @@ import time
 
 
 logger = logging.getLogger(__name__)
+_SHARED_STORAGE_WARNING_MIN_INTERVAL_SECONDS = 6 * 3600.0
 
 
 @dataclass(frozen=True)
@@ -87,10 +89,55 @@ def detect_shared_storage_risks(app_data_dir: Path) -> tuple[str, ...]:
 
 def log_shared_storage_risks(app_data_dir: Path) -> tuple[str, ...]:
     warnings = detect_shared_storage_risks(app_data_dir)
-    for warning in warnings:
+    if not warnings:
+        return warnings
+    now = time.time()
+    state_path = _shared_storage_warning_state_path()
+    fingerprint = "|".join(warnings)
+    previous = _read_shared_storage_warning_state(state_path)
+    last_logged_at = previous.get("last_logged_at")
+    last_fingerprint = previous.get("fingerprint")
+    should_log = (
+        not isinstance(last_logged_at, int | float)
+        or last_fingerprint != fingerprint
+        or now - float(last_logged_at) >= _SHARED_STORAGE_WARNING_MIN_INTERVAL_SECONDS
+    )
+    if should_log:
         logger.warning(
-            "Shared-storage SQLite safety warning: %s at %s. Prefer one writer, local DB ownership, and periodic logical backups instead of syncing a live SQLite store.",
-            warning,
+            "Shared-storage SQLite safety warning(s) at %s: %s. Prefer one writer, local DB ownership, and periodic logical backups instead of syncing a live SQLite store.",
             app_data_dir,
+            ", ".join(warnings),
+        )
+        _write_shared_storage_warning_state(
+            state_path,
+            {
+                "fingerprint": fingerprint,
+                "last_logged_at": now,
+            },
         )
     return warnings
+
+
+def _shared_storage_warning_state_path() -> Path:
+    from mcp_memory.config import resolve_state_dir
+
+    state_dir = resolve_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir / "shared-storage-warnings.json"
+
+
+def _read_shared_storage_warning_state(state_path: Path) -> dict[str, object]:
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_shared_storage_warning_state(state_path: Path, payload: dict[str, object]) -> None:
+    try:
+        state_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    except OSError:
+        logger.debug("Failed to persist shared-storage warning state", exc_info=True)

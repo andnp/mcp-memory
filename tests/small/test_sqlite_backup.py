@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, detect_shared_storage_risks, prune_old_backups
+from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, detect_shared_storage_risks, log_shared_storage_risks, prune_old_backups
 
 
 pytestmark = pytest.mark.small
@@ -59,3 +59,53 @@ def test_detect_shared_storage_risks_flags_syncthing_markers(tmp_path: Path) -> 
     warnings = detect_shared_storage_risks(app_data_dir)
 
     assert warnings == ("syncthing_marker_detected", "sqlite_sync_conflicts_detected:1")
+
+
+def test_log_shared_storage_risks_aggregates_and_throttles_repeated_warnings(
+    tmp_path: Path,
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_data_dir = tmp_path / "mcp-memory"
+    indices_dir = app_data_dir / "memories" / "indices"
+    indices_dir.mkdir(parents=True)
+    (app_data_dir / ".stfolder").write_text("marker", encoding="utf-8")
+    (indices_dir / "memory.sync-conflict-20260320.db").write_text("conflict", encoding="utf-8")
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+    with caplog.at_level("WARNING"):
+        first = log_shared_storage_risks(app_data_dir)
+        second = log_shared_storage_risks(app_data_dir)
+
+    assert first == ("syncthing_marker_detected", "sqlite_sync_conflicts_detected:1")
+    assert second == first
+    warnings = [record.message for record in caplog.records if "Shared-storage SQLite safety warning(s)" in record.message]
+    assert warnings == [
+        "Shared-storage SQLite safety warning(s) at "
+        f"{app_data_dir}: syncthing_marker_detected, sqlite_sync_conflicts_detected:1. "
+        "Prefer one writer, local DB ownership, and periodic logical backups instead of syncing a live SQLite store."
+    ]
+
+
+def test_log_shared_storage_risks_logs_again_when_warning_fingerprint_changes(
+    tmp_path: Path,
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_data_dir = tmp_path / "mcp-memory"
+    indices_dir = app_data_dir / "memories" / "indices"
+    indices_dir.mkdir(parents=True)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+    (app_data_dir / ".stfolder").write_text("marker", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        log_shared_storage_risks(app_data_dir)
+        (indices_dir / "memory.sync-conflict-20260320.db").write_text("conflict", encoding="utf-8")
+        log_shared_storage_risks(app_data_dir)
+
+    warnings = [record.message for record in caplog.records if "Shared-storage SQLite safety warning(s)" in record.message]
+    assert len(warnings) == 2
+    assert "syncthing_marker_detected." in warnings[0]
+    assert "syncthing_marker_detected, sqlite_sync_conflicts_detected:1." in warnings[1]
