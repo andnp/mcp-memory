@@ -136,9 +136,17 @@ command = "gemini"
 
 [daemon]
 host = "127.0.0.1"
+port = 4242
 auto_start_timeout_seconds = 10.0
 shutdown_grace_seconds = 5.0
 healthcheck_interval_seconds = 0.05
+
+[backups]
+enabled = true
+interval_seconds = 3600.0
+max_snapshots = 24
+create_startup_snapshot = true
+warn_on_shared_storage = true
 
 [embeddings]
 model = "sentence-transformers/all-MiniLM-L6-v2"
@@ -295,6 +303,8 @@ Because the runtime now uses one shared memory store, back up the directory peri
 ```bash
 cp -R ~/.local/share/mcp-memory ~/.local/share/mcp-memory.backup
 ```
+
+The daemon now also supports periodic SQLite snapshots into `~/.local/share/mcp-memory/backups/` through the `[backups]` config block. This is especially useful if the store lives inside Syncthing or any other shared-storage setup that can create conflict files around a live SQLite database.
 
 ## 📄 License
 

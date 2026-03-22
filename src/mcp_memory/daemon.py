@@ -104,7 +104,9 @@ def ensure_daemon_started(
                 reason="owner_stopped_for_recovery",
             )
 
-        daemon_port = _find_free_port()
+        daemon_port = spec.config.daemon.port
+        if daemon_port == 0:
+            daemon_port = _find_free_port()
         spawn_details = _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
         poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
         readiness_deadline = time.monotonic() + timeout_seconds

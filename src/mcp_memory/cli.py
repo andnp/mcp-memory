@@ -23,7 +23,7 @@ from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.service import ManagementService
-from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
 from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
     record_markdown_memory_paths_as_thoughts,
@@ -67,14 +67,18 @@ def _run_stdio_proxy(
         sys.exit(1)
 
 
-def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int) -> None:
+def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int | None) -> None:
     configure_workspace_logging(
         debug_enabled,
         workspace_root_override=workspace_root,
         console_output=True,
         source="daemon",
     )
-    resolved_port = find_free_port() if port == 0 else port
+    resolved_port = port
+    if resolved_port is None:
+        resolved_port = resolve_runtime_spec(workspace_root_override=workspace_root).config.daemon.port
+    if resolved_port == 0:
+        resolved_port = find_free_port()
     app = create_daemon_app(
         workspace_root_override=workspace_root,
         host=host,
@@ -844,9 +848,9 @@ def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
 @main.group(name="daemon", invoke_without_command=True)
 @workspace_root_option
 @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
-@click.option("--port", default=0, show_default=True, type=int, help="Daemon bind port")
+@click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
 @click.pass_context
-def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int) -> None:
+def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int | None) -> None:
     """Run and manage the global daemon."""
     if ctx.invoked_subcommand is not None:
         return

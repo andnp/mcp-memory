@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
+from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_backup_dir, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
 from mcp_memory.daemon_dispatch import dispatch_management_request, error_payload
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
@@ -26,6 +26,7 @@ from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
+from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,56 @@ def _schedule_idle_shutdown_if_needed(app: FastAPI) -> None:
     app.state.idle_shutdown_task = asyncio.create_task(_shutdown_daemon_when_idle(app))
 
 
+async def _cancel_background_task(app: FastAPI, task_name: str) -> None:
+    task = getattr(app.state, task_name, None)
+    if task is None:
+        return
+    if task.done():
+        setattr(app.state, task_name, None)
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+    setattr(app.state, task_name, None)
+
+
+async def _run_periodic_backup_loop(runtime) -> None:
+    config = getattr(runtime, "config", None)
+    db_manager = getattr(runtime, "db_manager", None)
+    memory_path = getattr(runtime, "memory_path", None)
+    if config is None or db_manager is None or memory_path is None:
+        return
+
+    backup_config = config.backups
+    app_data_dir = Path(memory_path).parent
+    if backup_config.warn_on_shared_storage:
+        log_shared_storage_risks(app_data_dir)
+
+    if not backup_config.enabled:
+        return
+
+    backup_dir = resolve_backup_dir()
+    should_run_immediately = backup_config.create_startup_snapshot
+    while True:
+        if not should_run_immediately:
+            await asyncio.sleep(backup_config.interval_seconds)
+        should_run_immediately = False
+        try:
+            result = await asyncio.to_thread(
+                create_and_prune_sqlite_backup,
+                Path(db_manager.db_path),
+                backup_dir,
+                max_snapshots=backup_config.max_snapshots,
+            )
+            logger.info(
+                "SQLite backup snapshot created: %s pruned=%s",
+                result.backup_path,
+                len(result.pruned_paths),
+            )
+        except Exception as exc:
+            logger.warning("SQLite backup snapshot failed: %s", exc)
+
+
 def create_daemon_app(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -102,10 +153,11 @@ def create_daemon_app(
 ):
     spec = resolve_runtime_spec(workspace_root_override, cwd)
     daemon_host = host or spec.config.daemon.host
-    if port in {None, 0}:
+    if port is None:
+        daemon_port = spec.config.daemon.port
+    elif port == 0:
         daemon_port = find_free_port()
     else:
-        assert port is not None
         daemon_port = int(port)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     socket_path = resolve_daemon_socket_path()
@@ -123,6 +175,7 @@ def create_daemon_app(
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)
         warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
+        backup_task = asyncio.create_task(_run_periodic_backup_loop(runtime))
         if worker is not None:
             await worker.start()
 
@@ -149,6 +202,7 @@ def create_daemon_app(
         )
         app.state.routes = routes
         app.state.idle_shutdown_task = None
+        app.state.backup_task = backup_task
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.metadata = DaemonMetadata(
             host=daemon_host,

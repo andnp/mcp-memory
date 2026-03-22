@@ -59,6 +59,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
 def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     config = Config()
+    config.daemon.port = 4242
     config.daemon.auto_start_timeout_seconds = 0.25
     spec = _Spec(
         memory_path=tmp_path / "memories",
@@ -136,6 +137,7 @@ def test_spawn_daemon_process_uses_workspace_root_as_cwd(monkeypatch, tmp_path: 
 def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exits(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     config = Config()
+    config.daemon.port = 4242
     config.daemon.auto_start_timeout_seconds = 0.2
     spec = _Spec(
         memory_path=tmp_path / 'memories',
@@ -155,7 +157,6 @@ def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exit
     monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', lambda path: None)
     monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
-    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9006)
     monkeypatch.setattr(
         'mcp_memory.daemon._spawn_daemon_process',
         lambda workspace_root, host, port: DaemonSpawnDetails(
@@ -202,6 +203,7 @@ def test_cli_dashboard_surfaces_startup_failure_diagnostics(monkeypatch) -> None
 def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     config = Config()
+    config.daemon.port = 4242
     config.daemon.auto_start_timeout_seconds = 0.2
     config.daemon.healthcheck_interval_seconds = 0.05
     spec = _Spec(
@@ -234,7 +236,6 @@ def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch,
 
     monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
-    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9007)
     monkeypatch.setattr(
         'mcp_memory.daemon._spawn_daemon_process',
         lambda workspace_root, host, port: DaemonSpawnDetails(
@@ -268,6 +269,7 @@ def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch,
 def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     config = Config()
+    config.daemon.port = 4242
     config.daemon.auto_start_timeout_seconds = 0.2
     config.daemon.healthcheck_interval_seconds = 0.05
     spec = _Spec(
@@ -307,19 +309,19 @@ def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, t
     monkeypatch.setattr('mcp_memory.daemon._is_process_running', lambda pid: True)
     monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
     monkeypatch.setattr('mcp_memory.daemon._spawn_daemon_process', lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
-    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9005)
     monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
     monkeypatch.setattr('mcp_memory.daemon.time.monotonic', lambda: next(monotonic_values))
 
     current = ensure_daemon_started()
 
     assert current.pid == metadata.pid
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9005)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     config = Config()
+    config.daemon.port = 4242
     config.daemon.auto_start_timeout_seconds = 0.2
     config.daemon.healthcheck_interval_seconds = 0.05
     spec = _Spec(
@@ -384,7 +386,6 @@ def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(mon
         'mcp_memory.daemon._spawn_daemon_process',
         lambda workspace_root, host, port: spawned.append((workspace_root, host, port)),
     )
-    monkeypatch.setattr('mcp_memory.daemon._find_free_port', lambda: 9008)
     monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
     monkeypatch.setattr('mcp_memory.daemon.time.monotonic', lambda: next(monotonic_values))
 
@@ -393,7 +394,7 @@ def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(mon
     assert current.pid == ready_metadata.pid
     assert acquired_timeouts == [0.2]
     assert cleanup_deadlines == [0.2]
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9008)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch, tmp_path: Path) -> None:
@@ -635,9 +636,11 @@ def test_terminate_daemon_process_uses_fresh_deadline_after_sigkill(monkeypatch)
 
 def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
     spec = _Spec(
         memory_path=tmp_path / "memories",
-        config=Config(),
+        config=config,
         workspace_id="workspace-start",
         workspace_root=tmp_path / "workspace",
         lock_path=tmp_path / "workspace.lock",
@@ -674,7 +677,6 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
-    monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9001)
     monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
@@ -683,14 +685,16 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
 
     assert current.daemon_scope == "global"
     assert sent_signals == [15]
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9001)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadata_missing(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
     spec = _Spec(
         memory_path=tmp_path / "memories",
-        config=Config(),
+        config=config,
         workspace_id="workspace-start",
         workspace_root=tmp_path / "workspace",
         lock_path=tmp_path / "workspace.lock",
@@ -724,7 +728,6 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
-    monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9002)
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
 
@@ -732,14 +735,16 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
 
     assert current.port == 8126
     assert killed == [4321]
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9002)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
     spec = _Spec(
         memory_path=tmp_path / "memories",
-        config=Config(),
+        config=config,
         workspace_id="workspace-start",
         workspace_root=tmp_path / "workspace",
         lock_path=tmp_path / "workspace.lock",
@@ -790,7 +795,6 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
-    monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9003)
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
 
@@ -798,7 +802,7 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
 
     assert current.port == 8128
     assert killed == [3333]
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9003)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 def test_is_daemon_healthy_requires_socket_path_for_zmq(monkeypatch) -> None:
@@ -822,9 +826,11 @@ def test_is_daemon_healthy_requires_socket_path_for_zmq(monkeypatch) -> None:
 
 def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
     spec = _Spec(
         memory_path=tmp_path / "memories",
-        config=Config(),
+        config=config,
         workspace_id="workspace-start",
         workspace_root=tmp_path / "workspace",
         lock_path=tmp_path / "workspace.lock",
@@ -865,7 +871,6 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
     monkeypatch.setattr("mcp_memory.daemon._probe_daemon_socket", lambda socket_path, timeout_seconds: False)
     monkeypatch.setattr("mcp_memory.daemon._remove_daemon_socket", lambda socket_path: removed_sockets.append(Path(socket_path)))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
-    monkeypatch.setattr("mcp_memory.daemon._find_free_port", lambda: 9004)
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
 
@@ -873,4 +878,4 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
 
     assert current.port == 8131
     assert removed_sockets == [stale_socket]
-    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 9004)]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
