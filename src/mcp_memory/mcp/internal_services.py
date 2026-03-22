@@ -34,11 +34,11 @@ __all__ = [
 
 
 def internal_search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
-    return search_memory_records_service(ctx, arguments)
+    return search_memory_records_service(ctx, arguments, caller_kind="internal")
 
 
 def internal_read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
-    return read_memory_record_service(ctx, arguments)
+    return read_memory_record_service(ctx, arguments, caller_kind="internal")
 
 
 def internal_list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:

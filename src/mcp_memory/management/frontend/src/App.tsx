@@ -5,6 +5,7 @@ import { ActivityPage } from './pages/ActivityPage';
 import { LogsPage } from './pages/LogsPage';
 import { MemoryDetailPage } from './pages/MemoryDetailPage';
 import { OverviewPage } from './pages/OverviewPage';
+import { RetrievalPage } from './pages/RetrievalPage';
 import { SearchPage } from './pages/SearchPage';
 
 const NerdPage = lazy(async () => import('./pages/NerdPage').then((module) => ({ default: module.NerdPage })));
@@ -14,6 +15,7 @@ const navItems = [
   { to: '/search', label: 'Search' },
   { to: '/activity', label: 'Activity' },
   { to: '/logs', label: 'Logs' },
+  { to: '/retrieval', label: 'Retrieval' },
   { to: '/nerd', label: 'Nerd' },
 ];
 
@@ -47,6 +49,7 @@ export default function App() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           <Route path="/logs" element={<LogsPage />} />
+          <Route path="/retrieval" element={<RetrievalPage />} />
           <Route path="/nerd" element={<NerdPage />} />
           <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
         </Routes>

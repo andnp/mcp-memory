@@ -128,12 +128,28 @@ def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: s
     return conn.execute(query, params).fetchall()
 
 
+def list_memory_tool_event_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    query = (
+        "SELECT invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at "
+        "FROM memory_tool_events WHERE created_at >= ?"
+    )
+    params: list[object] = [cutoff]
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    query += " ORDER BY created_at DESC, id DESC"
+    return conn.execute(query, params).fetchall()
+
+
 def list_scoped_memory_rows(db_manager, workspace_id: str | None):
     if db_manager is None:
         return []
     conn = db_manager.get_connection()
     query = (
-        "SELECT memories.id, memories.type, memories.status, memories.created_at, memories.updated_at, "
+        "SELECT memories.id, memories.title, memories.type, memories.status, memories.created_at, memories.updated_at, "
         "memories.last_accessed_at, memories.last_surfaced_at, LENGTH(COALESCE(memories.content, '')) AS content_bytes, "
         "COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv, COALESCE(tag_agg.tags, '') AS tags_csv "
         "FROM memories "

@@ -29,33 +29,39 @@ from mcp_memory.management.models import (
     AgentThroughputBucketPayload,
     GraphTopologyPayload,
     MaintenanceEventPayload,
-    NerdCountSeriesPayload,
     MemoryTimelineBucketPayload,
-    NerdGrowthDynamicsPayload,
-    NerdLifecycleTrendsPayload,
     MemoryLifecyclePayload,
     NerdAlertPayload,
     NerdCompositionPayload,
     NerdCountBucketPayload,
+    NerdCountSeriesPayload,
     NerdMaintenanceAgentYieldPayload,
     NerdDistributionsPayload,
+    NerdGrowthDynamicsPayload,
+    NerdLifecycleTrendsPayload,
     NerdMaintenanceDeltaBucketPayload,
     NerdMaintenanceDeltaSeriesPayload,
     NerdMaintenancePayload,
     NerdMaintenanceSummaryPayload,
     NerdMaintenanceSummaryRowPayload,
     NerdMetricsPayload,
+    NerdRetrievalMemoryRowPayload,
+    NerdRetrievalPayload,
+    NerdRetrievalSummaryPayload,
+    NerdRetrievalTagRowPayload,
+    NerdRetrievalTagTimelinePayload,
     NerdStatPayload,
+    NerdShareSeriesPayload,
     NerdTimeCountBucketPayload,
     NerdTimeShareBucketPayload,
     NerdTimelinesPayload,
     ProviderLatencyBucketPayload,
     QueueSnapshotPayload,
     SearchQualityPayload,
-    NerdShareSeriesPayload,
 )
 from mcp_memory.management.reporting_queries import (
     build_queue_diagnostics,
+    list_memory_tool_event_rows_since,
     list_maintenance_task_run_rows_since,
     list_provider_usage_rows_since,
     list_scoped_link_rows,
@@ -68,6 +74,9 @@ from mcp_memory.management.route_audit import build_task_route_audit
 
 _TAG_LIMIT = 10
 _DYNAMICS_LIMIT = 5
+_RETRIEVAL_MEMORY_LIMIT = 100
+_RETRIEVAL_TAG_LIMIT = 25
+_RETRIEVAL_TAG_TIMELINE_LIMIT = 10
 _AGE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
     ("lt_1d", "< 1 day", 0, 86_400),
     ("1d_to_7d", "1-7 days", 86_400, 7 * 86_400),
@@ -192,6 +201,24 @@ class _ProviderBucketAccumulator:
     durations: list[float] = field(default_factory=list)
 
 
+@dataclass
+class _RetrievalMemoryAccumulator:
+    title: str
+    memory_type: str
+    status: str
+    tags: list[str]
+    read_count: int = 0
+    search_count: int = 0
+    last_read_at: float | None = None
+    last_search_at: float | None = None
+
+
+@dataclass
+class _RetrievalTagAccumulator:
+    read_count: int = 0
+    search_count: int = 0
+
+
 def build_nerd_metrics(
     *,
     db_manager,
@@ -221,6 +248,7 @@ def build_nerd_metrics(
     maintenance_rows = list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
+    retrieval_rows = list_memory_tool_event_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
 
     task_buckets: dict[float, _TaskBucketAccumulator] = {}
     for row in task_rows:
@@ -251,7 +279,12 @@ def build_nerd_metrics(
     provider_buckets: dict[tuple[float, str, str, str], _ProviderBucketAccumulator] = {}
     all_provider_durations: list[float] = []
     provider_failures = 0
+    provider_skips = 0
     for row in provider_rows:
+        status = str(row["status"])
+        if status == "skipped":
+            provider_skips += 1
+            continue
         bucket_start = float(int(float(row["created_at"]) // bucket_seconds) * bucket_seconds)
         key = (
             bucket_start,
@@ -264,7 +297,7 @@ def build_nerd_metrics(
         bucket.call_count += 1
         bucket.durations.append(duration)
         all_provider_durations.append(duration)
-        if str(row["status"]) != "success":
+        if status != "success":
             bucket.failure_count += 1
             provider_failures += 1
 
@@ -319,6 +352,13 @@ def build_nerd_metrics(
         generated_at=generated_at,
         bucket_seconds=bucket_seconds,
     )
+    retrieval = build_retrieval_analytics(
+        memory_rows,
+        retrieval_rows=retrieval_rows,
+        cutoff=cutoff,
+        generated_at=generated_at,
+        bucket_seconds=bucket_seconds,
+    )
     maintenance_summary = build_maintenance_summary(
         maintenance_rows,
         cutoff=cutoff,
@@ -339,7 +379,9 @@ def build_nerd_metrics(
         ai_provider_registry=ai_provider_registry,
     )
 
-    provider_failure_rate = 0.0 if not provider_rows else provider_failures / len(provider_rows)
+    executed_provider_rows = len(provider_rows) - provider_skips
+    provider_failure_rate = 0.0 if executed_provider_rows <= 0 else provider_failures / executed_provider_rows
+    provider_skip_rate = 0.0 if not provider_rows else provider_skips / len(provider_rows)
 
     stats = [
         NerdStatPayload(key="queue_oldest_age", label="Oldest runnable age", value=queue_snapshot.oldest_age_seconds, unit="s"),
@@ -347,8 +389,10 @@ def build_nerd_metrics(
         NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if str(row["status"]) == "failed")), unit="runs"),
         NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),
         NerdStatPayload(key="provider_failures_last_window", label="Provider failures in window", value=float(provider_failures), unit="calls"),
+        NerdStatPayload(key="provider_skips_last_window", label="Provider skips in window", value=float(provider_skips), unit="calls"),
         NerdStatPayload(key="provider_p95_latency", label="Provider p95 latency", value=round(_percentile(all_provider_durations, 0.95), 4), unit="s"),
         NerdStatPayload(key="provider_failure_rate", label="Provider failure rate", value=round(provider_failure_rate, 4), unit="pct"),
+        NerdStatPayload(key="provider_skip_rate", label="Provider skip rate", value=round(provider_skip_rate, 4), unit="pct"),
         NerdStatPayload(key="orphan_rate", label="Orphan rate", value=round(graph_topology.orphan_rate, 4), unit="pct"),
         NerdStatPayload(key="cold_memory_rate", label="Cold memory rate", value=round(memory_lifecycle.cold_memory_rate, 4), unit="pct"),
         NerdStatPayload(key="search_fallback_count", label="Search fallback count", value=float(search_quality.fallback_count), unit="count"),
@@ -365,6 +409,7 @@ def build_nerd_metrics(
         maintenance=maintenance,
         lifecycle_trends=lifecycle_trends,
         growth_dynamics=growth_dynamics,
+        retrieval=retrieval,
         maintenance_summary=maintenance_summary,
         queue_snapshot=queue_snapshot,
         graph_topology=graph_topology,
@@ -843,6 +888,169 @@ def build_maintenance_summary(
         by_family=by_family,
         by_agent=by_agent,
         family_delta_series=family_delta_series,
+    )
+
+
+def build_retrieval_analytics(
+    memory_rows,
+    *,
+    retrieval_rows,
+    cutoff: float,
+    generated_at: float,
+    bucket_seconds: int,
+) -> NerdRetrievalPayload:
+    bucket_starts = _bucket_starts(cutoff=cutoff, generated_at=generated_at, bucket_seconds=bucket_seconds)
+    if not bucket_starts:
+        return NerdRetrievalPayload()
+
+    memory_info = {
+        str(row["id"]): {
+            "title": str(row["title"]),
+            "memory_type": str(row["type"]),
+            "status": str(row["status"]),
+            "tags": split_csv_values(row["tags_csv"]),
+        }
+        for row in memory_rows
+    }
+    memory_accumulators: dict[str, _RetrievalMemoryAccumulator] = {}
+    tag_accumulators: dict[str, _RetrievalTagAccumulator] = {}
+    tag_read_buckets: dict[str, Counter[int]] = {}
+    tag_search_buckets: dict[str, Counter[int]] = {}
+    search_invocation_ids: set[str] = set()
+    zero_result_search_invocation_ids: set[str] = set()
+    unique_search_memories: set[str] = set()
+    unique_read_memories: set[str] = set()
+    read_events = 0
+    search_hits = 0
+
+    for row in retrieval_rows:
+        event_kind = str(row["event_kind"])
+        invocation_id = str(row["invocation_id"])
+        created_at = float(row["created_at"] or 0.0)
+        if event_kind == "search":
+            search_invocation_ids.add(invocation_id)
+            if int(row["result_count"] or 0) == 0:
+                zero_result_search_invocation_ids.add(invocation_id)
+
+        memory_id = None if row["memory_id"] is None else str(row["memory_id"])
+        if memory_id is None or memory_id not in memory_info:
+            continue
+
+        info = memory_info[memory_id]
+        memory_accumulator = memory_accumulators.setdefault(
+            memory_id,
+            _RetrievalMemoryAccumulator(
+                title=info["title"],
+                memory_type=info["memory_type"],
+                status=info["status"],
+                tags=list(info["tags"]),
+            ),
+        )
+        bucket_start = int(created_at // bucket_seconds) * bucket_seconds
+        for tag in info["tags"]:
+            tag_accumulator = tag_accumulators.setdefault(tag, _RetrievalTagAccumulator())
+            if event_kind == "read":
+                tag_accumulator.read_count += 1
+                tag_read_buckets.setdefault(tag, Counter())[bucket_start] += 1
+            elif event_kind == "search":
+                tag_accumulator.search_count += 1
+                tag_search_buckets.setdefault(tag, Counter())[bucket_start] += 1
+
+        if event_kind == "read":
+            memory_accumulator.read_count += 1
+            memory_accumulator.last_read_at = created_at if memory_accumulator.last_read_at is None else max(memory_accumulator.last_read_at, created_at)
+            unique_read_memories.add(memory_id)
+            read_events += 1
+        elif event_kind == "search":
+            memory_accumulator.search_count += 1
+            memory_accumulator.last_search_at = created_at if memory_accumulator.last_search_at is None else max(memory_accumulator.last_search_at, created_at)
+            unique_search_memories.add(memory_id)
+            search_hits += 1
+
+    top_read_memories = [
+        NerdRetrievalMemoryRowPayload(
+            memory_id=memory_id,
+            title=accumulator.title,
+            memory_type=accumulator.memory_type,
+            status=accumulator.status,
+            tags=accumulator.tags,
+            read_count=accumulator.read_count,
+            search_count=accumulator.search_count,
+            total_count=accumulator.read_count + accumulator.search_count,
+            last_read_at=accumulator.last_read_at,
+            last_search_at=accumulator.last_search_at,
+        )
+        for memory_id, accumulator in sorted(
+            memory_accumulators.items(),
+            key=lambda item: (-item[1].read_count, -(item[1].last_read_at or 0.0), item[1].title.lower(), item[0]),
+        )
+        if accumulator.read_count > 0
+    ][:_RETRIEVAL_MEMORY_LIMIT]
+
+    top_search_memories = [
+        NerdRetrievalMemoryRowPayload(
+            memory_id=memory_id,
+            title=accumulator.title,
+            memory_type=accumulator.memory_type,
+            status=accumulator.status,
+            tags=accumulator.tags,
+            read_count=accumulator.read_count,
+            search_count=accumulator.search_count,
+            total_count=accumulator.read_count + accumulator.search_count,
+            last_read_at=accumulator.last_read_at,
+            last_search_at=accumulator.last_search_at,
+        )
+        for memory_id, accumulator in sorted(
+            memory_accumulators.items(),
+            key=lambda item: (-item[1].search_count, -(item[1].last_search_at or 0.0), item[1].title.lower(), item[0]),
+        )
+        if accumulator.search_count > 0
+    ][:_RETRIEVAL_MEMORY_LIMIT]
+
+    ordered_tag_items = sorted(
+        tag_accumulators.items(),
+        key=lambda item: (-(item[1].read_count + item[1].search_count), -item[1].search_count, -item[1].read_count, item[0]),
+    )
+    top_tags = [
+        NerdRetrievalTagRowPayload(
+            key=tag,
+            label=tag,
+            read_count=accumulator.read_count,
+            search_count=accumulator.search_count,
+            total_count=accumulator.read_count + accumulator.search_count,
+        )
+        for tag, accumulator in ordered_tag_items[:_RETRIEVAL_TAG_LIMIT]
+    ]
+
+    tag_timelines = [
+        NerdRetrievalTagTimelinePayload(
+            key=tag,
+            label=tag,
+            read_buckets=[
+                NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=tag_read_buckets.get(tag, Counter()).get(bucket_start, 0))
+                for bucket_start in bucket_starts
+            ],
+            search_buckets=[
+                NerdTimeCountBucketPayload(bucket_start=float(bucket_start), count=tag_search_buckets.get(tag, Counter()).get(bucket_start, 0))
+                for bucket_start in bucket_starts
+            ],
+        )
+        for tag, _accumulator in ordered_tag_items[:_RETRIEVAL_TAG_TIMELINE_LIMIT]
+    ]
+
+    return NerdRetrievalPayload(
+        summary=NerdRetrievalSummaryPayload(
+            search_invocations=len(search_invocation_ids),
+            search_hits=search_hits,
+            zero_result_searches=len(zero_result_search_invocation_ids),
+            read_events=read_events,
+            unique_search_memories=len(unique_search_memories),
+            unique_read_memories=len(unique_read_memories),
+        ),
+        top_read_memories=top_read_memories,
+        top_search_memories=top_search_memories,
+        top_tags=top_tags,
+        tag_timelines=tag_timelines,
     )
 
 

@@ -19,6 +19,13 @@ This spec expands the existing `/api/metrics/nerd` payload with a first analytic
 
 It now also defines the next additive backend tranche for **lifecycle trends**, **growth dynamics**, and **maintenance summaries**.
 
+It also defines an operator-facing **retrieval analytics** slice for tool-level memory search/read traffic so the dashboard can answer questions such as:
+
+- Which memories surface most often in searches?
+- Which memories are actually opened/read most often?
+- Which tags dominate retrieval traffic?
+- How is retrieval traffic for the top tags changing over time?
+
 ## 2. Contract rules
 
 ### 2.1 Additive-only evolution
@@ -259,6 +266,64 @@ Rules:
 - `by_agent` keeps one row per task name and exposes lightweight yield ratios.
 - `family_delta_series` emits bucketed per-family counters using the same explicit run-reported delta keys.
 
+### 4.7 `retrieval`
+
+```text
+retrieval: {
+  summary: {
+    search_invocations: int
+    search_hits: int
+    zero_result_searches: int
+    read_events: int
+    unique_search_memories: int
+    unique_read_memories: int
+  }
+  top_read_memories: RetrievalMemoryRow[]
+  top_search_memories: RetrievalMemoryRow[]
+  top_tags: RetrievalTagRow[]
+  tag_timelines: RetrievalTagTimeline[]
+}
+```
+
+`RetrievalMemoryRow`:
+
+- `memory_id: str`
+- `title: str`
+- `memory_type: str`
+- `status: str`
+- `tags: str[]`
+- `read_count: int`
+- `search_count: int`
+- `total_count: int`
+- `last_read_at: float | null`
+- `last_search_at: float | null`
+
+`RetrievalTagRow`:
+
+- `key: str`
+- `label: str`
+- `read_count: int`
+- `search_count: int`
+- `total_count: int`
+
+`RetrievalTagTimeline`:
+
+- `key: str`
+- `label: str`
+- `read_buckets: TimeCountBucket[]`
+- `search_buckets: TimeCountBucket[]`
+
+Rules:
+
+- Retrieval analytics are based on persisted tool-level events, not inferred from current memory stock alone.
+- Searches are logged at the MCP service layer for both external and internal tool usage.
+- A search with no hits still contributes to `summary.search_invocations` and `summary.zero_result_searches`.
+- `top_read_memories` is capped at the top 100 visible memories by read-event count within the selected window.
+- `top_search_memories` is capped at the top 100 visible memories by search-hit count within the selected window.
+- `top_tags` is capped at the top 25 visible tags by combined retrieval activity.
+- `tag_timelines` is capped at the top 10 visible tags by combined retrieval activity and uses event-time buckets, not memory creation-time approximations.
+- Workspace scoping follows the retrieval event's originating workspace context and then filters to memories currently visible in the scoped request.
+
 ## 5. First-slice information architecture
 
 The UI is expected to consume the first analytics wave as three foundational panels:
@@ -297,6 +362,13 @@ This slice intentionally does **not** cover the deeper graph/search/provider/ope
 - Queue/runtime anomaly evidence panels
 - Cross-workspace reuse/linkage analytics
 
+### Phase C.1 — retrieval operator panel now shipped
+
+- Tool-level read/search telemetry persisted from MCP search/read services
+- Top 100 read memories and top 100 search-hit memories
+- Top 25 retrieval tags with read/search split
+- Historical timelines for the top 10 retrieval tags
+
 ## 7. Testing requirements
 
 At minimum, backend verification must cover:
@@ -312,4 +384,8 @@ At minimum, backend verification must cover:
 - top-5 plus `other` capping for growth dynamics
 - maintenance-family aggregation using run-reported counters only
 - missing maintenance counters staying zero / omitted instead of fabricated
+- retrieval event persistence for search-hit vs explicit-read separation
+- zero-result search accounting
+- top-100 memory ranking for reads and search hits
+- top-25 tag rollups and top-10 tag timelines
 - API contract exposure under `/api/metrics/nerd`

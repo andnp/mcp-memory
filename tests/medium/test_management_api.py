@@ -14,6 +14,7 @@ import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
+from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
 
 
@@ -92,12 +93,17 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             content="An older plan for the same area.",
             workspace_ids=[seed_runtime.workspace_id],
             memory_type="plan",
+            status="stale",
             tags=["dashboard"],
             created_at=superseded_created_at,
             updated_at=superseded_updated_at,
         )
         assert primary is not None and superseded is not None
         seed_runtime.repository.add_link(primary.id, superseded.id, "SUPERSEDES", "Superseded during epic 6")
+        search_memory_records_service(seed_runtime, {"query": "runtime health", "limit": 5, "status": "active"})
+        search_memory_records_service(seed_runtime, {"query": "runtime health", "limit": 5, "status": "archived"})
+        read_memory_record_service(seed_runtime, {"memory_id": primary.id})
+        read_memory_record_service(seed_runtime, {"memory_id": primary.id})
         foreign_memory = seed_runtime.repository.create_memory(
             title="Other workspace memory",
             content="This should stay out of scoped nerd metrics.",
@@ -283,9 +289,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert overview["provider_usage"][0]["provider_key"] == "gemini-cli"
         assert overview["provider_usage"][0]["task_name"] == "graph-linker"
         assert overview["provider_usage"][0]["calls_last_day"] == 1
+        assert overview["provider_usage"][0]["skips_last_day"] == 0
+        assert overview["provider_usage"][0]["top_failure_reason_last_day"] is None
         assert overview["recent_logs"][0]["message"] == "seeded daemon log"
-        assert overview["top_read_memories"] == []
-        assert overview["top_read_memories_active"] == []
+        assert [record["id"] for record in overview["top_read_memories"][:1]] == [primary.id]
+        assert [record["read_count"] for record in overview["top_read_memories"][:1]] == [2]
+        assert [record["id"] for record in overview["top_read_memories_active"][:1]] == [primary.id]
         assert overview["tasks"]["failed_count"] == 1
         assert record_thought["status"] == "recorded"
         assert overview_after_thought["journal"]["pending_count"] >= overview["journal"]["pending_count"] + 1
@@ -300,6 +309,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "maintenance" in nerd_metrics
         assert "lifecycle_trends" in nerd_metrics
         assert "growth_dynamics" in nerd_metrics
+        assert "retrieval" in nerd_metrics
         assert "maintenance_summary" in nerd_metrics
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
@@ -316,7 +326,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert workspace_override_nerd_metrics["composition"]["by_workspace"] == [
             {"key": "workspace-b", "label": "workspace-b", "count": 1}
         ]
-        assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 2
+        assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 1
+        assert nerd_metrics["memory_lifecycle"]["by_status"]["stale"] == 1
         assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
         assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
         assert nerd_metrics["composition"]["by_workspace"] == [
@@ -326,7 +337,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert {item["key"] for item in nerd_metrics["composition"]["by_content_tag"]} == {"api", "dashboard"}
         assert nerd_metrics["composition"]["by_provenance_tag"] == []
         assert nerd_metrics["composition"]["by_status"] == [
-            {"key": "active", "label": "active", "count": 2}
+            {"key": "active", "label": "active", "count": 1},
+            {"key": "stale", "label": "stale", "count": 1},
         ]
         assert [bucket["key"] for bucket in nerd_metrics["distributions"]["created_age_buckets"]] == [
             "lt_1d",
@@ -347,6 +359,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["lifecycle_trends"]["cold_tail"]
         assert nerd_metrics["growth_dynamics"]["top_tag_trends"]
         assert nerd_metrics["growth_dynamics"]["workspace_contribution_share"]
+        assert nerd_metrics["retrieval"]["summary"]["search_invocations"] == 2
+        assert nerd_metrics["retrieval"]["summary"]["zero_result_searches"] == 1
+        assert nerd_metrics["retrieval"]["summary"]["read_events"] == 2
+        assert nerd_metrics["retrieval"]["top_read_memories"][0]["memory_id"] == primary.id
+        assert nerd_metrics["retrieval"]["top_read_memories"][0]["read_count"] == 2
+        assert nerd_metrics["retrieval"]["top_search_memories"][0]["memory_id"] == primary.id
         compaction_family = next(item for item in nerd_metrics["maintenance_summary"]["by_family"] if item["key"] == "compaction")
         deduplicator_yield = next(item for item in nerd_metrics["maintenance_summary"]["by_agent"] if item["key"] == "deduplicator")
         assert compaction_family["merged_count"] == 1
@@ -619,6 +637,56 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     assert record_thought.json()["status"] == "recorded"
     assert overview_after.json()["journal"]["pending_count"] >= overview.json()["journal"]["pending_count"] + 1
     assert missing_asset.status_code == 404
+
+
+def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=None, cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=None, cwd=workspace_b)
+    try:
+        assert runtime_a.repository is not None
+        assert runtime_b.repository is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+        runtime_a.repository.create_memory(
+            title="Workspace A fact",
+            content="A scoped fact.",
+            workspace_ids=[runtime_a.workspace_id],
+            memory_type="fact",
+        )
+        runtime_b.repository.create_memory(
+            title="Workspace B fact",
+            content="Another scoped fact.",
+            workspace_ids=[runtime_b.workspace_id],
+            memory_type="fact",
+        )
+        runtime_a.repository.create_memory(
+            title="Shared fact",
+            content="Belongs to both workspaces.",
+            workspace_ids=[runtime_a.workspace_id, runtime_b.workspace_id],
+            memory_type="fact",
+        )
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    with TestClient(app) as client:
+        global_overview = client.get("/api/overview")
+        workspace_overview = client.get("/api/overview", params={"scope": "workspace"})
+
+    assert global_overview.status_code == 200
+    assert workspace_overview.status_code == 200
+    assert global_overview.json()["memories"]["total"] == 3
+    assert global_overview.json()["memory_metrics"]["total_memories"] == 3
+    assert workspace_overview.json()["memories"]["total"] == 2
 
 
 def test_management_api_accepts_30_day_nerd_metrics_window(monkeypatch, tmp_path: Path) -> None:

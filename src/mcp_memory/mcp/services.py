@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal_operations import (
     RecordThoughtOperation,
@@ -14,6 +16,7 @@ from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
 )
+from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 from mcp_memory.serialization import (
     link_payload,
     memory_record_payload,
@@ -35,19 +38,35 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
     return operation.execute(require_string(arguments, "content"))
 
 
-def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def _retrieval_telemetry_repository(ctx: ApplicationContext) -> RetrievalTelemetryRepository:
+    return RetrievalTelemetryRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+
+
+def search_memory_records_service(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    caller_kind: str = "external",
+) -> dict:
     if ctx.relational_search is None:
         return {"status": "error", "error": "relational_search_not_initialized"}
 
+    query = require_string(arguments, "query")
     operation = SearchMemoryRecordsOperation(ctx.relational_search)
     results = operation.execute(
-        query=require_string(arguments, "query"),
+        query=query,
         workspace_id=ctx.workspace_id,
         limit=optional_positive_int(arguments, "limit", 5),
         memory_type=optional_string(arguments, "memory_type"),
         status=optional_string(arguments, "status"),
         include_superseded=optional_bool(arguments, "include_superseded", False),
         debug=optional_bool(arguments, "debug", False),
+    )
+    _retrieval_telemetry_repository(ctx).record_search(
+        invocation_id=str(uuid4()),
+        caller_kind=caller_kind,
+        query=query,
+        surfaced_memory_ids=[result.memory_id for result in results],
     )
     debug_enabled = optional_bool(arguments, "debug", False)
     return {
@@ -62,7 +81,12 @@ def search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> d
     }
 
 
-def read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def read_memory_record_service(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    caller_kind: str = "external",
+) -> dict:
     if ctx.relational_search is None:
         return {"status": "error", "error": "relational_search_not_initialized"}
 
@@ -71,6 +95,11 @@ def read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict
     result = operation.execute(memory_id)
     if result is None:
         return {"status": "error", "error": "memory_not_found"}
+    _retrieval_telemetry_repository(ctx).record_read(
+        invocation_id=str(uuid4()),
+        caller_kind=caller_kind,
+        memory_id=memory_id,
+    )
 
     return {
         "status": "ok",
