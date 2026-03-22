@@ -75,6 +75,7 @@ class RankingSignals:
     matched_by_semantic: bool = False
     semantic_score: float = 0.0
     keyword_token_coverage: float = 0.0
+    expanded_by_graph: bool = False
 
 
 @dataclass(slots=True)
@@ -87,6 +88,7 @@ class ScoringWeights:
     semantic_only_keyword_penalty: float = 0.65
     keyword_coverage_floor: float = 0.6
     keyword_low_coverage_penalty: float = 0.7
+    graph_expansion_only_penalty: float = 0.35
     degradation_multiplier: float = DEGRADATION_PENALTY
     access_half_life_days: float = ACCESS_HALF_LIFE_DAYS
     access_bonus_scale: float = 0.1
@@ -105,6 +107,7 @@ class ScoringWeights:
             semantic_only_keyword_penalty=ranking.semantic_only_keyword_penalty,
             keyword_coverage_floor=ranking.keyword_coverage_floor,
             keyword_low_coverage_penalty=ranking.keyword_low_coverage_penalty,
+            graph_expansion_only_penalty=ranking.graph_expansion_only_penalty,
             degradation_multiplier=ranking.degradation_multiplier,
             access_half_life_days=ranking.access_half_life_days,
             access_bonus_scale=ranking.access_bonus_scale,
@@ -223,7 +226,11 @@ class RankingEngine:
         keyword_candidates_present: bool,
     ) -> float:
         if not keyword_candidates_present:
+            if signals.expanded_by_graph and not signals.matched_by_semantic:
+                return self._weights.graph_expansion_only_penalty
             return 1.0
+        if signals.expanded_by_graph and not signals.matched_by_keyword and not signals.matched_by_semantic:
+            return self._weights.graph_expansion_only_penalty
         if signals.matched_by_semantic and not signals.matched_by_keyword:
             return self._weights.semantic_only_keyword_penalty
         if not signals.matched_by_keyword:
@@ -472,6 +479,7 @@ class RelationalMemorySearchService:
                 matched_by_keyword=memory_id in keyword_id_set,
                 matched_by_semantic=memory_id in semantic_id_set,
                 semantic_score=semantic_scores.get(memory_id, 0.0),
+                expanded_by_graph=memory_id in graph_expansion,
                 keyword_token_coverage=_keyword_token_coverage(
                     query_tokens,
                     candidate_by_id[memory_id].record if isinstance(candidate_by_id[memory_id], RankedMemoryCandidate) else candidate_by_id[memory_id],
@@ -517,7 +525,15 @@ class RelationalMemorySearchService:
                 keyword_candidates_present=bool(keyword_ids),
             )
         ]
-        ranked.sort(key=lambda item: item.score, reverse=True)
+        ranked.sort(
+            key=lambda item: (
+                item.score,
+                _direct_match_rank(ranking_signals.get(item.memory_id)),
+                ranking_signals.get(item.memory_id, RankingSignals()).keyword_token_coverage,
+                ranking_signals.get(item.memory_id, RankingSignals()).semantic_score,
+            ),
+            reverse=True,
+        )
         ranked = ranked[:limit]
 
         if not keyword_ids and ranked:
@@ -790,6 +806,18 @@ def _keyword_token_coverage(query_tokens: Sequence[str], record: RelationalMemor
     )
     matched_tokens = sum(1 for token in query_tokens if token in haystack)
     return matched_tokens / len(query_tokens)
+
+
+def _direct_match_rank(signals: RankingSignals | None) -> int:
+    if signals is None:
+        return 0
+    if signals.matched_by_keyword and signals.matched_by_semantic:
+        return 3
+    if signals.matched_by_keyword:
+        return 2
+    if signals.matched_by_semantic:
+        return 1
+    return 0
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):

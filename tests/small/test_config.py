@@ -80,3 +80,8 @@ def test_search_ranking_config_rejects_invalid_rrf_k() -> None:
 def test_search_ranking_config_rejects_invalid_semantic_only_abstain_threshold() -> None:
     with pytest.raises(ValueError, match="search_ranking.semantic_only_abstain_threshold"):
         SearchRankingConfig(semantic_only_abstain_threshold=1.5)
+
+
+def test_search_ranking_config_rejects_invalid_graph_expansion_only_penalty() -> None:
+    with pytest.raises(ValueError, match="search_ranking.graph_expansion_only_penalty"):
+        SearchRankingConfig(graph_expansion_only_penalty=1.5)

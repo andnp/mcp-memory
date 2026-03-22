@@ -53,6 +53,7 @@ The active runtime now uses a staged ranking pipeline:
 - the explicit `memory_type` query argument no longer applies a separate compatibility boost; ranking now relies on the staged pipeline and type-aware recency only
 - when keyword candidates exist, semantic-only candidates are penalized and low keyword-coverage matches are damped so exact lexical intent can anchor the top of the ranking more reliably
 - when no keyword candidates exist, low-confidence semantic-only result sets may abstain entirely instead of surfacing weak guesses as confident matches
+- graph expansion remains a recall aid, but graph-only candidates are downranked behind direct keyword/semantic evidence so relationship traversal does not dominate routine query precision
 - the ranking weights are tunable via `[search_ranking]` in `config.toml`
 - search debug output can expose ranking details including keyword/semantic participation, graph authority counts, graph expansion provenance, and final score composition
 

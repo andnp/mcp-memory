@@ -892,6 +892,50 @@ def test_search_memories_penalizes_semantic_only_candidates_when_keyword_matches
     assert float(debug_by_id[distractor.id]["ranking_signal_multiplier"]) == pytest.approx(0.4)
 
 
+def test_search_memories_penalizes_graph_only_expansions_against_direct_matches(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(search_ranking=SearchRankingConfig(graph_expansion_only_penalty=0.2)),
+    )
+
+    primary = repository.create_memory(
+        title="Ripgrep ban",
+        content="Avoid broad ripgrep scans in large repositories.",
+        summary="Ripgrep ban summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["grep"],
+    )
+    direct = repository.create_memory(
+        title="Ripgrep scanning guidelines",
+        content="Ripgrep guidance for repository scans.",
+        summary="Ripgrep guidance summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["grep"],
+    )
+    graph_only = repository.create_memory(
+        title="Dashboard plan",
+        content="Management dashboard planning note.",
+        summary="Dashboard plan summary.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert primary is not None and direct is not None and graph_only is not None
+
+    repository.add_link(primary.id, graph_only.id, "DEPENDS_ON")
+
+    results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5, debug=True)
+    positions = {result.memory_id: index for index, result in enumerate(results)}
+    graph_debug = next(result.ranking_debug for result in results if result.memory_id == graph_only.id)
+
+    assert positions[primary.id] < positions[graph_only.id]
+    assert positions[direct.id] < positions[graph_only.id]
+    assert graph_debug is not None
+    assert float(graph_debug["ranking_signal_multiplier"]) == pytest.approx(0.2)
+
+
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
