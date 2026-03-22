@@ -336,6 +336,25 @@ export interface RetrievalSummary {
   unique_read_memories: number;
 }
 
+export interface RetrievalCallerKindRow {
+  key: string;
+  label: string;
+  search_invocations: number;
+  search_hits: number;
+  zero_result_searches: number;
+  read_events: number;
+  total_events: number;
+}
+
+export interface RetrievalQueryFamilyRow {
+  key: string;
+  label: string;
+  search_invocations: number;
+  search_hits: number;
+  zero_result_searches: number;
+  unique_search_memories: number;
+}
+
 export interface RetrievalMemoryRow {
   memory_id: string;
   title: string;
@@ -366,6 +385,8 @@ export interface RetrievalTagTimeline {
 
 export interface RetrievalMetrics {
   summary: RetrievalSummary;
+  by_caller_kind: RetrievalCallerKindRow[];
+  top_query_families: RetrievalQueryFamilyRow[];
   top_read_memories: RetrievalMemoryRow[];
   top_search_memories: RetrievalMemoryRow[];
   top_tags: RetrievalTagRow[];

@@ -259,6 +259,76 @@ export function RetrievalPage() {
       <section className="grid gap-4 xl:grid-cols-2">
         <section className="table-shell">
           <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">Caller mix</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Which tool path is doing the retrieval</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Caller</th>
+                <th>Searches</th>
+                <th>Hits</th>
+                <th>Reads</th>
+                <th>Zero-result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {retrieval.by_caller_kind.length ? retrieval.by_caller_kind.map((row) => (
+                <tr key={row.key}>
+                  <td>{row.label}</td>
+                  <td>{formatStatValue(row.search_invocations)}</td>
+                  <td>{formatStatValue(row.search_hits)}</td>
+                  <td>{formatStatValue(row.read_events)}</td>
+                  <td>{formatStatValue(row.zero_result_searches)}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={5} className="text-xs text-muted">No caller-kind retrieval activity yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
+            <p className="panel-title">Query families</p>
+            <h3 className="mt-1 text-base font-semibold text-text">Top repeated search prompts in the selected window</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Query family</th>
+                <th>Searches</th>
+                <th>Hits</th>
+                <th>Zero-result</th>
+                <th>Unique memories</th>
+              </tr>
+            </thead>
+            <tbody>
+              {retrieval.top_query_families.length ? retrieval.top_query_families.map((row) => (
+                <tr key={row.key}>
+                  <td>
+                    <div className="max-w-[24rem] truncate" title={row.label}>{row.label}</div>
+                  </td>
+                  <td>{formatStatValue(row.search_invocations)}</td>
+                  <td>{formatStatValue(row.search_hits)}</td>
+                  <td>{formatStatValue(row.zero_result_searches)}</td>
+                  <td>{formatStatValue(row.unique_search_memories)}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={5} className="text-xs text-muted">No repeated search-query patterns yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <section className="table-shell">
+          <div className="border-b border-border px-3 py-2">
             <p className="panel-title">Top reads</p>
             <h3 className="mt-1 text-base font-semibold text-text">Top 100 memories opened through the tool</h3>
           </div>

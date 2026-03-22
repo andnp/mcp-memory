@@ -348,8 +348,29 @@ class NerdRetrievalTagTimelinePayload(BaseModel):
     search_buckets: list[NerdTimeCountBucketPayload] = Field(default_factory=list)
 
 
+class NerdRetrievalCallerKindRowPayload(BaseModel):
+    key: str
+    label: str
+    search_invocations: int = 0
+    search_hits: int = 0
+    zero_result_searches: int = 0
+    read_events: int = 0
+    total_events: int = 0
+
+
+class NerdRetrievalQueryFamilyRowPayload(BaseModel):
+    key: str
+    label: str
+    search_invocations: int = 0
+    search_hits: int = 0
+    zero_result_searches: int = 0
+    unique_search_memories: int = 0
+
+
 class NerdRetrievalPayload(BaseModel):
     summary: NerdRetrievalSummaryPayload = Field(default_factory=NerdRetrievalSummaryPayload)
+    by_caller_kind: list[NerdRetrievalCallerKindRowPayload] = Field(default_factory=list)
+    top_query_families: list[NerdRetrievalQueryFamilyRowPayload] = Field(default_factory=list)
     top_read_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
     top_search_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
     top_tags: list[NerdRetrievalTagRowPayload] = Field(default_factory=list)

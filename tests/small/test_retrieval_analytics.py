@@ -83,6 +83,25 @@ def test_build_nerd_metrics_includes_retrieval_analytics(monkeypatch, tmp_path: 
         assert payload.retrieval.summary.unique_search_memories == 2
         assert payload.retrieval.summary.unique_read_memories == 2
 
+        caller_kind_counts = {row.key: row for row in payload.retrieval.by_caller_kind}
+        assert caller_kind_counts["external"].search_invocations == 3
+        assert caller_kind_counts["external"].search_hits == 2
+        assert caller_kind_counts["external"].read_events == 3
+        assert caller_kind_counts["external"].zero_result_searches == 1
+        assert caller_kind_counts["internal"].search_invocations == 1
+        assert caller_kind_counts["internal"].search_hits == 1
+        assert caller_kind_counts["internal"].read_events == 0
+
+        query_family_counts = {row.key: row for row in payload.retrieval.top_query_families}
+        assert query_family_counts["alpha phrase"].search_invocations == 2
+        assert query_family_counts["alpha phrase"].search_hits == 1
+        assert query_family_counts["alpha phrase"].zero_result_searches == 1
+        assert query_family_counts["alpha phrase"].unique_search_memories == 1
+        assert query_family_counts["beta phrase"].search_invocations == 2
+        assert query_family_counts["beta phrase"].search_hits == 2
+        assert query_family_counts["beta phrase"].zero_result_searches == 0
+        assert query_family_counts["beta phrase"].unique_search_memories == 1
+
         assert [row.memory_id for row in payload.retrieval.top_read_memories[:2]] == [alpha.id, beta.id]
         assert [row.read_count for row in payload.retrieval.top_read_memories[:2]] == [2, 1]
         assert [row.memory_id for row in payload.retrieval.top_search_memories[:2]] == [beta.id, alpha.id]

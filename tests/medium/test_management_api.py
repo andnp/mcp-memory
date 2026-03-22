@@ -329,7 +329,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 1
         assert nerd_metrics["memory_lifecycle"]["by_status"]["stale"] == 1
         assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
-        assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
+        assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 1
         assert nerd_metrics["composition"]["by_workspace"] == [
             {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2}
         ]

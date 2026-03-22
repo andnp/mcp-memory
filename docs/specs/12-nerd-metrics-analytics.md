@@ -278,6 +278,8 @@ retrieval: {
     unique_search_memories: int
     unique_read_memories: int
   }
+  by_caller_kind: RetrievalCallerKindRow[]
+  top_query_families: RetrievalQueryFamilyRow[]
   top_read_memories: RetrievalMemoryRow[]
   top_search_memories: RetrievalMemoryRow[]
   top_tags: RetrievalTagRow[]
@@ -297,6 +299,25 @@ retrieval: {
 - `total_count: int`
 - `last_read_at: float | null`
 - `last_search_at: float | null`
+
+`RetrievalCallerKindRow`:
+
+- `key: str`
+- `label: str`
+- `search_invocations: int`
+- `search_hits: int`
+- `zero_result_searches: int`
+- `read_events: int`
+- `total_events: int`
+
+`RetrievalQueryFamilyRow`:
+
+- `key: str`
+- `label: str`
+- `search_invocations: int`
+- `search_hits: int`
+- `zero_result_searches: int`
+- `unique_search_memories: int`
 
 `RetrievalTagRow`:
 
@@ -320,6 +341,8 @@ Rules:
 - A search with no hits still contributes to `summary.search_invocations` and `summary.zero_result_searches`.
 - `top_read_memories` is capped at the top 100 visible memories by read-event count within the selected window.
 - `top_search_memories` is capped at the top 100 visible memories by search-hit count within the selected window.
+- `by_caller_kind` groups retrieval traffic by the MCP service caller path (for example `external` vs `internal`).
+- `top_query_families` groups repeated search prompts by normalized query text (trimmed, whitespace-collapsed, case-folded) and is capped at the top 25 query families by invocation count.
 - `top_tags` is capped at the top 25 visible tags by combined retrieval activity.
 - `tag_timelines` is capped at the top 10 visible tags by combined retrieval activity and uses event-time buckets, not memory creation-time approximations.
 - Workspace scoping follows the retrieval event's originating workspace context and then filters to memories currently visible in the scoped request.
@@ -365,6 +388,7 @@ This slice intentionally does **not** cover the deeper graph/search/provider/ope
 ### Phase C.1 — retrieval operator panel now shipped
 
 - Tool-level read/search telemetry persisted from MCP search/read services
+- Caller-kind breakdowns and top repeated query-family tables
 - Top 100 read memories and top 100 search-hit memories
 - Top 25 retrieval tags with read/search split
 - Historical timelines for the top 10 retrieval tags
@@ -386,6 +410,8 @@ At minimum, backend verification must cover:
 - missing maintenance counters staying zero / omitted instead of fabricated
 - retrieval event persistence for search-hit vs explicit-read separation
 - zero-result search accounting
+- caller-kind grouping for external vs internal retrieval traffic
+- query-family grouping with normalized repeated search text
 - top-100 memory ranking for reads and search hits
 - top-25 tag rollups and top-10 tag timelines
 - API contract exposure under `/api/metrics/nerd`

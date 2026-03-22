@@ -30,6 +30,7 @@ from mcp_memory.management.models import (
     GraphTopologyPayload,
     MaintenanceEventPayload,
     MemoryTimelineBucketPayload,
+    NerdRetrievalCallerKindRowPayload,
     MemoryLifecyclePayload,
     NerdAlertPayload,
     NerdCompositionPayload,
@@ -47,6 +48,7 @@ from mcp_memory.management.models import (
     NerdMetricsPayload,
     NerdRetrievalMemoryRowPayload,
     NerdRetrievalPayload,
+    NerdRetrievalQueryFamilyRowPayload,
     NerdRetrievalSummaryPayload,
     NerdRetrievalTagRowPayload,
     NerdRetrievalTagTimelinePayload,
@@ -75,6 +77,7 @@ from mcp_memory.management.route_audit import build_task_route_audit
 _TAG_LIMIT = 10
 _DYNAMICS_LIMIT = 5
 _RETRIEVAL_MEMORY_LIMIT = 100
+_RETRIEVAL_QUERY_FAMILY_LIMIT = 25
 _RETRIEVAL_TAG_LIMIT = 25
 _RETRIEVAL_TAG_TIMELINE_LIMIT = 10
 _AGE_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
@@ -217,6 +220,32 @@ class _RetrievalMemoryAccumulator:
 class _RetrievalTagAccumulator:
     read_count: int = 0
     search_count: int = 0
+
+
+@dataclass
+class _RetrievalCallerKindAccumulator:
+    search_invocations: int = 0
+    search_hits: int = 0
+    zero_result_searches: int = 0
+    read_events: int = 0
+
+
+@dataclass
+class _RetrievalQueryFamilyAccumulator:
+    label: str
+    search_invocations: int = 0
+    search_hits: int = 0
+    zero_result_searches: int = 0
+    unique_search_memory_ids: set[str] = field(default_factory=set)
+
+
+@dataclass
+class _RetrievalSearchInvocationAccumulator:
+    caller_kind: str
+    query_family_key: str
+    query_family_label: str
+    surfaced_memory_ids: set[str] = field(default_factory=set)
+    zero_result: bool = False
 
 
 def build_nerd_metrics(
@@ -914,6 +943,9 @@ def build_retrieval_analytics(
     }
     memory_accumulators: dict[str, _RetrievalMemoryAccumulator] = {}
     tag_accumulators: dict[str, _RetrievalTagAccumulator] = {}
+    caller_kind_accumulators: dict[str, _RetrievalCallerKindAccumulator] = {}
+    query_family_accumulators: dict[str, _RetrievalQueryFamilyAccumulator] = {}
+    search_invocation_accumulators: dict[str, _RetrievalSearchInvocationAccumulator] = {}
     tag_read_buckets: dict[str, Counter[int]] = {}
     tag_search_buckets: dict[str, Counter[int]] = {}
     search_invocation_ids: set[str] = set()
@@ -927,13 +959,25 @@ def build_retrieval_analytics(
         event_kind = str(row["event_kind"])
         invocation_id = str(row["invocation_id"])
         created_at = float(row["created_at"] or 0.0)
+        caller_kind = _normalize_caller_kind(row["caller_kind"])
         if event_kind == "search":
             search_invocation_ids.add(invocation_id)
+            search_invocation = search_invocation_accumulators.setdefault(
+                invocation_id,
+                _RetrievalSearchInvocationAccumulator(
+                    caller_kind=caller_kind,
+                    query_family_key=_normalize_query_family_key(row["query_text"]),
+                    query_family_label=_format_query_family_label(row["query_text"]),
+                ),
+            )
             if int(row["result_count"] or 0) == 0:
                 zero_result_search_invocation_ids.add(invocation_id)
+                search_invocation.zero_result = True
 
         memory_id = None if row["memory_id"] is None else str(row["memory_id"])
         if memory_id is None or memory_id not in memory_info:
+            if event_kind == "read":
+                caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
             continue
 
         info = memory_info[memory_id]
@@ -961,11 +1005,74 @@ def build_retrieval_analytics(
             memory_accumulator.last_read_at = created_at if memory_accumulator.last_read_at is None else max(memory_accumulator.last_read_at, created_at)
             unique_read_memories.add(memory_id)
             read_events += 1
+            caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
         elif event_kind == "search":
             memory_accumulator.search_count += 1
             memory_accumulator.last_search_at = created_at if memory_accumulator.last_search_at is None else max(memory_accumulator.last_search_at, created_at)
             unique_search_memories.add(memory_id)
             search_hits += 1
+            search_invocation_accumulators[invocation_id].surfaced_memory_ids.add(memory_id)
+
+    for search_invocation in search_invocation_accumulators.values():
+        caller_kind_accumulator = caller_kind_accumulators.setdefault(
+            search_invocation.caller_kind,
+            _RetrievalCallerKindAccumulator(),
+        )
+        caller_kind_accumulator.search_invocations += 1
+        caller_kind_accumulator.search_hits += len(search_invocation.surfaced_memory_ids)
+        if search_invocation.zero_result:
+            caller_kind_accumulator.zero_result_searches += 1
+
+        query_family_accumulator = query_family_accumulators.setdefault(
+            search_invocation.query_family_key,
+            _RetrievalQueryFamilyAccumulator(label=search_invocation.query_family_label),
+        )
+        query_family_accumulator.search_invocations += 1
+        query_family_accumulator.search_hits += len(search_invocation.surfaced_memory_ids)
+        if search_invocation.zero_result:
+            query_family_accumulator.zero_result_searches += 1
+        query_family_accumulator.unique_search_memory_ids.update(search_invocation.surfaced_memory_ids)
+
+    by_caller_kind = [
+        NerdRetrievalCallerKindRowPayload(
+            key=caller_kind,
+            label=_format_caller_kind_label(caller_kind),
+            search_invocations=accumulator.search_invocations,
+            search_hits=accumulator.search_hits,
+            zero_result_searches=accumulator.zero_result_searches,
+            read_events=accumulator.read_events,
+            total_events=accumulator.search_invocations + accumulator.read_events,
+        )
+        for caller_kind, accumulator in sorted(
+            caller_kind_accumulators.items(),
+            key=lambda item: (
+                -(item[1].search_invocations + item[1].read_events),
+                -item[1].search_hits,
+                -item[1].read_events,
+                item[0],
+            ),
+        )
+    ]
+
+    top_query_families = [
+        NerdRetrievalQueryFamilyRowPayload(
+            key=family_key,
+            label=accumulator.label,
+            search_invocations=accumulator.search_invocations,
+            search_hits=accumulator.search_hits,
+            zero_result_searches=accumulator.zero_result_searches,
+            unique_search_memories=len(accumulator.unique_search_memory_ids),
+        )
+        for family_key, accumulator in sorted(
+            query_family_accumulators.items(),
+            key=lambda item: (
+                -item[1].search_invocations,
+                -item[1].search_hits,
+                -len(item[1].unique_search_memory_ids),
+                item[0],
+            ),
+        )[:_RETRIEVAL_QUERY_FAMILY_LIMIT]
+    ]
 
     top_read_memories = [
         NerdRetrievalMemoryRowPayload(
@@ -1047,11 +1154,39 @@ def build_retrieval_analytics(
             unique_search_memories=len(unique_search_memories),
             unique_read_memories=len(unique_read_memories),
         ),
+        by_caller_kind=by_caller_kind,
+        top_query_families=top_query_families,
         top_read_memories=top_read_memories,
         top_search_memories=top_search_memories,
         top_tags=top_tags,
         tag_timelines=tag_timelines,
     )
+
+
+def _normalize_caller_kind(value: object) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            return normalized
+    return "unknown"
+
+
+def _format_caller_kind_label(value: str) -> str:
+    return value.replace("_", " ").title()
+
+
+def _normalize_query_family_key(value: object) -> str:
+    if not isinstance(value, str):
+        return "empty-query"
+    normalized = " ".join(value.lower().split())
+    return normalized or "empty-query"
+
+
+def _format_query_family_label(value: object) -> str:
+    if not isinstance(value, str):
+        return "(empty query)"
+    normalized = " ".join(value.split())
+    return normalized or "(empty query)"
 
 
 def build_nerd_alerts(
