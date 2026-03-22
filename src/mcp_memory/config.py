@@ -93,6 +93,8 @@ class ProviderRoutingConfig:
     task_routes: dict[str, list[str]] = field(default_factory=dict)
     task_classes: dict[str, str] = field(default_factory=dict)
     profile_daily_call_limits: dict[str, int] = field(default_factory=dict)
+    model_burst_call_limit: int = 1
+    model_burst_window_seconds: float = 600.0
     default_json_route: list[str] = field(default_factory=list)
     default_agentic_route: list[str] = field(default_factory=list)
     fallback_to_json_only: bool = False
@@ -123,6 +125,10 @@ class ProviderRoutingConfig:
         for profile_key, limit in self.profile_daily_call_limits.items():
             if limit < 1:
                 raise ValueError(f"provider_routing.profile_daily_call_limits[{profile_key!r}] must be >= 1")
+        if self.model_burst_call_limit < 1:
+            raise ValueError("provider_routing.model_burst_call_limit must be >= 1")
+        if self.model_burst_window_seconds <= 0:
+            raise ValueError("provider_routing.model_burst_window_seconds must be > 0")
         self.default_json_route = [item.strip() for item in self.default_json_route if isinstance(item, str) and item.strip()]
         self.default_agentic_route = [item.strip() for item in self.default_agentic_route if isinstance(item, str) and item.strip()]
         self.low_priority_task_names = [item.strip() for item in self.low_priority_task_names if isinstance(item, str) and item.strip()]
@@ -194,17 +200,35 @@ class OllamaCLIConfig:
 @dataclass
 class DaemonConfig:
     host: str = "127.0.0.1"
+    port: int = 4242
     auto_start_timeout_seconds: float = 10.0
     shutdown_grace_seconds: float = 5.0
     healthcheck_interval_seconds: float = 0.05
 
     def __post_init__(self) -> None:
+        if self.port < 0 or self.port > 65535:
+            raise ValueError("daemon.port must be in [0, 65535]")
         if self.auto_start_timeout_seconds <= 0:
             raise ValueError("daemon.auto_start_timeout_seconds must be > 0")
         if self.shutdown_grace_seconds < 0:
             raise ValueError("daemon.shutdown_grace_seconds must be >= 0")
         if self.healthcheck_interval_seconds <= 0:
             raise ValueError("daemon.healthcheck_interval_seconds must be > 0")
+
+
+@dataclass
+class BackupsConfig:
+    enabled: bool = True
+    interval_seconds: float = 3600.0
+    max_snapshots: int = 24
+    create_startup_snapshot: bool = True
+    warn_on_shared_storage: bool = True
+
+    def __post_init__(self) -> None:
+        if self.interval_seconds <= 0:
+            raise ValueError("backups.interval_seconds must be > 0")
+        if self.max_snapshots < 1:
+            raise ValueError("backups.max_snapshots must be >= 1")
 
 
 @dataclass
@@ -274,6 +298,7 @@ class Config:
     opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
     ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
+    backups: BackupsConfig = field(default_factory=BackupsConfig)
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
@@ -358,6 +383,8 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
             if isinstance(data.get("task_classes", {}), dict) and isinstance(key, str) and isinstance(value, str)
         },
         profile_daily_call_limits=profile_daily_call_limits,
+        model_burst_call_limit=int(data.get("model_burst_call_limit", 1)),
+        model_burst_window_seconds=float(data.get("model_burst_window_seconds", 600.0)),
         default_json_route=_normalize_route_list(data.get("default_json_route", [])),
         default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
         fallback_to_json_only=bool(data.get("fallback_to_json_only", False)),
@@ -408,6 +435,10 @@ def resolve_state_dir() -> Path:
     return Path(os.getenv("XDG_STATE_HOME", Path.home() / ".local" / "state")) / DEFAULT_APP_NAME
 
 
+def resolve_backup_dir() -> Path:
+    return resolve_global_data_dir() / DEFAULT_APP_NAME / "backups"
+
+
 def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     resolved_path = config_path or resolve_default_config_path()
     if resolved_path.exists():
@@ -427,9 +458,17 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     document["ollama"] = {"command": "ollama"}
     document["daemon"] = {
         "host": "127.0.0.1",
+        "port": 4242,
         "auto_start_timeout_seconds": 10.0,
         "shutdown_grace_seconds": 5.0,
         "healthcheck_interval_seconds": 0.05,
+    }
+    document["backups"] = {
+        "enabled": True,
+        "interval_seconds": 3600.0,
+        "max_snapshots": 24,
+        "create_startup_snapshot": True,
+        "warn_on_shared_storage": True,
     }
     document["embeddings"] = {
         "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -495,6 +534,8 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
             "copilot-mini": 50,
             "gemini-cheap": 100,
         },
+        "model_burst_call_limit": 1,
+        "model_burst_window_seconds": 600.0,
         "default_json_route": [],
         "default_agentic_route": [],
         "fallback_to_json_only": False,
@@ -559,6 +600,7 @@ def load_config(config_path: Path | None = None) -> Config:
         opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),
         ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
+        backups=_load_dataclass_from_dict(BackupsConfig, raw.get("backups", {})),
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),

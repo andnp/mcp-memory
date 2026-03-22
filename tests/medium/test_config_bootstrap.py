@@ -31,6 +31,8 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
     assert config.provider_routing.low_priority_task_names == ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"]
+    assert config.provider_routing.model_burst_call_limit == 1
+    assert config.provider_routing.model_burst_window_seconds == 600.0
     assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
     assert config.provider_routing.profiles["gemini-cheap"].model == "gemini-3-flash-preview"
@@ -75,6 +77,8 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
         'default_agentic_route = ["gemini-cheap"]\n'
         'fallback_to_json_only = false\n'
         'low_priority_task_names = ["deduplicator"]\n'
+        'model_burst_call_limit = 1\n'
+        'model_burst_window_seconds = 600.0\n'
         "\n"
         "[provider_routing.task_routes]\n"
         'ingest-system1 = ["copilot-mini", "gemini-cheap"]\n'
@@ -106,6 +110,8 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
     assert config.provider_routing.default_agentic_route == ["gemini-cheap"]
     assert config.provider_routing.fallback_to_json_only is False
     assert config.provider_routing.low_priority_task_names == ["deduplicator"]
+    assert config.provider_routing.model_burst_call_limit == 1
+    assert config.provider_routing.model_burst_window_seconds == 600.0
     assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.task_classes["ingest-system1"] == "cheap_agentic"
     assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
