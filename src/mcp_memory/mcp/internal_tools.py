@@ -46,7 +46,10 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="task_complete",
-            description="Record a lightweight completion marker for the current maintenance task without mutating memories.",
+            description=(
+                "Record a lightweight completion marker for the current maintenance task without mutating memories. "
+                "Use this instead of creating journal or memory records for routine completion/status traces."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -58,7 +61,10 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_task_complete",
-            description="Record a lightweight completion marker for the current maintenance task without mutating memories.",
+            description=(
+                "Record a lightweight completion marker for the current maintenance task without mutating memories. "
+                "Use this instead of creating journal or memory records for routine completion/status traces."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -129,7 +135,11 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_ingest_create_memory",
-            description="Create a new memory record for ingest while preserving source_entry_ids, ingest_task_id, default ingest tags, workspace_ids, and summary-task enqueueing.",
+            description=(
+                "Create a new durable memory record for ingest while preserving source_entry_ids, ingest_task_id, "
+                "default ingest tags, workspace_ids, and summary-task enqueueing. Do not use this for routine "
+                "status or completion markers."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -227,7 +237,10 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_create_memory_record",
-            description="Create a new memory record for maintenance and cleanup workflows, optionally enqueueing follow-up summarization.",
+            description=(
+                "Create a new durable memory record for maintenance and cleanup workflows, optionally enqueueing "
+                "follow-up summarization. Do not use this for routine completion, counters, or status-only traces."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

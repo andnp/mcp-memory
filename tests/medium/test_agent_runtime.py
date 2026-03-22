@@ -43,6 +43,7 @@ from mcp_memory.core.task_handlers.maintenance import (
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
     _select_curator_seed_records,
 )
+from mcp_memory.core.task_handlers.deduplicator_support import build_deduplicator_agent_prompt
 from mcp_memory.core.task_handlers.ingest import (
     INGEST_APPEND_TOOL_NAME,
     INGEST_CREATE_TOOL_NAME,
@@ -196,6 +197,34 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     assert '"entry_outcomes": [{"entry_id": 123, "disposition": "created"|"appended"|"matched_existing"|"ignored"|"no_mutation"' in prompt
     assert "Do not make vague claims like 'matched existing canonical memories'" in prompt
     assert "Provide a reason whenever an entry outcome is ignored, no_mutation, or matched_existing." in prompt
+    assert "Do not create memories that only log task completion, queue progress, tool usage" in prompt
+
+
+def test_build_deduplicator_agent_prompt_routes_closeout_to_task_complete() -> None:
+    prompt = build_deduplicator_agent_prompt(
+        TaskRecord(
+            id="dedup-prompt-test",
+            task_name=DEDUPLICATOR_TASK_NAME,
+            data={},
+            workspace_id="workspace-test",
+            status="pending",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        ),
+        [],
+        strategy_used="semantic",
+    )
+
+    assert "use task_complete for operational closeout only" in prompt
+    assert "Do not call record_thought or create journal/observation memories" in prompt
 
 
 @pytest.mark.asyncio

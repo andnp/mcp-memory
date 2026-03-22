@@ -51,6 +51,8 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_search_memory_records",
         "internal_read_memory_record",
         "internal_list_memory_records",
+        "task_complete",
+        "internal_task_complete",
         "internal_get_next_dedup_batch",
         "internal_get_next_curator_batch",
         "internal_get_next_ingest_batch",
@@ -69,6 +71,9 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
     search_tool = next(tool for tool in tools if tool.name == "internal_search_memory_records")
     assert search_tool.description is not None
     assert "follow up with internal_read_memory_record" in search_tool.description
+    completion_tool = next(tool for tool in tools if tool.name == "task_complete")
+    assert completion_tool.description is not None
+    assert "instead of creating journal or memory records" in completion_tool.description
 
 
 def test_mcp_server_initializes_with_workspace_root() -> None:

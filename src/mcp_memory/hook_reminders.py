@@ -10,7 +10,10 @@ from mcp_memory.utils.db import DatabaseManager
 
 
 REMINDER_INTERVAL_SECONDS = 300.0
-REMINDER_MESSAGE = "Please take a moment to record your thoughts with the record_thought tool."
+REMINDER_MESSAGE = (
+    "Before moving on, record any durable finding, decision, anomaly, or reusable next step with the "
+    "record_thought tool. Skip routine play-by-play and status-only updates."
+)
 
 
 @dataclass(slots=True)

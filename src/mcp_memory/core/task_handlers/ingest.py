@@ -485,6 +485,7 @@ def _build_ingest_agent_prompt(
         "Use the generic append/create tools only when a non-ingest workflow truly requires them.\n"
         f"Use workspace_id '{workspace_id}' when you need a fallback workspace.\n"
         "Do not delete or release journal claims yourself; the handler finalizes claimed entries after your run based on actual memory mutations.\n"
+        "Do not create memories that only log task completion, queue progress, tool usage, or other routine status traces; durable memory should capture findings, decisions, or reusable observations instead.\n"
         "Preserve concrete symbols, file paths, thresholds, IDs, error strings, config keys, and commit refs when they appear in the source entries or supporting memories.\n"
         "When uncertain, prefer narrow concrete observations over broad abstraction.\n"
         "When finished, output final JSON only. Include explicit per-entry outcomes for every claimed entry you handled or intentionally left unchanged.\n"

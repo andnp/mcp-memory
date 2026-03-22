@@ -5,7 +5,11 @@ def get_memory_tools() -> list[Tool]:
     return [
         Tool(
             name="record_thought",
-            description="Record a raw system-1 thought in the local memory journal.",
+            description=(
+                "Capture a durable working memory such as a finding, decision, anomaly, hypothesis, trade-off, "
+                "or reusable next step. Prefer one self-contained thought with the conclusion, brief supporting "
+                "evidence, and why it matters. Avoid routine play-by-play or status-only updates with no durable takeaway."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
