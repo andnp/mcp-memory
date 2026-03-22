@@ -6,6 +6,12 @@ from typing import Any, Awaitable, Callable, cast
 import re
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.provider_admission import classify_provider_failure
+from mcp_memory.core.providers._json_cli import ProviderBackoffError
+from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
+from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
+from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
+from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
@@ -84,6 +90,7 @@ TAXONOMIST_STRATEGY_WEIGHTS = {
     NEVER_SURFACED_STRATEGY: 3,
     BOUNDED_NOISE_STRATEGY: 1,
 }
+TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET = 1
 
 
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
@@ -326,6 +333,10 @@ async def handle_taxonomist_task(
     )
     candidates = sampled_batch.records
     updated = 0
+    provider_call_budget = _taxonomist_provider_call_budget(ctx, provider)
+    provider_calls_used = 0
+    provider_deferred_reason_code: str | None = None
+    provider_deferred_retry_delay_seconds: float | None = None
     for record in candidates:
         normalized_tags = _normalize_tag_values(record.tags)
         if normalized_tags != record.tags:
@@ -333,14 +344,40 @@ async def handle_taxonomist_task(
             if refreshed is not None:
                 updated += 1
             continue
-        if provider is not None and not record.tags:
-            normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
+        if provider is not None and not record.tags and provider_calls_used < provider_call_budget:
+            try:
+                normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
+                provider_calls_used += 1
+            except Exception as exc:
+                if _is_taxonomist_provider_deferred_error(exc):
+                    reason = classify_provider_failure(exc)
+                    provider_deferred_reason_code = reason.reason_code
+                    provider_deferred_retry_delay_seconds = reason.retry_delay_seconds
+                    _record_taxonomist_provider_deferred_event(
+                        ctx,
+                        task=task,
+                        provider=provider,
+                        reason_code=reason.reason_code,
+                        reason_category=reason.reason_category,
+                        retry_delay_seconds=reason.retry_delay_seconds,
+                    )
+                    provider = None
+                    continue
+                raise
         if normalized_tags == record.tags:
             continue
         refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
         if refreshed is not None:
             updated += 1
-    return sampling_payload(sampled_batch, sampled_records=candidates, updated=updated)
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        updated=updated,
+        provider_calls_used=provider_calls_used,
+        provider_call_budget=provider_call_budget,
+        provider_deferred_reason_code=provider_deferred_reason_code,
+        provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+    )
 
 
 async def handle_memory_curator_task(
@@ -464,6 +501,55 @@ async def _provider_normalize_tags(provider: Any, record, normalized_tags: list[
     if not isinstance(provider_tags, list):
         return normalized_tags
     return _normalize_tag_values([str(tag) for tag in provider_tags]) or normalized_tags
+
+
+def _taxonomist_provider_call_budget(ctx: ApplicationContext, provider: Any) -> int:
+    if provider is None:
+        return 0
+    config = getattr(ctx, "config", None)
+    routing = None if config is None else getattr(config, "provider_routing", None)
+    configured_limit = None if routing is None else getattr(routing, "model_burst_call_limit", None)
+    if isinstance(configured_limit, int) and configured_limit > 0:
+        return configured_limit
+    return TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET
+
+
+def _is_taxonomist_provider_deferred_error(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            ProviderAdmissionDeferred,
+            ProviderAuthenticationRequired,
+            ProviderBackoffError,
+            ProviderBudgetExceeded,
+            ProviderRateLimitExceeded,
+        ),
+    )
+
+
+def _record_taxonomist_provider_deferred_event(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    provider: Any,
+    reason_code: str,
+    reason_category: str,
+    retry_delay_seconds: float | None,
+) -> None:
+    repository = getattr(ctx, "provider_policy_events", None)
+    if repository is None:
+        return
+    repository.record_event(
+        task_name=task.task_name,
+        task_id=task.id,
+        event_kind="provider_deferred",
+        provider_key=getattr(provider, "_provider_key", None),
+        provider_name=getattr(provider, "_provider_name", None),
+        model_name=getattr(provider, "_model_name", None),
+        reason_category=reason_category,
+        reason_code=reason_code,
+        retry_delay_seconds=retry_delay_seconds,
+    )
 
 
 # Temporary compatibility aliases for the extraction slices.

@@ -34,6 +34,7 @@ from mcp_memory.core.agent_runtime import (
     handle_taxonomist_task,
     _provider_for_task,
 )
+from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult, CopilotCLIAgenticProvider
 from mcp_memory.core.task_worker import RuntimeTaskWorker
@@ -2783,6 +2784,153 @@ async def test_taxonomist_uses_provider_for_untagged_records(monkeypatch, tmp_pa
         assert result["updated"] == 1
         assert provider.call_count == 1
         assert updated is not None and updated.tags == ["auth", "testing"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="First untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        second = runtime.repository.create_memory(
+            title="Second untagged fact",
+            content="A second auth fact needing tags.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert first is not None and second is not None
+
+        provider = FakeAIProvider(responses=[{"tags": ["Authn", "Tests"]}, {"tags": ["Architecture"]}])
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-provider-budget-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_first = runtime.repository.get_memory(first.id)
+        updated_second = runtime.repository.get_memory(second.id)
+        assert result["updated"] == 1
+        assert result["provider_calls_used"] == 1
+        assert result["provider_call_budget"] == 1
+        assert provider.call_count == 1
+        assert updated_first is not None and updated_first.tags == ["auth", "testing"]
+        assert updated_second is not None and updated_second.tags == []
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_soft_fails_provider_rate_limit_and_keeps_task_successful(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    try:
+        tagged = runtime.repository.create_memory(
+            title="Tagged fact",
+            content="A fact with messy tags.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["Tests", "Authn"],
+        )
+        untagged = runtime.repository.create_memory(
+            title="Untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert tagged is not None and untagged is not None
+
+        provider = FakeAIProvider(
+            responses=[{"tags": ["ignored"]}],
+            error=ProviderRateLimitExceeded(
+                "gemini-3-flash-preview",
+                calls_in_window=1,
+                burst_call_limit=1,
+                burst_window_seconds=600.0,
+                retry_delay_seconds=600.0,
+            ),
+        )
+        provider._provider_key = "gemini-cli"  # type: ignore[attr-defined]
+        provider._provider_name = "Gemini CLI"  # type: ignore[attr-defined]
+        provider._model_name = "gemini-3-flash-preview"  # type: ignore[attr-defined]
+
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-provider-backoff-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_tagged = runtime.repository.get_memory(tagged.id)
+        updated_untagged = runtime.repository.get_memory(untagged.id)
+        event_rows = runtime.db_manager.get_connection().execute(
+            "SELECT event_kind, reason_code, retry_delay_seconds FROM provider_policy_events WHERE task_id = ?",
+            ("taxonomist-provider-backoff-task",),
+        ).fetchall()
+
+        assert result["updated"] == 1
+        assert result["provider_calls_used"] == 0
+        assert result["provider_deferred_reason_code"] == "model_burst_limit_exceeded"
+        assert result["provider_deferred_retry_delay_seconds"] == 600.0
+        assert provider.call_count == 1
+        assert updated_tagged is not None and updated_tagged.tags == ["auth", "testing"]
+        assert updated_untagged is not None and updated_untagged.tags == []
+        assert [tuple(row) for row in event_rows] == [
+            ("provider_deferred", "model_burst_limit_exceeded", 600.0)
+        ]
     finally:
         runtime.close()
 
