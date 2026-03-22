@@ -221,6 +221,7 @@ def create_daemon_app(
             yield
         finally:
             await _cancel_idle_shutdown_task(app)
+            await _cancel_background_task(app, "backup_task")
             await zmq_server.stop()
             if not warmup_task.done():
                 warmup_task.cancel()
