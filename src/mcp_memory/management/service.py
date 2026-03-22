@@ -87,14 +87,25 @@ class ManagementService:
             search=build_search_health(self._relational_search),
         )
 
-    def get_overview(self, recent_limit: int = 10, failed_limit: int = 10):
+    def get_overview(
+        self,
+        *,
+        scope: str | None = None,
+        workspace_id: str | None = None,
+        recent_limit: int = 10,
+        failed_limit: int = 10,
+    ):
+        effective_workspace_id = self._resolve_scoped_workspace_id(
+            scope=scope,
+            workspace_id=workspace_id,
+        )
         return build_overview(
             memory_queries=self._memory_queries,
             repository=self._repository,
             task_queue=self._task_queue,
             runtime_info=self._runtime_info,
             db_manager=self._db_manager,
-            workspace_id=self._workspace_id,
+            workspace_id=effective_workspace_id,
             provider_usage_repo=self._provider_usage,
             runtime_logs_repo=self._runtime_logs,
             embedder=self._embedder,
@@ -330,7 +341,7 @@ class ManagementService:
         bucket_minutes: int = 60,
         now: float | None = None,
     ) -> NerdMetricsPayload:
-        effective_workspace_id = self._resolve_nerd_metrics_workspace_id(
+        effective_workspace_id = self._resolve_scoped_workspace_id(
             scope=scope,
             workspace_id=workspace_id,
         )
@@ -352,7 +363,7 @@ class ManagementService:
             now=now,
         )
 
-    def _resolve_nerd_metrics_workspace_id(
+    def _resolve_scoped_workspace_id(
         self,
         *,
         scope: str | None,

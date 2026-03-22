@@ -11,13 +11,18 @@ def fetch_memory_count_rows(db_manager, workspace_id: str | None):
     if db_manager is None:
         return []
     conn = db_manager.get_connection()
-    query = (
-        "SELECT memories.type, memories.status, COUNT(*) AS count "
-        "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
-    )
     params: list[object] = []
-    if workspace_id is not None:
-        query += " WHERE memory_workspaces.workspace_id = ?"
+    if workspace_id is None:
+        query = (
+            "SELECT memories.type, memories.status, COUNT(*) AS count "
+            "FROM memories"
+        )
+    else:
+        query = (
+            "SELECT memories.type, memories.status, COUNT(*) AS count "
+            "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id "
+            "WHERE memory_workspaces.workspace_id = ?"
+        )
         params.append(workspace_id)
     query += " GROUP BY memories.type, memories.status"
     return conn.execute(query, params).fetchall()
@@ -40,16 +45,24 @@ def fetch_memory_metrics_row(db_manager, workspace_id: str | None):
     if db_manager is None:
         return None
     conn = db_manager.get_connection()
-    query = (
-        "SELECT "
-        "COUNT(*) AS total_memories, "
-        "COALESCE(SUM(CASE WHEN memories.content = '' THEN 0 ELSE 1 + LENGTH(memories.content) - LENGTH(REPLACE(memories.content, CHAR(10), '')) END), 0) AS total_memory_lines, "
-        "COALESCE(SUM(CASE WHEN memories.summary IS NULL OR memories.summary = '' THEN 0 ELSE 1 + LENGTH(memories.summary) - LENGTH(REPLACE(memories.summary, CHAR(10), '')) END), 0) AS total_summary_lines "
-        "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
-    )
     params: list[object] = []
-    if workspace_id is not None:
-        query += " WHERE memory_workspaces.workspace_id = ?"
+    if workspace_id is None:
+        query = (
+            "SELECT "
+            "COUNT(*) AS total_memories, "
+            "COALESCE(SUM(CASE WHEN memories.content = '' THEN 0 ELSE 1 + LENGTH(memories.content) - LENGTH(REPLACE(memories.content, CHAR(10), '')) END), 0) AS total_memory_lines, "
+            "COALESCE(SUM(CASE WHEN memories.summary IS NULL OR memories.summary = '' THEN 0 ELSE 1 + LENGTH(memories.summary) - LENGTH(REPLACE(memories.summary, CHAR(10), '')) END), 0) AS total_summary_lines "
+            "FROM memories"
+        )
+    else:
+        query = (
+            "SELECT "
+            "COUNT(*) AS total_memories, "
+            "COALESCE(SUM(CASE WHEN memories.content = '' THEN 0 ELSE 1 + LENGTH(memories.content) - LENGTH(REPLACE(memories.content, CHAR(10), '')) END), 0) AS total_memory_lines, "
+            "COALESCE(SUM(CASE WHEN memories.summary IS NULL OR memories.summary = '' THEN 0 ELSE 1 + LENGTH(memories.summary) - LENGTH(REPLACE(memories.summary, CHAR(10), '')) END), 0) AS total_summary_lines "
+            "FROM memories JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id "
+            "WHERE memory_workspaces.workspace_id = ?"
+        )
         params.append(workspace_id)
     return conn.execute(query, params).fetchone()
 

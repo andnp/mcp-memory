@@ -251,6 +251,8 @@ def create_daemon_app(
     @app.api_route("/api/{api_path:path}", methods=["GET", "POST"])
     async def dashboard_api(api_path: str, request: Request):
         payload = await _payload_from_http_request(request)
+        if api_path == "overview" and "scope" not in payload and "workspace_id" not in payload:
+            payload["scope"] = "global"
         try:
             result = dispatch_management_request(
                 app.state.routes,

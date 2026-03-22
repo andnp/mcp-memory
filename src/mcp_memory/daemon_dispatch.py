@@ -22,7 +22,10 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
         response["transport"] = metadata.transport
         return response
     if path == "/api/overview":
-        return routes.service.get_overview().model_dump()
+        return routes.service.get_overview(
+            scope=optional_str(payload, "scope"),
+            workspace_id=optional_str(payload, "workspace_id"),
+        ).model_dump()
     if path == "/api/metrics/nerd":
         return routes.service.get_nerd_metrics(
             scope=optional_str(payload, "scope"),

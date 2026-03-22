@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import time
+from typing import cast
 
 from mcp_memory.config import LoggingConfig
 from mcp_memory.utils.db import DatabaseManager
@@ -95,8 +96,9 @@ class RuntimeLogRepository:
     ):
         if self._db_manager is None:
             return []
+        resolved_workspace_id: str | None = None if workspace_id is _ALL_WORKSPACES else cast(str | None, workspace_id)
         where_clause, params = _build_log_filters(
-            workspace_id=None if workspace_id is _ALL_WORKSPACES else workspace_id,
+            workspace_id=resolved_workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
@@ -136,8 +138,9 @@ class RuntimeLogRepository:
     ):
         if self._db_manager is None:
             return RuntimeLogSummary(total=0)
+        resolved_workspace_id: str | None = None if workspace_id is _ALL_WORKSPACES else cast(str | None, workspace_id)
         where_clause, params = _build_log_filters(
-            workspace_id=None if workspace_id is _ALL_WORKSPACES else workspace_id,
+            workspace_id=resolved_workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
@@ -196,9 +199,8 @@ class RuntimeLogRepository:
         effective_max_age_days = self._config.max_log_age_days if max_age_days is None else max_age_days
         deleted = 0
         conn = self._db_manager.get_connection()
-        workspace_clause, workspace_params = _workspace_scope_clause(
-            None if workspace_id is _ALL_WORKSPACES else workspace_id
-        )
+        resolved_workspace_id: str | None = None if workspace_id is _ALL_WORKSPACES else cast(str | None, workspace_id)
+        workspace_clause, workspace_params = _workspace_scope_clause(resolved_workspace_id)
 
         if effective_max_age_days > 0:
             cutoff = (time.time() if now is None else now) - (effective_max_age_days * 86400)
