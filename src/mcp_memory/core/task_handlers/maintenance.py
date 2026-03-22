@@ -180,28 +180,29 @@ async def handle_graph_link_discovery_task(
     candidates = sampled_batch.records
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
-
-    fallback_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider=None)
-    created = _apply_graph_link_proposals(ctx, fallback_pairs)
-    seeded_work_item_count = 0
-    if (
-        len(fallback_pairs) < _relationship_proposals.GRAPH_LINKER_FALLBACK_LINK_TARGET
-        and len(candidates) > _relationship_proposals.GRAPH_LINKER_AI_MIN_CANDIDATES
-    ):
-        _, created_item = _enqueue_graph_link_review_work_item(
+    return await _run_sparse_frontier_review_task(
+        ctx,
+        task=task,
+        sampled_batch=sampled_batch,
+        candidates=candidates,
+        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
+        propose_pairs=lambda review_candidates: _relationship_proposals.propose_graph_links(
+            ctx,
+            review_candidates,
+            provider=None,
+        ),
+        apply_pairs=lambda proposed_pairs: _apply_graph_link_proposals(ctx, proposed_pairs),
+        should_seed=lambda proposed_pairs, review_candidates: (
+            len(proposed_pairs) < _relationship_proposals.GRAPH_LINKER_FALLBACK_LINK_TARGET
+            and len(review_candidates) > _relationship_proposals.GRAPH_LINKER_AI_MIN_CANDIDATES
+        ),
+        enqueue_review_work_item=lambda review_candidates: _enqueue_graph_link_review_work_item(
             ctx,
             task=task,
             workspace_id=workspace_id,
-            candidates=candidates,
+            candidates=review_candidates,
             strategy_used=sampled_batch.strategy_used,
-        )
-        seeded_work_item_count = 1 if created_item else 0
-
-    return sampling_payload(
-        sampled_batch,
-        sampled_records=candidates,
-        created=created,
-        seeded_work_item_count=seeded_work_item_count,
+        ),
     )
 
 
@@ -285,24 +286,28 @@ async def handle_conflict_screening_task(
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
 
-    fallback_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider=None)
-    created = _apply_conflict_proposals(ctx, fallback_pairs)
-    seeded_work_item_count = 0
-    if not fallback_pairs and len(candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
-        _, created_item = _enqueue_conflict_review_work_item(
+    return await _run_sparse_frontier_review_task(
+        ctx,
+        task=task,
+        sampled_batch=sampled_batch,
+        candidates=candidates,
+        family_key=WORK_FAMILY_CONFLICT_REVIEW,
+        propose_pairs=lambda review_candidates: _relationship_proposals.propose_conflicts(
+            ctx,
+            review_candidates,
+            provider=None,
+        ),
+        apply_pairs=lambda proposed_pairs: _apply_conflict_proposals(ctx, proposed_pairs),
+        should_seed=lambda proposed_pairs, review_candidates: (
+            not proposed_pairs and len(review_candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES
+        ),
+        enqueue_review_work_item=lambda review_candidates: _enqueue_conflict_review_work_item(
             ctx,
             task=task,
             workspace_id=workspace_id,
-            candidates=candidates,
+            candidates=review_candidates,
             strategy_used=sampled_batch.strategy_used,
-        )
-        seeded_work_item_count = 1 if created_item else 0
-
-    return sampling_payload(
-        sampled_batch,
-        sampled_records=candidates,
-        created=created,
-        seeded_work_item_count=seeded_work_item_count,
+        ),
     )
 
 
@@ -511,7 +516,7 @@ async def handle_dedup_prep_task(
             seeded_work_item_count=0,
         )
 
-    _, created = _enqueue_dedup_review_work_item(
+    created_work_item, created = _enqueue_dedup_review_work_item(
         ctx,
         task=task,
         workspace_id=workspace_id,
@@ -523,6 +528,13 @@ async def handle_dedup_prep_task(
         seed_batch,
         sampled_records=seed_records,
         seed_records=seed_records,
+        extra=_work_item_result_metadata(
+            family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            seed_source="frontier_seed",
+            seed_records=seed_records,
+            created_work_item=created_work_item if created else None,
+        ),
         seeded_work_item_count=1 if created else 0,
     )
 
@@ -1305,6 +1317,41 @@ async def _run_claimed_review_work_item(
         )
     )
     return result
+
+
+async def _run_sparse_frontier_review_task(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    sampled_batch: SamplingBatch,
+    candidates: list[Any],
+    family_key: str,
+    propose_pairs: Callable[[list[Any]], Awaitable[Any]],
+    apply_pairs: Callable[[Any], int],
+    should_seed: Callable[[Any, list[Any]], bool],
+    enqueue_review_work_item: Callable[[list[Any]], tuple[Any, bool]],
+) -> dict[str, Any]:
+    created_work_item: Any | None = None
+    fallback_pairs = await propose_pairs(candidates)
+    created = apply_pairs(fallback_pairs)
+    seeded_work_item_count = 0
+    if should_seed(fallback_pairs, candidates):
+        created_work_item, created_item = enqueue_review_work_item(candidates)
+        seeded_work_item_count = 1 if created_item else 0
+
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        extra=_work_item_result_metadata(
+            family_key=family_key,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            seed_source="frontier_seed",
+            seed_records=candidates,
+            created_work_item=created_work_item if seeded_work_item_count else None,
+        ),
+        created=created,
+        seeded_work_item_count=seeded_work_item_count,
+    )
 
 
 def _claim_dedup_review_work_batch(

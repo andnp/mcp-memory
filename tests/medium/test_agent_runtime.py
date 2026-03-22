@@ -2337,7 +2337,12 @@ async def test_graph_link_discovery_seeds_agentic_review_when_fallback_is_sparse
 
         assert result["created"] == 0
         assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "graph_link_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] == 13
         assert [item.status for item in review_items] == ["pending"]
+        assert result["created_work_item_id"] == review_items[0].id
         assert len(review_items[0].payload["candidate_memory_ids"]) == 13
     finally:
         runtime.close()
@@ -2665,7 +2670,12 @@ async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(m
 
         assert result["created"] == 0
         assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "conflict_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] == 16
         assert [item.status for item in review_items] == ["pending"]
+        assert result["created_work_item_id"] == review_items[0].id
         assert len(review_items[0].payload["candidate_memory_ids"]) == 16
     finally:
         runtime.close()
@@ -3604,7 +3614,12 @@ async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path)
         review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
 
         assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "memory_dedup_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] >= 2
         assert [item.status for item in review_items] == ["pending"]
+        assert result["created_work_item_id"] == review_items[0].id
         assert set(review_items[0].payload["seed_memory_ids"]) >= {first.id, second.id}
     finally:
         runtime.close()
