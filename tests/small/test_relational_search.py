@@ -936,6 +936,36 @@ def test_search_memories_penalizes_graph_only_expansions_against_direct_matches(
     assert float(graph_debug["ranking_signal_multiplier"]) == pytest.approx(0.2)
 
 
+def test_search_memories_prefers_summary_and_title_keyword_quality_over_content_only_overlap(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    strong = repository.create_memory(
+        title="Ripgrep scanning guidance",
+        content="Use targeted alternatives for large-repo scans.",
+        summary="Ripgrep ban guidance for repository scans.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["grep"],
+    )
+    content_only = repository.create_memory(
+        title="Ingest robustness note",
+        content="This note mentions ripgrep once but mostly discusses unrelated queue behavior.",
+        summary="Queue robustness summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert strong is not None and content_only is not None
+
+    results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5, debug=True)
+    debug_by_id = {result.memory_id: result.ranking_debug for result in results}
+
+    assert results[0].memory_id == strong.id
+    assert debug_by_id[strong.id] is not None
+    assert debug_by_id[content_only.id] is not None
+    assert float(debug_by_id[strong.id]["keyword_token_coverage"]) > float(debug_by_id[content_only.id]["keyword_token_coverage"])
+
+
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)

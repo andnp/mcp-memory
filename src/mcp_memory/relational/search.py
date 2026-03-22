@@ -237,10 +237,7 @@ class RankingEngine:
             return 1.0
         if signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
             return 1.0
-        coverage_ratio = max(signals.keyword_token_coverage, 0.0) / self._weights.keyword_coverage_floor
-        return self._weights.keyword_low_coverage_penalty + (
-            (1.0 - self._weights.keyword_low_coverage_penalty) * min(coverage_ratio, 1.0)
-        )
+        return max(self._weights.keyword_low_coverage_penalty, signals.keyword_token_coverage)
 
     def rank_records(
         self,
@@ -794,16 +791,29 @@ def _query_tokens(query: str) -> list[str]:
 def _keyword_token_coverage(query_tokens: Sequence[str], record: RelationalMemoryRecord) -> float:
     if not query_tokens:
         return 0.0
-    haystack = "\n".join(
-        part.lower()
-        for part in [
-            record.title,
-            record.summary or "",
-            record.content,
-            " ".join(record.tags),
-        ]
-        if part
+    title_coverage = _token_presence_ratio(query_tokens, record.title)
+    summary_coverage = _token_presence_ratio(query_tokens, record.summary or "")
+    content_coverage = _token_presence_ratio(query_tokens, record.content)
+    tag_coverage = _token_presence_ratio(query_tokens, " ".join(record.tags))
+    coverage = (
+        (0.25 * title_coverage)
+        + (0.4 * summary_coverage)
+        + (0.25 * content_coverage)
+        + (0.1 * tag_coverage)
     )
+    if title_coverage >= 0.75:
+        coverage += 0.1
+    if summary_coverage >= 0.75:
+        coverage += 0.15
+    if content_coverage >= 0.75:
+        coverage += 0.05
+    return min(coverage, 1.0)
+
+
+def _token_presence_ratio(query_tokens: Sequence[str], text: str) -> float:
+    if not query_tokens or not text.strip():
+        return 0.0
+    haystack = text.lower()
     matched_tokens = sum(1 for token in query_tokens if token in haystack)
     return matched_tokens / len(query_tokens)
 
