@@ -2070,6 +2070,62 @@ async def test_runtime_task_worker_periodically_recovers_dead_subprocess_tasks(d
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_survives_unexpected_post_claim_errors(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    first_task = queue.enqueue(
+        "test-runtime-worker-resilience",
+        workspace_id="workspace-a",
+        max_retries=1,
+        available_at=0.0,
+        task_id="runtime-worker-resilience-1",
+    )
+    second_task = queue.enqueue(
+        "test-runtime-worker-resilience",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="runtime-worker-resilience-2",
+    )
+
+    original_complete = queue.complete
+    calls = 0
+
+    def flaky_complete(task_id: str, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("synthetic completion failure")
+        return original_complete(task_id, *args, **kwargs)
+
+    monkeypatch.setattr(queue, "complete", flaky_complete)
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"test-runtime-worker-resilience": lambda context, queued_task: {"task_id": queued_task.id}},
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=60.0,
+    )
+
+    await worker.start()
+    try:
+        for _ in range(100):
+            first = queue.get_task(first_task.id)
+            second = queue.get_task(second_task.id)
+            if first.status == "failed" and second.status == "completed":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop(0.05)
+
+    refreshed_first = queue.get_task(first_task.id)
+    refreshed_second = queue.get_task(second_task.id)
+
+    assert refreshed_first.status == "failed"
+    assert refreshed_first.last_error == "Unhandled runtime task worker error: synthetic completion failure"
+    assert refreshed_second.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

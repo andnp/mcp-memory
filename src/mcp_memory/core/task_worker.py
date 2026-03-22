@@ -92,14 +92,66 @@ class RuntimeTaskWorker:
 
         while not self._stop_event.is_set():
             await self._recover_abandoned_tasks(task_queue)
-            task = await asyncio.to_thread(
-                task_queue.claim_next,
-            )
+            try:
+                task = await asyncio.to_thread(
+                    task_queue.claim_next,
+                )
+            except Exception:
+                logger.exception("Runtime task worker failed while claiming the next task")
+                await asyncio.sleep(self._poll_interval_seconds)
+                continue
             if task is None:
                 await asyncio.sleep(self._poll_interval_seconds)
                 continue
 
-            await self._process_task(task)
+            try:
+                await self._process_task(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "Runtime task worker hit an unexpected error while processing a task",
+                    extra={
+                        "task_id": task.id,
+                        "task_name": task.task_name,
+                        "workspace_id": task.workspace_id,
+                    },
+                )
+                await self._recover_unexpected_task_error(task, exc)
+
+    async def _recover_unexpected_task_error(self, task: TaskRecord, exc: Exception) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+
+        try:
+            current = await asyncio.to_thread(task_queue.get_task, task.id)
+        except Exception:
+            logger.exception(
+                "Runtime task worker could not load task state after an unexpected error",
+                extra={"task_id": task.id, "task_name": task.task_name},
+            )
+            return
+
+        if current.status != "running":
+            return
+
+        try:
+            failed_task = await asyncio.to_thread(
+                task_queue.fail,
+                task.id,
+                f"Unhandled runtime task worker error: {exc}",
+                self._retry_delay_seconds,
+            )
+        except Exception:
+            logger.exception(
+                "Runtime task worker could not mark task failed after an unexpected error",
+                extra={"task_id": task.id, "task_name": task.task_name},
+            )
+            return
+
+        await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
+        await self._schedule_follow_up(task, failed_task)
 
     async def _recover_abandoned_tasks(self, task_queue) -> None:
         current_time = time.time()
