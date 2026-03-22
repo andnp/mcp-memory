@@ -955,6 +955,8 @@ async def test_runtime_task_worker_recovers_abandoned_running_tasks_on_start(db_
     original = SQLiteTaskQueue.recover_abandoned_running_tasks
 
     def recover(self, **kwargs):
+        kwargs.pop("stale_after_seconds", None)
+        kwargs.pop("now", None)
         return original(self, stale_after_seconds=0.0, now=2.0, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()
@@ -998,6 +1000,8 @@ async def test_runtime_task_worker_releases_orphaned_journal_claims_on_start(db_
     original = SQLiteTaskQueue.recover_abandoned_running_tasks
 
     def recover(self, **kwargs):
+        kwargs.pop("stale_after_seconds", None)
+        kwargs.pop("now", None)
         return original(self, stale_after_seconds=0.0, now=3.0, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()
@@ -1056,6 +1060,8 @@ async def test_runtime_task_worker_reconciles_running_conversation_for_recovered
     original = SQLiteTaskQueue.recover_abandoned_running_tasks
 
     def recover(self, **kwargs):
+        kwargs.pop("stale_after_seconds", None)
+        kwargs.pop("now", None)
         return original(self, stale_after_seconds=0.0, now=5.0, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()

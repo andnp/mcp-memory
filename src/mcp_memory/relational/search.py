@@ -788,13 +788,17 @@ def _query_tokens(query: str) -> list[str]:
     return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
 
 
-def _keyword_token_coverage(query_tokens: Sequence[str], record: RelationalMemoryRecord) -> float:
+def _keyword_token_coverage(
+    query_tokens: Sequence[str],
+    record: RankedMemoryCandidate | RelationalMemoryRecord,
+) -> float:
     if not query_tokens:
         return 0.0
-    title_coverage = _token_presence_ratio(query_tokens, record.title)
-    summary_coverage = _token_presence_ratio(query_tokens, record.summary or "")
-    content_coverage = _token_presence_ratio(query_tokens, record.content)
-    tag_coverage = _token_presence_ratio(query_tokens, " ".join(record.tags))
+    resolved_record = record.record if isinstance(record, RankedMemoryCandidate) else record
+    title_coverage = _token_presence_ratio(query_tokens, resolved_record.title)
+    summary_coverage = _token_presence_ratio(query_tokens, resolved_record.summary or "")
+    content_coverage = _token_presence_ratio(query_tokens, resolved_record.content)
+    tag_coverage = _token_presence_ratio(query_tokens, " ".join(resolved_record.tags))
     coverage = (
         (0.25 * title_coverage)
         + (0.4 * summary_coverage)

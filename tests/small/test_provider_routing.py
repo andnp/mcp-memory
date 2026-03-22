@@ -33,7 +33,13 @@ class _FakeProvider:
     def record_admission_skip(self, decision) -> None:
         self.skipped.append(decision.reason)
 
-    def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+    def with_usage_context(
+        self,
+        *,
+        task_name: str | None,
+        task_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> object:
         return {
             "provider": self.name,
             "task_name": task_name,
@@ -653,7 +659,13 @@ def test_select_provider_for_request_records_real_route_skip_but_route_audit_doe
             self.skipped.append(decision.reason)
 
     class _SkippingProvider(_FakeProvider):
-        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            workspace_id: str | None = None,
+        ) -> object:
             return _BoundSkippingProvider(
                 provider=self.name,
                 task_name=task_name,

@@ -885,11 +885,12 @@ def test_search_memories_penalizes_semantic_only_candidates_when_keyword_matches
 
     results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5, debug=True)
     debug_by_id = {result.memory_id: result.ranking_debug for result in results}
+    distractor_debug = debug_by_id[distractor.id]
 
     assert results
     assert results[0].memory_id == exact.id
-    assert debug_by_id[distractor.id] is not None
-    assert float(debug_by_id[distractor.id]["ranking_signal_multiplier"]) == pytest.approx(0.4)
+    assert distractor_debug is not None
+    assert float(distractor_debug["ranking_signal_multiplier"]) == pytest.approx(0.4)
 
 
 def test_search_memories_penalizes_graph_only_expansions_against_direct_matches(db_manager) -> None:
@@ -959,11 +960,13 @@ def test_search_memories_prefers_summary_and_title_keyword_quality_over_content_
 
     results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5, debug=True)
     debug_by_id = {result.memory_id: result.ranking_debug for result in results}
+    strong_debug = debug_by_id[strong.id]
+    content_only_debug = debug_by_id[content_only.id]
 
     assert results[0].memory_id == strong.id
-    assert debug_by_id[strong.id] is not None
-    assert debug_by_id[content_only.id] is not None
-    assert float(debug_by_id[strong.id]["keyword_token_coverage"]) > float(debug_by_id[content_only.id]["keyword_token_coverage"])
+    assert strong_debug is not None
+    assert content_only_debug is not None
+    assert float(strong_debug["keyword_token_coverage"]) > float(content_only_debug["keyword_token_coverage"])
 
 
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
