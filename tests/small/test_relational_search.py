@@ -794,6 +794,104 @@ def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager
     assert updated_record.embedding == [1.0, 0.0]
 
 
+def test_search_memories_abstains_on_low_confidence_semantic_only_query(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(search_ranking=SearchRankingConfig(semantic_only_abstain_threshold=0.8)),
+    )
+
+    record = repository.create_memory(
+        title="Provider routing note",
+        content="Provider routing and admission control summary.",
+        summary="Provider routing summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+
+    def _low_confidence_semantic_scores(*args, **kwargs):
+        return {record.id: 0.72}
+
+    monkeypatch.setattr(service, "_semantic_scores", _low_confidence_semantic_scores)
+
+    results = service.search_memories("quantum zebra croissant", workspace_id="workspace-alpha", limit=5)
+
+    assert results == []
+    refreshed = repository.get_memory(record.id)
+    assert refreshed is not None
+    assert refreshed.last_surfaced_at is None
+
+
+def test_search_memories_preserves_strong_semantic_only_matches_above_abstain_threshold(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(search_ranking=SearchRankingConfig(semantic_only_abstain_threshold=0.8)),
+    )
+
+    record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+
+    def _high_confidence_semantic_scores(*args, **kwargs):
+        return {record.id: 0.96}
+
+    monkeypatch.setattr(service, "_semantic_scores", _high_confidence_semantic_scores)
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == record.id
+
+
+def test_search_memories_penalizes_semantic_only_candidates_when_keyword_matches_exist(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(search_ranking=SearchRankingConfig(semantic_only_keyword_penalty=0.4)),
+    )
+
+    exact = repository.create_memory(
+        title="Ripgrep ban",
+        content="Avoid broad ripgrep scans in large repositories.",
+        summary="Ripgrep ban summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["grep"],
+    )
+    distractor = repository.create_memory(
+        title="Provider routing note",
+        content="Admission control and provider routing details.",
+        summary="Provider routing summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert exact is not None and distractor is not None
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, limit):
+        _ = candidates, limit
+        return {
+            distractor.id: 0.99,
+            exact.id: 0.55,
+        }
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5, debug=True)
+    debug_by_id = {result.memory_id: result.ranking_debug for result in results}
+
+    assert results
+    assert results[0].memory_id == exact.id
+    assert debug_by_id[distractor.id] is not None
+    assert float(debug_by_id[distractor.id]["ranking_signal_multiplier"]) == pytest.approx(0.4)
+
+
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)

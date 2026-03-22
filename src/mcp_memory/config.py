@@ -262,6 +262,10 @@ class SearchRankingConfig:
     calibration_threshold: float = 0.035
     calibration_steepness: float = 150.0
     workspace_multiplier: float = 1.2
+    semantic_only_abstain_threshold: float = 0.8
+    semantic_only_keyword_penalty: float = 0.65
+    keyword_coverage_floor: float = 0.6
+    keyword_low_coverage_penalty: float = 0.7
     degradation_multiplier: float = 0.3
     access_half_life_days: float = 7.0
     access_bonus_scale: float = 0.1
@@ -277,6 +281,14 @@ class SearchRankingConfig:
             raise ValueError("search_ranking.calibration_steepness must be > 0")
         if self.workspace_multiplier < 1.0:
             raise ValueError("search_ranking.workspace_multiplier must be >= 1.0")
+        if not (0.0 <= self.semantic_only_abstain_threshold <= 1.0):
+            raise ValueError("search_ranking.semantic_only_abstain_threshold must be in [0.0, 1.0]")
+        if not (0.0 <= self.semantic_only_keyword_penalty <= 1.0):
+            raise ValueError("search_ranking.semantic_only_keyword_penalty must be in [0.0, 1.0]")
+        if not (0.0 < self.keyword_coverage_floor <= 1.0):
+            raise ValueError("search_ranking.keyword_coverage_floor must be in (0.0, 1.0]")
+        if not (0.0 <= self.keyword_low_coverage_penalty <= 1.0):
+            raise ValueError("search_ranking.keyword_low_coverage_penalty must be in [0.0, 1.0]")
         if not (0.0 <= self.degradation_multiplier <= 1.0):
             raise ValueError("search_ranking.degradation_multiplier must be in [0.0, 1.0]")
         if self.access_half_life_days <= 0:

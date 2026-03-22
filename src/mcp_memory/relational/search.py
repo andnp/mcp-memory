@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
-from mcp_memory.relational.repository import MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -70,11 +70,23 @@ class GraphExpansionInfo:
 
 
 @dataclass(slots=True)
+class RankingSignals:
+    matched_by_keyword: bool = False
+    matched_by_semantic: bool = False
+    semantic_score: float = 0.0
+    keyword_token_coverage: float = 0.0
+
+
+@dataclass(slots=True)
 class ScoringWeights:
     rrf_k: float = 60.0
     calibration_threshold: float = 0.035
     calibration_steepness: float = 150.0
     workspace_multiplier: float = WORKSPACE_BOOST
+    semantic_only_abstain_threshold: float = 0.8
+    semantic_only_keyword_penalty: float = 0.65
+    keyword_coverage_floor: float = 0.6
+    keyword_low_coverage_penalty: float = 0.7
     degradation_multiplier: float = DEGRADATION_PENALTY
     access_half_life_days: float = ACCESS_HALF_LIFE_DAYS
     access_bonus_scale: float = 0.1
@@ -89,6 +101,10 @@ class ScoringWeights:
             calibration_threshold=ranking.calibration_threshold,
             calibration_steepness=ranking.calibration_steepness,
             workspace_multiplier=ranking.workspace_multiplier,
+            semantic_only_abstain_threshold=ranking.semantic_only_abstain_threshold,
+            semantic_only_keyword_penalty=ranking.semantic_only_keyword_penalty,
+            keyword_coverage_floor=ranking.keyword_coverage_floor,
+            keyword_low_coverage_penalty=ranking.keyword_low_coverage_penalty,
             degradation_multiplier=ranking.degradation_multiplier,
             access_half_life_days=ranking.access_half_life_days,
             access_bonus_scale=ranking.access_bonus_scale,
@@ -200,11 +216,33 @@ class RankingEngine:
         score *= self.degradation_multiplier(record)
         return min(max(score, 0.0), 1.0)
 
+    def _signal_adjustment_multiplier(
+        self,
+        signals: RankingSignals,
+        *,
+        keyword_candidates_present: bool,
+    ) -> float:
+        if not keyword_candidates_present:
+            return 1.0
+        if signals.matched_by_semantic and not signals.matched_by_keyword:
+            return self._weights.semantic_only_keyword_penalty
+        if not signals.matched_by_keyword:
+            return 1.0
+        if signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
+            return 1.0
+        coverage_ratio = max(signals.keyword_token_coverage, 0.0) / self._weights.keyword_coverage_floor
+        return self._weights.keyword_low_coverage_penalty + (
+            (1.0 - self._weights.keyword_low_coverage_penalty) * min(coverage_ratio, 1.0)
+        )
+
     def rank_records(
         self,
         records: Sequence[RankedMemoryCandidate | RelationalMemoryRecord],
         rrf_scores: dict[str, float],
         workspace_id: str | None = None,
+        *,
+        ranking_signals: dict[str, RankingSignals] | None = None,
+        keyword_candidates_present: bool = False,
     ) -> list[tuple[RelationalMemoryRecord, float]]:
         ranked: list[tuple[RelationalMemoryRecord, float]] = []
         for candidate in records:
@@ -222,6 +260,8 @@ class RankingEngine:
             score += self.adjusted_access_bonus(record, authority_counts)
             score *= self.authority_multiplier_for_candidate(candidate)
             score *= self.degradation_multiplier(record)
+            signals = ranking_signals.get(record.id, RankingSignals()) if ranking_signals is not None else RankingSignals()
+            score *= self._signal_adjustment_multiplier(signals, keyword_candidates_present=keyword_candidates_present)
             ranked.append((record, min(max(score, 0.0), 1.0)))
         ranked.sort(key=lambda item: item[1], reverse=True)
         return ranked
@@ -231,6 +271,9 @@ class RankingEngine:
         candidate: RankedMemoryCandidate | RelationalMemoryRecord,
         rrf_score: float,
         workspace_id: str | None = None,
+        *,
+        signals: RankingSignals | None = None,
+        keyword_candidates_present: bool = False,
     ) -> dict[str, float | str | bool]:
         record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
         calibrated_score = self.calibrate_score(rrf_score)
@@ -251,6 +294,12 @@ class RankingEngine:
         final_score += access_bonus
         final_score *= authority_multiplier
         final_score *= degradation_multiplier
+        active_signals = signals or RankingSignals()
+        signal_multiplier = self._signal_adjustment_multiplier(
+            active_signals,
+            keyword_candidates_present=keyword_candidates_present,
+        )
+        final_score *= signal_multiplier
         final_score = min(max(final_score, 0.0), 1.0)
         return {
             "rrf_score": round(rrf_score, 6),
@@ -267,6 +316,9 @@ class RankingEngine:
             "authority_contradicting_links": round(authority_counts.get("CONTRADICTS", 0), 6),
             "authority_superseding_links": round(authority_counts.get("SUPERSEDES", 0), 6),
             "degradation_multiplier": round(degradation_multiplier, 6),
+            "keyword_token_coverage": round(active_signals.keyword_token_coverage, 6),
+            "semantic_score": round(active_signals.semantic_score, 6),
+            "ranking_signal_multiplier": round(signal_multiplier, 6),
             "final_score": round(final_score, 6),
             "memory_type": record.type,
             "status": record.status,
@@ -377,13 +429,14 @@ class RelationalMemorySearchService:
         if not query.strip():
             return []
 
+        query_tokens = _query_tokens(query)
         keyword_ids = self._repository.search_keyword_memory_ids(
             query,
             status=status,
             include_superseded=include_superseded,
             limit=50,
         )
-        semantic_ids = self._semantic_candidate_ids(
+        semantic_ids, semantic_scores = self._semantic_candidate_ids(
             query,
             workspace_id=workspace_id,
             status=status,
@@ -414,6 +467,18 @@ class RelationalMemorySearchService:
         }
         keyword_id_set = set(keyword_ids)
         semantic_id_set = set(semantic_ids)
+        ranking_signals = {
+            memory_id: RankingSignals(
+                matched_by_keyword=memory_id in keyword_id_set,
+                matched_by_semantic=memory_id in semantic_id_set,
+                semantic_score=semantic_scores.get(memory_id, 0.0),
+                keyword_token_coverage=_keyword_token_coverage(
+                    query_tokens,
+                    candidate_by_id[memory_id].record if isinstance(candidate_by_id[memory_id], RankedMemoryCandidate) else candidate_by_id[memory_id],
+                ) if memory_id in candidate_by_id else 0.0,
+            )
+            for memory_id in rrf_scores
+        }
         ranked = [
             RelationalSearchResult(
                 memory_id=record.id,
@@ -425,7 +490,13 @@ class RelationalMemorySearchService:
                 workspace_ids=list(record.workspace_ids),
                 score=round(score, 6),
                 ranking_debug=(
-                    engine.explain_candidate(candidate_by_id[record.id], rrf_scores[record.id], workspace_id)
+                    engine.explain_candidate(
+                        candidate_by_id[record.id],
+                        rrf_scores[record.id],
+                        workspace_id,
+                        signals=ranking_signals.get(record.id),
+                        keyword_candidates_present=bool(keyword_ids),
+                    )
                     | {
                         "matched_by_keyword": record.id in keyword_id_set,
                         "matched_by_semantic": record.id in semantic_id_set,
@@ -438,10 +509,21 @@ class RelationalMemorySearchService:
                 if debug
                 else None,
             )
-            for record, score in engine.rank_records(candidates, rrf_scores, workspace_id)
+            for record, score in engine.rank_records(
+                candidates,
+                rrf_scores,
+                workspace_id,
+                ranking_signals=ranking_signals,
+                keyword_candidates_present=bool(keyword_ids),
+            )
         ]
         ranked.sort(key=lambda item: item.score, reverse=True)
         ranked = ranked[:limit]
+
+        if not keyword_ids and ranked:
+            top_semantic_score = semantic_scores.get(ranked[0].memory_id, 0.0)
+            if top_semantic_score < self._config.search_ranking.semantic_only_abstain_threshold:
+                return []
 
         surfaced_ids = [result.memory_id for result in ranked]
         if surfaced_ids:
@@ -586,15 +668,18 @@ class RelationalMemorySearchService:
         *,
         status: str | None,
         limit: int,
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, float]]:
         candidates = self._repository.list_memories(status=status, limit=500)
         semantic_scores = self._semantic_scores(query, candidates, None, limit=limit)
-        return _rank_semantic_candidate_ids(
-            candidates,
+        return (
+            _rank_semantic_candidate_ids(
+                candidates,
+                semantic_scores,
+                workspace_id=workspace_id,
+                limit=limit,
+                workspace_multiplier=self._config.search_ranking.workspace_multiplier,
+            ),
             semantic_scores,
-            workspace_id=workspace_id,
-            limit=limit,
-            workspace_multiplier=self._config.search_ranking.workspace_multiplier,
         )
 
     def _expand_graph_candidate_scores(
@@ -684,6 +769,27 @@ def _smart_truncate(text: str, *, max_chars: int = 200):
         if candidate:
             return candidate
     return f"{truncated}…"
+
+
+def _query_tokens(query: str) -> list[str]:
+    return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+
+
+def _keyword_token_coverage(query_tokens: Sequence[str], record: RelationalMemoryRecord) -> float:
+    if not query_tokens:
+        return 0.0
+    haystack = "\n".join(
+        part.lower()
+        for part in [
+            record.title,
+            record.summary or "",
+            record.content,
+            " ".join(record.tags),
+        ]
+        if part
+    )
+    matched_tokens = sum(1 for token in query_tokens if token in haystack)
+    return matched_tokens / len(query_tokens)
 
 
 def _decayed_access_score(access_score: float, last_accessed_at: str | None):

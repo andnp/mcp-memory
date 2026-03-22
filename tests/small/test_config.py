@@ -75,3 +75,8 @@ def test_backups_config_rejects_invalid_interval() -> None:
 def test_search_ranking_config_rejects_invalid_rrf_k() -> None:
     with pytest.raises(ValueError, match="search_ranking.rrf_k"):
         SearchRankingConfig(rrf_k=0)
+
+
+def test_search_ranking_config_rejects_invalid_semantic_only_abstain_threshold() -> None:
+    with pytest.raises(ValueError, match="search_ranking.semantic_only_abstain_threshold"):
+        SearchRankingConfig(semantic_only_abstain_threshold=1.5)

@@ -51,6 +51,8 @@ The active runtime now uses a staged ranking pipeline:
 - semantic retrieval is optional and only participates when the local embedder/vector store is configured
 - semantic candidate ordering now softly prefers workspace-local memories without turning workspace into a hidden filter
 - the explicit `memory_type` query argument no longer applies a separate compatibility boost; ranking now relies on the staged pipeline and type-aware recency only
+- when keyword candidates exist, semantic-only candidates are penalized and low keyword-coverage matches are damped so exact lexical intent can anchor the top of the ranking more reliably
+- when no keyword candidates exist, low-confidence semantic-only result sets may abstain entirely instead of surfacing weak guesses as confident matches
 - the ranking weights are tunable via `[search_ranking]` in `config.toml`
 - search debug output can expose ranking details including keyword/semantic participation, graph authority counts, graph expansion provenance, and final score composition
 
