@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -217,6 +217,25 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
         );
 
+        CREATE TABLE IF NOT EXISTS provider_policy_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            task_name TEXT NOT NULL,
+            task_id TEXT,
+            event_kind TEXT NOT NULL,
+            warning_kind TEXT,
+            provider_key TEXT,
+            provider_name TEXT,
+            model_name TEXT,
+            route_key TEXT,
+            candidate_routes_json TEXT NOT NULL DEFAULT '[]',
+            reason_category TEXT,
+            reason_code TEXT,
+            retry_delay_seconds REAL,
+            warning_suppressed INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
             title,
@@ -335,6 +354,28 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS provider_policy_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            task_name TEXT NOT NULL,
+            task_id TEXT,
+            event_kind TEXT NOT NULL,
+            warning_kind TEXT,
+            provider_key TEXT,
+            provider_name TEXT,
+            model_name TEXT,
+            route_key TEXT,
+            candidate_routes_json TEXT NOT NULL DEFAULT '[]',
+            reason_category TEXT,
+            reason_code TEXT,
+            retry_delay_seconds REAL,
+            warning_suppressed INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -400,6 +441,14 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON memory_tool_events(memory_id, event_kind, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_memory_tool_events_invocation_kind
             ON memory_tool_events(invocation_id, event_kind);
+        CREATE INDEX IF NOT EXISTS idx_provider_policy_events_workspace_created_at
+            ON provider_policy_events(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_policy_events_task_created_at
+            ON provider_policy_events(task_name, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_policy_events_kind_created_at
+            ON provider_policy_events(event_kind, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_provider_policy_events_provider_created_at
+            ON provider_policy_events(provider_key, created_at DESC, id DESC);
         """
     )
     conn.execute(

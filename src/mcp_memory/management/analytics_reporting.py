@@ -75,6 +75,7 @@ from mcp_memory.management.reporting_queries import (
     build_queue_diagnostics,
     list_memory_tool_event_rows_since,
     list_maintenance_task_run_rows_since,
+    list_provider_policy_event_rows_since,
     list_provider_usage_rows_since,
     list_runtime_log_rows_since,
     list_scoped_link_rows,
@@ -342,6 +343,7 @@ def build_nerd_metrics(
     task_rows = list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     maintenance_rows = list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_rows = list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
+    provider_policy_event_rows = list_provider_policy_event_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id)
     provider_policy_log_rows = list_runtime_log_rows_since(
         db_manager,
         cutoff=cutoff,
@@ -490,6 +492,7 @@ def build_nerd_metrics(
     )
     provider_policy = build_provider_policy_rollups(
         provider_rows=provider_rows,
+        provider_policy_event_rows=provider_policy_event_rows,
         provider_policy_log_rows=provider_policy_log_rows,
         provider_usage_repo=provider_usage_repo,
         workspace_id=workspace_id,
@@ -590,6 +593,7 @@ def build_memory_quality_signals(memory_rows) -> _MemoryQualitySignals:
 def build_provider_policy_rollups(
     *,
     provider_rows,
+    provider_policy_event_rows,
     provider_policy_log_rows,
     provider_usage_repo,
     workspace_id: str | None,
@@ -599,17 +603,38 @@ def build_provider_policy_rollups(
     total_route_exhaustion_count = 0
     total_legacy_fallback_denied_count = 0
     total_admission_skip_count = 0
+    total_warning_suppressed_count = 0
 
-    for row in provider_policy_log_rows:
-        message = str(row["message"])
-        task_name = _runtime_log_task_name(_runtime_log_data(row))
-        accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
-        if message == "Provider routing exhausted all configured routes":
-            accumulator.route_exhaustion_count += 1
-            total_route_exhaustion_count += 1
-        elif message == "Legacy fallback provider is unavailable due to admission control":
-            accumulator.legacy_fallback_denied_count += 1
-            total_legacy_fallback_denied_count += 1
+    if provider_policy_event_rows:
+        for row in provider_policy_event_rows:
+            task_name = _coerce_row_str(row["task_name"]) or "unknown"
+            accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
+            event_kind = str(row["event_kind"])
+            if event_kind == "route_exhausted":
+                accumulator.route_exhaustion_count += 1
+                total_route_exhaustion_count += 1
+            elif event_kind == "legacy_fallback_denied":
+                accumulator.legacy_fallback_denied_count += 1
+                total_legacy_fallback_denied_count += 1
+            elif event_kind == "route_skipped":
+                provider_key = _coerce_row_str(row["provider_key"])
+                model_name = _coerce_row_str(row["model_name"])
+                reason_code = _coerce_row_str(row["reason_code"])
+                if provider_key is not None and model_name is not None:
+                    accumulator.skip_provider_counts[(provider_key, model_name, reason_code)] += 1
+            if bool(row["warning_suppressed"]):
+                total_warning_suppressed_count += 1
+    else:
+        for row in provider_policy_log_rows:
+            message = str(row["message"])
+            task_name = _runtime_log_task_name(_runtime_log_data(row))
+            accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
+            if message == "Provider routing exhausted all configured routes":
+                accumulator.route_exhaustion_count += 1
+                total_route_exhaustion_count += 1
+            elif message == "Legacy fallback provider is unavailable due to admission control":
+                accumulator.legacy_fallback_denied_count += 1
+                total_legacy_fallback_denied_count += 1
 
     for row in provider_rows:
         if str(row["status"]) != "skipped":
@@ -711,6 +736,12 @@ def build_provider_policy_rollups(
                 key="provider_policy_admission_skip_count",
                 label="Admission-control skips",
                 value=float(total_admission_skip_count),
+                unit="count",
+            ),
+            NerdStatPayload(
+                key="provider_policy_warning_suppressed_count",
+                label="Suppressed warning duplicates",
+                value=float(total_warning_suppressed_count),
                 unit="count",
             ),
         ],

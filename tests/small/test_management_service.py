@@ -86,7 +86,7 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.quality_drilldown.signals == []
     assert nerd_metrics.quality_remediation.stats == []
     assert nerd_metrics.quality_remediation.activity == []
-    assert [stat.value for stat in nerd_metrics.provider_policy.stats] == [0.0, 0.0, 0.0]
+    assert [stat.value for stat in nerd_metrics.provider_policy.stats] == [0.0, 0.0, 0.0, 0.0]
     assert nerd_metrics.provider_policy.by_task == []
     assert nerd_metrics.provider_policy.by_provider == []
     assert all(bucket.count == 0 for bucket in nerd_metrics.lifecycle_trends.never_surfaced_backlog)
@@ -967,6 +967,62 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
             ),
         ],
     )
+    db_manager.get_connection().executemany(
+        "INSERT INTO provider_policy_events (workspace_id, task_name, task_id, event_kind, warning_kind, provider_key, provider_name, model_name, route_key, candidate_routes_json, reason_category, reason_code, retry_delay_seconds, warning_suppressed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "workspace-a",
+                "memory-curator",
+                None,
+                "route_exhausted",
+                "provider_routing_exhausted",
+                None,
+                None,
+                None,
+                None,
+                '["gemini-cheap","copilot-mini"]',
+                None,
+                None,
+                None,
+                1,
+                time.time(),
+            ),
+            (
+                "workspace-a",
+                "memory-curator",
+                None,
+                "legacy_fallback_denied",
+                "legacy_fallback_denied",
+                None,
+                None,
+                None,
+                None,
+                '[]',
+                "upstream",
+                "provider_quota_exhausted",
+                90.0,
+                0,
+                time.time(),
+            ),
+            (
+                "workspace-a",
+                "memory-curator",
+                None,
+                "route_skipped",
+                None,
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                "gemini-cheap",
+                '[]',
+                "upstream",
+                "provider_quota_exhausted",
+                90.0,
+                0,
+                time.time(),
+            ),
+        ],
+    )
     db_manager.get_connection().execute(
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
@@ -1083,6 +1139,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert nerd_metrics.provider_policy.stats[0].value == 1.0
     assert nerd_metrics.provider_policy.stats[1].value == 1.0
     assert nerd_metrics.provider_policy.stats[2].value == 1.0
+    assert nerd_metrics.provider_policy.stats[3].key == "provider_policy_warning_suppressed_count"
+    assert nerd_metrics.provider_policy.stats[3].value == 1.0
     provider_policy_task = next(item for item in nerd_metrics.provider_policy.by_task if item.task_name == "memory-curator")
     assert provider_policy_task.route_exhaustion_count == 1
     assert provider_policy_task.legacy_fallback_denied_count == 1

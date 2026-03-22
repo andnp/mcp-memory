@@ -21,6 +21,7 @@ from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -94,6 +95,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         ai_agent_provider=ai_agent_provider,
         ai_provider=ai_json_provider,
         ai_provider_registry=provider_registry,
+        provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
         embedder=embedder,
         vector_store=vector_store,
         search_health=relational_search.get_health(),

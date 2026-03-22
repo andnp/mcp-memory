@@ -122,6 +122,7 @@ def _provider_selection_inputs_from_context(ctx: ApplicationContext) -> Provider
     return ProviderSelectionInputs(
         config=ctx.config,
         ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
+        provider_policy_events=getattr(ctx, "provider_policy_events", None),
     )
 
 

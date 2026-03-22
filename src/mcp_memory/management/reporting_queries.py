@@ -156,6 +156,21 @@ def list_runtime_log_rows_since(
     return conn.execute(query, params).fetchall()
 
 
+def list_provider_policy_event_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    query = (
+        "SELECT task_name, task_id, event_kind, warning_kind, provider_key, provider_name, model_name, route_key, candidate_routes_json, reason_category, reason_code, retry_delay_seconds, warning_suppressed, created_at "
+        "FROM provider_policy_events WHERE created_at >= ?"
+    )
+    params: list[object] = [cutoff]
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    return conn.execute(query, params).fetchall()
+
+
 def list_memory_tool_event_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
     if db_manager is None:
         return []

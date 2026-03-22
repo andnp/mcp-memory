@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_policy import is_deterministic_task
 from mcp_memory.core.tasks import TaskRecord
 
@@ -21,6 +22,7 @@ _provider_warning_state: dict[tuple[str, str | None, tuple[str, ...], str | None
 class ProviderSelectionInputs:
     config: Any = None
     ai_provider_registry: dict[str, Any] | None = None
+    provider_policy_events: Any = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,7 @@ def select_provider_for_task(
         ProviderSelectionInputs(
             config=ctx.config,
             ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
+            provider_policy_events=getattr(ctx, "provider_policy_events", None),
         ),
         provider,
         agentic_provider,
@@ -114,14 +117,12 @@ def select_provider_for_request(
     routing = None if inputs.config is None else inputs.config.provider_routing
     prefer_agentic = task_name in agentic_task_names
 
-    candidate_route_keys: list[str] = []
-    if routing is not None:
-        if task_name in routing.task_routes:
-            candidate_route_keys = routing.task_routes[task_name]
-        elif prefer_agentic and routing.default_agentic_route:
-            candidate_route_keys = routing.default_agentic_route
-        elif not prefer_agentic and routing.default_json_route:
-            candidate_route_keys = routing.default_json_route
+    candidate_route_keys = _candidate_route_keys_for_task(
+        routing=routing,
+        registry=registry,
+        task_name=task_name,
+        prefer_agentic=prefer_agentic,
+    )
 
     if candidate_route_keys:
         logger.debug(
@@ -145,6 +146,15 @@ def select_provider_for_request(
             if not admission.allowed:
                 if record_admission_skips:
                     _record_admission_skip(bound_provider, admission)
+                _record_provider_policy_event(
+                    inputs,
+                    request=request,
+                    event_kind="route_skipped",
+                    provider=selected_provider,
+                    route_key=route_key,
+                    candidate_routes=candidate_route_keys,
+                    reason=admission,
+                )
                 logger.debug(
                     "Provider route skipped because admission control denied availability",
                     extra={
@@ -174,11 +184,19 @@ def select_provider_for_request(
                 )
             return first_routed_provider
         if found_routed_provider:
-            _log_provider_warning_once(
+            warning_suppressed = _log_provider_warning_once(
                 "Provider routing exhausted all configured routes",
                 warning_kind="routes_exhausted",
                 task_name=task_name,
                 route_keys=candidate_route_keys,
+            )
+            _record_provider_policy_event(
+                inputs,
+                request=request,
+                event_kind="route_exhausted",
+                warning_kind="routes_exhausted",
+                candidate_routes=candidate_route_keys,
+                warning_suppressed=warning_suppressed,
             )
             return None
 
@@ -195,12 +213,21 @@ def select_provider_for_request(
     if not admission.allowed:
         if record_admission_skips:
             _record_admission_skip(bind_provider_context(selected_provider, request=request), admission)
-        _log_provider_warning_once(
+        warning_suppressed = _log_provider_warning_once(
             "Legacy fallback provider is unavailable due to admission control",
             warning_kind="legacy_fallback_denied",
             task_name=task_name,
             route_keys=(),
             reason=admission.reason,
+        )
+        _record_provider_policy_event(
+            inputs,
+            request=request,
+            event_kind="legacy_fallback_denied",
+            warning_kind="legacy_fallback_denied",
+            provider=selected_provider,
+            reason=admission,
+            warning_suppressed=warning_suppressed,
         )
         return None
     return bind_provider_context(selected_provider, request=request)
@@ -278,6 +305,52 @@ def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionR
     return binder(task_name=request.task_name, task_id=request.task_id, workspace_id=request.workspace_id)
 
 
+def _candidate_route_keys_for_task(*, routing, registry: dict[str, Any], task_name: str, prefer_agentic: bool) -> list[str]:
+    if routing is None:
+        return []
+    if task_name in routing.task_routes:
+        return routing.task_routes[task_name]
+    if prefer_agentic and routing.default_agentic_route:
+        return routing.default_agentic_route
+    if not prefer_agentic and routing.default_json_route:
+        return routing.default_json_route
+    if not prefer_agentic and task_name == TAXONOMIST_TASK_NAME:
+        return [route_key for route_key in ["copilot-mini", "gemini-cheap"] if route_key in registry]
+    return []
+
+
+def _record_provider_policy_event(
+    inputs: ProviderSelectionInputs,
+    *,
+    request: ProviderSelectionRequest,
+    event_kind: str,
+    warning_kind: str | None = None,
+    provider: Any = None,
+    route_key: str | None = None,
+    candidate_routes: list[str] | tuple[str, ...] = (),
+    reason: ProviderAdmissionDecision | None = None,
+    warning_suppressed: bool = False,
+) -> None:
+    repository = inputs.provider_policy_events
+    if repository is None:
+        return
+    repository.record_event(
+        task_name=request.task_name,
+        task_id=request.task_id,
+        event_kind=event_kind,
+        warning_kind=warning_kind,
+        provider_key=getattr(provider, "_provider_key", None),
+        provider_name=getattr(provider, "_provider_name", None),
+        model_name=getattr(provider, "_model_name", None),
+        route_key=route_key,
+        candidate_routes=list(candidate_routes),
+        reason_category=None if reason is None else reason.reason_category,
+        reason_code=None if reason is None else reason.reason,
+        retry_delay_seconds=None if reason is None else reason.retry_delay_seconds,
+        warning_suppressed=warning_suppressed,
+    )
+
+
 def _log_provider_warning_once(
     message: str,
     *,
@@ -286,7 +359,7 @@ def _log_provider_warning_once(
     route_keys: list[str] | tuple[str, ...],
     reason: str | None = None,
     now: float | None = None,
-) -> None:
+ ) -> bool:
     current_time = time.time() if now is None else now
     key = (warning_kind, task_name, tuple(route_keys), reason)
     previous_logged_at = _provider_warning_state.get(key)
@@ -294,7 +367,7 @@ def _log_provider_warning_once(
         previous_logged_at is not None
         and current_time - previous_logged_at < _PROVIDER_WARNING_MIN_INTERVAL_SECONDS
     ):
-        return
+        return True
     _provider_warning_state[key] = current_time
     extra = {
         "task_name": task_name,
@@ -303,3 +376,4 @@ def _log_provider_warning_once(
     if reason is not None:
         extra["reason"] = reason
     logger.warning(message, extra=extra)
+    return False

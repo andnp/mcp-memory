@@ -154,12 +154,11 @@ def _build_prompt(
         "Available internal tools:",
         json.dumps(tool_specs, sort_keys=True),
         (
-            "Respond either with JSON containing `tool_calls` like "
-            "{'tool_calls': [{'name': '...', 'arguments': {...}}]} or with the final JSON result for this task."
+            "Respond with either `tool_calls` JSON or the final JSON result for this task."
         ),
         (
-            "Never claim that positive actions were taken unless those actions were executed through prior `tool_calls` in this conversation. "
-            "If you did not use any tools, your final JSON must report `actions_taken: 0` and describe the result as a no-op."
+            "Never claim positive actions unless they were executed through prior `tool_calls`. "
+            "If no tools were used, report `actions_taken: 0` and a no-op summary."
         ),
     ]
     if transcript:
@@ -181,10 +180,17 @@ def _compact_tool_spec(tool: Any) -> dict[str, Any]:
     optional_names = [name for name in property_names if name not in set(required_names)]
     return {
         "name": tool.name,
-        "description": tool.description,
+        "description": _truncate_tool_description(tool.description),
         "required_fields": required_names,
         "optional_fields": optional_names,
     }
+
+
+def _truncate_tool_description(value: object, *, limit: int = 96) -> str:
+    text = "" if not isinstance(value, str) else " ".join(value.strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "…"
 
 
 def _is_mutating_tool_name(name: str) -> bool:

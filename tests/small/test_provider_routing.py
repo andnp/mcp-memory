@@ -42,6 +42,14 @@ class _FakeProvider:
         }
 
 
+class _FakePolicyEventRepository:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def record_event(self, **kwargs) -> None:
+        self.events.append(kwargs)
+
+
 def test_provider_for_task_uses_fallback_route_when_first_provider_is_over_budget() -> None:
     ctx = ApplicationContext(
         config=Config(
@@ -254,6 +262,106 @@ def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budge
 
     assert selected is None
     assert any("exhausted all configured routes" in message for message in caplog.messages)
+
+
+def test_provider_for_taxonomist_prefers_default_non_agentic_routes() -> None:
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                profiles={
+                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=True)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=True)},
+        },
+    )
+    task = TaskRecord(
+        id="taxonomist-task",
+        task_name="taxonomist",
+        data={},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    selected = _provider_for_task(ctx, None, None, "taxonomist", task)
+
+    assert selected == {
+        "provider": "copilot-mini",
+        "task_name": "taxonomist",
+        "task_id": "taxonomist-task",
+        "workspace_id": "workspace-a",
+    }
+
+
+def test_provider_for_task_records_first_class_route_events_when_routes_exhausted() -> None:
+    provider_policy_module._provider_warning_state.clear()
+    event_repo = _FakePolicyEventRepository()
+    task = TaskRecord(
+        id="graph-task",
+        task_name="graph-linker",
+        data={},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+    inputs = ProviderSelectionInputs(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
+                profiles={
+                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=False)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=False)},
+        },
+        provider_policy_events=event_repo,
+    )
+
+    first = select_provider_for_inputs(inputs, None, None, "graph-linker", task, agentic_task_names=set())
+    second = select_provider_for_inputs(inputs, None, None, "graph-linker", task, agentic_task_names=set())
+
+    assert first is None
+    assert second is None
+    assert [event["event_kind"] for event in event_repo.events] == [
+        "route_skipped",
+        "route_skipped",
+        "route_exhausted",
+        "route_skipped",
+        "route_skipped",
+        "route_exhausted",
+    ]
+    assert event_repo.events[2]["candidate_routes"] == ["copilot-mini", "gemini-cheap"]
+    assert event_repo.events[2]["warning_suppressed"] is False
+    assert event_repo.events[-1]["warning_suppressed"] is True
 
 
 def test_provider_for_task_throttles_duplicate_routed_warning_logs(caplog) -> None:
@@ -530,13 +638,13 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
     assert deduplicator_audit.resolved_model_name == "gemini-3-flash-preview"
     assert deduplicator_audit.resolved_provider_type == "_AuditProvider"
     assert deduplicator_audit.resolved_supports_agentic is True
-    assert provider.bound_calls == [
-        {
-            "task_name": "deduplicator",
-            "task_id": "audit:deduplicator",
-            "workspace_id": "workspace-a",
-        }
-    ]
+    assert {
+        (call["task_name"], call["task_id"], call["workspace_id"])
+        for call in provider.bound_calls
+    } == {
+        ("deduplicator", "audit:deduplicator", "workspace-a"),
+        ("taxonomist", "audit:taxonomist", "workspace-a"),
+    }
 
 
 def test_select_provider_for_request_records_real_route_skip_but_route_audit_does_not() -> None:
