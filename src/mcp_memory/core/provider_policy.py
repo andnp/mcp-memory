@@ -315,7 +315,7 @@ def _candidate_route_keys_for_task(*, routing, registry: dict[str, Any], task_na
     if not prefer_agentic and routing.default_json_route:
         return routing.default_json_route
     if not prefer_agentic and task_name == TAXONOMIST_TASK_NAME:
-        return [route_key for route_key in ["copilot-mini", "gemini-cheap"] if route_key in registry]
+        return [route_key for route_key in ["gemini-cheap", "copilot-mini"] if route_key in registry]
     return []
 
 

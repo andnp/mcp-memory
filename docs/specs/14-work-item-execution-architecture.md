@@ -16,6 +16,12 @@ Today that means the runtime mixes several concerns inside individual handlers:
 - deciding how long a run should continue
 - reporting mutations and retries in agent-specific ways
 
+There is also a product-economics constraint that matters explicitly:
+
+- premium Copilot / strong-provider usage is charged per **execution call**
+- call duration is not the primary cost driver
+- the scheduler should therefore optimize for **useful work completed per premium execution**, not simply for shorter runs
+
 This has been good enough for the current maintenance rollout, but it creates two architectural tensions:
 
 1. low-risk deterministic work and AI-powered work share a queue, yet they do not share a clear execution contract
@@ -37,6 +43,10 @@ The target shape is:
 - lease-based execution with explicit soft-stop and hard-stop behavior
 
 The design goal is to unify scheduling and observability **without** immediately collapsing all maintenance behavior into one mega-agent prompt.
+
+The economic goal is equally important:
+
+> keep premium executions alive long enough to complete multiple compatible work units, and only end them when productive continuation meaningfully drops off.
 
 ### 2.1 Preferred Runtime Shape
 
@@ -80,6 +90,12 @@ The internal batch tools should evolve toward shapes like:
 
 This is intentionally more general than today’s ingest-only or curator-only batch tools.
 
+Batching policy should also treat a premium execution as a **campaign**, not just a single-shot task body. In practice that means:
+
+- initial work packets should be rich enough to let the model start productive work immediately
+- the executor should be able to claim more compatible work during the same provider session
+- deterministic precomputation is justified only when it increases total useful work completed in that same premium session
+
 ## 3. Key Architectural Constraint
 
 This ADR does **not** recommend jumping directly to one provider call that mixes ingest, curation, deduplication, and tagging in the same run.
@@ -97,6 +113,10 @@ Why:
 The better direction is:
 
 > unify the durable work model first, then selectively widen multi-family execution only where the safety model is shared.
+
+And more specifically:
+
+> do not break one premium working session into multiple paid calls merely because the software architecture prefers small isolated steps.
 
 ## 4. Special Case: Ingest
 
@@ -125,6 +145,12 @@ Recommended behavior:
 
 This gives the system a consistent control plane for long-running agentic maintenance without relying on fragile prompt discipline alone.
 
+For premium providers, the lease protocol should be interpreted as a way to support **long-lived adaptive sessions**:
+
+- a soft deadline should encourage graceful wrap-up without discarding already-open context
+- compatibility-group continuation should remain possible while the session is still productive
+- hard stops should be used to protect safety and recoverability, not as an accidental source of extra paid calls
+
 ## 6. Consequences
 
 ### Positive
@@ -134,6 +160,7 @@ This gives the system a consistent control plane for long-running agentic mainte
 - batching logic becomes reusable across maintenance families
 - observability improves because work units become first-class objects rather than implicit task-local loops
 - future dashboard views can report batch leases, defer reasons, mutation yield, and executor utilization consistently
+- the runtime can explicitly optimize for premium-call yield instead of letting task boundaries silently multiply paid executions
 
 ### Negative
 
@@ -189,6 +216,12 @@ The first implementation slice should be intentionally modest:
 4. migrate `taxonomist`-style tagging work first
 5. preserve existing task handlers as compatibility orchestrators during migration
 
+After that baseline is stable, the next architectural question is no longer just “can a family consume work items?” but also:
+
+- how much work can one premium execution finish before another call is necessary?
+- which boundaries still force unnecessary premium re-entry?
+- which precomputation steps genuinely expand same-call yield versus merely improving latency?
+
 This keeps the system moving toward the new architecture without forcing a risky all-at-once cutover.
 
 ## 10. Decision Summary
@@ -204,3 +237,5 @@ The preferred direction is:
 In short:
 
 > unify scheduling and work ownership first; widen execution sharing only where the safety model truly matches.
+
+And evaluate the result by **useful work per premium call**, not by runtime neatness alone.

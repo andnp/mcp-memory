@@ -12,6 +12,12 @@ Recent work substantially increased the system's capability surface:
 
 The product direction still looks right, but the codebase is now at the point where the main risks are **architectural drift, boundary blur, and duplicated orchestration**, not missing features.
 
+There is now an additional product constraint that changes how this review should judge the architecture:
+
+- premium Copilot usage is paid per **execution call**
+- call duration is economically irrelevant relative to call count
+- the architecture should therefore be evaluated by whether it increases **useful work per premium call** or accidentally fragments one working session into several paid executions
+
 This document started as a first-pass architecture review. It is now updated to reflect the current repository state after several refactor slices already landed, so the roadmap below focuses on **remaining debt**, not work that is already complete.
 
 ## 2. Current System Map
@@ -211,27 +217,87 @@ Why it matters:
 - mostly a cleanup concern today
 - left alone, it will slowly reintroduce drift between maintenance families and reporting surfaces
 
-## 5. Design Principles for the Next Refactor Phase
+## 5. Premium-Call Review: Where The Architecture Still Fragments One Working Session
 
-### 5.1 Separate policy from execution
+This section evaluates the runtime against the actual economic goal: **reduce premium execution count by increasing useful work completed per premium call**.
+
+### 5.1 Small initial work packets still risk under-feeding premium runs
+Recent packetization work improved structural review, but the architecture still often starts premium agents from narrow frontier slices and expects them to rediscover nearby work through additional control flow.
+
+Why that matters:
+- if the first packet is too thin, the run may spend too much of its paid budget on discovery instead of action
+- if the run exits after a shallow packet, the next nearby work may require another premium call
+
+Design implication:
+- packet construction should be judged by whether it increases same-call completion yield, not whether it keeps preparation code simple
+
+### 5.2 Task/handler boundaries can still become premium-call boundaries
+The work-item substrate now supports repeated claims and compatibility groups, but some orchestration paths still think in terms of “finish this task body” more than “keep the premium session productively alive.”
+
+Why that matters:
+- safe software seams can accidentally force a new paid execution even when the current session could continue
+
+Design implication:
+- handler completion should be more explicitly separated from provider-session completion
+
+### 5.3 Deterministic prep is not yet evaluated consistently by call-yield impact
+The codebase has several deterministic frontiers, prep tasks, and queue-shaping stages. Some of these are clearly useful for safety and packet density; others may only reduce latency or keep orchestration tidy.
+
+Why that matters:
+- under the premium-call cost model, “faster” is not enough
+- every prep layer should justify itself by increasing same-call yield, reducing future re-entry, or enforcing a real safety invariant
+
+Design implication:
+- architecture reviews should ask whether a prep stage saves paid calls, not merely whether it organizes the pipeline nicely
+
+### 5.4 Compatibility groups exist, but campaign semantics are still shallow
+The scheduler can already continue into compatible families, but a premium run still lacks a richer notion of a multi-step campaign with explicit continuation criteria, diminishing-return thresholds, and economic stop conditions.
+
+Why that matters:
+- the system can claim more work, but it still does not fully reason about when staying alive is better than stopping
+
+Design implication:
+- the next layer should model premium sessions as campaigns that continue while marginal yield remains high and safety stays within bounds
+
+### 5.5 Observability still emphasizes runtime facts more than premium-call yield
+Telemetry improved substantially, but the architecture review still lacks a canonical dashboard metric for:
+
+- completed work items per premium execution
+- meaningful mutations per premium execution
+- follow-on compatible claims per premium execution
+
+Why that matters:
+- without these metrics, the system can drift toward optimizing latency or cleanliness instead of cost efficiency
+
+Design implication:
+- reporting should elevate yield-per-call metrics to first-class product measures
+
+## 6. Design Principles for the Next Refactor Phase
+
+### 6.1 Separate policy from execution
 - **Policy** decides: capability tier, fallback chain, budgets, deterministic bypass, sampling strategy.
 - **Execution** performs: claim work, call provider/tool loop, apply mutations, finalize task outcome.
 
-### 5.2 Standardize maintenance-agent orchestration incrementally
+### 6.2 Standardize maintenance-agent orchestration incrementally
 The deduplicator split proved that small, family-specific extractions work. Continue applying that pattern to curator, graph/conflict, and ingest rather than attempting one giant framework rewrite.
 
-### 5.3 Keep daemon boundaries explicit
+### 6.3 Keep daemon boundaries explicit
 The daemon should remain the operational center of gravity. Runtime construction and daemon-backed operation should be separate on purpose, not just by habit.
 
-### 5.4 Centralize read-model/query semantics for reporting
+### 6.4 Centralize read-model/query semantics for reporting
 Builder modules are a good façade layer, but raw reporting queries should live behind a more deliberate read-model/query seam.
 
-### 5.5 Tighten internal API contracts
+### 6.5 Tighten internal API contracts
 Internal maintenance tools should continue moving toward a stable internal platform with consistent validation, naming, and mutation semantics.
 
-## 6. Updated Refactor Roadmap
+### 6.6 Prefer adaptive premium sessions over architecturally neat early exits
+- do not terminate a premium provider run just because one handler-local unit is complete if compatible follow-on work is still available
+- measure orchestrator success by what the paid session accomplished before exit
+- use deterministic shaping only when it increases that yield or enforces a hard safety boundary
 
-### 6.1 Do Now — Highest-Leverage Remaining Tranche
+## 7. Updated Refactor Roadmap
+
+### 7.1 Do Now — Highest-Leverage Remaining Tranche
 
 #### Refactor A: Continue maintenance-family extraction
 **Goal:** keep peeling families out of `maintenance.py` using the same behavior-preserving pattern that worked for the deduplicator.
@@ -262,7 +328,7 @@ Internal maintenance tools should continue moving toward a stable internal platf
 - clearer semantics for dashboard metrics
 - easier evolution of management payloads and operational definitions
 
-### 6.2 Do Next — Boundary Cleanup
+### 7.2 Do Next — Boundary Cleanup
 
 #### Refactor D: Split `internal_services.py` by mutation domain
 **Focus:**
@@ -282,7 +348,7 @@ Internal maintenance tools should continue moving toward a stable internal platf
 - stronger provider/CLI isolation
 - less dependence on ambient user config and installed tools
 
-### 6.3 Later — Deeper Structural Cleanup
+### 7.3 Later — Deeper Structural Cleanup
 
 #### Refactor G: Narrow `ApplicationContext`
 Split it into smaller service bundles or typed facades once enough consumers can move to narrower inputs.
@@ -293,34 +359,60 @@ Make local runtime construction and daemon-backed operation more deliberately se
 #### Refactor I: Dashboard semantics & alert taxonomy pass
 Tighten metric definitions and make operational alerts consistently actionable.
 
-## 7. Immediate Recommendation
+#### Refactor J: Add premium-session campaign semantics
+**Goal:** distinguish provider-session continuation from individual handler/task completion.
+
+**Focus:**
+- explicit continuation criteria for compatible follow-on work
+- economic stop conditions based on diminishing yield, not elapsed time alone
+- richer session metadata for what one premium execution actually accomplished
+
+**Expected payoff:**
+- fewer unnecessary premium re-entries
+- clearer control over when a paid session should stay alive
+- better leverage from the compatibility-group scheduler substrate
+
+#### Refactor K: Add yield-per-call telemetry and reporting
+**Goal:** make premium-call efficiency a visible product metric.
+
+**Focus:**
+- completed work items per premium execution
+- mutations/tool actions per premium execution
+- family/compatibility-group continuation counts per premium execution
+
+**Expected payoff:**
+- architectural decisions can be judged against the real cost model
+- easier regression detection when changes accidentally increase paid call count
+
+## 8. Immediate Recommendation
 
 The best next implementation tranche is now:
 
-### **Maintenance-family extraction + reporting query-layer cleanup**
+### **Premium-session campaign semantics + yield-per-call reporting**
 
-That combines the two highest-value remaining themes:
-- reduce coordination hotspots in background-agent code
-- reduce schema coupling in management/reporting code
+That combines the two highest-value themes under the current product goal:
+- reduce unnecessary premium call fragmentation in background-agent code
+- make premium efficiency visible enough to steer future architecture work
 
-Provider policy cleanup is no longer the first-order problem it was in the original draft; the bigger remaining architectural risks are now **broad dependency carriers and mixed orchestration/query seams**.
+Provider policy cleanup is no longer the first-order problem it was in the original draft; the bigger remaining architectural risks are now **premium-session fragmentation, broad dependency carriers, and mixed orchestration/query seams**.
 
-## 8. Proposed Next Coding Slices
+## 9. Proposed Next Coding Slices
 
 Recommended near-term order:
 
-1. extract graph/conflict support from `maintenance.py`
-2. extract curator support from `maintenance.py`
-3. introduce a narrower provider-selection input model
-4. create a management reporting query layer used by `overview_reporting.py` and `analytics_reporting.py`
-5. split `mcp/internal_services.py` by domain
+1. add premium-session campaign semantics for structural and lightweight compatible runs
+2. add yield-per-call reporting fields and dashboard surfacing
+3. extract graph/conflict support from `maintenance.py`
+4. introduce a narrower provider-selection input model
+5. create a management reporting query layer used by `overview_reporting.py` and `analytics_reporting.py`
+6. split `mcp/internal_services.py` by domain
 
 Rationale:
 - these are all small, behavior-preserving slices
 - each slice tightens one real boundary instead of chasing cosmetics
-- each slice reduces future change coupling in an area that still carries meaningful structural debt
+- the first two slices directly optimize the real premium-cost objective instead of only improving internal cleanliness
 
-## 9. Completion Criteria for This Review Update
+## 10. Completion Criteria for This Review Update
 
 This roadmap update is complete when it:
 - reflects the current live code rather than the earlier snapshot

@@ -110,6 +110,13 @@ Trusted maintenance agents currently include fully agentic curator, deduplicator
 - agents must preserve project / product / repository boundaries and should not combine records merely because they share generic engineering words like `architecture`, `infra`, `testing`, `roadmap`, or `migration`
 - when the scope is mixed or uncertain, agents should prefer read/search, split, or link operations over forcing a merge or append
 
+### 4.2.2 Premium-Call Economics
+- for premium providers, the cost unit is the **execution call itself**, not its elapsed runtime
+- the daemon should therefore optimize for **useful work completed per premium call**
+- a premium maintenance run should behave like a long-lived adaptive working session that can inspect, mutate, reprioritize, and continue through internal tools while it is still productive
+- deterministic prep is valuable only when it increases same-call yield or prevents a future premium call; latency reduction alone is not sufficient justification
+- compatibility-group continuation and richer work packets are preferred when they allow one premium run to finish more related work safely
+
 ### 4.3 Current Maintenance Notes
 - current runtime is still mostly deterministic and recency-biased for candidate acquisition; full strategy roulette is planned but not yet broadly implemented
 - `memory-curator` currently adds limited anomaly pressure for oversized memories, including a periodic larger-memory pass keyed from task identity

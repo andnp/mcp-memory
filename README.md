@@ -20,6 +20,21 @@ The runtime is now **relational-first**.
 - Background task handling is now part of the active runtime surface.
 - The MCP stdio entrypoint is now a thin proxy that auto-starts a proper workspace daemon on demand.
 
+### Premium provider economics
+
+For premium providers such as Copilot strong models, the working assumption is:
+
+- **one provider execution call is one unit of premium cost**
+- wall-clock runtime does **not** change that cost unit
+- therefore the optimization target is **useful completed work per premium call**, not merely lower latency
+
+That product goal shapes the maintenance architecture:
+
+- keep one premium execution alive across additional compatible work when safe
+- let the agent discover, reprioritize, and continue through internal tools during the same paid run
+- use deterministic prep only when it increases the amount of useful work a premium call can finish, not just to make the call faster
+- prefer richer work packets and compatibility-group continuation over starting another premium execution for nearby work
+
 ### Key Features
 
 - **Graph-Aware Search Ranking**: Search now combines weighted BM25 keyword retrieval, optional semantic candidates, soft workspace-aware semantic ordering, RRF fusion, sigmoid calibration, graph-aware reranking, one-hop graph expansion, and degradation penalties.
@@ -126,7 +141,7 @@ The active workspace ID is derived from the current git root when available, wit
 
 ```toml
 [ai]
-provider = "none"
+provider = "gemini-cli"
 model = "gemini-3-flash-preview"
 timeout_seconds = 900
 max_retries = 1

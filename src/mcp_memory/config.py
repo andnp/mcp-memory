@@ -462,7 +462,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     document = tomlkit.document()
     document["ai"] = {
-        "provider": "none",
+        "provider": "gemini-cli",
         "model": "gemini-3-flash-preview",
         "timeout_seconds": 900,
         "max_retries": 0,
@@ -507,6 +507,18 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     }
     document["provider_routing"] = {
         "profiles": {
+            "gemini-strong": {
+                "provider": "gemini-cli",
+                "model": "gemini-3.1-pro-preview",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
+            "gemini-cheap": {
+                "provider": "gemini-cli",
+                "model": "gemini-3-flash-preview",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
             "copilot-strong": {
                 "provider": "copilot-cli",
                 "model": "gpt-5.4",
@@ -519,17 +531,11 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },
-            "gemini-cheap": {
-                "provider": "gemini-cli",
-                "model": "gemini-3-flash-preview",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            }
         },
         "task_routes": {
-            "ingest-system1": ["copilot-mini", "gemini-cheap"],
-            "deduplicator": ["copilot-mini", "gemini-cheap"],
-            "memory-curator": ["copilot-strong", "gemini-cheap"],
+            "ingest-system1": ["gemini-cheap", "copilot-mini"],
+            "deduplicator": ["gemini-cheap", "copilot-mini"],
+            "memory-curator": ["gemini-strong", "copilot-strong", "gemini-cheap"],
         },
         "task_classes": {
             "ingest-system1": "cheap_agentic",
@@ -545,14 +551,15 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
             "sweeper": "deterministic",
         },
         "profile_daily_call_limits": {
+            "gemini-strong": 50,
+            "gemini-cheap": 100,
             "copilot-strong": 20,
             "copilot-mini": 50,
-            "gemini-cheap": 100,
         },
         "model_burst_call_limit": 1,
         "model_burst_window_seconds": 600.0,
-        "default_json_route": [],
-        "default_agentic_route": [],
+        "default_json_route": ["gemini-cheap", "copilot-mini"],
+        "default_agentic_route": ["gemini-cheap", "copilot-mini"],
         "fallback_to_json_only": False,
         "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
     }
