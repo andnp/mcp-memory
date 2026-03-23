@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
@@ -155,6 +156,59 @@ def curator_seed_payload_item(record) -> dict[str, Any]:
         "summary": truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
     }
+
+
+def build_json_tool_loop_prompt(
+    task: TaskRecord,
+    *,
+    strategy_used: str,
+    seed_records: list[Any],
+    guardrails: str,
+) -> str:
+    seed_payload = [curator_seed_payload_item(record) for record in seed_records]
+    return (
+        "You are the curator maintenance agent for the global memory store.\n"
+        "Improve the store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
+        "Work in high-impact maintenance mode: prefer several coherent high-value improvements in one run when the store clearly supports them.\n"
+        f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the current frontier before mutating.\n"
+        "Treat the seed memories as a starting frontier, not a hard boundary; widen only when they hint at nearby duplicates, contradictions, or oversized clusters.\n"
+        "Prefer safe operations with clear lineage and archive before delete when possible.\n"
+        f"{guardrails}\n"
+        f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting them into smaller focused records with links such as DEPENDS_ON or AMENDS instead of growing one blob.\n"
+        f"Avoid creating or growing memories past {CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
+        "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
+        "Before stopping, check once more for any adjacent worthwhile maintenance action; no-op is fine when another step would be low-value or unsafe.\n"
+        f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
+        "When finished, return JSON like {\"summary\": \"...\", \"actions_taken\": N}.\n\n"
+        f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+    )
+
+
+def build_agentic_prompt(
+    task: TaskRecord,
+    *,
+    strategy_used: str,
+    seed_records: list[Any],
+    guardrails: str,
+) -> str:
+    seed_payload = [curator_seed_payload_item(record) for record in seed_records]
+    return (
+        "You are the memory-curator maintenance agent for the global memory store.\n"
+        "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
+        f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids={json.dumps([record.id for record in seed_records], sort_keys=True)} so you can widen beyond the current frontier only when justified.\n"
+        "Treat the provided seed memories as a starting frontier and the active frontier for this run; widen only when they imply nearby duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
+        "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
+        f"{guardrails}\n"
+        f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+        "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
+        "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
+        "Before finishing, do one more quick search/list/read pass for any adjacent high-value maintenance opportunity.\n"
+        "Do not claim work you did not actually execute through MCP tools.\n"
+        f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
+        "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
+        f"Sampling strategy: {strategy_used}\n"
+        f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False)}"
+    )
 
 
 def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
