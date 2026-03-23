@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from inspect import isawaitable
 import json
 from typing import Any, Awaitable, Callable, cast
 import re
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.provider_admission import classify_provider_failure
-from mcp_memory.core.providers._json_cli import ProviderBackoffError
-from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
-from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
-from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
-from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
-    COLD_STORAGE_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
     CONFLICT_FRONTIER_STRATEGY,
     GRAPH_BRIDGE_STRATEGY,
@@ -43,6 +36,7 @@ import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
 import mcp_memory.core.task_handlers.defragmenter_support as _defragmenter_support
 import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_housekeeping
+import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
 import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
@@ -56,12 +50,9 @@ from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
     WORK_FAMILY_CONFLICT_REVIEW,
     EXECUTION_LANE_AGENTIC,
-    EXECUTION_LANE_DETERMINISTIC,
     WORK_FAMILY_GRAPH_LINK_REVIEW,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-    WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
-    WORK_FAMILY_MEMORY_TAGGING,
 )
 
 
@@ -101,19 +92,6 @@ CONFLICT_DETECTOR_STRATEGY_WEIGHTS = {
     CONFLICT_FRONTIER_STRATEGY: 3,
     NEVER_SURFACED_STRATEGY: 1,
 }
-TAXONOMIST_ALLOWED_STRATEGIES = (
-    COLD_STORAGE_STRATEGY,
-    NEVER_SURFACED_STRATEGY,
-    BOUNDED_NOISE_STRATEGY,
-)
-TAXONOMIST_STRATEGY_WEIGHTS = {
-    COLD_STORAGE_STRATEGY: 2,
-    NEVER_SURFACED_STRATEGY: 3,
-    BOUNDED_NOISE_STRATEGY: 1,
-}
-TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET = 1
-
-
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
 handle_fact_checker_task = _maintenance_housekeeping.handle_fact_checker_task
 handle_sweeper_task = _maintenance_housekeeping.handle_sweeper_task
@@ -566,24 +544,21 @@ async def handle_taxonomist_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=TAXONOMIST_ALLOWED_STRATEGIES,
-        strategy_weights=TAXONOMIST_STRATEGY_WEIGHTS,
+        allowed_strategies=_taxonomist_support.TAXONOMIST_ALLOWED_STRATEGIES,
+        strategy_weights=_taxonomist_support.TAXONOMIST_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
-    updated = 0
-    provider_call_budget = _taxonomist_provider_call_budget(ctx, provider)
-    provider_calls_used = 0
-    provider_deferred_reason_code: str | None = None
-    provider_deferred_retry_delay_seconds: float | None = None
+    provider_call_budget = _taxonomist_support.provider_call_budget(ctx, provider)
     untagged_candidates = [record for record in candidates if not _normalize_tag_values(record.tags)]
 
-    seeded_work_items = _seed_taxonomist_work_items(
+    seeded_work_items = _taxonomist_support.seed_taxonomist_work_items(
         ctx,
         task=task,
+        workspace_id=workspace_id,
         candidates=untagged_candidates,
     )
-    if _taxonomist_supports_agentic_execution(provider) and seeded_work_items and provider_call_budget > 0:
+    if _taxonomist_support.supports_agentic_execution(provider) and seeded_work_items and provider_call_budget > 0:
         agentic_result = await _run_taxonomist_agentic_pass(
             ctx,
             task=task,
@@ -593,18 +568,14 @@ async def handle_taxonomist_task(
             seeded_work_items=seeded_work_items,
             provider_call_budget=provider_call_budget,
         )
-        updated += agentic_result["updated"]
-        provider_calls_used = agentic_result["provider_calls_used"]
-        provider_deferred_reason_code = agentic_result["provider_deferred_reason_code"]
-        provider_deferred_retry_delay_seconds = agentic_result["provider_deferred_retry_delay_seconds"]
-        return sampling_payload(
+        return _taxonomist_support.build_taxonomist_result(
             sampled_batch,
             sampled_records=candidates,
-            updated=updated,
-            provider_calls_used=provider_calls_used,
+            updated=agentic_result["updated"],
             provider_call_budget=provider_call_budget,
-            provider_deferred_reason_code=provider_deferred_reason_code,
-            provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+            provider_calls_used=agentic_result["provider_calls_used"],
+            provider_deferred_reason_code=agentic_result["provider_deferred_reason_code"],
+            provider_deferred_retry_delay_seconds=agentic_result["provider_deferred_retry_delay_seconds"],
             claimed_work_item_count=agentic_result["claimed_work_item_count"],
             execution_mode="agentic_mcp",
             summary=agentic_result["summary"],
@@ -617,18 +588,14 @@ async def handle_taxonomist_task(
         candidates=untagged_candidates,
         provider_call_budget=provider_call_budget,
     )
-    updated += json_result["updated"]
-    provider_calls_used = json_result["provider_calls_used"]
-    provider_deferred_reason_code = json_result["provider_deferred_reason_code"]
-    provider_deferred_retry_delay_seconds = json_result["provider_deferred_retry_delay_seconds"]
-    return sampling_payload(
+    return _taxonomist_support.build_taxonomist_result(
         sampled_batch,
         sampled_records=candidates,
-        updated=updated,
-        provider_calls_used=provider_calls_used,
+        updated=json_result["updated"],
         provider_call_budget=provider_call_budget,
-        provider_deferred_reason_code=provider_deferred_reason_code,
-        provider_deferred_retry_delay_seconds=provider_deferred_retry_delay_seconds,
+        provider_calls_used=json_result["provider_calls_used"],
+        provider_deferred_reason_code=json_result["provider_deferred_reason_code"],
+        provider_deferred_retry_delay_seconds=json_result["provider_deferred_retry_delay_seconds"],
         claimed_work_item_count=json_result["claimed_work_item_count"],
     )
 
@@ -649,20 +616,25 @@ async def handle_tag_normalizer_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=TAXONOMIST_ALLOWED_STRATEGIES,
-        strategy_weights=TAXONOMIST_STRATEGY_WEIGHTS,
+        allowed_strategies=_taxonomist_support.TAXONOMIST_ALLOWED_STRATEGIES,
+        strategy_weights=_taxonomist_support.TAXONOMIST_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
-    normalization_candidates = [record for record in candidates if _needs_tag_normalization(record.tags)]
-    seeded_work_items = _seed_tag_normalizer_work_items(
+    normalization_candidates = [
+        record for record in candidates if _taxonomist_support.needs_tag_normalization(record.tags, _normalize_tag_values)
+    ]
+    seeded_work_items = _taxonomist_support.seed_tag_normalizer_work_items(
         ctx,
         task=task,
+        workspace_id=workspace_id,
         candidates=normalization_candidates,
+        normalize_tag_values=_normalize_tag_values,
     )
-    claimed_work_items = _claim_tag_normalizer_work_batch(
+    claimed_work_items = _taxonomist_support.claim_tag_normalizer_work_batch(
         ctx,
         task=task,
+        workspace_id=workspace_id,
         limit=min(len(normalization_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
 
@@ -670,7 +642,7 @@ async def handle_tag_normalizer_task(
     seeded_enrichment_count = 0
     finalized_work_item_ids: set[str] = set()
     for work_item in claimed_work_items:
-        memory_id = _taxonomist_work_memory_id(work_item.payload)
+        memory_id = _taxonomist_support.work_memory_id(work_item.payload)
         if memory_id is None:
             _complete_work_item(ctx, work_item.id)
             finalized_work_item_ids.add(work_item.id)
@@ -690,7 +662,7 @@ async def handle_tag_normalizer_task(
                 record = refreshed
 
         if not record.tags:
-            _, created = _enqueue_taxonomist_enrichment_work_item(
+            _, created = _taxonomist_support.enqueue_taxonomist_enrichment_work_item(
                 ctx,
                 task=task,
                 memory_id=record.id,
@@ -705,7 +677,7 @@ async def handle_tag_normalizer_task(
     for record in candidates:
         if record.tags:
             continue
-        _, created = _enqueue_taxonomist_enrichment_work_item(
+        _, created = _taxonomist_support.enqueue_taxonomist_enrichment_work_item(
             ctx,
             task=task,
             memory_id=record.id,
@@ -719,7 +691,7 @@ async def handle_tag_normalizer_task(
             continue
         _release_work_item(ctx, work_item.id)
 
-    return sampling_payload(
+    return _taxonomist_support.build_tag_normalizer_result(
         sampled_batch,
         sampled_records=candidates,
         updated=updated,
@@ -743,17 +715,22 @@ async def _run_taxonomist_agentic_pass(
     assert callable(run_agent)
     try:
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-            _build_taxonomist_agent_prompt(
+            _taxonomist_support.build_agent_prompt(
                 task,
                 workspace_id=workspace_id,
                 provider_call_budget=provider_call_budget,
             )
         )
     except Exception as exc:
-        running_items = _list_taxonomist_running_work_items(ctx, task_id=task.id, workspace_id=workspace_id)
-        if _is_taxonomist_provider_deferred_error(exc):
+        running_items = _taxonomist_support.list_running_work_items(
+            ctx,
+            task_id=task.id,
+            workspace_id=workspace_id,
+            limit=max(_taxonomist_support.TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET, DEFAULT_AGENT_SCAN_LIMIT),
+        )
+        if _taxonomist_support.is_provider_deferred_error(exc):
             reason = classify_provider_failure(exc)
-            _record_taxonomist_provider_deferred_event(
+            _taxonomist_support.record_provider_deferred_event(
                 ctx,
                 task=task,
                 provider=provider,
@@ -769,26 +746,35 @@ async def _run_taxonomist_agentic_pass(
                     retry_delay_seconds=reason.retry_delay_seconds,
                 )
             return {
-                "updated": _count_taxonomist_updated_records(ctx, candidate_memory_ids),
+                "updated": _taxonomist_support.count_updated_records(ctx, candidate_memory_ids),
                 "provider_calls_used": 0,
                 "provider_deferred_reason_code": reason.reason_code,
                 "provider_deferred_retry_delay_seconds": reason.retry_delay_seconds,
-                "claimed_work_item_count": _count_claimed_taxonomist_work_items(ctx, seeded_work_items),
+                "claimed_work_item_count": _taxonomist_support.count_claimed_work_items(ctx, seeded_work_items),
                 "summary": None,
             }
         for work_item in running_items:
             _release_work_item(ctx, work_item.id)
         raise
 
-    for work_item in _list_taxonomist_running_work_items(ctx, task_id=task.id, workspace_id=workspace_id):
+    for work_item in _taxonomist_support.list_running_work_items(
+        ctx,
+        task_id=task.id,
+        workspace_id=workspace_id,
+        limit=max(_taxonomist_support.TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET, DEFAULT_AGENT_SCAN_LIMIT),
+    ):
         _release_work_item(ctx, work_item.id)
-    normalized = _normalize_taxonomist_agentic_result(agentic_result)
+    normalized = _taxonomist_support.normalize_agentic_result(
+        agentic_result,
+        coerce_text_summary=_coerce_text_summary,
+        extract_embedded_json_object=_extract_embedded_json_object,
+    )
     return {
-        "updated": _count_taxonomist_updated_records(ctx, candidate_memory_ids),
+        "updated": _taxonomist_support.count_updated_records(ctx, candidate_memory_ids),
         "provider_calls_used": 1,
         "provider_deferred_reason_code": None,
         "provider_deferred_retry_delay_seconds": None,
-        "claimed_work_item_count": _count_claimed_taxonomist_work_items(ctx, seeded_work_items),
+        "claimed_work_item_count": _taxonomist_support.count_claimed_work_items(ctx, seeded_work_items),
         "summary": normalized["summary"],
     }
 
@@ -801,16 +787,19 @@ async def _run_taxonomist_json_pass(
     candidates: list[Any],
     provider_call_budget: int,
 ) -> dict[str, Any]:
-    claimed_work_items = _claim_taxonomist_work_batch(
+    seeded_work_items: dict[str, Any] = {}
+    claimed_work_items = _taxonomist_support.claim_taxonomist_work_batch(
         ctx,
         task=task,
+        workspace_id=_resolve_workspace_id(ctx, task) or "global",
         candidates=candidates,
         limit=provider_call_budget,
+        seeded_work_items=seeded_work_items,
     )
     claimed_by_memory_id = {
-        _taxonomist_work_memory_id(record.payload): record
+        _taxonomist_support.work_memory_id(record.payload): record
         for record in claimed_work_items
-        if _taxonomist_work_memory_id(record.payload) is not None
+        if _taxonomist_support.work_memory_id(record.payload) is not None
     }
     finalized_work_item_ids: set[str] = set()
     updated = 0
@@ -822,14 +811,19 @@ async def _run_taxonomist_json_pass(
         work_item = claimed_by_memory_id.get(record.id)
         if provider is not None and work_item is not None and provider_calls_used < provider_call_budget:
             try:
-                normalized_tags = await _provider_normalize_tags(provider, record, normalized_tags)
+                normalized_tags = await _taxonomist_support.provider_normalize_tags(
+                    provider,
+                    record,
+                    normalized_tags,
+                    _normalize_tag_values,
+                )
                 provider_calls_used += 1
             except Exception as exc:
-                if _is_taxonomist_provider_deferred_error(exc):
+                if _taxonomist_support.is_provider_deferred_error(exc):
                     reason = classify_provider_failure(exc)
                     provider_deferred_reason_code = reason.reason_code
                     provider_deferred_retry_delay_seconds = reason.retry_delay_seconds
-                    _record_taxonomist_provider_deferred_event(
+                    _taxonomist_support.record_provider_deferred_event(
                         ctx,
                         task=task,
                         provider=provider,
@@ -1063,75 +1057,6 @@ async def handle_curator_frontier_task(
     )
 
 
-async def _provider_normalize_tags(provider: Any, record, normalized_tags: list[str]) -> list[str]:
-    prompt = (
-        "Normalize these tags to a concise canonical set. Return JSON with {\"tags\": [...]} only.\n"
-        f"Title: {record.title}\nTags: {normalized_tags}"
-    )
-    response = provider.ask(prompt)
-    if isawaitable(response):
-        response = await response
-    provider_tags = response.get("tags", [])
-    if not isinstance(provider_tags, list):
-        return normalized_tags
-    return _normalize_tag_values([str(tag) for tag in provider_tags]) or normalized_tags
-
-
-def _taxonomist_provider_call_budget(ctx: ApplicationContext, provider: Any) -> int:
-    if provider is None:
-        return 0
-    config = getattr(ctx, "config", None)
-    routing = None if config is None else getattr(config, "provider_routing", None)
-    configured_limit = None if routing is None else getattr(routing, "model_burst_call_limit", None)
-    if isinstance(configured_limit, int) and configured_limit > 0:
-        return configured_limit
-    return TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET
-
-
-def _taxonomist_supports_agentic_execution(provider: Any) -> bool:
-    run_agent = getattr(provider, "run_agent", None)
-    supports_agentic = getattr(provider, "supports_agentic", None)
-    return callable(run_agent) and (not callable(supports_agentic) or bool(supports_agentic()))
-
-
-def _is_taxonomist_provider_deferred_error(exc: Exception) -> bool:
-    return isinstance(
-        exc,
-        (
-            ProviderAdmissionDeferred,
-            ProviderAuthenticationRequired,
-            ProviderBackoffError,
-            ProviderBudgetExceeded,
-            ProviderRateLimitExceeded,
-        ),
-    )
-
-
-def _record_taxonomist_provider_deferred_event(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    provider: Any,
-    reason_code: str,
-    reason_category: str,
-    retry_delay_seconds: float | None,
-) -> None:
-    repository = getattr(ctx, "provider_policy_events", None)
-    if repository is None:
-        return
-    repository.record_event(
-        task_name=task.task_name,
-        task_id=task.id,
-        event_kind="provider_deferred",
-        provider_key=getattr(provider, "_provider_key", None),
-        provider_name=getattr(provider, "_provider_name", None),
-        model_name=getattr(provider, "_model_name", None),
-        reason_category=reason_category,
-        reason_code=reason_code,
-        retry_delay_seconds=retry_delay_seconds,
-    )
-
-
 def _apply_graph_link_proposals(
     ctx: ApplicationContext,
     proposed_pairs: list[tuple[str, str, str, str]],
@@ -1327,207 +1252,6 @@ def _conflict_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]
         payload_memory_ids_key="candidate_memory_ids",
         allowed_types={"fact", "plan"},
     )
-
-
-def _claim_taxonomist_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    candidates: list[Any],
-    limit: int,
-) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    _seed_taxonomist_work_items(ctx, task=task, candidates=candidates)
-    return work_items.claim_batch(
-        family_key=WORK_FAMILY_MEMORY_TAGGING,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        lease_owner=task.id,
-        limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
-    )
-
-
-def _claim_tag_normalizer_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    limit: int,
-) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
-        family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
-        execution_lane=EXECUTION_LANE_DETERMINISTIC,
-        lease_owner=task.id,
-        limit=limit,
-        workspace_id=_resolve_workspace_id(ctx, task),
-    )
-
-
-def _seed_taxonomist_work_items(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    candidates: list[Any],
-) -> dict[str, Any]:
-    if getattr(ctx, "work_items", None) is None:
-        return {}
-    workspace_id = _resolve_workspace_id(ctx, task)
-    seeded: dict[str, Any] = {}
-    for record in candidates:
-        if record.tags:
-            continue
-        work_item, _ = _enqueue_taxonomist_enrichment_work_item(
-            ctx,
-            task=task,
-            memory_id=record.id,
-            workspace_id=workspace_id,
-        )
-        seeded[record.id] = work_item
-    return seeded
-
-
-def _seed_tag_normalizer_work_items(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    candidates: list[Any],
-) -> dict[str, Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return {}
-    workspace_id = _resolve_workspace_id(ctx, task)
-    seeded: dict[str, Any] = {}
-    for record in candidates:
-        normalized_tags = _normalize_tag_values(record.tags)
-        if normalized_tags == record.tags:
-            continue
-        signature = _tag_normalization_signature(record.tags)
-        work_item, _ = work_items.enqueue_unique(
-            family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
-            execution_lane=EXECUTION_LANE_DETERMINISTIC,
-            workspace_id=workspace_id,
-            priority=task.priority,
-            idempotency_key=f"memory_tag_normalization:{record.id}:{signature}",
-            payload={"memory_id": record.id, "workspace_id": workspace_id, "observed_tags": list(record.tags)},
-        )
-        seeded[record.id] = work_item
-    return seeded
-
-
-def _enqueue_taxonomist_enrichment_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    memory_id: str,
-    workspace_id: str,
-) -> tuple[Any, bool]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        raise ValueError("work_items repository is not configured")
-    return work_items.enqueue_unique(
-        family_key=WORK_FAMILY_MEMORY_TAGGING,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=workspace_id,
-        priority=task.priority,
-        idempotency_key=f"memory_tagging:{memory_id}",
-        payload={"memory_id": memory_id, "workspace_id": workspace_id},
-    )
-
-
-def _needs_tag_normalization(tags: list[str]) -> bool:
-    normalized_tags = _normalize_tag_values(tags)
-    return bool(tags) and normalized_tags != tags
-
-
-def _tag_normalization_signature(tags: list[str]) -> str:
-    if not tags:
-        return "untagged"
-    return "|".join(tag.strip() for tag in tags)
-
-
-def _taxonomist_work_memory_id(payload: dict[str, Any]) -> str | None:
-    memory_id = payload.get("memory_id")
-    if isinstance(memory_id, str) and memory_id.strip():
-        return memory_id
-    return None
-
-
-def _build_taxonomist_agent_prompt(
-    task: TaskRecord,
-    *,
-    workspace_id: str,
-    provider_call_budget: int,
-) -> str:
-    return (
-        "You are the taxonomist maintenance agent for the global memory store.\n"
-        "Use the workspace-local internal MCP maintenance tools directly.\n"
-        f"Start with internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_id}', and limit={provider_call_budget}.\n"
-        "For each claimed work item, read the target memory, normalize its tags to a concise canonical set, use internal_update_memory_record when the tag set should change, and then finalize the work item.\n"
-        "Use internal_complete_work_item after a successful tag decision, internal_release_work_item when no safe change is needed, and internal_defer_work_item only when a claimed item truly needs delayed retry semantics.\n"
-        "Use internal_heartbeat_work_item if you need to extend a claimed lease before finishing it.\n"
-        "Do not create journal or memory records for routine status traces.\n"
-        "When finished, output final JSON only in the form {\"summary\": \"...\", \"updated_memory_ids\": [\"...\"]}.\n"
-    )
-
-
-def _list_taxonomist_running_work_items(
-    ctx: ApplicationContext,
-    *,
-    task_id: str,
-    workspace_id: str,
-) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return []
-    return work_items.list_items(
-        family_key=WORK_FAMILY_MEMORY_TAGGING,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        status="running",
-        workspace_id=workspace_id,
-        lease_owner=task_id,
-        limit=max(TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET, DEFAULT_AGENT_SCAN_LIMIT),
-    )
-
-
-def _count_claimed_taxonomist_work_items(ctx: ApplicationContext, seeded_work_items: dict[str, Any]) -> int:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return 0
-    claimed = 0
-    for work_item in seeded_work_items.values():
-        current = work_items.get_item(work_item.id)
-        if current.attempt_count > 0:
-            claimed += 1
-    return claimed
-
-
-def _count_taxonomist_updated_records(ctx: ApplicationContext, memory_ids: set[str]) -> int:
-    if ctx.repository is None or not memory_ids:
-        return 0
-    updated = 0
-    for memory_id in memory_ids:
-        record = ctx.repository.get_memory(memory_id)
-        if record is None:
-            continue
-        if record.tags:
-            updated += 1
-    return updated
-
-
-def _normalize_taxonomist_agentic_result(agentic_result: Any) -> dict[str, Any]:
-    summary = _coerce_text_summary(getattr(agentic_result, "summary", None))
-    parsed = getattr(agentic_result, "parsed", None)
-    if isinstance(parsed, dict):
-        response = parsed.get("response")
-        if isinstance(response, str):
-            parsed_response = _extract_embedded_json_object(response)
-            if isinstance(parsed_response, dict):
-                summary = _coerce_text_summary(parsed_response.get("summary")) or summary
-    return {"summary": summary}
 
 
 # Temporary compatibility aliases for the extraction slices.
