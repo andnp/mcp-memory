@@ -1088,6 +1088,134 @@ async def test_runtime_task_worker_reconciles_running_conversation_for_recovered
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_cancels_stalled_task_after_reconciliation_and_drains_queue(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    stalled_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="stalled-ingest-task",
+    )
+    follow_up_task = queue.enqueue(
+        "after-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="after-stalled-ingest-task",
+    )
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    parked = asyncio.Event()
+    completed: list[str] = []
+
+    async def stalled_handler(ctx: ApplicationContext, task) -> None:
+        queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-stalled-ingest", updated_at=2.0)
+        started.set()
+        try:
+            await parked.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    def follow_up_handler(ctx: ApplicationContext, task) -> None:
+        completed.append(task.id)
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={
+            SYSTEM1_INGEST_TASK_NAME: stalled_handler,
+            "after-task": follow_up_handler,
+        },
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=0.0,
+    )
+
+    await worker.start()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        for _ in range(100):
+            stalled_status = queue.get_task(stalled_task.id).status
+            follow_up_status = queue.get_task(follow_up_task.id).status
+            if stalled_status == "failed" and follow_up_status == "completed":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        parked.set()
+        await worker.stop(0.05)
+
+    assert cancelled.is_set()
+    assert queue.get_task(stalled_task.id).status == "failed"
+    assert queue.get_task(stalled_task.id).last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert queue.get_task(follow_up_task.id).status == "completed"
+    assert completed == [follow_up_task.id]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_periodic_reconciliation_finalizes_stale_running_conversations(
+    db_manager,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="stale-running-conversation-task",
+    )
+    assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+    failed_task = queue.fail_permanently(task.id, "Provider subprocess exited unexpectedly", failed_at=2.0)
+    repository.record_conversation(
+        request_id="req-stale-running-conversation",
+        attempt=1,
+        task_name=SYSTEM1_INGEST_TASK_NAME,
+        task_id=task.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=9999,
+        prompt_text="ingest pending thoughts",
+        response_text="",
+        parsed=None,
+        status="running",
+        error_text=None,
+        started_at=1.0,
+        completed_at=1.0,
+    )
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None},
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=0.0,
+    )
+
+    await worker.start()
+    try:
+        for _ in range(100):
+            conversation = repository.get_conversation("req-stale-running-conversation")[0]
+            if conversation.status == "error":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop(0.05)
+
+    conversation = repository.get_conversation("req-stale-running-conversation")[0]
+
+    assert failed_task.status == "failed"
+    assert conversation.status == "error"
+    assert conversation.error_text == "Provider subprocess exited unexpectedly"
+    assert conversation.reason_category == "recovery"
+    assert conversation.reason_code == "task_failed"
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled_error(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")

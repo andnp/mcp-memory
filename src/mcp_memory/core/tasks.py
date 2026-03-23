@@ -779,6 +779,33 @@ class SQLiteTaskQueue:
             return None
         return self._row_to_record(row)
 
+    def find_open_task_with_data(
+        self,
+        task_name: str,
+        *,
+        workspace_id: str | None = None,
+        data_fields: dict[str, Any],
+    ) -> TaskRecord | None:
+        if not data_fields:
+            return self.find_open_task(task_name, workspace_id)
+
+        rows = self._db.get_connection().execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE task_name = ?
+              AND ((workspace_id IS NULL AND ? IS NULL) OR workspace_id = ?)
+              AND status IN ('pending', 'running')
+            ORDER BY created_at ASC
+            """,
+            (task_name, workspace_id, workspace_id),
+        ).fetchall()
+        for row in rows:
+            record = self._row_to_record(row)
+            if all(record.data.get(key) == value for key, value in data_fields.items()):
+                return record
+        return None
+
     def count_by_status(self) -> dict[str, int]:
         rows = self._db.get_connection().execute(
             "SELECT status, COUNT(*) FROM tasks GROUP BY status"

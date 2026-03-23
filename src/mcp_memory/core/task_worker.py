@@ -42,8 +42,10 @@ class RuntimeTaskWorker:
         self._abandoned_task_stale_after_seconds = abandoned_task_stale_after_seconds
         self._stop_event = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
+        self._reconciliation_runner: asyncio.Task[None] | None = None
         self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
         self._next_abandoned_recovery_at = 0.0
+        self._reconciliation_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._runner is not None and not self._runner.done():
@@ -60,36 +62,35 @@ class RuntimeTaskWorker:
             },
         )
         self._runner = asyncio.create_task(self._run_loop())
+        self._reconciliation_runner = asyncio.create_task(self._run_reconciliation_loop())
 
     async def stop(self, grace_period_seconds: float) -> None:
         self._stop_event.set()
         runner = self._runner
-        if runner is None:
+        reconciliation_runner = self._reconciliation_runner
+        active_runners = [task for task in (runner, reconciliation_runner) if task is not None]
+        if not active_runners:
             return
 
         try:
-            await asyncio.wait_for(asyncio.shield(runner), timeout=grace_period_seconds)
+            await asyncio.wait_for(
+                asyncio.shield(asyncio.gather(*active_runners, return_exceptions=True)),
+                timeout=grace_period_seconds,
+            )
         except TimeoutError:
-            runner.cancel()
-            await asyncio.gather(runner, return_exceptions=True)
+            for active_runner in active_runners:
+                active_runner.cancel()
+            await asyncio.gather(*active_runners, return_exceptions=True)
         finally:
             self._runner = None
+            self._reconciliation_runner = None
 
     async def _run_loop(self) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
             return
 
-        await asyncio.to_thread(self._recover_leaked_work_items)
-        recovered_tasks = await asyncio.to_thread(
-            task_queue.recover_abandoned_running_tasks,
-            stale_after_seconds=self._abandoned_task_stale_after_seconds,
-        )
-        for recovered_task in recovered_tasks:
-            await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
-        journal = getattr(self._ctx, "journal", None)
-        if journal is not None:
-            await asyncio.to_thread(journal.release_orphaned_claims)
+        await self._run_reconciliation_pass(reason="startup")
 
         while not self._stop_event.is_set():
             await self._recover_abandoned_tasks(task_queue)
@@ -106,7 +107,7 @@ class RuntimeTaskWorker:
                 continue
 
             try:
-                await self._process_task(task)
+                await self._process_task_with_reconciliation(task)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -119,6 +120,32 @@ class RuntimeTaskWorker:
                     },
                 )
                 await self._recover_unexpected_task_error(task, exc)
+
+    async def _process_task_with_reconciliation(self, task: TaskRecord) -> None:
+        processing_task = asyncio.create_task(self._process_task(task))
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(processing_task),
+                        timeout=self._abandoned_recovery_interval_seconds,
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    task_queue = getattr(self._ctx, "task_queue", None)
+                    if task_queue is None:
+                        continue
+                    await self._recover_abandoned_tasks(task_queue)
+                    current_task = await asyncio.to_thread(task_queue.get_task, task.id)
+                    if current_task.status == "running":
+                        continue
+                    processing_task.cancel()
+                    await asyncio.gather(processing_task, return_exceptions=True)
+                    return
+        finally:
+            if not processing_task.done():
+                processing_task.cancel()
+                await asyncio.gather(processing_task, return_exceptions=True)
 
     async def _recover_unexpected_task_error(self, task: TaskRecord, exc: Exception) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -159,14 +186,129 @@ class RuntimeTaskWorker:
         if current_time < self._next_abandoned_recovery_at:
             return
         self._next_abandoned_recovery_at = current_time + self._abandoned_recovery_interval_seconds
-        await asyncio.to_thread(self._recover_leaked_work_items)
-        recovered_tasks = await asyncio.to_thread(
-            task_queue.recover_abandoned_running_tasks,
-            stale_after_seconds=self._abandoned_task_stale_after_seconds,
-            now=current_time,
-        )
-        for recovered_task in recovered_tasks:
-            await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
+        del task_queue
+        await self._run_reconciliation_pass(now=current_time, reason="worker_loop")
+
+    async def _run_reconciliation_loop(self) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+
+        while not self._stop_event.is_set():
+            try:
+                await self._run_reconciliation_pass(reason="periodic")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Runtime task worker reconciliation pass failed")
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self._abandoned_recovery_interval_seconds,
+                )
+            except TimeoutError:
+                continue
+
+    async def _run_reconciliation_pass(
+        self,
+        *,
+        now: float | None = None,
+        reason: str,
+    ) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+
+        async with self._reconciliation_lock:
+            current_time = time.time() if now is None else now
+            await asyncio.to_thread(self._recover_leaked_work_items)
+            recovered_tasks = await asyncio.to_thread(
+                task_queue.recover_abandoned_running_tasks,
+                stale_after_seconds=self._abandoned_task_stale_after_seconds,
+                now=current_time,
+            )
+            recovered_task_ids: list[str] = []
+            for recovered_task in recovered_tasks:
+                recovered_task_ids.append(recovered_task.id)
+                await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
+
+            reconciled_conversation_ids = await asyncio.to_thread(
+                self._reconcile_orphaned_running_conversations,
+            )
+
+            journal = getattr(self._ctx, "journal", None)
+            released_claim_ids: list[int] = []
+            if journal is not None:
+                released_claim_ids = await asyncio.to_thread(journal.release_orphaned_claims)
+
+            pending_tasks = await asyncio.to_thread(task_queue.list_tasks, "pending", None, 200)
+            overdue_pending = sorted(
+                [
+                    queued_task
+                    for queued_task in pending_tasks
+                    if queued_task.available_at <= current_time
+                    and (current_time - queued_task.available_at) >= self._abandoned_task_stale_after_seconds
+                ],
+                key=lambda queued_task: current_time - queued_task.available_at,
+                reverse=True,
+            )
+            overdue_summaries = [queued_task.id for queued_task in overdue_pending[:5]]
+            if recovered_task_ids or reconciled_conversation_ids or released_claim_ids or overdue_pending:
+                logger.info(
+                    "Runtime reconciliation pass completed",
+                    extra={
+                        "workspace_id": getattr(self._ctx, "workspace_id", None),
+                        "reason": reason,
+                        "recovered_task_count": len(recovered_task_ids),
+                        "recovered_task_ids": recovered_task_ids,
+                        "reconciled_conversation_count": len(reconciled_conversation_ids),
+                        "reconciled_conversation_ids": reconciled_conversation_ids,
+                        "released_orphaned_claim_count": len(released_claim_ids),
+                        "released_orphaned_claim_ids": released_claim_ids,
+                        "overdue_pending_count": len(overdue_pending),
+                        "overdue_pending_task_ids": overdue_summaries,
+                    },
+                )
+
+    def _reconcile_orphaned_running_conversations(self) -> list[str]:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return []
+
+        reconciled_request_ids: list[str] = []
+        running_conversations = self._provider_usage.list_conversations(status="running", limit=200)
+        for conversation in running_conversations:
+            if conversation.task_id is None:
+                continue
+            try:
+                task = task_queue.get_task(conversation.task_id)
+            except Exception:
+                self._provider_usage.finalize_running_conversation(
+                    request_id=conversation.request_id,
+                    status="error",
+                    error_text="Conversation task was missing during reconciliation",
+                    reason_category="recovery",
+                    reason_code="task_missing",
+                    completed_at=max(conversation.completed_at, time.time()),
+                )
+                reconciled_request_ids.append(conversation.request_id)
+                continue
+            if task.status == "running":
+                continue
+            status = "success" if task.status == "completed" else "cancelled" if task.status == "cancelled" else "error"
+            error_text = None if status == "success" else (task.last_error or f"Task finished with status {task.status}")
+            reason_category = None if status == "success" else "cancellation" if status == "cancelled" else "recovery"
+            reason_code = None if status == "success" else "task_cancelled" if status == "cancelled" else f"task_{task.status}"
+            self._provider_usage.finalize_running_conversation(
+                request_id=conversation.request_id,
+                status=status,
+                error_text=error_text,
+                reason_category=reason_category,
+                reason_code=reason_code,
+                completed_at=task.completed_at or task.updated_at,
+            )
+            reconciled_request_ids.append(conversation.request_id)
+        return reconciled_request_ids
 
     async def _process_task(self, task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -219,6 +361,9 @@ class RuntimeTaskWorker:
             if isawaitable(result):
                 result = await result
         except asyncio.CancelledError:
+            current_task = await asyncio.to_thread(task_queue.get_task, task.id)
+            if current_task.status != "running":
+                return
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
                 cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
                 await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
