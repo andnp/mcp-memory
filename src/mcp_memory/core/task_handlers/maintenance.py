@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import json
 from typing import Any, Awaitable, Callable, cast
-import re
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
-    BOUNDED_NOISE_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
-    CONFLICT_FRONTIER_STRATEGY,
-    GRAPH_BRIDGE_STRATEGY,
-    NEVER_SURFACED_STRATEGY,
     SEMANTIC_STRATEGY,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import (
@@ -25,7 +20,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     complete_work_item as _complete_work_item,
     defer_work_item as _defer_work_item,
     enqueue_review_work_item as _enqueue_review_work_item,
-    payload_memory_records as _payload_memory_records,
     release_work_item as _release_work_item,
     run_claimed_review_work_item as _run_claimed_review_work_item,
     run_sparse_frontier_review_task as _run_sparse_frontier_review_task,
@@ -38,6 +32,7 @@ import mcp_memory.core.task_handlers.defragmenter_support as _defragmenter_suppo
 import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_housekeeping
 import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
 import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
+import mcp_memory.core.task_handlers.relationship_review_support as _relationship_review_support
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
     CURATOR_TASK_NAME,
@@ -56,7 +51,6 @@ from mcp_memory.work_item_store import (
 )
 
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 DEDUPLICATOR_MAX_SEED_RECORDS = 8
 DEDUPLICATOR_SIZE_ANOMALY_SEED_RECORDS = 2
 DEDUPLICATOR_OBSERVATION_SEED_RECORDS = 4
@@ -72,26 +66,6 @@ DEDUPLICATOR_STRATEGY_WEIGHTS = {
 }
 CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS = 10
 CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND = 8
-GRAPH_LINKER_ALLOWED_STRATEGIES = (
-    SEMANTIC_STRATEGY,
-    GRAPH_BRIDGE_STRATEGY,
-    BOUNDED_NOISE_STRATEGY,
-)
-GRAPH_LINKER_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 3,
-    GRAPH_BRIDGE_STRATEGY: 3,
-    BOUNDED_NOISE_STRATEGY: 1,
-}
-CONFLICT_DETECTOR_ALLOWED_STRATEGIES = (
-    SEMANTIC_STRATEGY,
-    CONFLICT_FRONTIER_STRATEGY,
-    NEVER_SURFACED_STRATEGY,
-)
-CONFLICT_DETECTOR_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 3,
-    CONFLICT_FRONTIER_STRATEGY: 3,
-    NEVER_SURFACED_STRATEGY: 1,
-}
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
 handle_fact_checker_task = _maintenance_housekeeping.handle_fact_checker_task
 handle_sweeper_task = _maintenance_housekeeping.handle_sweeper_task
@@ -110,13 +84,13 @@ async def handle_graph_linker_task(
             ctx,
             task=task,
             family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
-            load_candidates=_graph_link_review_candidates,
+            load_candidates=_relationship_review_support.graph_link_review_candidates,
             propose_pairs=lambda review_candidates: _relationship_proposals.propose_graph_links(
                 ctx,
                 review_candidates,
                 provider,
             ),
-            apply_pairs=lambda proposed_pairs: _apply_graph_link_proposals(ctx, proposed_pairs),
+            apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs),
         )
         if claimed_review_result is not None:
             return claimed_review_result
@@ -130,8 +104,8 @@ async def handle_graph_linker_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=GRAPH_LINKER_ALLOWED_STRATEGIES,
-        strategy_weights=GRAPH_LINKER_STRATEGY_WEIGHTS,
+        allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
+        strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
@@ -139,7 +113,7 @@ async def handle_graph_linker_task(
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
-    created = _apply_graph_link_proposals(ctx, proposed_pairs)
+    created = _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs)
 
     return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
 
@@ -161,8 +135,8 @@ async def handle_graph_link_discovery_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=GRAPH_LINKER_ALLOWED_STRATEGIES,
-        strategy_weights=GRAPH_LINKER_STRATEGY_WEIGHTS,
+        allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
+        strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
@@ -179,12 +153,12 @@ async def handle_graph_link_discovery_task(
             review_candidates,
             provider=None,
         ),
-        apply_pairs=lambda proposed_pairs: _apply_graph_link_proposals(ctx, proposed_pairs),
+        apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs),
         should_seed=lambda proposed_pairs, review_candidates: (
             len(proposed_pairs) < _relationship_proposals.GRAPH_LINKER_FALLBACK_LINK_TARGET
             and len(review_candidates) > _relationship_proposals.GRAPH_LINKER_AI_MIN_CANDIDATES
         ),
-        enqueue_review_work_item=lambda review_candidates: _enqueue_graph_link_review_work_item(
+        enqueue_review_work_item=lambda review_candidates: _relationship_review_support.enqueue_graph_link_review_work_item(
             ctx,
             task=task,
             workspace_id=workspace_id,
@@ -207,13 +181,13 @@ async def handle_conflict_detector_task(
             ctx,
             task=task,
             family_key=WORK_FAMILY_CONFLICT_REVIEW,
-            load_candidates=_conflict_review_candidates,
+            load_candidates=_relationship_review_support.conflict_review_candidates,
             propose_pairs=lambda review_candidates: _relationship_proposals.propose_conflicts(
                 ctx,
                 review_candidates,
                 provider,
             ),
-            apply_pairs=lambda proposed_pairs: _apply_conflict_proposals(ctx, proposed_pairs),
+            apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs),
         )
         if claimed_review_result is not None:
             return claimed_review_result
@@ -231,8 +205,8 @@ async def handle_conflict_detector_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
-        strategy_weights=CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
+        allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
+        strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
@@ -240,7 +214,7 @@ async def handle_conflict_detector_task(
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
     proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
-    created = _apply_conflict_proposals(ctx, proposed_pairs)
+    created = _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs)
 
     return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
 
@@ -266,8 +240,8 @@ async def handle_conflict_screening_task(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
-        strategy_weights=CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
+        allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
+        strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
@@ -285,11 +259,11 @@ async def handle_conflict_screening_task(
             review_candidates,
             provider=None,
         ),
-        apply_pairs=lambda proposed_pairs: _apply_conflict_proposals(ctx, proposed_pairs),
+        apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs),
         should_seed=lambda proposed_pairs, review_candidates: (
             not proposed_pairs and len(review_candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES
         ),
-        enqueue_review_work_item=lambda review_candidates: _enqueue_conflict_review_work_item(
+        enqueue_review_work_item=lambda review_candidates: _relationship_review_support.enqueue_conflict_review_work_item(
             ctx,
             task=task,
             workspace_id=workspace_id,
@@ -706,7 +680,7 @@ async def _run_taxonomist_agentic_pass(
     *,
     task: TaskRecord,
     provider: Any,
-    workspace_id: str,
+    workspace_id: str | None,
     candidate_memory_ids: set[str],
     seeded_work_items: dict[str, Any],
     provider_call_budget: int,
@@ -787,6 +761,7 @@ async def _run_taxonomist_json_pass(
     candidates: list[Any],
     provider_call_budget: int,
 ) -> dict[str, Any]:
+    assert ctx.repository is not None
     seeded_work_items: dict[str, Any] = {}
     claimed_work_items = _taxonomist_support.claim_taxonomist_work_batch(
         ctx,
@@ -1057,40 +1032,6 @@ async def handle_curator_frontier_task(
     )
 
 
-def _apply_graph_link_proposals(
-    ctx: ApplicationContext,
-    proposed_pairs: list[tuple[str, str, str, str]],
-) -> int:
-    if ctx.repository is None:
-        return 0
-    created = 0
-    for source_id, target_id, link_type, context in proposed_pairs:
-        if source_id == target_id or _has_link(ctx, source_id, target_id, link_type):
-            continue
-        ctx.repository.add_link(source_id, target_id, link_type, context)
-        created += 1
-    return created
-
-
-def _apply_conflict_proposals(
-    ctx: ApplicationContext,
-    proposed_pairs: list[tuple[str, str, str]],
-) -> int:
-    if ctx.repository is None:
-        return 0
-    created = 0
-    for left_id, right_id, context in proposed_pairs:
-        if left_id == right_id:
-            continue
-        if not _has_link(ctx, left_id, right_id, "CONTRADICTS"):
-            ctx.repository.add_link(left_id, right_id, "CONTRADICTS", context)
-            created += 1
-        if not _has_link(ctx, right_id, left_id, "CONTRADICTS"):
-            ctx.repository.add_link(right_id, left_id, "CONTRADICTS", context)
-            created += 1
-    return created
-
-
 def _claim_dedup_review_work_batch(
     ctx: ApplicationContext,
     *,
@@ -1106,85 +1047,11 @@ def _claim_dedup_review_work_batch(
     )
 
 
-def _claim_graph_link_review_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    limit: int,
-) -> list[Any]:
-    return _claim_work_batch(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        limit=limit,
-    )
-
-
-def _claim_conflict_review_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    limit: int,
-) -> list[Any]:
-    return _claim_work_batch(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_CONFLICT_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        limit=limit,
-    )
-
-
-def _enqueue_graph_link_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str,
-    candidates: list[Any],
-    strategy_used: str | None,
-) -> tuple[Any, bool]:
-    return _enqueue_review_work_item(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=workspace_id,
-        idempotency_prefix="graph_link_review",
-        payload_memory_ids_key="candidate_memory_ids",
-        memory_ids=[record.id for record in candidates],
-        strategy_used=strategy_used,
-        candidate_count=len(candidates),
-    )
-
-
-def _enqueue_conflict_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str,
-    candidates: list[Any],
-    strategy_used: str | None,
-) -> tuple[Any, bool]:
-    return _enqueue_review_work_item(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_CONFLICT_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=workspace_id,
-        idempotency_prefix="conflict_review",
-        payload_memory_ids_key="candidate_memory_ids",
-        memory_ids=[record.id for record in candidates],
-        strategy_used=strategy_used,
-        candidate_count=len(candidates),
-    )
-
-
 def _enqueue_dedup_review_work_item(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
-    workspace_id: str,
+    workspace_id: str | None,
     seed_records: list[Any],
     strategy_used: str | None,
     candidate_count: int,
@@ -1238,19 +1105,6 @@ def _enqueue_curator_review_work_item(
         memory_ids=[record.id for record in seed_records],
         strategy_used=strategy_used,
         candidate_count=candidate_count,
-    )
-
-
-def _graph_link_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    return _payload_memory_records(ctx, payload, payload_memory_ids_key="candidate_memory_ids")
-
-
-def _conflict_review_candidates(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
-    return _payload_memory_records(
-        ctx,
-        payload,
-        payload_memory_ids_key="candidate_memory_ids",
-        allowed_types={"fact", "plan"},
     )
 
 
@@ -1349,9 +1203,3 @@ def _normalize_tag_values(tags: list[str]) -> list[str]:
     return sorted(normalized)
 
 
-def _has_link(ctx: ApplicationContext, source_id: str, target_id: str, link_type: str) -> bool:
-    assert ctx.repository is not None
-    return any(
-        link.target_id == target_id
-        for link in ctx.repository.get_links(source_id, direction="outgoing", link_type=link_type)
-    )

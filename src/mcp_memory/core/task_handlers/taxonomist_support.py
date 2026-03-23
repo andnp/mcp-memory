@@ -95,7 +95,7 @@ def claim_taxonomist_work_batch(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
-    workspace_id: str,
+    workspace_id: str | None,
     candidates: list[Any],
     limit: int,
     seeded_work_items: dict[str, Any],
@@ -118,7 +118,7 @@ def claim_tag_normalizer_work_batch(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
-    workspace_id: str,
+    workspace_id: str | None,
     limit: int,
 ) -> list[Any]:
     work_items = getattr(ctx, "work_items", None)
@@ -137,7 +137,7 @@ def seed_taxonomist_work_items(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
-    workspace_id: str,
+    workspace_id: str | None,
     candidates: list[Any],
 ) -> dict[str, Any]:
     if getattr(ctx, "work_items", None) is None:
@@ -160,7 +160,7 @@ def seed_tag_normalizer_work_items(
     ctx: ApplicationContext,
     *,
     task: TaskRecord,
-    workspace_id: str,
+    workspace_id: str | None,
     candidates: list[Any],
     normalize_tag_values,
 ) -> dict[str, Any]:
@@ -190,7 +190,7 @@ def enqueue_taxonomist_enrichment_work_item(
     *,
     task: TaskRecord,
     memory_id: str,
-    workspace_id: str,
+    workspace_id: str | None,
 ) -> tuple[Any, bool]:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None:
@@ -226,13 +226,14 @@ def work_memory_id(payload: dict[str, Any]) -> str | None:
 def build_agent_prompt(
     task: TaskRecord,
     *,
-    workspace_id: str,
+    workspace_id: str | None,
     provider_call_budget: int,
 ) -> str:
+    workspace_scope = workspace_id or "global"
     return (
         "You are the taxonomist maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
-        f"Start with internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_id}', and limit={provider_call_budget}.\n"
+        f"Start with internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_scope}', and limit={provider_call_budget}.\n"
         "For each claimed work item, read the target memory, normalize its tags to a concise canonical set, use internal_update_memory_record when the tag set should change, and then finalize the work item.\n"
         "Use internal_complete_work_item after a successful tag decision, internal_release_work_item when no safe change is needed, and internal_defer_work_item only when a claimed item truly needs delayed retry semantics.\n"
         "Use internal_heartbeat_work_item if you need to extend a claimed lease before finishing it.\n"
@@ -245,7 +246,7 @@ def list_running_work_items(
     ctx: ApplicationContext,
     *,
     task_id: str,
-    workspace_id: str,
+    workspace_id: str | None,
     limit: int,
 ) -> list[Any]:
     work_items = getattr(ctx, "work_items", None)
