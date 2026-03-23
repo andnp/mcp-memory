@@ -23,6 +23,7 @@ from mcp_memory.mcp.internal_service_support import (
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.validation import optional_object, optional_positive_int, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import compact_memory_record_payload, memory_record_payload
+from mcp_memory.work_item_store import compatibility_group_families
 
 
 __all__ = [
@@ -95,6 +96,57 @@ def internal_get_work_batch_service(ctx: ApplicationContext, arguments: dict) ->
         "task_id": task_id,
         "family_key": family_key,
         "execution_lane": execution_lane,
+        "claimed_count": len(records),
+        "limit": limit,
+        "records": [
+            {
+                "id": record.id,
+                "family_key": record.family_key,
+                "execution_lane": record.execution_lane,
+                "workspace_id": record.workspace_id,
+                "payload": record.payload,
+                "status": record.status,
+                "priority": record.priority,
+                "attempt_count": record.attempt_count,
+                "lease_owner": record.lease_owner,
+                "lease_expires_at": record.lease_expires_at,
+            }
+            for record in records
+        ],
+    }
+
+
+def internal_get_compatible_work_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return {"status": "error", "error": "work_items_not_initialized"}
+
+    task_id = require_string(arguments, "task_id")
+    compatibility_group = require_string(arguments, "compatibility_group")
+    execution_lane = require_string(arguments, "execution_lane")
+    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    limit = optional_positive_int(arguments, "limit", 20)
+    lease_ttl_seconds = float(optional_positive_int(arguments, "lease_ttl_seconds", 1800))
+    family_keys = compatibility_group_families(
+        compatibility_group,
+        allowed_families=string_list(arguments, "allowed_families"),
+    )
+    records = work_items.claim_compatible_batch(
+        family_keys=family_keys,
+        execution_lane=execution_lane,
+        lease_owner=task_id,
+        limit=limit,
+        workspace_id=workspace_id,
+        lease_ttl_seconds=lease_ttl_seconds,
+    )
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "compatibility_group": compatibility_group,
+        "family_keys": list(family_keys),
+        "execution_lane": execution_lane,
+        "claimed_count": len(records),
+        "limit": limit,
         "records": [
             {
                 "id": record.id,

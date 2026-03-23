@@ -23,6 +23,19 @@ WORK_FAMILY_MEMORY_DEDUP_REVIEW = "memory_dedup_review"
 WORK_FAMILY_GRAPH_LINK_REVIEW = "graph_link_review"
 WORK_FAMILY_MEMORY_TAG_NORMALIZATION = "memory_tag_normalization"
 WORK_FAMILY_MEMORY_TAGGING = "memory_tagging"
+COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW = "lightweight_review"
+COMPATIBILITY_GROUP_STRUCTURAL_REVIEW = "structural_review"
+WORK_ITEM_COMPATIBILITY_GROUPS: dict[str, tuple[str, ...]] = {
+    COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW: (
+        WORK_FAMILY_MEMORY_TAGGING,
+        WORK_FAMILY_GRAPH_LINK_REVIEW,
+        WORK_FAMILY_CONFLICT_REVIEW,
+    ),
+    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW: (
+        WORK_FAMILY_MEMORY_CURATION_REVIEW,
+        WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+    ),
+}
 DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS = 1800.0
 
 
@@ -138,6 +151,84 @@ class SQLiteWorkItemRepository:
                 "((status IN ('pending', 'deferred') AND available_at <= ?) OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
             ]
             params: list[object] = [family_key, execution_lane, current_time, current_time]
+            if workspace_id is None:
+                clauses.append("workspace_id IS NULL")
+            elif workspace_id != "*":
+                clauses.append("workspace_id = ?")
+                params.append(workspace_id)
+            rows = conn.execute(
+                "SELECT id FROM work_items WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY priority ASC, created_at ASC LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+            if not rows:
+                conn.commit()
+                return []
+            item_ids = [str(row["id"]) for row in rows]
+            placeholders = ",".join("?" for _ in item_ids)
+            conn.execute(
+                f"""
+                UPDATE work_items
+                SET status = ?,
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?,
+                    claimed_at = ?,
+                    lease_owner = ?,
+                    lease_expires_at = ?,
+                    last_error = NULL
+                WHERE id IN ({placeholders})
+                """,
+                [
+                    WORK_ITEM_STATUS_RUNNING,
+                    current_time,
+                    current_time,
+                    lease_owner,
+                    lease_expires_at,
+                    *item_ids,
+                ],
+            )
+            claimed_rows = conn.execute(
+                f"SELECT * FROM work_items WHERE id IN ({placeholders}) ORDER BY priority ASC, created_at ASC",
+                item_ids,
+            ).fetchall()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return [self._row_to_record(row) for row in claimed_rows]
+
+    def claim_compatible_batch(
+        self,
+        *,
+        family_keys: list[str] | tuple[str, ...],
+        execution_lane: str,
+        lease_owner: str,
+        limit: int,
+        workspace_id: str | None = None,
+        now: float | None = None,
+        lease_ttl_seconds: float = DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
+    ) -> list[WorkItemRecord]:
+        normalized_family_keys = [family_key for family_key in family_keys if family_key]
+        if not normalized_family_keys:
+            raise ValueError("family_keys must include at least one family")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        current_time = time.time() if now is None else now
+        lease_expires_at = current_time + lease_ttl_seconds
+        conn = self._db.get_connection()
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            family_placeholders = ",".join("?" for _ in normalized_family_keys)
+            clauses = [
+                f"family_key IN ({family_placeholders})",
+                "execution_lane = ?",
+                "((status IN ('pending', 'deferred') AND available_at <= ?) OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?))",
+            ]
+            params: list[object] = [*normalized_family_keys, execution_lane, current_time, current_time]
             if workspace_id is None:
                 clauses.append("workspace_id IS NULL")
             elif workspace_id != "*":
@@ -375,3 +466,25 @@ class SQLiteWorkItemRepository:
             idempotency_key=row["idempotency_key"],
             last_error=row["last_error"],
         )
+
+
+def compatibility_group_families(
+    compatibility_group: str,
+    *,
+    allowed_families: list[str] | None = None,
+) -> tuple[str, ...]:
+    families = WORK_ITEM_COMPATIBILITY_GROUPS.get(compatibility_group)
+    if families is None:
+        raise ValueError(f"Unknown work-item compatibility group: {compatibility_group}")
+    if not allowed_families:
+        return families
+
+    normalized_allowed = tuple(dict.fromkeys(str(family) for family in allowed_families if str(family).strip()))
+    if not normalized_allowed:
+        raise ValueError("allowed_families must include at least one family when provided")
+    invalid = [family for family in normalized_allowed if family not in families]
+    if invalid:
+        raise ValueError(
+            f"Families {invalid} are not compatible with group {compatibility_group}"
+        )
+    return normalized_allowed

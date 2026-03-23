@@ -117,7 +117,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_get_work_batch",
-            description="Claim the next durable work-item batch for one family and execution lane.",
+            description="Claim the next durable work-item batch for one family and execution lane. Call it repeatedly within one run to safely process more queued work from that same family.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -129,6 +129,23 @@ def get_internal_maintenance_tools() -> list[Tool]:
                     "lease_ttl_seconds": {"type": "integer", "minimum": 1},
                 },
                 "required": ["task_id", "family_key", "execution_lane"],
+            },
+        ),
+        Tool(
+            name="internal_get_compatible_work_batch",
+            description="Claim the next durable work-item batch from a compatible multi-family group. Use this to widen one run across families that share the same safety model.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "compatibility_group": {"type": "string"},
+                    "allowed_families": {"type": "array", "items": {"type": "string"}},
+                    "execution_lane": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                    "lease_ttl_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["task_id", "compatibility_group", "execution_lane"],
             },
         ),
         Tool(
