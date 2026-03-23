@@ -31,6 +31,7 @@ class InstrumentedAIProvider:
         daily_call_limit: int | None = None,
         model_burst_call_limit: int | None = None,
         model_burst_window_seconds: float | None = None,
+        block_test_execution: bool = False,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
@@ -45,6 +46,7 @@ class InstrumentedAIProvider:
         self._daily_call_limit = daily_call_limit
         self._model_burst_call_limit = model_burst_call_limit
         self._model_burst_window_seconds = model_burst_window_seconds
+        self._block_test_execution = block_test_execution
 
     def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
         return InstrumentedAIProvider(
@@ -61,7 +63,13 @@ class InstrumentedAIProvider:
             daily_call_limit=self._daily_call_limit,
             model_burst_call_limit=self._model_burst_call_limit,
             model_burst_window_seconds=self._model_burst_window_seconds,
+            block_test_execution=self._block_test_execution,
         )
+
+    def _guard_test_execution(self) -> None:
+        if not self._block_test_execution:
+            return
+        raise RuntimeError("provider_execution_blocked_in_tests")
 
     def admission_decision(self, *, now: float | None = None):
         return evaluate_provider_admission(
@@ -114,6 +122,7 @@ class InstrumentedAIProvider:
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
+        self._guard_test_execution()
 
         try:
             self._enforce_rate_limits()
@@ -327,6 +336,7 @@ class InstrumentedAIProvider:
         started_at = time.time()
         request_id = str(uuid4())
         last_event: dict | None = None
+        self._guard_test_execution()
 
         try:
             self._enforce_rate_limits()

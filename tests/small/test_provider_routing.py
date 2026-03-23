@@ -307,7 +307,7 @@ def test_provider_for_taxonomist_prefers_default_non_agentic_routes() -> None:
     selected = _provider_for_task(ctx, None, None, "taxonomist", task)
 
     assert selected == {
-        "provider": "copilot-mini",
+        "provider": "gemini-cheap",
         "task_name": "taxonomist",
         "task_id": "taxonomist-task",
         "workspace_id": "workspace-a",

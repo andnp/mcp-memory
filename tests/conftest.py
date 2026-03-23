@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from collections.abc import Generator
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from tests.sdk.providers import FakeAIProvider, FakeSubprocessInstaller
 
 
 def pytest_configure(config) -> None:
+    os.environ["MCP_MEMORY_TEST_MODE"] = "1"
     config.addinivalue_line(
         "markers",
         "small: fast, isolated tests with no network or model loading",

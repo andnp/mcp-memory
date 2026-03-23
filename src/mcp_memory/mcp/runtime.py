@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shutil
 
@@ -119,6 +120,9 @@ def _default_profile_key(config: Config) -> str | None:
 
 
 def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, task_queue: SQLiteTaskQueue) -> dict[str, dict[str, object]]:
+    if _runtime_providers_disabled_for_tests():
+        return {}
+
     registry: dict[str, dict[str, object]] = {}
     usage_repository = ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id)
 
@@ -177,3 +181,7 @@ def _provider_command_available(provider: object) -> bool:
         return True
     candidate = Path(command).expanduser()
     return candidate.exists()
+
+
+def _runtime_providers_disabled_for_tests() -> bool:
+    return os.environ.get("MCP_MEMORY_TEST_MODE") == "1"

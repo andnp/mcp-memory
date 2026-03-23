@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-
 from mcp.types import TextContent
 
 from mcp_memory.cli import main
@@ -57,6 +56,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
         "internal_get_next_curator_batch",
         "internal_get_next_ingest_batch",
         "internal_get_work_batch",
+        "internal_get_compatible_work_batch",
         "internal_heartbeat_work_item",
         "internal_complete_work_item",
         "internal_defer_work_item",
@@ -79,6 +79,88 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
     completion_tool = next(tool for tool in tools if tool.name == "task_complete")
     assert completion_tool.description is not None
     assert "instead of creating journal or memory records" in completion_tool.description
+
+
+@pytest.mark.asyncio
+async def test_call_internal_memory_tool_can_claim_compatible_work_batches(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    assert runtime.work_items is not None
+
+    try:
+        lightweight_specs = [
+            ("memory_tagging", "tag-memory"),
+            ("graph_link_review", "graph-memory"),
+            ("conflict_review", "conflict-memory"),
+        ]
+        structural_specs = [
+            ("memory_curation_review", ["curator-a", "curator-b"]),
+            ("memory_dedup_review", ["dedup-a", "dedup-b"]),
+        ]
+        for family_key, memory_id in lightweight_specs:
+            runtime.work_items.enqueue_unique(
+                family_key=family_key,
+                execution_lane="agentic",
+                workspace_id=runtime.workspace_id,
+                payload={"memory_id": memory_id, "workspace_id": runtime.workspace_id},
+            )
+        for family_key, seed_memory_ids in structural_specs:
+            runtime.work_items.enqueue_unique(
+                family_key=family_key,
+                execution_lane="agentic",
+                workspace_id=runtime.workspace_id,
+                payload={"seed_memory_ids": seed_memory_ids, "workspace_id": runtime.workspace_id},
+            )
+
+        lightweight_result = await call_internal_memory_tool(
+            runtime,
+            "internal_get_compatible_work_batch",
+            {
+                "task_id": "compat-lightweight-task",
+                "compatibility_group": "lightweight_review",
+                "execution_lane": "agentic",
+                "workspace_id": runtime.workspace_id,
+                "limit": 5,
+            },
+        )
+        lightweight_payload = json.loads(lightweight_result[0].text)
+
+        assert lightweight_payload["status"] == "ok"
+        assert lightweight_payload["compatibility_group"] == "lightweight_review"
+        assert lightweight_payload["family_keys"] == ["memory_tagging", "graph_link_review", "conflict_review"]
+        assert lightweight_payload["claimed_count"] == 3
+        assert {record["family_key"] for record in lightweight_payload["records"]} == {
+            "memory_tagging",
+            "graph_link_review",
+            "conflict_review",
+        }
+
+        structural_result = await call_internal_memory_tool(
+            runtime,
+            "internal_get_compatible_work_batch",
+            {
+                "task_id": "compat-structural-task",
+                "compatibility_group": "structural_review",
+                "execution_lane": "agentic",
+                "workspace_id": runtime.workspace_id,
+                "allowed_families": ["memory_curation_review"],
+                "limit": 5,
+            },
+        )
+        structural_payload = json.loads(structural_result[0].text)
+
+        assert structural_payload["status"] == "ok"
+        assert structural_payload["compatibility_group"] == "structural_review"
+        assert structural_payload["family_keys"] == ["memory_curation_review"]
+        assert structural_payload["claimed_count"] == 1
+        assert [record["family_key"] for record in structural_payload["records"]] == ["memory_curation_review"]
+
+        pending_items = runtime.work_items.list_items(status="pending", limit=10)
+        assert {item.family_key for item in pending_items} == {"memory_dedup_review"}
+    finally:
+        runtime.close()
 
 
 def test_mcp_server_initializes_with_workspace_root() -> None:
@@ -333,13 +415,6 @@ async def test_call_internal_ingest_tools_preserve_ingest_invariants(monkeypatch
 
         append_payload = json.loads(append_result[0].text)
         create_payload = json.loads(create_result[0].text)
-        created_id = create_payload["record"]["id"]
-        created_summary_tasks = runtime.task_queue.list_tasks(
-            status="pending",
-            workspace_id=None,
-            limit=20,
-        )
-
         assert append_payload["status"] == "ok"
         assert "deterministic fixtures" in append_payload["record"]["content"]
         assert set(append_payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
@@ -353,10 +428,8 @@ async def test_call_internal_ingest_tools_preserve_ingest_invariants(monkeypatch
         assert create_payload["record"]["metadata"]["source_entry_ids"] == [3, 4]
         assert create_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
         assert create_payload["record"]["tags"] == ["pytest"]
-        assert any(
-            task.task_name == "summarize-memory" and task.data.get("memory_id") == created_id
-            for task in created_summary_tasks
-        )
+        assert create_payload["record"]["summary"]
+        assert runtime.task_queue.find_open_task("summarize-memory", runtime.workspace_id or "global") is None
     finally:
         runtime.close()
 

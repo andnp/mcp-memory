@@ -35,7 +35,6 @@ async def _request_json(metadata, path: str, payload: dict | None = None) -> dic
 async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr("mcp_memory.mcp.runtime._provider_command_available", lambda _provider: False)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
@@ -125,6 +124,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             workspace_id=seed_runtime.workspace_id,
             available_at=0.0,
         )
+        premium_yield_task = seed_runtime.task_queue.enqueue(
+            "taxonomist",
+            task_id="taxonomist-premium-yield-1",
+            workspace_id=seed_runtime.workspace_id,
+            available_at=0.0,
+        )
         seed_runtime.task_queue.enqueue(
             "summarize-memory",
             task_id="summarize-pending-1",
@@ -145,6 +150,23 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
                 "strategy_used": "semantic",
                 "candidate_count": 6,
                 "sampled_memory_ids": [primary.id],
+            },
+        )
+        assert seed_runtime.task_queue.claim_next(now=base_time + 14.0) is not None
+        seed_runtime.task_queue.complete(
+            premium_yield_task.id,
+            completed_at=base_time + 15.0,
+            run_result={
+                "updated": 3,
+                "campaign_key": "lightweight_review",
+                "campaign_origin_family": "memory_tagging",
+                "campaign_family_keys": ["memory_tagging", "graph_link_review", "conflict_review"],
+                "campaign_continuation_supported": True,
+                "provider_calls_used": 1,
+                "claimed_work_item_count": 3,
+                "tool_calls_executed": 6,
+                "mutations": 4,
+                "compatible_batch_calls": 1,
             },
         )
     finally:
@@ -317,6 +339,11 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "premium_execution_count" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "compatible_batch_calls" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "work_items_per_premium_execution" and stat["value"] == 3.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "mutations_per_premium_execution" and stat["value"] == 4.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "tool_calls_per_premium_execution" and stat["value"] == 6.0 for stat in nerd_metrics["stats"])
         assert nerd_metrics["graph_topology"]["total_memories"] == 2
         assert nerd_metrics["graph_topology"]["total_links"] == 1
         assert nerd_metrics["graph_topology"]["link_type_counts"] == {"SUPERSEDES": 1}
@@ -388,11 +415,20 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert repair_search["rebuilt"] is True
         fact_checker = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "fact-checker")
         deduplicator = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "deduplicator")
+        taxonomist = next(agent for agent in overview["agent_runs"] if agent["task_name"] == "taxonomist")
         assert fact_checker["failed_runs"] == 1
         assert deduplicator["last_result_metadata"]["strategy_used"] == "semantic"
         assert deduplicator["last_result_metadata"]["candidate_count"] == 6
+        assert deduplicator["last_result_metadata"]["campaign_key"] is None
+        assert taxonomist["last_result_metadata"]["campaign_key"] == "lightweight_review"
+        assert taxonomist["last_result_metadata"]["premium_execution_count"] == 1
+        assert taxonomist["last_result_metadata"]["compatible_batch_calls"] == 1
+        assert taxonomist["last_result_metadata"]["work_items_per_premium_execution"] == 3.0
+        assert taxonomist["last_result_metadata"]["mutations_per_premium_execution"] == 4.0
+        assert taxonomist["last_result_metadata"]["tool_calls_per_premium_execution"] == 6.0
         assert overview["recent_agent_runs"]
         assert any(run["result_metadata"]["strategy_used"] == "semantic" for run in overview["recent_agent_runs"])
+        assert any(run["result_metadata"]["campaign_key"] == "lightweight_review" for run in overview["recent_agent_runs"])
         assert tasks["tasks"][0]["last_error"] == "missing ext link"
         assert {record["id"] for record in memories["records"]} == {primary.id, superseded.id}
         assert detail["record"]["id"] == primary.id

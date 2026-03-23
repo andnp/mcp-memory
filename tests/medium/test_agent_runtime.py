@@ -2,6 +2,7 @@ import json
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import time
 
 import pytest
 
@@ -46,7 +47,7 @@ from mcp_memory.core.agent_runtime import (
 )
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.providers import AgenticRunResult, CopilotCLIAgenticProvider
+from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
@@ -61,13 +62,12 @@ from mcp_memory.core.task_handlers.ingest import (
     _build_ingest_agent_prompt,
     _normalize_ingest_agentic_result,
 )
-from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, SUMMARIZE_MEMORY_PRIORITY, task_priority
+from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
-from mcp_memory.mcp import runtime as runtime_module
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
@@ -243,7 +243,7 @@ def test_build_deduplicator_agent_prompt_routes_closeout_to_task_complete() -> N
 
 
 @pytest.mark.asyncio
-async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
+async def test_ingest_handler_creates_relational_memories_without_enqueueing_summary_tasks(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -308,9 +308,8 @@ async def test_ingest_handler_creates_relational_memories_and_summary_tasks(
             SUMMARIZE_MEMORY_TASK_NAME,
             runtime.workspace_id or "global",
         )
-        assert summary_task is not None
-        assert summary_task.data["memory_id"] == records[0].id
-        assert summary_task.priority == SUMMARIZE_MEMORY_PRIORITY
+        assert summary_task is None
+        assert records[0].summary
     finally:
         runtime.close()
 
@@ -3452,6 +3451,422 @@ async def test_taxonomist_agentic_provider_uses_work_item_lifecycle_tools(monkey
 
 
 @pytest.mark.asyncio
+async def test_taxonomist_skips_agentic_provider_when_no_ready_work_items(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Already leased untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        assert record is not None
+
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key="memory_tagging",
+            execution_lane="agentic",
+            workspace_id=runtime.workspace_id,
+            priority=100,
+            idempotency_key=f"memory_tagging:{record.id}",
+            payload={"memory_id": record.id, "workspace_id": runtime.workspace_id},
+        )
+        assert created is True
+        current_time = time.time()
+        runtime.work_items.claim_batch(
+            family_key="memory_tagging",
+            execution_lane="agentic",
+            lease_owner="other-taxonomist-task",
+            limit=1,
+            workspace_id=runtime.workspace_id,
+            now=current_time,
+            lease_ttl_seconds=600.0,
+        )
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.call_count += 1
+                return AgenticRunResult(status="success", summary="should-not-run")
+
+        provider = _AgenticProvider()
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-precheck-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert provider.call_count == 0
+        assert result["provider_calls_used"] == 0
+        assert result["claimed_work_item_count"] == 0
+        assert result["execution_mode"] == "precheck_skipped"
+        assert result["reason"] == "no_ready_work_items"
+        current_work_item = runtime.work_items.get_item(work_item.id)
+        assert current_work_item.status == "running"
+        assert current_work_item.lease_owner == "other-taxonomist-task"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_agentic_provider_can_drain_multiple_work_batches_in_one_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        records = []
+        for title in ("First untagged fact", "Second untagged fact", "Third untagged fact"):
+            record = runtime.repository.create_memory(
+                title=title,
+                content=f"{title} needs canonical tags.",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[],
+            )
+            assert record is not None
+            records.append(record)
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                updated_memory_ids: list[str] = []
+                for expected_count in (2, 1):
+                    batch_result = await call_internal_memory_tool(
+                        runtime,
+                        "internal_get_work_batch",
+                        {
+                            "task_id": "taxonomist-agentic-multi-batch-task",
+                            "family_key": "memory_tagging",
+                            "execution_lane": "agentic",
+                            "workspace_id": runtime.workspace_id,
+                            "limit": 2,
+                        },
+                    )
+                    batch_payload = json.loads(batch_result[0].text)
+                    assert batch_payload["claimed_count"] == expected_count
+                    for work_item in batch_payload["records"]:
+                        memory_id = work_item["payload"]["memory_id"]
+                        await call_internal_memory_tool(
+                            runtime,
+                            "internal_update_memory_record",
+                            {
+                                "memory_id": memory_id,
+                                "tags": ["auth", "testing"],
+                            },
+                        )
+                        await call_internal_memory_tool(
+                            runtime,
+                            "internal_complete_work_item",
+                            {"work_item_id": work_item["id"]},
+                        )
+                        updated_memory_ids.append(memory_id)
+
+                empty_batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_work_batch",
+                    {
+                        "task_id": "taxonomist-agentic-multi-batch-task",
+                        "family_key": "memory_tagging",
+                        "execution_lane": "agentic",
+                        "workspace_id": runtime.workspace_id,
+                        "limit": 2,
+                    },
+                )
+                empty_batch_payload = json.loads(empty_batch_result[0].text)
+                assert empty_batch_payload["claimed_count"] == 0
+                assert empty_batch_payload["records"] == []
+                return AgenticRunResult(
+                    status="success",
+                    summary="Tagged three records across multiple work batches in one run.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Tagged three records across multiple work batches in one run.",
+                                "updated_memory_ids": updated_memory_ids,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 7,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_get_work_batch": {"count": 3},
+                                    "mcp_mcp-memory-internal_internal_update_memory_record": {"count": 3},
+                                    "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 3},
+                                },
+                            }
+                        },
+                    },
+                )
+
+        provider = _AgenticProvider()
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-agentic-multi-batch-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={
+                    "workspace_id": runtime.workspace_id,
+                    "work_item_batch_limit": 2,
+                    "max_batches_per_run": 4,
+                },
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed = [runtime.repository.get_memory(record.id) for record in records]
+        assert result["updated"] == 3
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["provider_calls_used"] == 1
+        assert result["claimed_work_item_count"] == 3
+        assert result["compatibility_group"] == "lightweight_review"
+        assert result["campaign_key"] == "lightweight_review"
+        assert result["campaign_origin_family"] == "memory_tagging"
+        assert result["campaign_family_keys"] == ["memory_tagging", "graph_link_review", "conflict_review"]
+        assert result["campaign_continuation_supported"] is True
+        assert result["tool_calls_executed"] == 7
+        assert result["mutations"] == 6
+        assert result["compatible_batch_calls"] == 0
+        assert result["work_item_batch_limit"] == 2
+        assert result["max_batches_per_run"] == 4
+        assert result["summary"] == "Tagged three records across multiple work batches in one run."
+        assert all(record is not None and record.tags == ["auth", "testing"] for record in refreshed)
+        assert runtime.work_items is not None
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=10)
+        assert [item.status for item in work_items] == ["completed", "completed", "completed"]
+        assert provider.prompts
+        assert "Aim to drain eligible memory_tagging work for this task in one run" in provider.prompts[0]
+        assert "Stop when the batch comes back empty" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_taxonomist_can_execute_lightweight_follow_on_graph_work_in_one_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        untagged = runtime.repository.create_memory(
+            title="Agentic untagged fact",
+            content="JWT auth requirement for tests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[],
+        )
+        left = runtime.repository.create_memory(
+            title="Auth requirement",
+            content="JWT auth is required for client requests.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        right = runtime.repository.create_memory(
+            title="Client auth guide",
+            content="Client requests must include JWT auth headers.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert untagged is not None and left is not None and right is not None
+
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key="graph_link_review",
+            execution_lane="agentic",
+            workspace_id=runtime.workspace_id,
+            priority=90,
+            idempotency_key=f"graph_link_review:{left.id}:{right.id}",
+            payload={
+                "workspace_id": runtime.workspace_id,
+                "candidate_memory_ids": [left.id, right.id],
+                "strategy_used": "semantic",
+                "candidate_count": 2,
+            },
+        )
+        assert created is True
+
+        class _AgenticProvider:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def supports_agentic(self) -> bool:
+                return True
+
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                self.prompts.append(prompt)
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_work_batch",
+                    {
+                        "task_id": "taxonomist-lightweight-follow-on-task",
+                        "family_key": "memory_tagging",
+                        "execution_lane": "agentic",
+                        "workspace_id": runtime.workspace_id,
+                        "limit": 1,
+                    },
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                tag_work_item = batch_payload["records"][0]
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_update_memory_record",
+                    {"memory_id": untagged.id, "tags": ["auth", "testing"]},
+                )
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_complete_work_item",
+                    {"work_item_id": tag_work_item["id"]},
+                )
+
+                compat_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_compatible_work_batch",
+                    {
+                        "task_id": "taxonomist-lightweight-follow-on-task",
+                        "compatibility_group": "lightweight_review",
+                        "allowed_families": ["graph_link_review"],
+                        "execution_lane": "agentic",
+                        "workspace_id": runtime.workspace_id,
+                        "limit": 1,
+                    },
+                )
+                compat_payload = json.loads(compat_result[0].text)
+                assert compat_payload["claimed_count"] == 1
+                lightweight_item = compat_payload["records"][0]
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_create_memory_link",
+                    {
+                        "source_id": left.id,
+                        "target_id": right.id,
+                        "link_type": "RELATED_TO",
+                        "context": "Lightweight structural follow-on graph review.",
+                    },
+                )
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_complete_work_item",
+                    {"work_item_id": lightweight_item["id"]},
+                )
+                return AgenticRunResult(
+                    status="success",
+                    summary="Tagged and linked records through lightweight follow-on work.",
+                    parsed={
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 6,
+                                "byName": {
+                                    "mcp_mcp-memory-internal_internal_get_work_batch": {"count": 1},
+                                    "mcp_mcp-memory-internal_internal_update_memory_record": {"count": 1},
+                                    "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 2},
+                                    "mcp_mcp-memory-internal_internal_get_compatible_work_batch": {"count": 1},
+                                    "mcp_mcp-memory-internal_internal_create_memory_link": {"count": 1},
+                                },
+                            }
+                        }
+                    },
+                )
+
+        provider = _AgenticProvider()
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-lightweight-follow-on-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id, "work_item_batch_limit": 1, "max_batches_per_run": 3},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed_untagged = runtime.repository.get_memory(untagged.id)
+        refreshed_work_item = runtime.work_items.get_item(work_item.id)
+        links = runtime.repository.get_links(left.id, direction="outgoing", link_type="RELATED_TO")
+
+        assert result["updated"] == 1
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["compatibility_group"] == "lightweight_review"
+        assert result["compatible_batch_calls"] == 1
+        assert refreshed_untagged is not None and refreshed_untagged.tags == ["auth", "testing"]
+        assert refreshed_work_item.status == "completed"
+        assert any(link.target_id == right.id for link in links)
+        assert provider.prompts
+        assert "internal_get_compatible_work_batch" in provider.prompts[0]
+        assert "lightweight_review" in provider.prompts[0]
+        assert "graph_link_review" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -3757,10 +4172,12 @@ async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path)
         assert result["work_item_family"] == "memory_dedup_review"
         assert result["work_item_execution_lane"] == "agentic"
         assert result["seed_source"] == "frontier_seed"
-        assert result["seed_record_count"] >= 2
+        assert result["seed_record_count"] >= 3
         assert [item.status for item in review_items] == ["pending"]
         assert result["created_work_item_id"] == review_items[0].id
         assert set(review_items[0].payload["seed_memory_ids"]) >= {first.id, second.id}
+        packet_ids = set(review_items[0].payload["seed_memory_ids"]) | set(review_items[0].payload["support_memory_ids"])
+        assert observation.id in packet_ids
     finally:
         runtime.close()
 
@@ -4841,7 +5258,14 @@ async def test_curator_frontier_seeds_agentic_review_work_item(monkeypatch, tmp_
             memory_type="fact",
             tags=["architecture", "oversized"],
         )
-        assert record is not None
+        related = runtime.repository.create_memory(
+            title="Architecture observation",
+            content="Related architecture note for the same oversized topic.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["architecture"],
+        )
+        assert record is not None and related is not None
 
         result = await handle_curator_frontier_task(
             runtime,
@@ -4870,11 +5294,12 @@ async def test_curator_frontier_seeds_agentic_review_work_item(monkeypatch, tmp_
         assert result["work_item_family"] == "memory_curation_review"
         assert result["work_item_execution_lane"] == "agentic"
         assert result["seed_source"] == "frontier_seed"
-        assert result["seed_record_count"] == 1
+        assert result["seed_record_count"] == 2
         assert queued
         assert result["created_work_item_id"] == queued[0].id
         assert queued[0].family_key == "memory_curation_review"
-        assert queued[0].payload["seed_memory_ids"] == [record.id]
+        packet_ids = set(queued[0].payload["seed_memory_ids"]) | set(queued[0].payload["support_memory_ids"])
+        assert packet_ids == {record.id, related.id}
     finally:
         runtime.close()
 
@@ -4960,6 +5385,161 @@ async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch
         assert provider.prompts
         assert f'"{record.id}"' in provider.prompts[0]
         assert "exclude_memory_ids" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def supports_agentic(self) -> bool:
+            return True
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            batch_result = await call_internal_memory_tool(
+                runtime,
+                "internal_get_compatible_work_batch",
+                {
+                    "task_id": "memory-curator-structural-follow-on-task",
+                    "compatibility_group": "structural_review",
+                    "allowed_families": ["memory_dedup_review"],
+                    "execution_lane": "agentic",
+                    "workspace_id": runtime.workspace_id,
+                    "limit": 1,
+                },
+            )
+            batch_payload = json.loads(batch_result[0].text)
+            assert batch_payload["claimed_count"] == 1
+            work_item = batch_payload["records"][0]
+            seed_memory_ids = work_item["payload"]["seed_memory_ids"]
+            canonical_id, duplicate_id = seed_memory_ids
+            await call_internal_memory_tool(
+                runtime,
+                "internal_merge_memory_into_canonical",
+                {
+                    "canonical_memory_id": canonical_id,
+                    "source_memory_id": duplicate_id,
+                    "summary": "Canonical testing preference after structural batching.",
+                    "metadata": {"deduplicator_task_id": "memory-curator-structural-follow-on-task"},
+                },
+            )
+            await call_internal_memory_tool(
+                runtime,
+                "internal_complete_work_item",
+                {"work_item_id": work_item["id"]},
+            )
+            return AgenticRunResult(
+                status="success",
+                summary="Curator completed structural follow-on work in one run.",
+                parsed={
+                    "stats": {
+                        "tools": {
+                            "totalCalls": 3,
+                            "byName": {
+                                "mcp_mcp-memory-internal_internal_get_compatible_work_batch": {"count": 1},
+                                "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 1},
+                                "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 1},
+                            },
+                        }
+                    }
+                },
+            )
+
+    try:
+        oversized = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        canonical = runtime.repository.create_memory(
+            title="Testing preferences",
+            content="Use pytest for integration tests and avoid brittle mocks.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        duplicate = runtime.repository.create_memory(
+            title="Testing preferences duplicate",
+            content="Use pytest for integration tests and avoid brittle mocks.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert oversized is not None and canonical is not None and duplicate is not None
+
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key="memory_dedup_review",
+            execution_lane="agentic",
+            workspace_id=runtime.workspace_id,
+            priority=90,
+            idempotency_key=f"memory_dedup_review:{canonical.id}:{duplicate.id}",
+            payload={
+                "workspace_id": runtime.workspace_id,
+                "seed_memory_ids": [canonical.id, duplicate.id],
+                "strategy_used": "semantic",
+                "candidate_count": 2,
+            },
+        )
+        assert created is True
+
+        provider = _AgenticProvider()
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-structural-follow-on-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=95,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed_duplicate = runtime.repository.get_memory(duplicate.id)
+        refreshed_work_item = runtime.work_items.get_item(work_item.id)
+
+        assert result["summary"] == "Curator completed structural follow-on work in one run."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["compatibility_group"] == "structural_review"
+        assert result["campaign_key"] == "structural_review"
+        assert result["campaign_origin_family"] == "memory_curation_review"
+        assert result["campaign_family_keys"] == ["memory_curation_review", "memory_dedup_review"]
+        assert result["campaign_continuation_supported"] is True
+        assert result["tool_calls_executed"] == 3
+        assert result["mutations"] == 2
+        assert result["compatible_batch_calls"] == 1
+        assert refreshed_duplicate is not None and refreshed_duplicate.status == "archived"
+        assert refreshed_work_item.status == "completed"
+        assert provider.prompts
+        assert "internal_get_compatible_work_batch" in provider.prompts[0]
+        assert "structural_review" in provider.prompts[0]
+        assert "memory_dedup_review" in provider.prompts[0]
+        assert "Treat this run as a structural-review campaign" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -5687,10 +6267,6 @@ async def test_runtime_worker_processes_enqueued_ingest_task(monkeypatch, tmp_pa
     assert runtime.repository is not None
 
     try:
-        runtime.ai_json_provider = None
-        runtime.ai_agent_provider = None
-        runtime.ai_provider = None
-        runtime.ai_provider_registry = {}
         runtime.journal.record("first queue thought")
         runtime.journal.record("second queue thought")
         runtime.task_queue.enqueue(
@@ -5743,7 +6319,6 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
         )
         runtime.ai_json_provider = fake_provider
         runtime.ai_provider = fake_provider
-        runtime.ai_provider_registry = {}
         task = runtime.task_queue.enqueue(
             SYSTEM1_INGEST_TASK_NAME,
             workspace_id=runtime.workspace_id,
@@ -5778,14 +6353,13 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
     "task_name",
     [SYSTEM1_INGEST_TASK_NAME, DEDUPLICATOR_TASK_NAME, CURATOR_TASK_NAME],
 )
-async def test_runtime_agentic_routes_prefer_copilot_agentic_provider(
+async def test_runtime_does_not_construct_provider_registry_during_tests(
     monkeypatch,
     tmp_path: Path,
     task_name: str,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr(runtime_module, "_provider_command_available", lambda provider: True)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -5809,9 +6383,10 @@ async def test_runtime_agentic_routes_prefer_copilot_agentic_provider(
             task,
         )
 
-        assert selected is not None
-        wrapped_provider = getattr(selected, "_provider", None)
-        assert isinstance(wrapped_provider, CopilotCLIAgenticProvider)
+        assert runtime.ai_json_provider is None
+        assert runtime.ai_agent_provider is None
+        assert runtime.ai_provider_registry == {}
+        assert selected is None
     finally:
         runtime.close()
 
@@ -5828,10 +6403,6 @@ async def test_runtime_worker_drains_multiple_ingest_batches(monkeypatch, tmp_pa
     assert runtime.task_queue is not None
 
     try:
-        runtime.ai_json_provider = None
-        runtime.ai_agent_provider = None
-        runtime.ai_provider = None
-        runtime.ai_provider_registry = {}
         for index in range(45):
             runtime.journal.record(f"sqlite queue batch item {index}")
 
