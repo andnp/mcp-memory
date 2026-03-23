@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_submission import enqueue_summary_refresh_task
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -62,16 +63,11 @@ def _merge_metadata_lists(existing: list[Any], override: list[Any]) -> list[Any]
 def _enqueue_summary_task(ctx: ApplicationContext, memory_id: str, workspace_ids: list[str]) -> None:
     if ctx.task_queue is None:
         return
-    from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
-
-    workspace_id = workspace_ids[0] if workspace_ids else ctx.workspace_id
     try:
-        ctx.task_queue.enqueue(
-            task_name=SUMMARIZE_MEMORY_TASK_NAME,
-            task_id=f"{SUMMARIZE_MEMORY_TASK_NAME}:{memory_id}",
-            workspace_id=workspace_id,
-            data={"memory_id": memory_id},
-            priority=SUMMARIZE_MEMORY_PRIORITY,
+        enqueue_summary_refresh_task(
+            ctx,
+            memory_id=memory_id,
+            workspace_ids=workspace_ids,
         )
     except sqlite3.IntegrityError:
         return

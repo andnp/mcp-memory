@@ -10,7 +10,6 @@ from mcp_memory.core.ingest_provenance import (
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
-    _enqueue_summary_task,
     _memory_write_quality_error,
     _memory_write_quality_warnings,
     _merge_memory_metadata,
@@ -209,7 +208,6 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         ),
     )
     assert record is not None
-    _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
     _record_successful_ingest_entry_ids(ctx, task_id=task_id, entry_ids=entry_ids)
     _record_successful_ingest_entry_dispositions(
         ctx,

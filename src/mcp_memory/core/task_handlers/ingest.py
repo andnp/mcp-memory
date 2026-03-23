@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from random import Random
-import sqlite3
 from datetime import UTC, datetime
 import re
 from typing import Any, Awaitable, Callable, cast
@@ -26,8 +25,6 @@ from mcp_memory.core.task_handlers.ingest_support import (
 )
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
-    SUMMARIZE_MEMORY_TASK_NAME,
-    SUMMARIZE_MEMORY_PRIORITY,
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
@@ -702,7 +699,6 @@ def _execute_ingest_actions(
             )
         )
         meaningful_actions += 1
-        _enqueue_summary_task(ctx, _primary_workspace_id(record.workspace_ids), record.id)
 
     return created_ids, handled_ids, meaningful_actions, entry_dispositions
 
@@ -751,7 +747,6 @@ def _fallback_ingest_entries(
         ),
     )
     assert record is not None
-    _enqueue_summary_task(ctx, _primary_workspace_id(workspace_ids), record.id)
     return (
         [record.id],
         [entry.id for entry in entries],
@@ -763,27 +758,6 @@ def _fallback_ingest_entries(
             memory_title=record.title,
         ),
     )
-
-
-def _enqueue_summary_task(
-    ctx: ApplicationContext,
-    workspace_id: str | None,
-    memory_id: str,
-) -> None:
-    if ctx.task_queue is None:
-        return
-    try:
-        ctx.task_queue.enqueue(
-            task_name=SUMMARIZE_MEMORY_TASK_NAME,
-            task_id=f"{SUMMARIZE_MEMORY_TASK_NAME}:{memory_id}",
-            workspace_id=workspace_id,
-            data={"memory_id": memory_id},
-            priority=SUMMARIZE_MEMORY_PRIORITY,
-        )
-    except sqlite3.IntegrityError:
-        return
-
-
 def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str:
     task_workspace = task.data.get("workspace_id")
     if isinstance(task_workspace, str) and task_workspace.strip():

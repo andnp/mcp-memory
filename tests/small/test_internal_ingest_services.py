@@ -6,6 +6,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME, SYSTEM1_INGEST_TASK_NAME
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.mcp.internal_service_support import _enqueue_summary_task
 from mcp_memory.mcp.internal_ingest_services import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
@@ -134,9 +135,50 @@ def test_internal_ingest_create_normalizes_mixed_duplicate_entry_ids_and_records
     ]
 
     summary_task = ctx.task_queue.find_open_task(SUMMARIZE_MEMORY_TASK_NAME, ctx.workspace_id)
-    assert summary_task is not None
-    assert summary_task.data == {"memory_id": record.id}
-    assert summary_task.priority == SUMMARIZE_MEMORY_PRIORITY
+    assert summary_task is None
+    assert record.summary
+
+
+def test_enqueue_summary_task_coalesces_open_work_and_can_requeue_after_completion(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    assert ctx.repository is not None
+    assert ctx.task_queue is not None
+
+    record = ctx.repository.create_memory(
+        title="Summary refresh target",
+        content="Deterministic summaries should avoid duplicate queue churn.",
+        workspace_ids=[ctx.workspace_id or "workspace-a"],
+        memory_type="observation",
+    )
+    assert record is not None
+
+    _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
+    _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
+
+    summary_tasks = ctx.task_queue.list_tasks(
+        status="pending",
+        workspace_id=ctx.workspace_id,
+        limit=10,
+    )
+    summary_tasks = [task for task in summary_tasks if task.task_name == SUMMARIZE_MEMORY_TASK_NAME]
+    assert len(summary_tasks) == 1
+    assert summary_tasks[0].data == {"memory_id": record.id}
+    assert summary_tasks[0].priority == SUMMARIZE_MEMORY_PRIORITY
+
+    claimed = ctx.task_queue.claim_next(now=summary_tasks[0].available_at, workspace_id=ctx.workspace_id)
+    assert claimed is not None
+    assert claimed.task_name == SUMMARIZE_MEMORY_TASK_NAME
+    ctx.task_queue.complete(claimed.id, completed_at=claimed.claimed_at or summary_tasks[0].available_at)
+
+    _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
+
+    requeued = ctx.task_queue.find_open_task_with_data(
+        SUMMARIZE_MEMORY_TASK_NAME,
+        workspace_id=ctx.workspace_id,
+        data_fields={"memory_id": record.id},
+    )
+    assert requeued is not None
+    assert requeued.id != claimed.id
 
 
 def test_internal_ingest_create_rejects_routine_completion_trace_payload(db_manager) -> None:
