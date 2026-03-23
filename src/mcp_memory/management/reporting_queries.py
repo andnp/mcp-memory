@@ -88,7 +88,7 @@ def list_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | N
     if db_manager is None:
         return []
     conn = db_manager.get_connection()
-    query = "SELECT status, completed_at, duration_seconds FROM task_runs WHERE completed_at >= ?"
+    query = "SELECT status, completed_at, duration_seconds, result_json FROM task_runs WHERE completed_at >= ?"
     params: list[object] = [cutoff]
     if workspace_id is not None:
         query += " AND workspace_id = ?"

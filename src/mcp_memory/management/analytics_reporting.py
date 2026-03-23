@@ -384,6 +384,19 @@ def build_nerd_metrics(
     all_provider_durations: list[float] = []
     provider_failures = 0
     provider_skips = 0
+    premium_execution_count = 0
+    premium_claimed_work_item_count = 0
+    premium_mutations = 0
+    premium_tool_calls = 0
+    compatible_batch_calls = 0
+    for row in task_rows:
+        result = decode_run_result(row["result_json"])
+        result_metadata = extract_run_result_metadata(result)
+        premium_execution_count += result_metadata.provider_calls_used or 0
+        premium_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
+        premium_mutations += result_metadata.mutations or 0
+        premium_tool_calls += result_metadata.tool_calls_executed or 0
+        compatible_batch_calls += result_metadata.compatible_batch_calls or 0
     for row in provider_rows:
         status = str(row["status"])
         if status == "skipped":
@@ -512,6 +525,26 @@ def build_nerd_metrics(
         NerdStatPayload(key="provider_p95_latency", label="Provider p95 latency", value=round(_percentile(all_provider_durations, 0.95), 4), unit="s"),
         NerdStatPayload(key="provider_failure_rate", label="Provider failure rate", value=round(provider_failure_rate, 4), unit="pct"),
         NerdStatPayload(key="provider_skip_rate", label="Provider skip rate", value=round(provider_skip_rate, 4), unit="pct"),
+        NerdStatPayload(key="premium_execution_count", label="Premium executions", value=float(premium_execution_count), unit="calls"),
+        NerdStatPayload(key="compatible_batch_calls", label="Compatible batch calls", value=float(compatible_batch_calls), unit="calls"),
+        NerdStatPayload(
+            key="work_items_per_premium_execution",
+            label="Work items per premium execution",
+            value=0.0 if premium_execution_count <= 0 else round(premium_claimed_work_item_count / premium_execution_count, 4),
+            unit="ratio",
+        ),
+        NerdStatPayload(
+            key="mutations_per_premium_execution",
+            label="Mutations per premium execution",
+            value=0.0 if premium_execution_count <= 0 else round(premium_mutations / premium_execution_count, 4),
+            unit="ratio",
+        ),
+        NerdStatPayload(
+            key="tool_calls_per_premium_execution",
+            label="Tool calls per premium execution",
+            value=0.0 if premium_execution_count <= 0 else round(premium_tool_calls / premium_execution_count, 4),
+            unit="ratio",
+        ),
         NerdStatPayload(key="orphan_rate", label="Orphan rate", value=round(graph_topology.orphan_rate, 4), unit="pct"),
         NerdStatPayload(key="cold_memory_rate", label="Cold memory rate", value=round(memory_lifecycle.cold_memory_rate, 4), unit="pct"),
         NerdStatPayload(key="search_fallback_count", label="Search fallback count", value=float(search_quality.fallback_count), unit="count"),

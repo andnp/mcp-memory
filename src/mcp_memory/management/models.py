@@ -113,10 +113,26 @@ class RunResultMetadataPayload(BaseModel):
     strategy_fallback_reason: str | None = None
     candidate_count: int | None = None
     sampled_memory_ids: list[str] = Field(default_factory=list)
+    compatibility_group: str | None = None
+    claimed_work_item_count: int | None = None
+    provider_calls_used: int | None = None
+    tool_calls_executed: int | None = None
+    mutations: int | None = None
+    work_item_batch_limit: int | None = None
+    max_batches_per_run: int | None = None
     requested_grouping_strategy: str | None = None
     grouping_strategy_used: str | None = None
     grouping_fallback_reason: str | None = None
     group_count: int | None = None
+    campaign_key: str | None = None
+    campaign_origin_family: str | None = None
+    campaign_family_keys: list[str] = Field(default_factory=list)
+    campaign_continuation_supported: bool | None = None
+    compatible_batch_calls: int | None = None
+    premium_execution_count: int | None = None
+    work_items_per_premium_execution: float | None = None
+    mutations_per_premium_execution: float | None = None
+    tool_calls_per_premium_execution: float | None = None
 
 
 class IngestEntryDispositionPayload(BaseModel):

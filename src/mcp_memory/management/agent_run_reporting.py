@@ -164,10 +164,22 @@ def format_result_summary(result: dict[str, object]) -> str | None:
         "strategy_fallback_reason",
         "candidate_count",
         "sampled_memory_ids",
+        "compatibility_group",
+        "claimed_work_item_count",
+        "provider_calls_used",
+        "tool_calls_executed",
+        "mutations",
+        "work_item_batch_limit",
+        "max_batches_per_run",
         "requested_grouping_strategy",
         "grouping_strategy_used",
         "grouping_fallback_reason",
         "group_count",
+        "campaign_key",
+        "campaign_origin_family",
+        "campaign_family_keys",
+        "campaign_continuation_supported",
+        "compatible_batch_calls",
     )
     formatted_parts: list[str] = []
     for key in preferred_keys:
@@ -191,16 +203,36 @@ def format_result_summary(result: dict[str, object]) -> str | None:
 
 def extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataPayload:
     sampled_memory_ids = result.get("sampled_memory_ids")
+    claimed_work_item_count = _coerce_int(result.get("claimed_work_item_count"))
+    provider_calls_used = _coerce_int(result.get("provider_calls_used"))
+    tool_calls_executed = _coerce_int(result.get("tool_calls_executed"))
+    mutations = _coerce_int(result.get("mutations"))
     return RunResultMetadataPayload(
         requested_strategy=_coerce_str(result.get("requested_strategy")),
         strategy_used=_coerce_str(result.get("strategy_used")),
         strategy_fallback_reason=_coerce_str(result.get("strategy_fallback_reason")),
         candidate_count=_coerce_int(result.get("candidate_count")),
         sampled_memory_ids=[str(item) for item in sampled_memory_ids] if isinstance(sampled_memory_ids, list) else [],
+        compatibility_group=_coerce_str(result.get("compatibility_group")),
+        claimed_work_item_count=claimed_work_item_count,
+        provider_calls_used=provider_calls_used,
+        tool_calls_executed=tool_calls_executed,
+        mutations=mutations,
+        work_item_batch_limit=_coerce_int(result.get("work_item_batch_limit")),
+        max_batches_per_run=_coerce_int(result.get("max_batches_per_run")),
         requested_grouping_strategy=_coerce_str(result.get("requested_grouping_strategy")),
         grouping_strategy_used=_coerce_str(result.get("grouping_strategy_used")),
         grouping_fallback_reason=_coerce_str(result.get("grouping_fallback_reason")),
         group_count=_coerce_int(result.get("group_count")),
+        campaign_key=_coerce_str(result.get("campaign_key")),
+        campaign_origin_family=_coerce_str(result.get("campaign_origin_family")),
+        campaign_family_keys=_coerce_str_list(result.get("campaign_family_keys")),
+        campaign_continuation_supported=_coerce_bool(result.get("campaign_continuation_supported")),
+        compatible_batch_calls=_coerce_int(result.get("compatible_batch_calls")),
+        premium_execution_count=provider_calls_used,
+        work_items_per_premium_execution=_ratio_or_none(claimed_work_item_count, provider_calls_used),
+        mutations_per_premium_execution=_ratio_or_none(mutations, provider_calls_used),
+        tool_calls_per_premium_execution=_ratio_or_none(tool_calls_executed, provider_calls_used),
     )
 
 
@@ -256,6 +288,16 @@ def _coerce_str(value: object) -> str | None:
 
 def _coerce_int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _coerce_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _ratio_or_none(numerator: int | None, denominator: int | None) -> float | None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
 
 
 def _coerce_str_list(value: object) -> list[str]:
