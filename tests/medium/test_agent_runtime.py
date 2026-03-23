@@ -69,6 +69,10 @@ from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp import runtime as runtime_module
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.work_item_store import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_MEMORY_CURATION_REVIEW,
+)
 from tests.sdk.providers import FakeAIProvider
 
 
@@ -2123,6 +2127,142 @@ async def test_runtime_task_worker_survives_unexpected_post_claim_errors(db_mana
     assert refreshed_first.status == "failed"
     assert refreshed_first.last_error == "Unhandled runtime task worker error: synthetic completion failure"
     assert refreshed_second.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_releases_claimed_work_items_when_task_fails(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.task_queue is not None
+    assert runtime.work_items is not None
+
+    try:
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": ["seed-memory"], "workspace_id": runtime.workspace_id},
+            priority=100,
+            idempotency_key="test:runtime-worker-release-work-item",
+        )
+        assert created is True
+
+        task = runtime.task_queue.enqueue(
+            "test-work-item-release",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+            task_id="test-work-item-release-task",
+        )
+
+        def failing_handler(context, queued_task):
+            claimed = context.work_items.claim_batch(
+                family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+                execution_lane=EXECUTION_LANE_AGENTIC,
+                lease_owner=queued_task.id,
+                limit=1,
+                workspace_id=queued_task.workspace_id,
+            )
+            assert len(claimed) == 1
+            raise RuntimeError("synthetic handler crash")
+
+        worker = RuntimeTaskWorker(
+            runtime,
+            handlers={"test-work-item-release": failing_handler},
+            poll_interval_seconds=0.01,
+            abandoned_recovery_interval_seconds=60.0,
+        )
+
+        await worker.start()
+        try:
+            for _ in range(100):
+                refreshed_task = runtime.task_queue.get_task(task.id)
+                refreshed_item = runtime.work_items.get_item(work_item.id)
+                if refreshed_task.status == "failed" and refreshed_item.status == "pending":
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await worker.stop(0.05)
+
+        refreshed_task = runtime.task_queue.get_task(task.id)
+        refreshed_item = runtime.work_items.get_item(work_item.id)
+
+        assert refreshed_task.status == "failed"
+        assert refreshed_task.last_error == "synthetic handler crash"
+        assert refreshed_item.status == "pending"
+        assert refreshed_item.lease_owner is None
+        assert refreshed_item.attempt_count >= 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_recovers_work_items_owned_by_terminal_tasks_on_startup(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.task_queue is not None
+    assert runtime.work_items is not None
+
+    try:
+        task = runtime.task_queue.enqueue(
+            "test-startup-work-item-recovery",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+            task_id="test-startup-work-item-recovery-task",
+        )
+        claimed_task = runtime.task_queue.claim_next(now=1.0)
+        assert claimed_task is not None
+
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": ["seed-memory"], "workspace_id": runtime.workspace_id},
+            priority=100,
+            idempotency_key="test:runtime-worker-startup-recover-work-item",
+        )
+        assert created is True
+
+        claimed_items = runtime.work_items.claim_batch(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            lease_owner=task.id,
+            limit=1,
+            workspace_id=runtime.workspace_id,
+        )
+        assert len(claimed_items) == 1
+
+        runtime.task_queue.fail_permanently(task.id, "synthetic terminal task")
+
+        worker = RuntimeTaskWorker(
+            runtime,
+            handlers={"test-startup-work-item-recovery": lambda context, queued_task: None},
+            poll_interval_seconds=0.01,
+            abandoned_recovery_interval_seconds=60.0,
+        )
+
+        await worker.start()
+        try:
+            for _ in range(100):
+                refreshed_item = runtime.work_items.get_item(work_item.id)
+                if refreshed_item.status == "pending":
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await worker.stop(0.05)
+
+        refreshed_item = runtime.work_items.get_item(work_item.id)
+        assert refreshed_item.status == "pending"
+        assert refreshed_item.lease_owner is None
+    finally:
+        runtime.close()
 
 
 @pytest.mark.asyncio

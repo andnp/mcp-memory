@@ -80,12 +80,13 @@ class RuntimeTaskWorker:
         if task_queue is None:
             return
 
+        await asyncio.to_thread(self._recover_leaked_work_items)
         recovered_tasks = await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
             stale_after_seconds=self._abandoned_task_stale_after_seconds,
         )
         for recovered_task in recovered_tasks:
-            await asyncio.to_thread(self._reconcile_task_conversations, recovered_task)
+            await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
         journal = getattr(self._ctx, "journal", None)
         if journal is not None:
             await asyncio.to_thread(journal.release_orphaned_claims)
@@ -150,7 +151,7 @@ class RuntimeTaskWorker:
             )
             return
 
-        await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
+        await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
         await self._schedule_follow_up(task, failed_task)
 
     async def _recover_abandoned_tasks(self, task_queue) -> None:
@@ -158,13 +159,14 @@ class RuntimeTaskWorker:
         if current_time < self._next_abandoned_recovery_at:
             return
         self._next_abandoned_recovery_at = current_time + self._abandoned_recovery_interval_seconds
+        await asyncio.to_thread(self._recover_leaked_work_items)
         recovered_tasks = await asyncio.to_thread(
             task_queue.recover_abandoned_running_tasks,
             stale_after_seconds=self._abandoned_task_stale_after_seconds,
             now=current_time,
         )
         for recovered_task in recovered_tasks:
-            await asyncio.to_thread(self._reconcile_task_conversations, recovered_task)
+            await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
 
     async def _process_task(self, task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -206,7 +208,7 @@ class RuntimeTaskWorker:
                     None,
                     build_idle_pause_result(task, idle_state),
                 )
-                await asyncio.to_thread(self._reconcile_task_conversations, completed_task)
+                await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
                 return
 
         try:
@@ -219,19 +221,19 @@ class RuntimeTaskWorker:
         except asyncio.CancelledError:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
                 cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
-                await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
+                await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             else:
                 failed_task = await asyncio.to_thread(
                     task_queue.fail_permanently,
                     task.id,
                     "Task interrupted during worker shutdown",
                 )
-                await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
+                await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
             raise
         except Exception as exc:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
                 cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
-                await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
+                await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
                 return
             retry_delay_seconds = self._retry_delay_seconds
             requested_retry_delay = getattr(exc, "retry_delay_seconds", None)
@@ -243,18 +245,23 @@ class RuntimeTaskWorker:
                 str(exc),
                 retry_delay_seconds,
             )
-            await asyncio.to_thread(self._reconcile_task_conversations, failed_task)
+            await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
             await self._schedule_follow_up(task, failed_task)
             return
 
         normalized_result = result if isinstance(result, dict) else {}
         if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
             cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
-            await asyncio.to_thread(self._reconcile_task_conversations, cancelled_task)
+            await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             await self._schedule_follow_up(task, cancelled_task)
             return
         completed_task = await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
+        await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
         await self._schedule_follow_up(task, completed_task)
+
+    def _reconcile_terminal_task_state(self, task: TaskRecord) -> None:
+        self._reconcile_task_conversations(task)
+        self._release_task_work_items(task)
 
     def _reconcile_task_conversations(self, task: TaskRecord) -> None:
         if task.status not in {"failed", "cancelled"}:
@@ -266,6 +273,56 @@ class RuntimeTaskWorker:
             error_text=task.last_error,
             completed_at=task.completed_at or task.updated_at,
         )
+
+    def _release_task_work_items(self, task: TaskRecord) -> None:
+        work_items = getattr(self._ctx, "work_items", None)
+        if work_items is None:
+            return
+        released_at = task.completed_at or task.updated_at
+        for work_item in work_items.list_items(status="running", lease_owner=task.id, limit=100):
+            try:
+                work_items.release_item(work_item.id, released_at=released_at)
+            except Exception:
+                logger.exception(
+                    "Runtime task worker failed to release a leaked work item for a terminal task",
+                    extra={
+                        "task_id": task.id,
+                        "task_name": task.task_name,
+                        "task_status": task.status,
+                        "work_item_id": work_item.id,
+                        "work_item_family": work_item.family_key,
+                    },
+                )
+
+    def _recover_leaked_work_items(self) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        work_items = getattr(self._ctx, "work_items", None)
+        if task_queue is None or work_items is None:
+            return
+        for work_item in work_items.list_items(status="running", limit=200):
+            lease_owner = work_item.lease_owner
+            if not isinstance(lease_owner, str) or not lease_owner:
+                self._release_recovered_work_item(work_items, work_item.id, work_item.family_key)
+                continue
+            try:
+                owner_task = task_queue.get_task(lease_owner)
+            except Exception:
+                self._release_recovered_work_item(work_items, work_item.id, work_item.family_key)
+                continue
+            if owner_task.status != "running":
+                self._release_recovered_work_item(work_items, work_item.id, work_item.family_key)
+
+    def _release_recovered_work_item(self, work_items, work_item_id: str, family_key: str) -> None:
+        try:
+            work_items.release_item(work_item_id)
+        except Exception:
+            logger.exception(
+                "Runtime task worker failed to recover a leaked running work item",
+                extra={
+                    "work_item_id": work_item_id,
+                    "work_item_family": family_key,
+                },
+            )
 
     async def _schedule_follow_up(self, task: TaskRecord, terminal_task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
