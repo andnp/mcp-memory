@@ -41,6 +41,7 @@ def enqueue_review_work_item(
     memory_ids: list[str],
     strategy_used: str | None,
     candidate_count: int | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[Any, bool]:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None:
@@ -53,6 +54,8 @@ def enqueue_review_work_item(
     }
     if candidate_count is not None:
         payload["candidate_count"] = candidate_count
+    if extra_payload:
+        payload.update(extra_payload)
     return work_items.enqueue_unique(
         family_key=family_key,
         execution_lane=execution_lane,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from inspect import isawaitable
+import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
@@ -14,9 +15,15 @@ from mcp_memory.core.sampling import (
     COLD_STORAGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
 )
+from mcp_memory.core.task_handlers.campaigns import (
+    campaign_family_keys,
+    campaign_metadata,
+    count_named_tool_calls_from_stats,
+)
 from mcp_memory.core.task_handlers.maintenance_framework import SamplingBatch, sampling_payload
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
+    COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
     EXECUTION_LANE_AGENTIC,
     EXECUTION_LANE_DETERMINISTIC,
     WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
@@ -34,6 +41,9 @@ TAXONOMIST_STRATEGY_WEIGHTS = {
     BOUNDED_NOISE_STRATEGY: 1,
 }
 TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET = 1
+TAXONOMIST_DEFAULT_WORK_ITEM_BATCH_LIMIT = 5
+TAXONOMIST_DEFAULT_MAX_BATCHES_PER_RUN = 4
+TAXONOMIST_WORK_ITEM_PRECHECK_LIMIT = 64
 
 
 def provider_call_budget(ctx: ApplicationContext, provider: Any) -> int:
@@ -45,6 +55,22 @@ def provider_call_budget(ctx: ApplicationContext, provider: Any) -> int:
     if isinstance(configured_limit, int) and configured_limit > 0:
         return configured_limit
     return TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET
+
+
+def work_item_batch_limit(task: TaskRecord) -> int:
+    raw_limit = task.data.get("work_item_batch_limit", TAXONOMIST_DEFAULT_WORK_ITEM_BATCH_LIMIT)
+    try:
+        return max(1, int(raw_limit))
+    except (TypeError, ValueError):
+        return TAXONOMIST_DEFAULT_WORK_ITEM_BATCH_LIMIT
+
+
+def max_batches_per_run(task: TaskRecord) -> int:
+    raw_limit = task.data.get("max_batches_per_run", TAXONOMIST_DEFAULT_MAX_BATCHES_PER_RUN)
+    try:
+        return max(1, int(raw_limit))
+    except (TypeError, ValueError):
+        return TAXONOMIST_DEFAULT_MAX_BATCHES_PER_RUN
 
 
 def supports_agentic_execution(provider: Any) -> bool:
@@ -228,15 +254,26 @@ def build_agent_prompt(
     *,
     workspace_id: str | None,
     provider_call_budget: int,
+    work_item_batch_limit: int,
+    max_batches_per_run: int,
 ) -> str:
     workspace_scope = workspace_id or "global"
+    lightweight_families = list(campaign_family_keys(COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW))
     return (
         "You are the taxonomist maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
-        f"Start with internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_scope}', and limit={provider_call_budget}.\n"
+        "Treat this run as a lightweight-review campaign: if the current tagging batch is done, keep the same provider session alive while compatible lightweight work remains productive and safe.\n"
+        f"Aim to drain eligible {WORK_FAMILY_MEMORY_TAGGING} work for this task in one run without leaving the family boundary.\n"
+        f"Repeatedly call internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_scope}', and limit={work_item_batch_limit}.\n"
+        f"Stop when the batch comes back empty, when you finish {max_batches_per_run} batch pulls, or when lease/time safety suggests you should stop.\n"
         "For each claimed work item, read the target memory, normalize its tags to a concise canonical set, use internal_update_memory_record when the tag set should change, and then finalize the work item.\n"
+        f"After the active tagging frontier is exhausted, you may continue with lightweight follow-on work by calling internal_get_compatible_work_batch using task_id='{task.id}', compatibility_group='lightweight_review', execution_lane='{EXECUTION_LANE_AGENTIC}', allowed_families={lightweight_families}, workspace_id='{workspace_scope}', and limit={work_item_batch_limit}.\n"
+        "For claimed graph_link_review items, inspect payload.candidate_memory_ids, read the candidate memories, and create safe typed links with internal_create_memory_link when justified. For claimed conflict_review items, inspect payload.candidate_memory_ids, read the candidate memories, and add CONTRADICTS links only when the conflict is explicit and evidence-backed.\n"
+        "When you claim follow-on lightweight work, complete, release, defer, or heartbeat that work item yourself through the work-item lifecycle tools before moving on.\n"
+        "Do not stop the provider session just because the initial tagging loop ended if one more compatible lightweight item would still be high-yield.\n"
         "Use internal_complete_work_item after a successful tag decision, internal_release_work_item when no safe change is needed, and internal_defer_work_item only when a claimed item truly needs delayed retry semantics.\n"
         "Use internal_heartbeat_work_item if you need to extend a claimed lease before finishing it.\n"
+        f"You still have only one external model execution for this run, so maximize useful work inside that single run. Provider call budget for this run: {provider_call_budget}.\n"
         "Do not create journal or memory records for routine status traces.\n"
         'When finished, output final JSON only in the form {"summary": "...", "updated_memory_ids": ["..."]}.\n'
     )
@@ -287,16 +324,61 @@ def count_updated_records(ctx: ApplicationContext, memory_ids: set[str]) -> int:
     return updated
 
 
+def has_ready_tagging_work(
+    ctx: ApplicationContext,
+    *,
+    workspace_id: str | None,
+) -> bool:
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None:
+        return False
+    now = time.time()
+
+    for item in work_items.list_items(
+        family_key=WORK_FAMILY_MEMORY_TAGGING,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        limit=TAXONOMIST_WORK_ITEM_PRECHECK_LIMIT,
+    ):
+        if item.status in {"pending", "deferred"} and item.available_at <= now:
+            return True
+        if item.status == "running" and item.lease_expires_at is not None and item.lease_expires_at <= now:
+            return True
+    return False
+
+
 def normalize_agentic_result(agentic_result: Any, *, coerce_text_summary, extract_embedded_json_object) -> dict[str, Any]:
     summary = coerce_text_summary(getattr(agentic_result, "summary", None))
     parsed = getattr(agentic_result, "parsed", None)
+    tool_stats: dict[str, Any] = {}
+    tool_payload: dict[str, Any] = {}
+    tool_counts: dict[str, Any] = {}
+    if isinstance(parsed, dict):
+        raw_tool_stats = parsed.get("stats")
+        if isinstance(raw_tool_stats, dict):
+            tool_stats = raw_tool_stats
+            raw_tool_payload = tool_stats.get("tools")
+            if isinstance(raw_tool_payload, dict):
+                tool_payload = raw_tool_payload
+                raw_tool_counts = tool_payload.get("byName")
+                if isinstance(raw_tool_counts, dict):
+                    tool_counts = raw_tool_counts
     if isinstance(parsed, dict):
         response = parsed.get("response")
         if isinstance(response, str):
             parsed_response = extract_embedded_json_object(response)
             if isinstance(parsed_response, dict):
                 summary = coerce_text_summary(parsed_response.get("summary")) or summary
-    return {"summary": summary}
+    return {
+        "summary": summary,
+        "tool_calls_executed": tool_payload.get("totalCalls") if isinstance(tool_payload.get("totalCalls"), int) else 0,
+        "mutations": _count_mutating_agentic_tool_calls(tool_counts),
+        "tool_names_used": _extract_agentic_tool_names(tool_counts),
+        "compatible_batch_calls": count_named_tool_calls_from_stats(
+            tool_counts,
+            tool_name="internal_get_compatible_work_batch",
+        ),
+    }
 
 
 def build_taxonomist_result(
@@ -309,8 +391,15 @@ def build_taxonomist_result(
     provider_deferred_reason_code: str | None,
     provider_deferred_retry_delay_seconds: float | None,
     claimed_work_item_count: int,
+    tool_calls_executed: int | None = None,
+    mutations: int | None = None,
+    compatible_batch_calls: int | None = None,
     summary: str | None = None,
     execution_mode: str | None = None,
+    compatibility_group: str | None = None,
+    work_item_batch_limit: int | None = None,
+    max_batches_per_run: int | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "updated": updated,
@@ -320,11 +409,61 @@ def build_taxonomist_result(
         "provider_deferred_retry_delay_seconds": provider_deferred_retry_delay_seconds,
         "claimed_work_item_count": claimed_work_item_count,
     }
+    metrics.update(
+        campaign_metadata(
+            compatibility_group=COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
+            origin_family=WORK_FAMILY_MEMORY_TAGGING,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+        )
+    )
     if summary is not None:
         metrics["summary"] = summary
+    if tool_calls_executed is not None:
+        metrics["tool_calls_executed"] = tool_calls_executed
+    if mutations is not None:
+        metrics["mutations"] = mutations
+    if compatible_batch_calls is not None:
+        metrics["compatible_batch_calls"] = compatible_batch_calls
     if execution_mode is not None:
         metrics["execution_mode"] = execution_mode
+    if compatibility_group is not None:
+        metrics["compatibility_group"] = compatibility_group
+    if work_item_batch_limit is not None:
+        metrics["work_item_batch_limit"] = work_item_batch_limit
+    if max_batches_per_run is not None:
+        metrics["max_batches_per_run"] = max_batches_per_run
+    if reason is not None:
+        metrics["reason"] = reason
     return sampling_payload(sampled_batch, sampled_records=sampled_records, **metrics)
+
+
+def _extract_agentic_tool_names(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+
+
+def _count_mutating_agentic_tool_calls(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    read_only_tool_names = {
+        "mcp_mcp-memory-internal_task_complete",
+        "mcp_mcp-memory-internal_internal_get_work_batch",
+        "mcp_mcp-memory-internal_internal_get_compatible_work_batch",
+        "mcp_mcp-memory-internal_internal_read_memory_record",
+        "mcp_mcp-memory-internal_internal_search_memory_records",
+        "mcp_mcp-memory-internal_internal_list_memory_records",
+        "mcp_mcp-memory-internal_internal_task_complete",
+    }
+    total = 0
+    for name, payload in value.items():
+        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
+            continue
+        payload_dict = dict(payload)
+        count = payload_dict.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            total += count
+    return total
 
 
 def build_tag_normalizer_result(

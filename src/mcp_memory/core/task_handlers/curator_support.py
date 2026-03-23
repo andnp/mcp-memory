@@ -12,6 +12,7 @@ from mcp_memory.core.sampling import (
     ORPHAN_LOW_SUPPORT_STRATEGY,
     SamplingBatch,
 )
+from mcp_memory.core.task_handlers.campaigns import campaign_family_keys
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
@@ -19,6 +20,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.work_item_store import COMPATIBILITY_GROUP_STRUCTURAL_REVIEW
 
 CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 4
@@ -26,6 +28,7 @@ CURATOR_RECENCY_SEED_RECORDS = 4
 CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
 CURATOR_MAX_BATCH_RECORDS = 24
 CURATOR_MAX_MEMORY_CHARS = 4000
+CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
@@ -59,6 +62,29 @@ def normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: 
             "no curator maintenance actions were executed."
         )
     return summary
+
+
+def normalize_curator_agentic_result(response: Any) -> dict[str, Any]:
+    parsed = response.parsed if isinstance(getattr(response, "parsed", None), dict) else {}
+    tool_stats: dict[str, Any] = {}
+    tool_payload: dict[str, Any] = {}
+    tool_counts: dict[str, Any] = {}
+    raw_tool_stats = parsed.get("stats") if isinstance(parsed, dict) else None
+    if isinstance(raw_tool_stats, dict):
+        tool_stats = raw_tool_stats
+        raw_tool_payload = tool_stats.get("tools")
+        if isinstance(raw_tool_payload, dict):
+            tool_payload = raw_tool_payload
+            raw_tool_counts = tool_payload.get("byName")
+            if isinstance(raw_tool_counts, dict):
+                tool_counts = raw_tool_counts
+    tool_names_used = _extract_agentic_tool_names(tool_counts)
+    return {
+        "summary": getattr(response, "summary", None),
+        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
+        "mutations": _count_mutating_agentic_tool_calls(tool_counts),
+        "tool_names_used": tool_names_used,
+    }
 
 
 def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
@@ -166,12 +192,18 @@ def build_json_tool_loop_prompt(
     guardrails: str,
 ) -> str:
     seed_payload = [curator_seed_payload_item(record) for record in seed_records]
+    structural_families = list(campaign_family_keys(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
     return (
         "You are the curator maintenance agent for the global memory store.\n"
         "Improve the store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
+        "Treat this run as a structural-review campaign: finishing the current frontier does not automatically mean the provider session should end.\n"
         "Work in high-impact maintenance mode: prefer several coherent high-value improvements in one run when the store clearly supports them.\n"
         f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the current frontier before mutating.\n"
         "Treat the seed memories as a starting frontier, not a hard boundary; widen only when they hint at nearby duplicates, contradictions, or oversized clusters.\n"
+        f"When the current frontier is exhausted, you may continue by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families)}, and limit=1.\n"
+        "For claimed memory_curation_review items, load payload.seed_memory_ids and continue normal curator maintenance. For claimed memory_dedup_review items, load payload.seed_memory_ids, prefer internal_merge_memory_into_canonical for merges, and keep lineage/archival semantics intact.\n"
+        "Complete, release, defer, or heartbeat each claimed follow-on work item yourself through the work-item lifecycle tools; do not leave claimed structural work behind.\n"
+        "Stop the provider session only when the current structural frontier and any high-value compatible follow-on work are both exhausted or unsafe.\n"
         "Prefer safe operations with clear lineage and archive before delete when possible.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting them into smaller focused records with links such as DEPENDS_ON or AMENDS instead of growing one blob.\n"
@@ -192,12 +224,18 @@ def build_agentic_prompt(
     guardrails: str,
 ) -> str:
     seed_payload = [curator_seed_payload_item(record) for record in seed_records]
+    structural_families = list(campaign_family_keys(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
     return (
         "You are the memory-curator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
+        "Treat this run as a structural-review campaign: the session should keep going while compatible structural work remains high-value and safe.\n"
         f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids={json.dumps([record.id for record in seed_records], sort_keys=True)} so you can widen beyond the current frontier only when justified.\n"
         "Treat the provided seed memories as a starting frontier and the active frontier for this run; widen only when they imply nearby duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
+        f"After finishing the active frontier, you may claim more compatible structural work by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families)}, and limit=1.\n"
+        "For claimed memory_curation_review items, inspect payload.seed_memory_ids and continue curator work. For claimed memory_dedup_review items, inspect payload.seed_memory_ids, prefer internal_merge_memory_into_canonical for safe merges, and preserve SUPERSEDES lineage plus archive-before-delete semantics.\n"
+        "When you claim a follow-on structural work item, you must finish it yourself with internal_complete_work_item, internal_release_work_item, or internal_defer_work_item; use internal_heartbeat_work_item if you need more lease time.\n"
         "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
+        "Do not end the provider session merely because the initial handler-local frontier is complete if a compatible structural follow-on item is still worth doing.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
         "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
@@ -214,11 +252,11 @@ def build_agentic_prompt(
 def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
     if ctx.repository is None:
         return []
-    seed_ids = payload.get("seed_memory_ids")
-    if not isinstance(seed_ids, list):
+    ordered_ids = _ordered_packet_memory_ids(payload)
+    if not ordered_ids:
         return []
     records: list[Any] = []
-    for memory_id in seed_ids:
+    for memory_id in ordered_ids:
         if not isinstance(memory_id, str):
             continue
         record = ctx.repository.get_memory(memory_id)
@@ -226,6 +264,51 @@ def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> lis
             continue
         records.append(record)
     return records
+
+
+def select_curator_support_records(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    seed_records: list[Any],
+    *,
+    support_limit: int = CURATOR_MAX_SUPPORT_RECORDS,
+) -> list[Any]:
+    if ctx.repository is None or not seed_records or support_limit < 1:
+        return []
+
+    seed_ids = {record.id for record in seed_records}
+    seed_tags = {tag for record in seed_records for tag in record.tags}
+    adjacent_ids = _seed_adjacent_memory_ids(ctx, seed_records)
+    candidates = [
+        record
+        for record in ctx.repository.list_memories(
+            workspace_id=_resolve_workspace_id(ctx, task),
+            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
+        )
+        if record.id not in seed_ids and not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
+    ]
+    ranked = sorted(
+        candidates,
+        key=lambda record: (
+            -int(record.id in adjacent_ids),
+            -len(seed_tags.intersection(record.tags)),
+            0 if record.type in {"observation", "journal"} else 1,
+            -len(record.content.strip()),
+            -record.read_count,
+            str(record.updated_at),
+        ),
+    )
+
+    support_records: list[Any] = []
+    for record in ranked:
+        if record.id in seed_ids:
+            continue
+        if record.id not in adjacent_ids and not seed_tags.intersection(record.tags):
+            continue
+        support_records.append(record)
+        if len(support_records) >= support_limit:
+            break
+    return support_records
 
 
 def review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> SamplingBatch:
@@ -307,3 +390,62 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | No
     if isinstance(task_workspace, str) and task_workspace.strip():
         return task_workspace.strip()
     return None
+
+
+def _ordered_packet_memory_ids(payload: dict[str, Any]) -> list[str]:
+    ordered_ids: list[str] = []
+    for key in ("seed_memory_ids", "support_memory_ids"):
+        memory_ids = payload.get(key)
+        if not isinstance(memory_ids, list):
+            continue
+        for memory_id in memory_ids:
+            if not isinstance(memory_id, str) or memory_id in ordered_ids:
+                continue
+            ordered_ids.append(memory_id)
+    return ordered_ids
+
+
+def _seed_adjacent_memory_ids(ctx: ApplicationContext, seed_records: list[Any]) -> set[str]:
+    if ctx.repository is None:
+        return set()
+    adjacent_ids: set[str] = set()
+    for record in seed_records:
+        outgoing = ctx.repository.get_links(record.id, direction="outgoing")
+        incoming = ctx.repository.get_links(record.id, direction="incoming")
+        adjacent_ids.update(link.target_id for link in outgoing if isinstance(link.target_id, str))
+        adjacent_ids.update(link.source_id for link in incoming if isinstance(link.source_id, str))
+    return adjacent_ids
+
+
+def _coerce_non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(value, 0)
+    return 0
+
+
+def _extract_agentic_tool_names(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+
+
+def _count_mutating_agentic_tool_calls(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    read_only_tool_names = {
+        "mcp_mcp-memory-internal_task_complete",
+        "mcp_mcp-memory-internal_internal_get_next_curator_batch",
+        "mcp_mcp-memory-internal_internal_get_compatible_work_batch",
+        "mcp_mcp-memory-internal_internal_read_memory_record",
+        "mcp_mcp-memory-internal_internal_search_memory_records",
+        "mcp_mcp-memory-internal_internal_list_memory_records",
+        "mcp_mcp-memory-internal_internal_task_complete",
+    }
+    total = 0
+    for name, payload in value.items():
+        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
+            continue
+        total += _coerce_non_negative_int(payload.get("count"))
+    return total

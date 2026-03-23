@@ -37,9 +37,12 @@ from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.agentic_guardrails import (
     build_curator_guardrails,
 )
+from mcp_memory.core.task_handlers.campaigns import campaign_metadata
+from mcp_memory.core.task_handlers.campaigns import count_named_tool_calls
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
+    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     WORK_FAMILY_CONFLICT_REVIEW,
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_GRAPH_LINK_REVIEW,
@@ -480,18 +483,19 @@ async def handle_dedup_prep_task(
         task=task,
         workspace_id=workspace_id,
         seed_records=seed_records,
+        candidates=candidates,
         strategy_used=seed_batch.strategy_used,
         candidate_count=seed_batch.candidate_count,
     )
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
-        seed_records=seed_records,
+        seed_records=seed_records + _deduplicator_support.select_deduplicator_support_records(seed_records, candidates),
         extra=_work_item_result_metadata(
             family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
             execution_lane=EXECUTION_LANE_AGENTIC,
             seed_source="frontier_seed",
-            seed_records=seed_records,
+            seed_records=seed_records + _deduplicator_support.select_deduplicator_support_records(seed_records, candidates),
             created_work_item=created_work_item if created else None,
         ),
         seeded_work_item_count=1 if created else 0,
@@ -523,12 +527,40 @@ async def handle_taxonomist_task(
     provider_call_budget = _taxonomist_support.provider_call_budget(ctx, provider)
     untagged_candidates = [record for record in candidates if not _normalize_tag_values(record.tags)]
 
+    if not untagged_candidates:
+        return _taxonomist_support.build_taxonomist_result(
+            sampled_batch,
+            sampled_records=candidates,
+            updated=0,
+            provider_call_budget=provider_call_budget,
+            provider_calls_used=0,
+            provider_deferred_reason_code=None,
+            provider_deferred_retry_delay_seconds=None,
+            claimed_work_item_count=0,
+            execution_mode="precheck_skipped",
+            reason="no_untagged_candidates",
+        )
+
     seeded_work_items = _taxonomist_support.seed_taxonomist_work_items(
         ctx,
         task=task,
         workspace_id=workspace_id,
         candidates=untagged_candidates,
     )
+    if _taxonomist_support.supports_agentic_execution(provider) and provider_call_budget > 0:
+        if not _taxonomist_support.has_ready_tagging_work(ctx, workspace_id=workspace_id):
+            return _taxonomist_support.build_taxonomist_result(
+                sampled_batch,
+                sampled_records=candidates,
+                updated=0,
+                provider_call_budget=provider_call_budget,
+                provider_calls_used=0,
+                provider_deferred_reason_code=None,
+                provider_deferred_retry_delay_seconds=None,
+                claimed_work_item_count=0,
+                execution_mode="precheck_skipped",
+                reason="no_ready_work_items",
+            )
     if _taxonomist_support.supports_agentic_execution(provider) and seeded_work_items and provider_call_budget > 0:
         agentic_result = await _run_taxonomist_agentic_pass(
             ctx,
@@ -548,8 +580,14 @@ async def handle_taxonomist_task(
             provider_deferred_reason_code=agentic_result["provider_deferred_reason_code"],
             provider_deferred_retry_delay_seconds=agentic_result["provider_deferred_retry_delay_seconds"],
             claimed_work_item_count=agentic_result["claimed_work_item_count"],
+            tool_calls_executed=agentic_result["tool_calls_executed"],
+            mutations=agentic_result["mutations"],
+            compatible_batch_calls=agentic_result["compatible_batch_calls"],
             execution_mode="agentic_mcp",
             summary=agentic_result["summary"],
+            compatibility_group=agentic_result["compatibility_group"],
+            work_item_batch_limit=agentic_result["work_item_batch_limit"],
+            max_batches_per_run=agentic_result["max_batches_per_run"],
         )
 
     json_result = await _run_taxonomist_json_pass(
@@ -684,12 +722,16 @@ async def _run_taxonomist_agentic_pass(
 ) -> dict[str, Any]:
     run_agent = getattr(provider, "run_agent", None)
     assert callable(run_agent)
+    work_item_batch_limit = _taxonomist_support.work_item_batch_limit(task)
+    max_batches_per_run = _taxonomist_support.max_batches_per_run(task)
     try:
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
             _taxonomist_support.build_agent_prompt(
                 task,
                 workspace_id=workspace_id,
                 provider_call_budget=provider_call_budget,
+                work_item_batch_limit=work_item_batch_limit,
+                max_batches_per_run=max_batches_per_run,
             )
         )
     except Exception as exc:
@@ -722,6 +764,12 @@ async def _run_taxonomist_agentic_pass(
                 "provider_deferred_reason_code": reason.reason_code,
                 "provider_deferred_retry_delay_seconds": reason.retry_delay_seconds,
                 "claimed_work_item_count": _taxonomist_support.count_claimed_work_items(ctx, seeded_work_items),
+                "tool_calls_executed": 0,
+                "mutations": 0,
+                "compatible_batch_calls": 0,
+                "compatibility_group": "lightweight_review",
+                "work_item_batch_limit": work_item_batch_limit,
+                "max_batches_per_run": max_batches_per_run,
                 "summary": None,
             }
         for work_item in running_items:
@@ -746,6 +794,12 @@ async def _run_taxonomist_agentic_pass(
         "provider_deferred_reason_code": None,
         "provider_deferred_retry_delay_seconds": None,
         "claimed_work_item_count": _taxonomist_support.count_claimed_work_items(ctx, seeded_work_items),
+        "tool_calls_executed": normalized["tool_calls_executed"],
+        "mutations": normalized["mutations"],
+        "compatible_batch_calls": normalized["compatible_batch_calls"],
+        "compatibility_group": "lightweight_review",
+        "work_item_batch_limit": work_item_batch_limit,
+        "max_batches_per_run": max_batches_per_run,
         "summary": normalized["summary"],
     }
 
@@ -869,6 +923,13 @@ async def handle_memory_curator_task(
         seed_records=seed_records,
         claimed_work_item=claimed_review_item,
     )
+    work_item_metadata.update(
+        campaign_metadata(
+            compatibility_group=COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
+            origin_family=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+        )
+    )
 
     if not seed_records:
         return sampling_payload(
@@ -907,14 +968,22 @@ async def handle_memory_curator_task(
             raise
         if claimed_review_item is not None:
             _complete_work_item(ctx, claimed_review_item.id)
+        normalized_agentic = _curator_support.normalize_curator_agentic_result(agentic_result)
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
             seed_records=seed_records,
             extra=work_item_metadata,
-            summary=agentic_result.summary,
+            summary=normalized_agentic["summary"],
             execution_mode="agentic_mcp",
             claimed_work_item_count=1 if claimed_review_item is not None else 0,
+            tool_calls_executed=normalized_agentic["tool_calls_executed"],
+            mutations=normalized_agentic["mutations"],
+            tool_names_used=normalized_agentic["tool_names_used"],
+            compatible_batch_calls=count_named_tool_calls(
+                normalized_agentic["tool_names_used"],
+                tool_name="internal_get_compatible_work_batch",
+            ),
         )
 
     try:
@@ -927,8 +996,13 @@ async def handle_memory_curator_task(
                 "internal_read_memory_record",
                 "internal_list_memory_records",
                 "internal_get_next_curator_batch",
+                "internal_get_compatible_work_batch",
                 "task_complete",
                 "internal_task_complete",
+                "internal_heartbeat_work_item",
+                "internal_complete_work_item",
+                "internal_defer_work_item",
+                "internal_release_work_item",
                 "internal_append_memory_content",
                 "internal_archive_memory_record",
                 "internal_merge_memory_into_canonical",
@@ -960,6 +1034,10 @@ async def handle_memory_curator_task(
         tool_calls_executed=loop_result.tool_calls_executed,
         mutations=loop_result.mutating_tool_calls,
         tool_names_used=loop_result.tool_names_used,
+        compatible_batch_calls=count_named_tool_calls(
+            loop_result.tool_names_used,
+            tool_name="internal_get_compatible_work_batch",
+        ),
     )
 
 
@@ -973,6 +1051,7 @@ async def handle_curator_frontier_task(
     workspace_id = _resolve_workspace_id(ctx, task)
     seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
     seed_records = seed_batch.records
+    support_records = _curator_support.select_curator_support_records(ctx, task, seed_records)
     if not seed_records:
         return sampling_payload(
             seed_batch,
@@ -987,18 +1066,19 @@ async def handle_curator_frontier_task(
         task=task,
         workspace_id=workspace_id,
         seed_records=seed_records,
+        support_records=support_records,
         strategy_used=seed_batch.strategy_used,
         candidate_count=seed_batch.candidate_count,
     )
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
-        seed_records=seed_records,
+        seed_records=seed_records + support_records,
         extra=_work_item_result_metadata(
             family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
             execution_lane=EXECUTION_LANE_AGENTIC,
             seed_source="frontier_seed",
-            seed_records=seed_records,
+            seed_records=seed_records + support_records,
             created_work_item=created_work_item if created else None,
         ),
         seeded_work_item_count=1 if created else 0,
@@ -1026,9 +1106,11 @@ def _enqueue_dedup_review_work_item(
     task: TaskRecord,
     workspace_id: str | None,
     seed_records: list[Any],
+    candidates: list[Any],
     strategy_used: str | None,
     candidate_count: int,
 ) -> tuple[Any, bool]:
+    support_records = _deduplicator_support.select_deduplicator_support_records(seed_records, candidates)
     return _enqueue_review_work_item(
         ctx,
         task=task,
@@ -1040,6 +1122,10 @@ def _enqueue_dedup_review_work_item(
         memory_ids=[record.id for record in seed_records],
         strategy_used=strategy_used,
         candidate_count=candidate_count,
+        extra_payload={
+            "support_memory_ids": [record.id for record in support_records],
+            "packet_record_count": len(seed_records) + len(support_records),
+        },
     )
 
 
@@ -1064,6 +1150,7 @@ def _enqueue_curator_review_work_item(
     task: TaskRecord,
     workspace_id: str | None,
     seed_records: list[Any],
+    support_records: list[Any],
     strategy_used: str | None,
     candidate_count: int,
 ) -> tuple[Any, bool]:
@@ -1078,6 +1165,10 @@ def _enqueue_curator_review_work_item(
         memory_ids=[record.id for record in seed_records],
         strategy_used=strategy_used,
         candidate_count=candidate_count,
+        extra_payload={
+            "support_memory_ids": [record.id for record in support_records],
+            "packet_record_count": len(seed_records) + len(support_records),
+        },
     )
 
 

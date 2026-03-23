@@ -21,6 +21,7 @@ from mcp_memory.core.tasks import TaskRecord
 DEDUPLICATOR_AI_MIN_COMBINED_LINES = 20
 DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD = 0.75
 DEDUPLICATOR_MAX_SEED_RECORDS = 8
+DEDUPLICATOR_MAX_SUPPORT_RECORDS = 4
 DEDUPLICATOR_SIZE_ANOMALY_SEED_RECORDS = 2
 DEDUPLICATOR_OBSERVATION_SEED_RECORDS = 4
 CURATOR_MAX_TITLE_CHARS = 80
@@ -142,11 +143,11 @@ def normalize_deduplicator_agentic_result(agentic_result: Any, seed_records: lis
 def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
     if ctx.repository is None:
         return []
-    seed_ids = payload.get("seed_memory_ids")
-    if not isinstance(seed_ids, list):
+    ordered_ids = _ordered_packet_memory_ids(payload)
+    if not ordered_ids:
         return []
     records: list[Any] = []
-    for memory_id in seed_ids:
+    for memory_id in ordered_ids:
         if not isinstance(memory_id, str):
             continue
         record = ctx.repository.get_memory(memory_id)
@@ -177,6 +178,31 @@ def review_strategy(payload: dict[str, Any]) -> str:
     if isinstance(strategy, str) and strategy.strip():
         return strategy
     return "none"
+
+
+def select_deduplicator_support_records(seed_records: list[Any], candidates: list[Any]) -> list[Any]:
+    if not seed_records:
+        return []
+    seed_ids = {record.id for record in seed_records}
+    seed_tags = {tag for record in seed_records for tag in record.tags}
+    ranked = sorted(
+        [record for record in candidates if record.id not in seed_ids],
+        key=lambda record: (
+            0 if record.type == "observation" else 1,
+            -len(seed_tags.intersection(record.tags)),
+            -record.read_count,
+            -len(record.content.strip()),
+            str(record.updated_at),
+        ),
+    )
+    support_records: list[Any] = []
+    for record in ranked:
+        if not seed_tags.intersection(record.tags):
+            continue
+        support_records.append(record)
+        if len(support_records) >= DEDUPLICATOR_MAX_SUPPORT_RECORDS:
+            break
+    return support_records
 
 
 def _select_deduplicator_seed_records(candidates: list) -> list:
@@ -300,3 +326,16 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
             continue
         total += _coerce_non_negative_int(payload.get("count"))
     return total
+
+
+def _ordered_packet_memory_ids(payload: dict[str, Any]) -> list[str]:
+    ordered_ids: list[str] = []
+    for key in ("seed_memory_ids", "support_memory_ids"):
+        memory_ids = payload.get(key)
+        if not isinstance(memory_ids, list):
+            continue
+        for memory_id in memory_ids:
+            if not isinstance(memory_id, str) or memory_id in ordered_ids:
+                continue
+            ordered_ids.append(memory_id)
+    return ordered_ids
