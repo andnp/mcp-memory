@@ -25,6 +25,7 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.core.storage import ensure_memory_dirs
@@ -71,6 +72,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
     vector_store = SQLiteVectorStore(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
     work_items = SQLiteWorkItemRepository(db_manager)
+    embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
     relational_search = RelationalMemorySearchService(
         repository,
         spec.config,
@@ -79,6 +81,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         db_manager=db_manager,
         task_queue=task_queue,
         work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
         background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
     )
     relational_search.run_startup_health_check()
@@ -103,6 +106,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         ai_provider_registry=provider_registry,
         provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
         work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
         embedder=embedder,
         vector_store=vector_store,
         search_health=relational_search.get_health(),

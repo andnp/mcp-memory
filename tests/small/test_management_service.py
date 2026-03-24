@@ -9,13 +9,14 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
-from mcp_memory.work_item_store import SQLiteWorkItemRepository, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
+from mcp_memory.work_item_store import SQLiteWorkItemRepository
 
 
 pytestmark = pytest.mark.small
@@ -882,6 +883,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
     work_items = SQLiteWorkItemRepository(db_manager)
+    embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
     handler = SQLiteStructuredLogHandler(
         db_manager=db_manager,
         workspace_id="workspace-a",
@@ -895,6 +897,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         db_manager=db_manager,
         task_queue=task_queue,
         work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
         background_repair_wait_seconds=5.0,
     )
 
@@ -1075,13 +1078,11 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, time.time(), None),
     )
-    work_items.enqueue_unique(
-        family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-        execution_lane="deterministic",
+    embedding_repair_queue.enqueue_unique(
+        memory_id=primary.id,
         workspace_id=None,
-        priority=15,
-        idempotency_key="repair:one",
-        payload={"memory_id": primary.id},
+        model_name="demo-model",
+        memory_updated_at=primary.updated_at,
     )
     db_manager.get_connection().commit()
 
@@ -1092,6 +1093,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         repository=repository,
         task_queue=task_queue,
         work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
         relational_search=relational_search,
     )
     controller = SimpleNamespace(has_runtime=True, client_count=1)

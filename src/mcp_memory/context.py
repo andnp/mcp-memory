@@ -27,6 +27,7 @@ class ApplicationContext:
     ai_provider_registry: dict[str, Any] | None = None
     provider_policy_events: Any = None
     work_items: Any = None
+    embedding_repair_queue: Any = None
     embedder: Any = None
     vector_store: Any = None
     search_health: Any = None

@@ -358,6 +358,7 @@ class RelationalMemorySearchService:
         db_manager: DatabaseManager | None = None,
         task_queue = None,
         work_items = None,
+        embedding_repair_queue = None,
         background_repair_wait_seconds: float = 0.0,
     ) -> None:
         self._repository = repository
@@ -367,12 +368,13 @@ class RelationalMemorySearchService:
         self._db_manager = db_manager
         self._task_queue = task_queue
         self._work_items = work_items
+        self._embedding_repair_queue = embedding_repair_queue
         self._background_repair_wait_seconds = max(background_repair_wait_seconds, 0.0)
         semantic_enabled = embedder is not None and vector_store is not None
         self._health = SearchHealthStatus(
             semantic_enabled=semantic_enabled,
             available=semantic_enabled,
-            background_repair_enabled=background_repair_wait_seconds > 0 and task_queue is not None and work_items is not None,
+            background_repair_enabled=background_repair_wait_seconds > 0 and task_queue is not None and (embedding_repair_queue is not None or work_items is not None),
             background_repair_wait_seconds=max(background_repair_wait_seconds, 0.0),
         )
 
@@ -752,7 +754,7 @@ class RelationalMemorySearchService:
         if not stale_or_missing:
             return
 
-        if self._background_repair_wait_seconds > 0 and self._task_queue is not None and self._work_items is not None:
+        if self._background_repair_wait_seconds > 0 and self._task_queue is not None and (self._embedding_repair_queue is not None or self._work_items is not None):
             self._queue_memory_embedding_repairs(stale_or_missing)
             self._wait_for_background_repairs(stale_or_missing)
             return
@@ -806,23 +808,32 @@ class RelationalMemorySearchService:
         from mcp_memory.core.task_handlers.constants import EMBEDDING_REPAIR_TASK_NAME, task_priority
 
         assert self._embedder is not None
-        assert self._work_items is not None
         assert self._task_queue is not None
 
         queued_count = 0
         for candidate in candidates:
-            _, created = self._work_items.enqueue_unique(
-                family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-                execution_lane=EXECUTION_LANE_DETERMINISTIC,
-                workspace_id=None,
-                priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
-                idempotency_key=f"{WORK_FAMILY_MEMORY_EMBEDDING_REPAIR}:{self._embedder.model_name}:{candidate.id}:{candidate.updated_at or ''}",
-                payload={
-                    "memory_id": candidate.id,
-                    "model_name": self._embedder.model_name,
-                    "memory_updated_at": candidate.updated_at or "",
-                },
-            )
+            if self._embedding_repair_queue is not None:
+                _, created = self._embedding_repair_queue.enqueue_unique(
+                    memory_id=candidate.id,
+                    workspace_id=None,
+                    model_name=self._embedder.model_name,
+                    memory_updated_at=candidate.updated_at or "",
+                    available_at=time.time(),
+                )
+            else:
+                assert self._work_items is not None
+                _, created = self._work_items.enqueue_unique(
+                    family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+                    execution_lane=EXECUTION_LANE_DETERMINISTIC,
+                    workspace_id=None,
+                    priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
+                    idempotency_key=f"{WORK_FAMILY_MEMORY_EMBEDDING_REPAIR}:{self._embedder.model_name}:{candidate.id}:{candidate.updated_at or ''}",
+                    payload={
+                        "memory_id": candidate.id,
+                        "model_name": self._embedder.model_name,
+                        "memory_updated_at": candidate.updated_at or "",
+                    },
+                )
             if created:
                 queued_count += 1
 
@@ -860,6 +871,12 @@ class RelationalMemorySearchService:
         self._refresh_background_repair_health_snapshot()
 
     def _refresh_background_repair_health_snapshot(self) -> None:
+        if self._embedding_repair_queue is not None:
+            snapshot = self._embedding_repair_queue.backlog_snapshot()
+            self._health.queued_repair_backlog_count = snapshot.queued_count
+            self._health.running_repair_count = snapshot.running_count
+            self._health.oldest_queued_repair_age_seconds = snapshot.oldest_queued_age_seconds
+            return
         if self._db_manager is None:
             self._health.queued_repair_backlog_count = 0
             self._health.running_repair_count = 0

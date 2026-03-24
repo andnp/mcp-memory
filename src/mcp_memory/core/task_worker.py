@@ -407,6 +407,7 @@ class RuntimeTaskWorker:
     def _reconcile_terminal_task_state(self, task: TaskRecord) -> None:
         self._reconcile_task_conversations(task)
         self._release_task_work_items(task)
+        self._release_task_embedding_repairs(task)
 
     def _reconcile_task_conversations(self, task: TaskRecord) -> None:
         if task.status not in {"failed", "cancelled"}:
@@ -439,10 +440,31 @@ class RuntimeTaskWorker:
                     },
                 )
 
+    def _release_task_embedding_repairs(self, task: TaskRecord) -> None:
+        embedding_repair_queue = getattr(self._ctx, "embedding_repair_queue", None)
+        if embedding_repair_queue is None:
+            return
+        released_at = task.completed_at or task.updated_at
+        for repair_item in embedding_repair_queue.list_items(status="running", lease_owner=task.id, limit=100):
+            try:
+                embedding_repair_queue.release_item(repair_item.id, released_at=released_at)
+            except Exception:
+                logger.exception(
+                    "Runtime task worker failed to release a leaked embedding repair item for a terminal task",
+                    extra={
+                        "task_id": task.id,
+                        "task_name": task.task_name,
+                        "task_status": task.status,
+                        "repair_item_id": repair_item.id,
+                        "memory_id": repair_item.memory_id,
+                    },
+                )
+
     def _recover_leaked_work_items(self) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
         work_items = getattr(self._ctx, "work_items", None)
         if task_queue is None or work_items is None:
+            self._recover_leaked_embedding_repairs()
             return
         for work_item in work_items.list_items(status="running", limit=200):
             lease_owner = work_item.lease_owner
@@ -456,6 +478,7 @@ class RuntimeTaskWorker:
                 continue
             if owner_task.status != "running":
                 self._release_recovered_work_item(work_items, work_item.id, work_item.family_key)
+        self._recover_leaked_embedding_repairs()
 
     def _release_recovered_work_item(self, work_items, work_item_id: str, family_key: str) -> None:
         try:
@@ -466,6 +489,36 @@ class RuntimeTaskWorker:
                 extra={
                     "work_item_id": work_item_id,
                     "work_item_family": family_key,
+                },
+            )
+
+    def _recover_leaked_embedding_repairs(self) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        embedding_repair_queue = getattr(self._ctx, "embedding_repair_queue", None)
+        if task_queue is None or embedding_repair_queue is None:
+            return
+        for repair_item in embedding_repair_queue.list_items(status="running", limit=200):
+            lease_owner = repair_item.lease_owner
+            if not isinstance(lease_owner, str) or not lease_owner:
+                self._release_recovered_embedding_repair(embedding_repair_queue, repair_item.id, repair_item.memory_id)
+                continue
+            try:
+                owner_task = task_queue.get_task(lease_owner)
+            except Exception:
+                self._release_recovered_embedding_repair(embedding_repair_queue, repair_item.id, repair_item.memory_id)
+                continue
+            if owner_task.status != "running":
+                self._release_recovered_embedding_repair(embedding_repair_queue, repair_item.id, repair_item.memory_id)
+
+    def _release_recovered_embedding_repair(self, embedding_repair_queue, item_id: str, memory_id: str) -> None:
+        try:
+            embedding_repair_queue.release_item(item_id)
+        except Exception:
+            logger.exception(
+                "Runtime task worker failed to recover a leaked running embedding repair item",
+                extra={
+                    "repair_item_id": item_id,
+                    "memory_id": memory_id,
                 },
             )
 

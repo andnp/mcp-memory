@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -256,6 +256,25 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             last_error TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS embedding_repair_queue (
+            id TEXT PRIMARY KEY,
+            memory_id TEXT NOT NULL,
+            workspace_id TEXT,
+            model_name TEXT NOT NULL,
+            memory_updated_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            available_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            claimed_at REAL,
+            completed_at REAL,
+            lease_owner TEXT,
+            lease_expires_at REAL,
+            last_error TEXT,
+            UNIQUE(memory_id, model_name, memory_updated_at)
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
             title,
@@ -419,6 +438,28 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS embedding_repair_queue (
+            id TEXT PRIMARY KEY,
+            memory_id TEXT NOT NULL,
+            workspace_id TEXT,
+            model_name TEXT NOT NULL,
+            memory_updated_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            available_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            claimed_at REAL,
+            completed_at REAL,
+            lease_owner TEXT,
+            lease_expires_at REAL,
+            last_error TEXT,
+            UNIQUE(memory_id, model_name, memory_updated_at)
+        )
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -498,6 +539,12 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON work_items(workspace_id, status, family_key, execution_lane, available_at, priority, created_at);
         CREATE INDEX IF NOT EXISTS idx_work_items_lease_owner
             ON work_items(lease_owner, status, lease_expires_at);
+        CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_ready
+            ON embedding_repair_queue(status, available_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_workspace_ready
+            ON embedding_repair_queue(workspace_id, status, available_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_lease_owner
+            ON embedding_repair_queue(lease_owner, status, lease_expires_at);
         """
     )
     conn.execute(

@@ -23,6 +23,7 @@ async def handle_embedding_repair_task(
     embedder = getattr(ctx, "embedder", None)
     vector_store = getattr(ctx, "vector_store", None)
     work_items = getattr(ctx, "work_items", None)
+    embedding_repair_queue = getattr(ctx, "embedding_repair_queue", None)
     if repository is None or embedder is None or vector_store is None:
         return {
             "repaired": 0,
@@ -30,12 +31,12 @@ async def handle_embedding_repair_task(
             "batches_processed": 0,
             "reason": "semantic_search_not_initialized",
         }
-    if work_items is None:
+    if embedding_repair_queue is None and work_items is None:
         return {
             "repaired": 0,
             "claimed_work_item_count": 0,
             "batches_processed": 0,
-            "reason": "work_items_not_initialized",
+            "reason": "repair_queue_not_initialized",
         }
 
     batch_size = max(int(task.data.get("batch_size", DEFAULT_EMBEDDING_REPAIR_BATCH_SIZE)), 1)
@@ -45,13 +46,21 @@ async def handle_embedding_repair_task(
     batches_processed = 0
 
     while batches_processed < max_batches_per_run:
-        claimed_items = work_items.claim_batch(
-            family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-            execution_lane=EXECUTION_LANE_DETERMINISTIC,
-            lease_owner=task.id,
-            limit=batch_size,
-            workspace_id=task.workspace_id,
-        )
+        if embedding_repair_queue is not None:
+            claimed_items = embedding_repair_queue.claim_batch(
+                lease_owner=task.id,
+                limit=batch_size,
+                workspace_id=task.workspace_id,
+            )
+        else:
+            assert work_items is not None
+            claimed_items = work_items.claim_batch(
+                family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+                execution_lane=EXECUTION_LANE_DETERMINISTIC,
+                lease_owner=task.id,
+                limit=batch_size,
+                workspace_id=task.workspace_id,
+            )
         if not claimed_items:
             break
 
@@ -60,25 +69,34 @@ async def handle_embedding_repair_task(
         repair_pairs: list[tuple[Any, Any]] = []
 
         for work_item in claimed_items:
-            payload = work_item.payload
-            memory_id = payload.get("memory_id")
+            if embedding_repair_queue is not None:
+                memory_id = work_item.memory_id
+                queued_model_name = work_item.model_name
+                queued_updated_at = work_item.memory_updated_at
+                completer = embedding_repair_queue.complete_item
+            else:
+                assert work_items is not None
+                payload = work_item.payload
+                memory_id = payload.get("memory_id")
+                queued_model_name = payload.get("model_name")
+                queued_updated_at = payload.get("memory_updated_at")
+                completer = work_items.complete_item
+
             if not isinstance(memory_id, str) or not memory_id.strip():
-                work_items.complete_item(work_item.id)
+                completer(work_item.id)
                 continue
 
-            queued_model_name = payload.get("model_name")
             if not isinstance(queued_model_name, str) or queued_model_name != embedder.model_name:
-                work_items.complete_item(work_item.id)
+                completer(work_item.id)
                 continue
 
             record = repository.get_memory(memory_id)
             if record is None or record.status == "archived":
-                work_items.complete_item(work_item.id)
+                completer(work_item.id)
                 continue
 
-            queued_updated_at = payload.get("memory_updated_at")
             if isinstance(queued_updated_at, str) and queued_updated_at != (record.updated_at or ""):
-                work_items.complete_item(work_item.id)
+                completer(work_item.id)
                 continue
 
             existing = vector_store.get(
@@ -87,7 +105,7 @@ async def handle_embedding_repair_task(
                 model_name=embedder.model_name,
             )
             if existing is not None and not _embedding_is_stale(existing.updated_at, record.updated_at):
-                work_items.complete_item(work_item.id)
+                completer(work_item.id)
                 continue
 
             repair_pairs.append((record, work_item))
@@ -104,7 +122,11 @@ async def handle_embedding_repair_task(
                 model_name=embedder.model_name,
                 embedding=embedding,
             )
-            work_items.complete_item(work_item.id)
+            if embedding_repair_queue is not None:
+                embedding_repair_queue.complete_item(work_item.id)
+            else:
+                assert work_items is not None
+                work_items.complete_item(work_item.id)
             repaired += 1
 
     return {
