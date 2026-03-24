@@ -20,6 +20,7 @@ from mcp_memory.core.task_handlers import (
     DEDUP_PREP_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
+    EMBEDDING_REPAIR_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     GRAPH_LINK_DISCOVERY_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
@@ -31,6 +32,7 @@ from mcp_memory.core.task_handlers import (
     TAG_NORMALIZER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
     handle_defragmenter_task,
+    handle_embedding_repair_task,
     handle_conflict_detector_task,
     handle_conflict_screening_task,
     handle_curator_frontier_task,
@@ -73,6 +75,7 @@ def build_runtime_task_worker(
     expected_handlers = {
         SYSTEM1_INGEST_TASK_NAME,
         SUMMARIZE_MEMORY_TASK_NAME,
+        EMBEDDING_REPAIR_TASK_NAME,
         GRAPH_LINK_DISCOVERY_TASK_NAME,
         GRAPH_LINKER_TASK_NAME,
         CONFLICT_SCREENING_TASK_NAME,
@@ -121,6 +124,7 @@ def build_default_task_handlers(
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(ctx, SYSTEM1_INGEST_TASK_NAME, task)),
         SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(ctx, SUMMARIZE_MEMORY_TASK_NAME, task)),
+        EMBEDDING_REPAIR_TASK_NAME: handle_embedding_repair_task,
         GRAPH_LINK_DISCOVERY_TASK_NAME: lambda ctx, task: handle_graph_link_discovery_task(ctx, task),
         GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(ctx, GRAPH_LINKER_TASK_NAME, task)),
         CONFLICT_SCREENING_TASK_NAME: lambda ctx, task: handle_conflict_screening_task(ctx, task),

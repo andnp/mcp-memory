@@ -8,6 +8,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_RECURRING_TASK_INTERVAL_SECONDS,
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
+    EMBEDDING_REPAIR_TASK_NAME,
     MAINTENANCE_TASK_NAMES,
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
@@ -33,6 +34,7 @@ from mcp_memory.core.task_handlers.constants import (
     TRIGGERABLE_BACKGROUND_TASK_NAMES,
     task_priority,
 )
+from mcp_memory.core.task_handlers.embedding_repair import handle_embedding_repair_task
 from mcp_memory.core.task_handlers.ingest import handle_ingest_system1_task
 from mcp_memory.core.task_handlers.maintenance import (
     handle_conflict_detector_task,
@@ -56,6 +58,7 @@ __all__ = [
     "DEFAULT_INGEST_BATCH_SIZE",
     "DEFAULT_AGENT_SCAN_LIMIT",
     "AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS",
+    "EMBEDDING_REPAIR_TASK_NAME",
     "CONFLICT_SCREENING_TASK_NAME",
     "CURATOR_FRONTIER_TASK_NAME",
     "DEFAULT_TASK_PRIORITY",
@@ -96,6 +99,7 @@ __all__ = [
     "handle_fact_checker_task",
     "handle_graph_link_discovery_task",
     "handle_graph_linker_task",
+    "handle_embedding_repair_task",
     "handle_ingest_system1_task",
     "handle_project_manager_task",
     "handle_tag_normalizer_task",

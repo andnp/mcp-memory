@@ -6,7 +6,13 @@ import pytest
 from mcp_memory.config import Config, SearchRankingConfig
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRecord, RelationalMemoryRepository
-from mcp_memory.relational.search import RankingEngine, RelationalMemorySearchService, ScoringWeights, _rank_semantic_candidate_ids
+from mcp_memory.relational.search import (
+    INLINE_EMBEDDING_REPAIR_LIMIT,
+    RankingEngine,
+    RelationalMemorySearchService,
+    ScoringWeights,
+    _rank_semantic_candidate_ids,
+)
 
 
 pytestmark = pytest.mark.small
@@ -705,6 +711,15 @@ class _FakeEmbedder:
         return vectors
 
 
+class _CountingFakeEmbedder(_FakeEmbedder):
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.batch_sizes.append(len(texts))
+        return super().embed(texts)
+
+
 def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(
@@ -792,6 +807,57 @@ def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager
     assert updated_record is not None
     assert updated_record.updated_at > stale_record.updated_at
     assert updated_record.embedding == [1.0, 0.0]
+
+
+def test_search_memories_caps_inline_embedding_repairs_to_recent_backlog_slice(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    embedder = _CountingFakeEmbedder()
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+
+    total_records = INLINE_EMBEDDING_REPAIR_LIMIT + 6
+    newest_record_id: str | None = None
+    oldest_record_id: str | None = None
+    for index in range(total_records):
+        record = repository.create_memory(
+            title=f"Identity policy {index}",
+            content="Authentication token rotation and credential policy.",
+            summary=f"Identity controls {index}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["auth"],
+            created_at=f"2026-03-{(index % 28) + 1:02d}T12:00:00+00:00",
+            updated_at=f"2026-03-{(index % 28) + 1:02d}T12:00:00+00:00",
+        )
+        assert record is not None
+        if index == 0:
+            oldest_record_id = record.id
+        if index == total_records - 1:
+            newest_record_id = record.id
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert embedder.batch_sizes[0] == INLINE_EMBEDDING_REPAIR_LIMIT
+    assert newest_record_id is not None and oldest_record_id is not None
+    newest_embedding = vector_store.get(
+        source_kind="memory",
+        source_id=newest_record_id,
+        model_name=embedder.model_name,
+    )
+    oldest_embedding = vector_store.get(
+        source_kind="memory",
+        source_id=oldest_record_id,
+        model_name=embedder.model_name,
+    )
+
+    assert newest_embedding is not None
+    assert oldest_embedding is None
 
 
 def test_search_memories_abstains_on_low_confidence_semantic_only_query(db_manager, monkeypatch) -> None:

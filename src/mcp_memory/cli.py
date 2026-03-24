@@ -337,6 +337,20 @@ def _render_search_health_table(search_health) -> None:
     table.add_row("Degraded", str(search_health.degraded))
     table.add_row("Fallback count", str(search_health.fallback_count))
     table.add_row("Rebuild count", str(search_health.rebuild_count))
+    table.add_row("Background repair enabled", str(search_health.background_repair_enabled))
+    table.add_row("Repair wait budget", f"{search_health.background_repair_wait_seconds:.2f}s")
+    table.add_row("Queued repair backlog", str(search_health.queued_repair_backlog_count))
+    table.add_row("Running repair work", str(search_health.running_repair_count))
+    table.add_row(
+        "Oldest queued repair age",
+        _format_age(search_health.oldest_queued_repair_age_seconds),
+    )
+    table.add_row("Repair waits", str(search_health.repair_wait_count))
+    table.add_row("Partial semantic searches", str(search_health.partial_semantic_search_count))
+    table.add_row("Last partial semantic", search_health.last_partial_semantic_at or "-")
+    table.add_row("Last repair wait", f"{search_health.last_repair_wait_seconds:.3f}s")
+    table.add_row("Last repair candidate count", str(search_health.last_repair_candidate_count))
+    table.add_row("Last repair pending count", str(search_health.last_repair_pending_count))
     table.add_row("Last integrity check", search_health.last_integrity_check_at or "-")
     table.add_row("Last failure", search_health.last_failure_at or "-")
     table.add_row("Last recovery", search_health.last_recovery_at or "-")

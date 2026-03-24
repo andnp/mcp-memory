@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
 from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
+from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
 
 
 ACCESS_HALF_LIFE_DAYS = 7
@@ -23,6 +25,10 @@ GRAPH_EXPANSION_DISCOUNTS = {
     "AMENDS": 0.6,
     "CONTRADICTS": 0.35,
 }
+INLINE_EMBEDDING_REPAIR_LIMIT = 64
+BACKGROUND_REPAIR_POLL_INTERVAL_SECONDS = 0.05
+DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE = 32
+DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN = 8
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,17 @@ class SearchHealthStatus:
     degraded: bool = False
     fallback_count: int = 0
     rebuild_count: int = 0
+    background_repair_enabled: bool = False
+    background_repair_wait_seconds: float = 0.0
+    queued_repair_backlog_count: int = 0
+    running_repair_count: int = 0
+    oldest_queued_repair_age_seconds: float | None = None
+    repair_wait_count: int = 0
+    partial_semantic_search_count: int = 0
+    last_partial_semantic_at: str | None = None
+    last_repair_wait_seconds: float = 0.0
+    last_repair_candidate_count: int = 0
+    last_repair_pending_count: int = 0
     last_error: str | None = None
     last_failure_at: str | None = None
     last_recovery_at: str | None = None
@@ -339,19 +356,28 @@ class RelationalMemorySearchService:
         embedder: Embedder | None = None,
         vector_store: SQLiteVectorStore | None = None,
         db_manager: DatabaseManager | None = None,
+        task_queue = None,
+        work_items = None,
+        background_repair_wait_seconds: float = 0.0,
     ) -> None:
         self._repository = repository
         self._config = config
         self._embedder = embedder
         self._vector_store = vector_store
         self._db_manager = db_manager
+        self._task_queue = task_queue
+        self._work_items = work_items
+        self._background_repair_wait_seconds = max(background_repair_wait_seconds, 0.0)
         semantic_enabled = embedder is not None and vector_store is not None
         self._health = SearchHealthStatus(
             semantic_enabled=semantic_enabled,
             available=semantic_enabled,
+            background_repair_enabled=background_repair_wait_seconds > 0 and task_queue is not None and work_items is not None,
+            background_repair_wait_seconds=max(background_repair_wait_seconds, 0.0),
         )
 
     def get_health(self) -> SearchHealthStatus:
+        self._refresh_background_repair_health_snapshot()
         return replace(self._health)
 
     def run_startup_health_check(self) -> SearchHealthStatus:
@@ -621,7 +647,7 @@ class RelationalMemorySearchService:
     ) -> list[tuple[str, float]]:
         assert self._embedder is not None
         assert self._vector_store is not None
-        self._ensure_memory_embeddings(candidates)
+        self._ensure_searchable_memory_embeddings(candidates)
         query_embedding = self._embedder.embed([query])[0]
         return self._vector_store.search(
             source_kind="memory",
@@ -721,7 +747,19 @@ class RelationalMemorySearchService:
                     )
         return expanded
 
-    def _ensure_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
+    def _ensure_searchable_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
+        stale_or_missing = self._stale_or_missing_embedding_candidates(candidates)
+        if not stale_or_missing:
+            return
+
+        if self._background_repair_wait_seconds > 0 and self._task_queue is not None and self._work_items is not None:
+            self._queue_memory_embedding_repairs(stale_or_missing)
+            self._wait_for_background_repairs(stale_or_missing)
+            return
+
+        self._ensure_memory_embeddings(stale_or_missing)
+
+    def _stale_or_missing_embedding_candidates(self, candidates: list[RelationalMemoryRecord]) -> list[RelationalMemoryRecord]:
         assert self._embedder is not None
         assert self._vector_store is not None
 
@@ -735,8 +773,23 @@ class RelationalMemorySearchService:
             if existing is None or _embedding_is_stale(existing.updated_at, candidate.updated_at):
                 stale_or_missing.append(candidate)
 
+        return stale_or_missing
+
+    def _ensure_memory_embeddings(self, stale_or_missing: list[RelationalMemoryRecord]) -> None:
+        assert self._embedder is not None
+        assert self._vector_store is not None
+
         if not stale_or_missing:
             return
+
+        if len(stale_or_missing) > INLINE_EMBEDDING_REPAIR_LIMIT:
+            prioritized_candidates = _prioritize_embedding_repairs(stale_or_missing)
+            logger.info(
+                "Semantic search deferred %s embedding refreshes; repairing the freshest %s inline",
+                len(stale_or_missing) - INLINE_EMBEDDING_REPAIR_LIMIT,
+                INLINE_EMBEDDING_REPAIR_LIMIT,
+            )
+            stale_or_missing = prioritized_candidates[:INLINE_EMBEDDING_REPAIR_LIMIT]
 
         payloads = [_memory_embedding_text(candidate) for candidate in stale_or_missing]
         embeddings = self._embedder.embed(payloads)
@@ -748,6 +801,93 @@ class RelationalMemorySearchService:
                 model_name=self._embedder.model_name,
                 embedding=embedding,
             )
+
+    def _queue_memory_embedding_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
+        from mcp_memory.core.task_handlers.constants import EMBEDDING_REPAIR_TASK_NAME, task_priority
+
+        assert self._embedder is not None
+        assert self._work_items is not None
+        assert self._task_queue is not None
+
+        queued_count = 0
+        for candidate in candidates:
+            _, created = self._work_items.enqueue_unique(
+                family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+                execution_lane=EXECUTION_LANE_DETERMINISTIC,
+                workspace_id=None,
+                priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
+                idempotency_key=f"{WORK_FAMILY_MEMORY_EMBEDDING_REPAIR}:{self._embedder.model_name}:{candidate.id}:{candidate.updated_at or ''}",
+                payload={
+                    "memory_id": candidate.id,
+                    "model_name": self._embedder.model_name,
+                    "memory_updated_at": candidate.updated_at or "",
+                },
+            )
+            if created:
+                queued_count += 1
+
+        if queued_count <= 0:
+            return
+
+        self._task_queue.enqueue_unique(
+            EMBEDDING_REPAIR_TASK_NAME,
+            data={
+                "trigger": "search_repair",
+                "batch_size": max(int(getattr(self._config.embeddings, "batch_size", DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE)), 1),
+                "max_batches_per_run": DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN,
+            },
+            workspace_id=None,
+            priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
+            available_at=time.time(),
+        )
+
+    def _wait_for_background_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
+        started_at = time.monotonic()
+        deadline = time.monotonic() + self._background_repair_wait_seconds
+        pending: list[RelationalMemoryRecord] = list(candidates)
+        while time.monotonic() < deadline:
+            pending = self._stale_or_missing_embedding_candidates(candidates)
+            if not pending:
+                break
+            time.sleep(BACKGROUND_REPAIR_POLL_INTERVAL_SECONDS)
+        self._health.repair_wait_count += 1
+        self._health.last_repair_wait_seconds = time.monotonic() - started_at
+        self._health.last_repair_candidate_count = len(candidates)
+        self._health.last_repair_pending_count = len(pending)
+        if pending:
+            self._health.partial_semantic_search_count += 1
+            self._health.last_partial_semantic_at = _utc_now()
+        self._refresh_background_repair_health_snapshot()
+
+    def _refresh_background_repair_health_snapshot(self) -> None:
+        if self._db_manager is None:
+            self._health.queued_repair_backlog_count = 0
+            self._health.running_repair_count = 0
+            self._health.oldest_queued_repair_age_seconds = None
+            return
+        row = self._db_manager.get_connection().execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN family_key = ? AND status IN ('pending', 'deferred') THEN 1 ELSE 0 END), 0) AS queued_count,
+                COALESCE(SUM(CASE WHEN family_key = ? AND status = 'running' THEN 1 ELSE 0 END), 0) AS running_count,
+                MIN(CASE WHEN family_key = ? AND status IN ('pending', 'deferred') THEN created_at END) AS oldest_queued_created_at
+            FROM work_items
+            """,
+            (
+                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+            ),
+        ).fetchone()
+        queued_count = 0 if row is None or row["queued_count"] is None else int(row["queued_count"])
+        running_count = 0 if row is None or row["running_count"] is None else int(row["running_count"])
+        oldest_created_at = None if row is None else row["oldest_queued_created_at"]
+        self._health.queued_repair_backlog_count = queued_count
+        self._health.running_repair_count = running_count
+        if oldest_created_at is None:
+            self._health.oldest_queued_repair_age_seconds = None
+        else:
+            self._health.oldest_queued_repair_age_seconds = max(time.time() - float(oldest_created_at), 0.0)
 
 def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
     tag_text = ", ".join(record.tags)
@@ -905,6 +1045,29 @@ def _count_links_by_type(links: Sequence[MemoryLink]) -> dict[str, int]:
     for link in links:
         counts[link.link_type] = counts.get(link.link_type, 0) + 1
     return counts
+
+
+def _prioritize_embedding_repairs(candidates: Sequence[RelationalMemoryRecord]) -> list[RelationalMemoryRecord]:
+    def _repair_priority(record: RelationalMemoryRecord) -> tuple[float, float, str]:
+        return (
+            _iso_timestamp_to_sortable_float(record.updated_at),
+            _iso_timestamp_to_sortable_float(record.created_at),
+            record.id,
+        )
+
+    return sorted(candidates, key=_repair_priority, reverse=True)
+
+
+def _iso_timestamp_to_sortable_float(value: str | None) -> float:
+    if not value:
+        return float("-inf")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return float("-inf")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _weighted_incoming_link_count(counts: dict[str, int]) -> float:

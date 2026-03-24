@@ -79,7 +79,7 @@ class MCPServer:
         request_payload = None if payload is None else dict(payload)
         if request_payload is not None and self.workspace_root is not None:
             request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
-        return request_daemon_json(self._daemon, path, request_payload, timeout_seconds=5)
+        return request_daemon_json(self._daemon, path, request_payload)
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:

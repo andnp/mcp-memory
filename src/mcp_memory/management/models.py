@@ -17,6 +17,17 @@ class SearchHealthPayload(BaseModel):
     degraded: bool = False
     fallback_count: int = 0
     rebuild_count: int = 0
+    background_repair_enabled: bool = False
+    background_repair_wait_seconds: float = 0.0
+    queued_repair_backlog_count: int = 0
+    running_repair_count: int = 0
+    oldest_queued_repair_age_seconds: float | None = None
+    repair_wait_count: int = 0
+    partial_semantic_search_count: int = 0
+    last_partial_semantic_at: str | None = None
+    last_repair_wait_seconds: float = 0.0
+    last_repair_candidate_count: int = 0
+    last_repair_pending_count: int = 0
     last_error: str | None = None
     last_failure_at: str | None = None
     last_recovery_at: str | None = None

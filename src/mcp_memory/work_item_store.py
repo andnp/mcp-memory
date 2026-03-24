@@ -17,6 +17,7 @@ WORK_ITEM_STATUS_DEFERRED = "deferred"
 
 EXECUTION_LANE_DETERMINISTIC = "deterministic"
 EXECUTION_LANE_AGENTIC = "agentic"
+WORK_FAMILY_MEMORY_EMBEDDING_REPAIR = "memory_embedding_repair"
 WORK_FAMILY_CONFLICT_REVIEW = "conflict_review"
 WORK_FAMILY_MEMORY_CURATION_REVIEW = "memory_curation_review"
 WORK_FAMILY_MEMORY_DEDUP_REVIEW = "memory_dedup_review"

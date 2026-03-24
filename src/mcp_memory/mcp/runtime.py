@@ -63,21 +63,25 @@ def resolve_runtime_spec(
     )
 
 
-def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
+def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queue: bool = False) -> ApplicationContext:
     db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
     journal = System1Journal(db_manager)
     repository = RelationalMemoryRepository(db_manager)
     embedder = build_embedder(spec.config.embeddings)
     vector_store = SQLiteVectorStore(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    work_items = SQLiteWorkItemRepository(db_manager)
     relational_search = RelationalMemorySearchService(
         repository,
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
         db_manager=db_manager,
+        task_queue=task_queue,
+        work_items=work_items,
+        background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
     )
     relational_search.run_startup_health_check()
-    task_queue = SQLiteTaskQueue(db_manager)
     provider_registry = _build_provider_registry(spec=spec, db_manager=db_manager, task_queue=task_queue)
     default_profile_key = _default_profile_key(spec.config)
     default_bundle = {} if default_profile_key is None else provider_registry.get(default_profile_key, {})
@@ -98,7 +102,7 @@ def create_runtime_from_spec(spec: RuntimeSpec) -> ApplicationContext:
         ai_provider=ai_json_provider,
         ai_provider_registry=provider_registry,
         provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
-        work_items=SQLiteWorkItemRepository(db_manager),
+        work_items=work_items,
         embedder=embedder,
         vector_store=vector_store,
         search_health=relational_search.get_health(),

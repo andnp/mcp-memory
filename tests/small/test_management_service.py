@@ -10,9 +10,12 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.management.service import ManagementService
+from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
+from mcp_memory.work_item_store import SQLiteWorkItemRepository, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
 
 
 pytestmark = pytest.mark.small
@@ -878,10 +881,21 @@ def test_management_service_nerd_metrics_surface_memory_quality_signals(db_manag
 def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
+    work_items = SQLiteWorkItemRepository(db_manager)
     handler = SQLiteStructuredLogHandler(
         db_manager=db_manager,
         workspace_id="workspace-a",
         source="daemon",
+    )
+    relational_search = RelationalMemorySearchService(
+        repository,
+        config=__import__("mcp_memory.config", fromlist=["Config"]).Config(),
+        embedder=None,
+        vector_store=SQLiteVectorStore(db_manager),
+        db_manager=db_manager,
+        task_queue=task_queue,
+        work_items=work_items,
+        background_repair_wait_seconds=5.0,
     )
 
     primary = repository.create_memory(
@@ -1061,6 +1075,14 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("workspace-b", "memory-curator", "copilot-mini", "Copilot CLI", "gpt-5-mini", "success", 0.5, time.time(), None),
     )
+    work_items.enqueue_unique(
+        family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
+        execution_lane="deterministic",
+        workspace_id=None,
+        priority=15,
+        idempotency_key="repair:one",
+        payload={"memory_id": primary.id},
+    )
     db_manager.get_connection().commit()
 
     ctx = ApplicationContext(
@@ -1069,6 +1091,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         db_manager=db_manager,
         repository=repository,
         task_queue=task_queue,
+        work_items=work_items,
+        relational_search=relational_search,
     )
     controller = SimpleNamespace(has_runtime=True, client_count=1)
     service = ManagementService(ctx, controller)
@@ -1120,6 +1144,10 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.failed_tasks[0]["status"] == "failed"
     assert health.runtime_active is True
     assert health.workspace_id == "workspace-a"
+    assert health.search.background_repair_enabled is True
+    assert health.search.background_repair_wait_seconds == 5.0
+    assert health.search.queued_repair_backlog_count == 1
+    assert health.search.running_repair_count == 0
     assert nerd_metrics.graph_topology.total_memories == 2
     assert nerd_metrics.graph_topology.total_links == 1
     assert nerd_metrics.graph_topology.link_type_counts == {"SUPERSEDES": 1}

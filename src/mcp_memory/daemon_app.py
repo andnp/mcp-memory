@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import inspect
 import logging
 import os
 import signal
@@ -187,7 +188,10 @@ def create_daemon_app(
         except DaemonLockTimeoutError as exc:
             raise RuntimeError("daemon_runtime_lock_unavailable:global") from exc
 
-        runtime = create_runtime_from_spec(spec)
+        if "enable_background_repair_queue" in inspect.signature(create_runtime_from_spec).parameters:
+            runtime = create_runtime_from_spec(spec, enable_background_repair_queue=True)
+        else:
+            runtime = create_runtime_from_spec(spec)
         assert runtime.db_manager is not None
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)

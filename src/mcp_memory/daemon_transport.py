@@ -23,16 +23,38 @@ from mcp_memory.mcp.tools import get_memory_tools
 
 
 DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
+EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 30.0
+_EXTENDED_TIMEOUT_PATH_PREFIXES = (
+    "/api/memories/search",
+    "/api/memories/",
+    "/internal/tools/search_memory_records",
+    "/internal/tools/read_memory_record",
+    "/internal/maintenance/tools/internal_search_memory_records",
+    "/internal/maintenance/tools/internal_read_memory_record",
+)
 
 
-def request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds: float = DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS):
+def request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds: float | None = None):
     socket_path = getattr(metadata, "socket_path", None)
     transport = getattr(metadata, "transport", "zmq")
     if transport not in {"zmq", "hybrid"}:
         raise ValueError("unsupported_daemon_transport")
     if not isinstance(socket_path, str) or not socket_path:
         raise ValueError("daemon_socket_path_required")
-    return _request_zmq_json(socket_path, path, payload, timeout_seconds=timeout_seconds)
+    resolved_timeout_seconds = resolve_daemon_request_timeout_seconds(path, timeout_seconds=timeout_seconds)
+    return _request_zmq_json(socket_path, path, payload, timeout_seconds=resolved_timeout_seconds)
+
+
+def resolve_daemon_request_timeout_seconds(path: str, *, timeout_seconds: float | None = None) -> float:
+    if timeout_seconds is not None:
+        return timeout_seconds
+    if _uses_extended_timeout_budget(path):
+        return EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
+    return DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS
+
+
+def _uses_extended_timeout_budget(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in _EXTENDED_TIMEOUT_PATH_PREFIXES)
 
 
 def probe_daemon_socket(socket_path: str | Path, *, timeout_seconds: float = 0.1) -> bool:
