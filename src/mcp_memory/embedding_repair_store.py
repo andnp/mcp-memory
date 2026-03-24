@@ -280,6 +280,38 @@ class SQLiteEmbeddingRepairQueue:
             oldest_queued_age_seconds=oldest_age,
         )
 
+    def prune_completed(
+        self,
+        *,
+        older_than_seconds: float = 0.0,
+        limit: int = 500,
+        now: float | None = None,
+    ) -> int:
+        if limit < 1:
+            return 0
+        current_time = time.time() if now is None else now
+        completed_before = current_time - max(float(older_than_seconds), 0.0)
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            """
+            SELECT id FROM embedding_repair_queue
+            WHERE status = ? AND completed_at IS NOT NULL AND completed_at <= ?
+            ORDER BY completed_at ASC
+            LIMIT ?
+            """,
+            (EMBEDDING_REPAIR_STATUS_COMPLETED, completed_before, limit),
+        ).fetchall()
+        if not rows:
+            return 0
+        item_ids = [str(row["id"]) for row in rows]
+        placeholders = ",".join("?" for _ in item_ids)
+        cursor = conn.execute(
+            f"DELETE FROM embedding_repair_queue WHERE id IN ({placeholders})",
+            item_ids,
+        )
+        conn.commit()
+        return int(cursor.rowcount)
+
     def _row_to_item(self, row) -> EmbeddingRepairQueueItem:
         return EmbeddingRepairQueueItem(
             id=str(row["id"]),

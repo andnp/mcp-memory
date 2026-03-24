@@ -358,6 +358,24 @@ def _render_search_health_table(search_health) -> None:
     console.print(table)
 
 
+def _render_embedding_repair_backlog_table(search_health) -> None:
+    table = Table(title="Embedding Repair Backlog")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Queue enabled", str(search_health.background_repair_enabled))
+    table.add_row("Wait budget", f"{search_health.background_repair_wait_seconds:.2f}s")
+    table.add_row("Queued repairs", str(search_health.queued_repair_backlog_count))
+    table.add_row("Running repairs", str(search_health.running_repair_count))
+    table.add_row("Oldest queued age", _format_age(search_health.oldest_queued_repair_age_seconds))
+    table.add_row("Repair waits", str(search_health.repair_wait_count))
+    table.add_row("Partial semantic searches", str(search_health.partial_semantic_search_count))
+    table.add_row("Last partial semantic", search_health.last_partial_semantic_at or "-")
+    table.add_row("Last repair wait", f"{search_health.last_repair_wait_seconds:.3f}s")
+    table.add_row("Last repair candidate count", str(search_health.last_repair_candidate_count))
+    table.add_row("Last repair pending count", str(search_health.last_repair_pending_count))
+    console.print(table)
+
+
 def _render_agent_table(overview) -> None:
     agent_table = Table(title="Background Agents")
     agent_table.add_column("Agent", no_wrap=True)
@@ -723,6 +741,7 @@ def _render_stats_snapshot(
         console.print(f"[dim]Refreshed:[/] {_format_timestamp(time.time())}")
 
     _render_search_health_table(health.search)
+    _render_embedding_repair_backlog_table(health.search)
     _render_memory_metrics_table(overview, journal_counts)
     _render_queue_diagnostics_table(overview)
     _render_agent_table(overview)

@@ -629,6 +629,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
 
     assert result.exit_code == 0
     assert "Search Health" in result.output
+    assert "Embedding Repair Backlog" in result.output
     assert "Memory Metrics" in result.output
     assert "Next Pending Tasks" in result.output
     assert "Background Agents" in result.output
@@ -658,6 +659,7 @@ def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Pat
 
     assert result.exit_code == 0
     assert "Search Health" in result.output
+    assert "Embedding Repair Backlog" in result.output
     assert "Memory Metrics" in result.output
     assert "Next Pending Tasks" in result.output
     assert "Background Agents" in result.output

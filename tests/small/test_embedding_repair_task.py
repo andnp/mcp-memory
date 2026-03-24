@@ -100,6 +100,7 @@ async def test_search_can_wait_for_queue_backed_embedding_repairs(db_manager) ->
     health = service.get_health()
     assert stored is not None
     assert embedding_repair_queue.list_items(status="running") == []
+    assert embedding_repair_queue.list_items(status="completed") == []
     assert health.background_repair_enabled is True
     assert health.repair_wait_count == 1
     assert health.partial_semantic_search_count == 0
@@ -186,3 +187,23 @@ def test_search_queues_repairs_in_specialized_backlog_store(db_manager) -> None:
     assert len(queued_items) == 1
     assert queued_items[0].memory_id == record.id
     assert queued_items[0].model_name == service._embedder.model_name
+
+
+def test_embedding_repair_queue_prune_completed_removes_old_rows(db_manager) -> None:
+    queue = SQLiteEmbeddingRepairQueue(db_manager)
+    item, created = queue.enqueue_unique(
+        memory_id="memory-1",
+        workspace_id=None,
+        model_name="demo-model",
+        memory_updated_at="2026-03-24T00:00:00+00:00",
+        available_at=0.0,
+    )
+    assert created is True
+    claimed = queue.claim_batch(lease_owner="task-1", limit=1)
+    assert [entry.id for entry in claimed] == [item.id]
+    queue.complete_item(item.id, completed_at=10.0)
+
+    pruned = queue.prune_completed(older_than_seconds=0.0, limit=10, now=20.0)
+
+    assert pruned == 1
+    assert queue.list_items(limit=10) == []

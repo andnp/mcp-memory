@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 DEFAULT_EMBEDDING_REPAIR_BATCH_SIZE = 32
 DEFAULT_EMBEDDING_REPAIR_MAX_BATCHES_PER_RUN = 8
+DEFAULT_EMBEDDING_REPAIR_PRUNE_LIMIT = 256
 
 
 async def handle_embedding_repair_task(
@@ -129,8 +130,13 @@ async def handle_embedding_repair_task(
                 work_items.complete_item(work_item.id)
             repaired += 1
 
+    pruned_completed = 0
+    if embedding_repair_queue is not None:
+        pruned_completed = embedding_repair_queue.prune_completed(limit=DEFAULT_EMBEDDING_REPAIR_PRUNE_LIMIT)
+
     return {
         "repaired": repaired,
         "claimed_work_item_count": claimed_work_item_count,
         "batches_processed": batches_processed,
+        "pruned_completed": pruned_completed,
     }
