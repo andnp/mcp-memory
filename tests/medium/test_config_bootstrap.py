@@ -124,6 +124,44 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
 
 
+def test_load_config_backfills_provider_routing_defaults_for_legacy_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[ai]\n"
+        'provider = "none"\n'
+        'model = "gemini-3-flash-preview"\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["gemini-strong", "copilot-strong", "gemini-cheap"]
+    assert config.provider_routing.default_json_route == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.default_agentic_route == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"
+    assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
+
+
+def test_load_config_merges_partial_provider_routing_override_with_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[provider_routing]\n"
+        'default_json_route = ["copilot-mini"]\n'
+        "\n"
+        "[provider_routing.task_routes]\n"
+        'memory-curator = ["copilot-strong"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.provider_routing.default_json_route == ["copilot-mini"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"
+
+
 def test_load_config_reads_ingest_control_overrides(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(

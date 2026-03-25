@@ -407,6 +407,95 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
     )
 
 
+def _default_provider_routing_data() -> dict[str, Any]:
+    return {
+        "profiles": {
+            "gemini-strong": {
+                "provider": "gemini-cli",
+                "model": "gemini-3.1-pro-preview",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
+            "gemini-cheap": {
+                "provider": "gemini-cli",
+                "model": "gemini-3-flash-preview",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
+            "copilot-strong": {
+                "provider": "copilot-cli",
+                "model": "gpt-5.4",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
+            "copilot-mini": {
+                "provider": "copilot-cli",
+                "model": "gpt-5-mini",
+                "timeout_seconds": 900,
+                "max_retries": 0,
+            },
+        },
+        "task_routes": {
+            "ingest-system1": ["gemini-cheap", "copilot-mini"],
+            "deduplicator": ["gemini-cheap", "copilot-mini"],
+            "memory-curator": ["gemini-strong", "copilot-strong", "gemini-cheap"],
+        },
+        "task_classes": {
+            "ingest-system1": "cheap_agentic",
+            "deduplicator": "cheap_agentic",
+            "memory-curator": "premium_agentic",
+            "graph-linker": "cheap_json",
+            "conflict-detector": "cheap_json",
+            "defragmenter": "cheap_json",
+            "taxonomist": "cheap_json",
+            "fact-checker": "deterministic",
+            "project-manager": "deterministic",
+            "summarize-memory": "deterministic",
+            "sweeper": "deterministic",
+        },
+        "profile_daily_call_limits": {
+            "gemini-strong": 50,
+            "gemini-cheap": 100,
+            "copilot-strong": 20,
+            "copilot-mini": 50,
+        },
+        "model_burst_call_limit": 1,
+        "model_burst_window_seconds": 600.0,
+        "default_json_route": ["gemini-cheap", "copilot-mini"],
+        "default_agentic_route": ["gemini-cheap", "copilot-mini"],
+        "fallback_to_json_only": False,
+        "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
+    }
+
+
+def _merge_provider_routing_defaults(raw_provider_routing: object) -> dict[str, Any]:
+    defaults = _default_provider_routing_data()
+    if not isinstance(raw_provider_routing, dict):
+        return defaults
+
+    merged = dict(defaults)
+    for key in (
+        "model_burst_call_limit",
+        "model_burst_window_seconds",
+        "default_json_route",
+        "default_agentic_route",
+        "fallback_to_json_only",
+        "low_priority_task_names",
+    ):
+        if key in raw_provider_routing:
+            merged[key] = raw_provider_routing[key]
+
+    for key in ("profiles", "task_routes", "task_classes", "profile_daily_call_limits"):
+        default_mapping = defaults.get(key, {})
+        raw_mapping = raw_provider_routing.get(key)
+        if isinstance(default_mapping, dict) and isinstance(raw_mapping, dict):
+            merged[key] = {**default_mapping, **raw_mapping}
+        elif key in raw_provider_routing:
+            merged[key] = raw_mapping
+
+    return merged
+
+
 def _load_ingest_suppression_config(data: dict[str, Any]) -> IngestSuppressionConfig:
     windows: list[IngestSuppressionWindow] = []
     raw_windows = data.get("windows", [])
@@ -505,64 +594,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "authority_link_step": 0.02,
         "authority_link_cap": 10,
     }
-    document["provider_routing"] = {
-        "profiles": {
-            "gemini-strong": {
-                "provider": "gemini-cli",
-                "model": "gemini-3.1-pro-preview",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
-            "gemini-cheap": {
-                "provider": "gemini-cli",
-                "model": "gemini-3-flash-preview",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
-            "copilot-strong": {
-                "provider": "copilot-cli",
-                "model": "gpt-5.4",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
-            "copilot-mini": {
-                "provider": "copilot-cli",
-                "model": "gpt-5-mini",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
-        },
-        "task_routes": {
-            "ingest-system1": ["gemini-cheap", "copilot-mini"],
-            "deduplicator": ["gemini-cheap", "copilot-mini"],
-            "memory-curator": ["gemini-strong", "copilot-strong", "gemini-cheap"],
-        },
-        "task_classes": {
-            "ingest-system1": "cheap_agentic",
-            "deduplicator": "cheap_agentic",
-            "memory-curator": "premium_agentic",
-            "graph-linker": "cheap_json",
-            "conflict-detector": "cheap_json",
-            "defragmenter": "cheap_json",
-            "taxonomist": "cheap_json",
-            "fact-checker": "deterministic",
-            "project-manager": "deterministic",
-            "summarize-memory": "deterministic",
-            "sweeper": "deterministic",
-        },
-        "profile_daily_call_limits": {
-            "gemini-strong": 50,
-            "gemini-cheap": 100,
-            "copilot-strong": 20,
-            "copilot-mini": 50,
-        },
-        "model_burst_call_limit": 1,
-        "model_burst_window_seconds": 600.0,
-        "default_json_route": ["gemini-cheap", "copilot-mini"],
-        "default_agentic_route": ["gemini-cheap", "copilot-mini"],
-        "fallback_to_json_only": False,
-        "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
-    }
+    document["provider_routing"] = _default_provider_routing_data()
     document["ingest_suppression"] = {
         "enabled": False,
         "windows": [],
@@ -626,7 +658,9 @@ def load_config(config_path: Path | None = None) -> Config:
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
-        provider_routing=_load_provider_routing_config(raw.get("provider_routing", {})),
+        provider_routing=_load_provider_routing_config(
+            _merge_provider_routing_defaults(raw.get("provider_routing", {}))
+        ),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
     )
