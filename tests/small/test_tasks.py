@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -24,6 +26,7 @@ from mcp_memory.core.task_handlers import (
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
 
 pytestmark = pytest.mark.small
@@ -203,6 +206,31 @@ def test_sqlite_task_queue_touch_running_task_refreshes_updated_at(db_manager) -
 
     assert touched.status == "running"
     assert touched.updated_at == pytest.approx(7.5)
+
+
+def test_database_manager_waits_for_short_write_lock_release(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    locker = sqlite3.connect(str(db_manager.db_path), check_same_thread=False, timeout=0.01)
+    locker.execute("PRAGMA journal_mode=WAL;")
+    locker.execute("BEGIN IMMEDIATE")
+
+    def release_lock() -> None:
+        time.sleep(0.1)
+        locker.commit()
+        locker.close()
+
+    releaser = threading.Thread(target=release_lock)
+    releaser.start()
+    started_at = time.perf_counter()
+    try:
+        task = queue.enqueue("delayed-write", task_id="delayed-write")
+    finally:
+        releaser.join()
+    elapsed_seconds = time.perf_counter() - started_at
+
+    assert task.id == "delayed-write"
+    assert elapsed_seconds >= 0.08
+    assert elapsed_seconds < (SQLITE_BUSY_TIMEOUT_MILLISECONDS / 1000.0)
 
 
 def test_sqlite_task_queue_does_not_recover_dead_subprocess_before_stale_threshold(

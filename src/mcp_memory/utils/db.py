@@ -10,6 +10,10 @@ from mcp_memory.utils.db_schema import SCHEMA_VERSION, initialize_schema
 logger = logging.getLogger(__name__)
 
 
+SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
+SQLITE_BUSY_TIMEOUT_MILLISECONDS = int(SQLITE_BUSY_TIMEOUT_SECONDS * 1000)
+
+
 class DatabaseManager:
     """Thread-safe SQLite database manager with WAL mode."""
 
@@ -23,10 +27,15 @@ class DatabaseManager:
         conn.close()
 
     def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+            timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        )
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS};")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -64,4 +73,9 @@ class DatabaseManager:
             self._local.connection = None
 
 
-__all__ = ["DatabaseManager", "SCHEMA_VERSION"]
+__all__ = [
+    "DatabaseManager",
+    "SCHEMA_VERSION",
+    "SQLITE_BUSY_TIMEOUT_MILLISECONDS",
+    "SQLITE_BUSY_TIMEOUT_SECONDS",
+]
