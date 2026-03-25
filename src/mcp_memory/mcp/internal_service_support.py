@@ -5,7 +5,6 @@ import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.task_submission import enqueue_summary_refresh_task
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -63,6 +62,8 @@ def _merge_metadata_lists(existing: list[Any], override: list[Any]) -> list[Any]
 def _enqueue_summary_task(ctx: ApplicationContext, memory_id: str, workspace_ids: list[str]) -> None:
     if ctx.task_queue is None:
         return
+    from mcp_memory.core.task_submission import enqueue_summary_refresh_task
+
     try:
         enqueue_summary_refresh_task(
             ctx,

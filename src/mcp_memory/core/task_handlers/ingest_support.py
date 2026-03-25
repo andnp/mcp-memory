@@ -4,7 +4,7 @@ import json
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.mcp.internal_services import (
+from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,

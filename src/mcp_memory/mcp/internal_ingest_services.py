@@ -8,6 +8,11 @@ from mcp_memory.core.ingest_provenance import (
     build_ingest_created_metadata,
 )
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
+from mcp_memory.mcp.internal_ingest_keys import (
+    INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
+    INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+    INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+)
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _memory_write_quality_error,
@@ -24,12 +29,6 @@ from mcp_memory.mcp.validation import (
     validate_ingest_mutation_payload,
 )
 from mcp_memory.serialization import memory_record_payload
-
-
-INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY = "ingest_handled_entry_ids"
-INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY = "ingest_entry_dispositions"
-INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY = "ingest_tool_invocations"
-
 
 def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.journal is None:
