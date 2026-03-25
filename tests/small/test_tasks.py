@@ -134,6 +134,7 @@ def test_sqlite_task_queue_fail_requeues_before_dead_letter(db_manager) -> None:
     assert second_claim is not None
     assert second_claim.id == task.id
     assert second_claim.status == "running"
+    assert second_claim.last_error is None
 
 
 def test_sqlite_task_queue_fail_transitions_to_dead_letter_at_retry_limit(db_manager) -> None:

@@ -10,6 +10,7 @@ from mcp_memory.utils.db import DatabaseManager
 
 
 REMINDER_INTERVAL_SECONDS = 300.0
+ACTIVE_CLIENT_STALE_AFTER_SECONDS = 3600.0
 REMINDER_MESSAGE = (
     "Before moving on, record any durable finding, decision, anomaly, or reusable next step with the "
     "record_thought tool. Skip routine play-by-play and status-only updates."
@@ -145,10 +146,13 @@ class HookReminderService:
             ended_at=None if row["ended_at"] is None else float(row["ended_at"]),
         )
 
-    def get_active_client_count(self) -> int:
+    def get_active_client_count(self, *, now: float | None = None) -> int:
+        current_time = time.time() if now is None else now
+        active_after = current_time - ACTIVE_CLIENT_STALE_AFTER_SECONDS
         conn = self._db.get_connection()
         row = conn.execute(
-            "SELECT COUNT(*) AS count FROM hook_conversations WHERE ended_at IS NULL"
+            "SELECT COUNT(*) AS count FROM hook_conversations WHERE ended_at IS NULL AND updated_at >= ?",
+            (active_after,),
         ).fetchone()
         return 0 if row is None else int(row["count"])
 

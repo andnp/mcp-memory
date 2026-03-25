@@ -188,7 +188,8 @@ class SQLiteTaskQueue:
                 SET status = 'running',
                     updated_at = ?,
                     claimed_at = ?,
-                    started_at = COALESCE(started_at, ?)
+                    started_at = COALESCE(started_at, ?),
+                    last_error = NULL
                 WHERE id = ? AND status = 'pending'
                 """,
                 (claimed_at, claimed_at, claimed_at, row["id"]),

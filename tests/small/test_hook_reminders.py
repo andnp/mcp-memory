@@ -46,5 +46,14 @@ def test_active_client_count_is_global(db_manager) -> None:
     workspace_b.record_session_start("conv-b-1", {"timestamp": 12.0})
     workspace_a.record_session_end("conv-a-1", {"timestamp": 13.0})
 
-    assert workspace_a.get_active_client_count() == 2
-    assert workspace_b.get_active_client_count() == 2
+    assert workspace_a.get_active_client_count(now=15.0) == 2
+    assert workspace_b.get_active_client_count(now=15.0) == 2
+
+
+def test_active_client_count_excludes_stale_unended_sessions(db_manager) -> None:
+    service = HookReminderService(db_manager, workspace_id="workspace-a")
+
+    service.record_session_start("stale-conv", {"timestamp": 10.0})
+    service.record_session_start("fresh-conv", {"timestamp": 4000.0})
+
+    assert service.get_active_client_count(now=4000.0) == 1
