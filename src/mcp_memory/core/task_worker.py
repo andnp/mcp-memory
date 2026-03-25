@@ -46,6 +46,7 @@ class RuntimeTaskWorker:
         self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
         self._next_abandoned_recovery_at = 0.0
         self._reconciliation_lock = asyncio.Lock()
+        self._last_reconciliation_snapshot: tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]] | None = None
 
     async def start(self) -> None:
         if self._runner is not None and not self._runner.done():
@@ -253,7 +254,14 @@ class RuntimeTaskWorker:
                 reverse=True,
             )
             overdue_summaries = [queued_task.id for queued_task in overdue_pending[:5]]
-            if recovered_task_ids or reconciled_conversation_ids or released_claim_ids or overdue_pending:
+            snapshot = (
+                tuple(recovered_task_ids),
+                tuple(reconciled_conversation_ids),
+                tuple(released_claim_ids),
+                tuple(overdue_summaries),
+            )
+            should_log = bool(recovered_task_ids or reconciled_conversation_ids or released_claim_ids or overdue_pending)
+            if should_log and snapshot != self._last_reconciliation_snapshot:
                 logger.info(
                     "Runtime reconciliation pass completed",
                     extra={
@@ -269,6 +277,7 @@ class RuntimeTaskWorker:
                         "overdue_pending_task_ids": overdue_summaries,
                     },
                 )
+            self._last_reconciliation_snapshot = snapshot if should_log else None
 
     def _reconcile_orphaned_running_conversations(self) -> list[str]:
         task_queue = getattr(self._ctx, "task_queue", None)

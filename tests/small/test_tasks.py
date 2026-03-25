@@ -1049,6 +1049,35 @@ async def test_runtime_task_worker_releases_orphaned_journal_claims_on_start(db_
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_logs_unchanged_overdue_pending_tasks_once(db_manager, caplog) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    overdue = queue.enqueue(
+        "overdue-pending-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="overdue-pending-task",
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"overdue-pending-task": lambda context, queued_task: None},
+        poll_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=60.0,
+    )
+
+    with caplog.at_level("INFO"):
+        await worker._run_reconciliation_pass(now=120.0, reason="periodic")  # noqa: SLF001
+        await worker._run_reconciliation_pass(now=121.0, reason="periodic")  # noqa: SLF001
+
+    matching_messages = [record for record in caplog.records if record.message == "Runtime reconciliation pass completed"]
+
+    assert overdue.id == "overdue-pending-task"
+    assert len(matching_messages) == 1
+    assert matching_messages[0].__dict__["overdue_pending_count"] == 1
+    assert matching_messages[0].__dict__["overdue_pending_task_ids"] == [overdue.id]
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_reconciles_running_conversation_for_recovered_dead_subprocess_task(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
