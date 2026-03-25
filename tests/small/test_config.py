@@ -26,11 +26,11 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
 
     assert created == config_path
     assert config_path.exists()
-    assert loaded.ai.provider == "none"
+    assert loaded.ai.provider == "gemini-cli"
     assert loaded.ai.max_retries == 0
-    assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
-    assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
-    assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-cheap"]
+    assert loaded.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
+    assert loaded.provider_routing.task_routes["deduplicator"] == ["gemini-cheap", "copilot-mini"]
+    assert loaded.provider_routing.task_routes["memory-curator"] == ["gemini-strong", "copilot-strong", "gemini-cheap"]
     assert loaded.provider_routing.fallback_to_json_only is False
     assert loaded.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert loaded.provider_routing.task_classes["summarize-memory"] == "deterministic"

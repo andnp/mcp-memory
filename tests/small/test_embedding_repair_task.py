@@ -90,12 +90,14 @@ async def test_search_can_wait_for_queue_backed_embedding_repairs(db_manager) ->
     finally:
         await worker.stop(1.0)
 
+    embedder = service._embedder
+    assert embedder is not None
     assert results
     assert results[0].memory_id == record.id
     stored = vector_store.get(
         source_kind="memory",
         source_id=record.id,
-        model_name=service._embedder.model_name,
+        model_name=embedder.model_name,
     )
     health = service.get_health()
     assert stored is not None
@@ -183,10 +185,12 @@ def test_search_queues_repairs_in_specialized_backlog_store(db_manager) -> None:
 
     service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
 
+    embedder = service._embedder
+    assert embedder is not None
     queued_items = embedding_repair_queue.list_items(limit=10)
     assert len(queued_items) == 1
     assert queued_items[0].memory_id == record.id
-    assert queued_items[0].model_name == service._embedder.model_name
+    assert queued_items[0].model_name == embedder.model_name
 
 
 def test_embedding_repair_queue_prune_completed_removes_old_rows(db_manager) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.server import MCPServer
 
 
@@ -27,7 +28,14 @@ def test_resolve_daemon_request_timeout_seconds_preserves_default_and_explicit_o
 
 def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
-    server._daemon = object()
+    server._daemon = DaemonMetadata(
+        host="127.0.0.1",
+        port=4242,
+        pid=1,
+        started_at=0.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-test.sock",
+    )
     captured: dict[str, object] = {}
 
     def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
