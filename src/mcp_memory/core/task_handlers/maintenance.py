@@ -23,6 +23,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     release_work_item as _release_work_item,
     work_item_result_metadata as _work_item_result_metadata,
 )
+import mcp_memory.core.task_handlers.curator_handlers as _curator_handlers
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
@@ -31,17 +32,9 @@ import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_ho
 import mcp_memory.core.task_handlers.relationship_review_handlers as _relationship_review_handlers
 import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
-from mcp_memory.core.task_handlers.agentic_guardrails import (
-    build_curator_guardrails,
-)
-from mcp_memory.core.task_handlers.campaigns import campaign_metadata
-from mcp_memory.core.task_handlers.campaigns import count_named_tool_calls
-from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
-    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_MEMORY_CURATION_REVIEW,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
 
@@ -59,8 +52,6 @@ DEDUPLICATOR_STRATEGY_WEIGHTS = {
     ANOMALY_STRATEGY: 2,
     COOLDOWN_ESCAPE_STRATEGY: 2,
 }
-CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS = 10
-CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND = 8
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
 handle_fact_checker_task = _maintenance_housekeeping.handle_fact_checker_task
 handle_sweeper_task = _maintenance_housekeeping.handle_sweeper_task
@@ -68,6 +59,8 @@ handle_graph_linker_task = _relationship_review_handlers.handle_graph_linker_tas
 handle_graph_link_discovery_task = _relationship_review_handlers.handle_graph_link_discovery_task
 handle_conflict_detector_task = _relationship_review_handlers.handle_conflict_detector_task
 handle_conflict_screening_task = _relationship_review_handlers.handle_conflict_screening_task
+handle_memory_curator_task = _curator_handlers.handle_memory_curator_task
+handle_curator_frontier_task = _curator_handlers.handle_curator_frontier_task
 
 
 async def handle_defragmenter_task(
@@ -688,200 +681,6 @@ async def _run_taxonomist_json_pass(
     }
 
 
-async def handle_memory_curator_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-    provider: Any = None,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"summary": None, "tool_calls_executed": 0, "mutations": 0}
-    if provider is None:
-        return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "provider_not_configured"}
-
-    claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
-    claimed_review_item = claimed_review_items[0] if claimed_review_items else None
-    if claimed_review_item is not None:
-        seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
-        if seed_records:
-            seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
-        else:
-            _complete_work_item(ctx, claimed_review_item.id)
-            claimed_review_item = None
-            seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
-            seed_records = seed_batch.records
-    else:
-        seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
-        seed_records = seed_batch.records
-
-    work_item_metadata = _work_item_result_metadata(
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        seed_source="claimed_review_work_item" if claimed_review_item is not None else "sampled_frontier",
-        seed_records=seed_records,
-        claimed_work_item=claimed_review_item,
-    )
-    work_item_metadata.update(
-        campaign_metadata(
-            compatibility_group=COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
-            origin_family=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-        )
-    )
-
-    if not seed_records:
-        return sampling_payload(
-            seed_batch,
-            sampled_records=seed_records,
-            extra=work_item_metadata,
-            summary=None,
-            tool_calls_executed=0,
-            mutations=0,
-            claimed_work_item_count=0,
-            reason="no_seed_records",
-        )
-
-    curator_guardrails = build_curator_guardrails()
-    prompt = _curator_support.build_json_tool_loop_prompt(
-        task,
-        strategy_used=seed_batch.strategy_used,
-        seed_records=seed_records,
-        guardrails=curator_guardrails,
-    )
-    run_agent = getattr(provider, "run_agent", None)
-    supports_agentic = getattr(provider, "supports_agentic", None)
-    if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
-        try:
-            agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-                _curator_support.build_agentic_prompt(
-                    task,
-                    strategy_used=seed_batch.strategy_used,
-                    seed_records=seed_records,
-                    guardrails=curator_guardrails,
-                )
-            )
-        except Exception:
-            if claimed_review_item is not None:
-                _release_work_item(ctx, claimed_review_item.id)
-            raise
-        if claimed_review_item is not None:
-            _complete_work_item(ctx, claimed_review_item.id)
-        normalized_agentic = _curator_support.normalize_curator_agentic_result(agentic_result)
-        return sampling_payload(
-            seed_batch,
-            sampled_records=seed_records,
-            seed_records=seed_records,
-            extra=work_item_metadata,
-            summary=normalized_agentic["summary"],
-            execution_mode="agentic_mcp",
-            claimed_work_item_count=1 if claimed_review_item is not None else 0,
-            tool_calls_executed=normalized_agentic["tool_calls_executed"],
-            mutations=normalized_agentic["mutations"],
-            tool_names_used=normalized_agentic["tool_names_used"],
-            compatible_batch_calls=count_named_tool_calls(
-                normalized_agentic["tool_names_used"],
-                tool_name="internal_get_compatible_work_batch",
-            ),
-        )
-
-    try:
-        loop_result = await run_internal_tool_loop(
-            ctx,
-            provider,
-            prompt=prompt,
-            allowed_tool_names=[
-                "internal_search_memory_records",
-                "internal_read_memory_record",
-                "internal_list_memory_records",
-                "internal_get_next_curator_batch",
-                "internal_get_compatible_work_batch",
-                "task_complete",
-                "internal_task_complete",
-                "internal_heartbeat_work_item",
-                "internal_complete_work_item",
-                "internal_defer_work_item",
-                "internal_release_work_item",
-                "internal_append_memory_content",
-                "internal_archive_memory_record",
-                "internal_merge_memory_into_canonical",
-                "internal_split_memory_record",
-                "internal_create_memory_record",
-                "internal_update_memory_record",
-                "internal_delete_memory_record",
-                "internal_create_memory_link",
-                "internal_delete_memory_link",
-            ],
-            max_rounds=CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS,
-            max_tool_calls_per_round=CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND,
-        )
-    except Exception:
-        if claimed_review_item is not None:
-            _release_work_item(ctx, claimed_review_item.id)
-        raise
-    if claimed_review_item is not None:
-        _complete_work_item(ctx, claimed_review_item.id)
-    summary = _curator_support.normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
-    return sampling_payload(
-        seed_batch,
-        sampled_records=seed_records,
-        seed_records=seed_records,
-        extra=work_item_metadata,
-        summary=summary,
-        execution_mode="json_tool_loop",
-        claimed_work_item_count=1 if claimed_review_item is not None else 0,
-        tool_calls_executed=loop_result.tool_calls_executed,
-        mutations=loop_result.mutating_tool_calls,
-        tool_names_used=loop_result.tool_names_used,
-        compatible_batch_calls=count_named_tool_calls(
-            loop_result.tool_names_used,
-            tool_name="internal_get_compatible_work_batch",
-        ),
-    )
-
-
-async def handle_curator_frontier_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
-    seed_records = seed_batch.records
-    support_records = _curator_support.select_curator_support_records(ctx, task, seed_records)
-    if not seed_records:
-        return sampling_payload(
-            seed_batch,
-            sampled_records=seed_records,
-            seed_records=seed_records,
-            seeded_work_item_count=0,
-            reason="no_seed_records",
-        )
-
-    created_work_item, created = _enqueue_curator_review_work_item(
-        ctx,
-        task=task,
-        workspace_id=workspace_id,
-        seed_records=seed_records,
-        support_records=support_records,
-        strategy_used=seed_batch.strategy_used,
-        candidate_count=seed_batch.candidate_count,
-    )
-    return sampling_payload(
-        seed_batch,
-        sampled_records=seed_records,
-        seed_records=seed_records + support_records,
-        extra=_work_item_result_metadata(
-            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            seed_source="frontier_seed",
-            seed_records=seed_records + support_records,
-            created_work_item=created_work_item if created else None,
-        ),
-        seeded_work_item_count=1 if created else 0,
-    )
-
-
 def _claim_dedup_review_work_batch(
     ctx: ApplicationContext,
     *,
@@ -915,49 +714,6 @@ def _enqueue_dedup_review_work_item(
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
         idempotency_prefix="memory_dedup_review",
-        payload_memory_ids_key="seed_memory_ids",
-        memory_ids=[record.id for record in seed_records],
-        strategy_used=strategy_used,
-        candidate_count=candidate_count,
-        extra_payload={
-            "support_memory_ids": [record.id for record in support_records],
-            "packet_record_count": len(seed_records) + len(support_records),
-        },
-    )
-
-
-def _claim_curator_review_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    limit: int,
-) -> list[Any]:
-    return _claim_work_batch(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        limit=limit,
-    )
-
-
-def _enqueue_curator_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str | None,
-    seed_records: list[Any],
-    support_records: list[Any],
-    strategy_used: str | None,
-    candidate_count: int,
-) -> tuple[Any, bool]:
-    return _enqueue_review_work_item(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=workspace_id,
-        idempotency_prefix="memory_curation_review",
         payload_memory_ids_key="seed_memory_ids",
         memory_ids=[record.id for record in seed_records],
         strategy_used=strategy_used,
