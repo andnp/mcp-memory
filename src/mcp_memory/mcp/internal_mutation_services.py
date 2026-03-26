@@ -12,8 +12,50 @@ from mcp_memory.mcp.internal_service_support import (
     _merge_memory_metadata,
     _normalize_tags,
 )
+from mcp_memory.mcp.internal_ingest_keys import INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY
 from mcp_memory.mcp.validation import optional_object, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import memory_record_payload
+
+
+def _maybe_record_ingest_tool_invocation(ctx: ApplicationContext, arguments: dict[str, Any], *, tool_name: str) -> None:
+    task_id = optional_string(arguments, "task_id")
+    if task_id is None or ctx.task_queue is None:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_object_list(
+            task_id,
+            field_name=INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+            values=[
+                {
+                    "tool_name": tool_name,
+                    "mutation": True,
+                }
+            ],
+        )
+    except ValueError:
+        return
+
+
+def _maybe_record_ingest_touched_memory_ids(
+    ctx: ApplicationContext,
+    arguments: dict[str, Any],
+    *,
+    memory_ids: list[str],
+) -> None:
+    task_id = optional_string(arguments, "task_id")
+    if task_id is None or ctx.task_queue is None:
+        return
+    normalized_memory_ids = [memory_id.strip() for memory_id in memory_ids if isinstance(memory_id, str) and memory_id.strip()]
+    if not normalized_memory_ids:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_object_list(
+            task_id,
+            field_name="ingest_touched_memory_ids",
+            values=[{"memory_id": memory_id} for memory_id in normalized_memory_ids],
+        )
+    except ValueError:
+        return
 
 
 def internal_append_memory_content_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -58,6 +100,8 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
     )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_append_memory_content")
+    _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
     payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(updated)}
     if warnings:
         payload["warnings"] = warnings
@@ -72,6 +116,8 @@ def internal_archive_memory_record_service(ctx: ApplicationContext, arguments: d
     updated = ctx.repository.update_memory(memory_id, status="archived")
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_archive_memory_record")
+    _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
     return {"status": "ok", "record": memory_record_payload(updated)}
 
 
@@ -117,6 +163,12 @@ def internal_merge_memory_into_canonical_service(ctx: ApplicationContext, argume
         optional_string(arguments, "link_context") or "Merged into canonical memory by internal maintenance tools.",
     )
     archived = ctx.repository.update_memory(source.id, status="archived")
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_merge_memory_into_canonical")
+    _maybe_record_ingest_touched_memory_ids(
+        ctx,
+        arguments,
+        memory_ids=[updated.id, source.id],
+    )
     return {
         "status": "ok",
         "canonical": memory_record_payload(updated),
@@ -229,6 +281,13 @@ def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dic
     else:
         refreshed_original = ctx.repository.update_memory(original.id, metadata=original_metadata)
 
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_split_memory_record")
+    _maybe_record_ingest_touched_memory_ids(
+        ctx,
+        arguments,
+        memory_ids=[original.id, *child_memory_ids],
+    )
+
     return {
         "status": "ok",
         "original": memory_record_payload(refreshed_original or original),
@@ -265,6 +324,8 @@ def internal_create_memory_record_service(ctx: ApplicationContext, arguments: di
     assert record is not None
     if optional_bool(arguments, "enqueue_summary_task"):
         _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_create_memory_record")
+    _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[record.id])
     payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(record)}
     if warnings:
         payload["warnings"] = warnings
@@ -326,6 +387,8 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
     )
     if updated is None:
         return {"status": "error", "error": "memory_not_found"}
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_update_memory_record")
+    _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
     payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(updated)}
     if warnings:
         payload["warnings"] = warnings
@@ -351,6 +414,8 @@ def internal_delete_memory_record_service(ctx: ApplicationContext, arguments: di
     deleted = ctx.repository.delete_memory(memory_id)
     if deleted is None:
         return {"status": "error", "error": "memory_not_found"}
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_delete_memory_record")
+    _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[deleted.id])
     return {"status": "ok", "deleted": memory_record_payload(deleted)}
 
 
@@ -368,6 +433,12 @@ def internal_create_memory_link_service(ctx: ApplicationContext, arguments: dict
     if source is None or (target is None and not target_id.startswith("ext:")):
         return {"status": "error", "error": "memory_not_found"}
     link = ctx.repository.add_link(source_id, target_id, link_type, context)
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_create_memory_link")
+    _maybe_record_ingest_touched_memory_ids(
+        ctx,
+        arguments,
+        memory_ids=[source_id, *( [] if target_id.startswith("ext:") else [target_id])],
+    )
     return {
         "status": "ok",
         "link": {
@@ -391,4 +462,13 @@ def internal_delete_memory_link_service(ctx: ApplicationContext, arguments: dict
     )
     if not deleted:
         return {"status": "error", "error": "link_not_found"}
+    _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_delete_memory_link")
+    _maybe_record_ingest_touched_memory_ids(
+        ctx,
+        arguments,
+        memory_ids=[
+            require_string(arguments, "source_id"),
+            *([] if require_string(arguments, "target_id").startswith("ext:") else [require_string(arguments, "target_id")]),
+        ],
+    )
     return {"status": "ok"}

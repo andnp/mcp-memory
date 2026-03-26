@@ -106,6 +106,14 @@ def test_normalize_ingest_agentic_result_preserves_rich_final_json_contract() ->
                                 "reason": "Exact match for error string E_CONNRESET in existing canonical memory.",
                             },
                         ],
+                        "cluster_outcomes": [
+                            {
+                                "entry_ids": [101, 102],
+                                "disposition": "refactored_cluster",
+                                "memory_ids": ["memory-created", "memory-existing"],
+                                "reason": "Both entries were needed to justify the coordinated cleanup.",
+                            }
+                        ],
                     }
                 ),
                 "stats": {
@@ -141,6 +149,14 @@ def test_normalize_ingest_agentic_result_preserves_rich_final_json_contract() ->
             "reason": "Exact match for error string E_CONNRESET in existing canonical memory.",
         },
     ]
+    assert result["cluster_outcomes"] == [
+        {
+            "entry_ids": [101, 102],
+            "disposition": "refactored_cluster",
+            "memory_ids": ["memory-created", "memory-existing"],
+            "reason": "Both entries were needed to justify the coordinated cleanup.",
+        }
+    ]
     assert result["tool_calls_executed"] == 3
     assert result["mutations"] == 2
 
@@ -175,6 +191,7 @@ def test_normalize_ingest_agentic_result_remains_backward_compatible_with_thin_j
     assert result["touched_memory_ids"] == ["memory-created"]
     assert result["matched_memory_ids"] == []
     assert result["entry_outcomes"] == []
+    assert result["cluster_outcomes"] == []
     assert result["meaningful_actions"] == 1
     assert result["tool_calls_executed"] == 1
     assert result["mutations"] == 1
@@ -209,13 +226,55 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     assert "A good memory is focused and durable" in prompt
     assert "Good memory anatomy: a specific title" in prompt
     assert "Bad memory patterns: routine progress logs, mixed unrelated topics, vague summaries" in prompt
+    assert "You are not a simple promotion script" in prompt
+    assert "Standing ingest jobs: append into the right canonical memory" in prompt
+    assert "Treat one claimed batch as a small maintenance campaign" in prompt
+    assert "internal_update_memory_record" in prompt
+    assert "internal_split_memory_record" in prompt
+    assert "internal_merge_memory_into_canonical" in prompt
+    assert "internal_archive_memory_record" in prompt
+    assert "internal_create_memory_link or internal_delete_memory_link" in prompt
+    assert "Include task_id='ingest-prompt-test' on those adjacent cleanup mutations" in prompt
     assert "When uncertain, prefer narrow concrete observations over broad abstraction." in prompt
+    assert "When multiple claimed entries only make sense together, keep them together" in prompt
     assert "Aim to drain the queue for this task in one run" in prompt
+    assert "Do not end after the first successful mutation" in prompt
+    assert "call task_complete with task_id='ingest-prompt-test', task_name='ingest-system1'" in prompt
     assert "Include explicit per-entry outcomes for every claimed entry" in prompt
     assert '"entry_outcomes": [{"entry_id": 123, "disposition": "created"|"appended"|"matched_existing"|"ignored"|"no_mutation"' in prompt
+    assert '"cluster_outcomes": [{"entry_ids": [123, 124], "disposition": "created_cluster"|"appended_cluster"|"refactored_cluster"|"linked_cluster"|"ignored_cluster"' in prompt
     assert "Do not make vague claims like 'matched existing canonical memories'" in prompt
     assert "Provide a reason whenever an entry outcome is ignored, no_mutation, or matched_existing." in prompt
     assert "Do not create memories that only log task completion, queue progress, tool usage" in prompt
+    assert "Use workspace_id 'workspace-test' when you need a fallback workspace for created or updated memories." in prompt
+
+
+def test_build_ingest_agent_prompt_omits_unknown_workspace_fallback() -> None:
+    prompt = _build_ingest_agent_prompt(
+        TaskRecord(
+            id="ingest-prompt-unknown-workspace",
+            task_name=SYSTEM1_INGEST_TASK_NAME,
+            data={},
+            workspace_id=None,
+            status="pending",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        ),
+        workspace_id="workspace-unknown",
+        batch_size=10,
+        grouping_strategy="fifo",
+        max_batches_per_run=8,
+    )
+
+    assert "workspace-unknown" not in prompt
 
 
 def test_build_deduplicator_agent_prompt_routes_closeout_to_task_complete() -> None:
@@ -808,6 +867,308 @@ async def test_ingest_handler_agentic_create_uses_task_attributed_counts_when_pr
                 "finalization_status": "recoverable",
                 "memory_id": result["created_memory_ids"][0],
                 "memory_title": "Truthful ingest telemetry",
+            }
+        ]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_adjacent_cleanup_counts_generic_mutations_when_provider_reports_zero_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        entry = runtime.journal.record(
+            "The ingest prompt should count adjacent cleanup mutations too.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-generic-cleanup",
+        )
+
+        class _GenericCleanupProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                create_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_CREATE_TOOL_NAME,
+                    {
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
+                        "title": "Adjacent cleanup telemetry",
+                        "content": "- [2026-03-19 00:00] The ingest prompt should count adjacent cleanup mutations too.",
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                create_payload = json.loads(create_result[0].text)
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_update_memory_record",
+                    {
+                        "memory_id": create_payload["record"]["id"],
+                        "summary": "Adjacent cleanup mutation telemetry is preserved for ingest runs.",
+                        "task_id": task.id,
+                    },
+                )
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest created and then cleaned up the touched memory.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest created and then cleaned up the touched memory.",
+                                "created_memory_ids": [create_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _GenericCleanupProvider())
+        updated = runtime.repository.get_memory(result["created_memory_ids"][0])
+
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["tool_calls_executed"] == 3
+        assert result["mutations"] == 2
+        assert result["tool_names_used"] == [
+            "internal_get_next_ingest_batch",
+            INGEST_CREATE_TOOL_NAME,
+            "internal_update_memory_record",
+        ]
+        assert result["provider_reported_tool_calls"] == 0
+        assert result["provider_reported_mutations"] == 0
+        assert updated is not None
+        assert updated.summary == "Adjacent cleanup mutation telemetry is preserved for ingest runs."
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_link_cleanup_expands_touched_memory_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        related = runtime.repository.create_memory(
+            title="Existing related canonical",
+            content="Tracks related ingest cleanup behavior.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert related is not None
+        entry = runtime.journal.record(
+            "The ingest run should expose extra touched memory ids from link cleanup.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-link-cleanup",
+        )
+
+        class _LinkCleanupProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                create_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_CREATE_TOOL_NAME,
+                    {
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
+                        "title": "Link cleanup telemetry",
+                        "content": "- [2026-03-19 00:00] The ingest run should expose extra touched memory ids from link cleanup.",
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                create_payload = json.loads(create_result[0].text)
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_create_memory_link",
+                    {
+                        "source_id": create_payload["record"]["id"],
+                        "target_id": related.id,
+                        "link_type": "RELATES_TO",
+                        "context": "Broader cluster cleanup discovered during ingest.",
+                        "task_id": task.id,
+                    },
+                )
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest created a memory and linked it into the related cluster.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest created a memory and linked it into the related cluster.",
+                                "created_memory_ids": [create_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _LinkCleanupProvider())
+
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["touched_memory_ids"] == sorted([result["created_memory_ids"][0], related.id])
+        assert result["tool_calls_executed"] == 3
+        assert result["mutations"] == 2
+        assert result["tool_names_used"] == [
+            "internal_create_memory_link",
+            "internal_get_next_ingest_batch",
+            INGEST_CREATE_TOOL_NAME,
+        ]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_surfaces_provider_reported_cluster_outcomes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    try:
+        first = runtime.journal.record(
+            "Thought one only makes sense with its sibling.",
+            workspace_id=runtime.workspace_id,
+        )
+        second = runtime.journal.record(
+            "Thought two only makes sense with its sibling.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-cluster-outcomes",
+        )
+
+        class _ClusterOutcomeProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                claimed_entry_ids = batch_payload["claimed_entry_ids"]
+                create_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_CREATE_TOOL_NAME,
+                    {
+                        "task_id": task.id,
+                        "entry_ids": claimed_entry_ids,
+                        "title": "Sibling thought cluster",
+                        "content": "- handled sibling cluster together",
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                create_payload = json.loads(create_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest handled a sibling thought cluster together.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest handled a sibling thought cluster together.",
+                                "created_memory_ids": [create_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                                "cluster_outcomes": [
+                                    {
+                                        "entry_ids": claimed_entry_ids,
+                                        "disposition": "created_cluster",
+                                        "memory_ids": [create_payload["record"]["id"]],
+                                        "reason": "The two sibling thoughts only formed a durable memory when handled together.",
+                                    }
+                                ],
+                            }
+                        ),
+                        "stats": {
+                            "tools": {
+                                "totalCalls": 0,
+                                "byName": {},
+                            }
+                        },
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _ClusterOutcomeProvider())
+
+        assert result["claimed_entry_ids"] == [first.id, second.id]
+        assert result["recoverable_entry_ids"] == [first.id, second.id]
+        assert result["provider_reported_cluster_outcomes"] == [
+            {
+                "entry_ids": [first.id, second.id],
+                "disposition": "created_cluster",
+                "memory_ids": [result["created_memory_ids"][0]],
+                "reason": "The two sibling thoughts only formed a durable memory when handled together.",
             }
         ]
     finally:

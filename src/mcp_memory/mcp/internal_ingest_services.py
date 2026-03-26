@@ -11,6 +11,7 @@ from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+    INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
 )
 from mcp_memory.mcp.internal_service_support import (
@@ -37,11 +38,12 @@ def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: d
     from mcp_memory.core.task_handlers.ingest import _build_ingest_groups, _resolve_grouping_strategy
 
     task_id = require_string(arguments, "task_id")
+    requested_workspace_id = optional_string(arguments, "workspace_id")
     journal_workspace_id = resolve_pending_workspace_id(
         ctx.journal,
-        optional_string(arguments, "workspace_id") or ctx.workspace_id,
+        requested_workspace_id,
     )
-    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id or "workspace-unknown"
+    workspace_id = requested_workspace_id or ctx.workspace_id or "workspace-unknown"
     batch_size = optional_positive_int(arguments, "batch_size", 20)
     grouping_strategy_requested = optional_string(arguments, "grouping_strategy")
     grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
@@ -165,6 +167,7 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         tool_name="internal_ingest_append_memory",
         mutation=True,
     )
+    _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[updated.id])
     payload = {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
     if warnings:
         payload["warnings"] = warnings
@@ -227,6 +230,7 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         tool_name="internal_ingest_create_memory",
         mutation=True,
     )
+    _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[record.id])
     payload = {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
     if warnings:
         payload["warnings"] = warnings
@@ -319,6 +323,22 @@ def _record_ingest_tool_invocation(
                     "mutation": mutation,
                 }
             ],
+        )
+    except ValueError:
+        return
+
+
+def _record_touched_memory_ids(ctx: ApplicationContext, *, task_id: str, memory_ids: list[str]) -> None:
+    if ctx.task_queue is None:
+        return
+    normalized_memory_ids = [memory_id for memory_id in memory_ids if isinstance(memory_id, str) and memory_id.strip()]
+    if not normalized_memory_ids:
+        return
+    try:
+        ctx.task_queue.extend_running_task_data_object_list(
+            task_id,
+            field_name=INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
+            values=[{"memory_id": memory_id.strip()} for memory_id in normalized_memory_ids],
         )
     except ValueError:
         return

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -364,6 +365,69 @@ async def test_call_internal_memory_tool_can_fetch_dedup_curator_and_ingest_batc
         assert ingest_payload["group_count"] >= 1
         assert ingest_payload["groups"]
         assert ingest_payload["groups"][0]["entries"]
+        assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_ingest_batch_claims_pending_entries_across_workspaces_by_default(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.journal is not None
+        runtime.journal.record("cross-workspace pending note one", workspace_id=runtime.workspace_id)
+        runtime.journal.record("cross-workspace pending note two", workspace_id=runtime.workspace_id)
+
+        mismatched_runtime = replace(runtime, workspace_id="workspace-other")
+        ingest_result = await call_internal_memory_tool(
+            mismatched_runtime,
+            "internal_get_next_ingest_batch",
+            {"task_id": "cross-workspace-ingest", "batch_size": 10, "grouping_strategy": "fifo"},
+        )
+
+        ingest_payload = json.loads(ingest_result[0].text)
+
+        assert ingest_payload["status"] == "ok"
+        assert ingest_payload["task_id"] == "cross-workspace-ingest"
+        assert len(ingest_payload["claimed_entry_ids"]) == 2
+        assert ingest_payload["groups"]
+        assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_internal_ingest_batch_falls_back_from_unknown_workspace_to_global_pending(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.journal is not None
+        runtime.journal.record("global fallback pending note one", workspace_id=runtime.workspace_id)
+        runtime.journal.record("global fallback pending note two", workspace_id=runtime.workspace_id)
+
+        mismatched_runtime = replace(runtime, workspace_id="workspace-other")
+        ingest_result = await call_internal_memory_tool(
+            mismatched_runtime,
+            "internal_get_next_ingest_batch",
+            {
+                "task_id": "workspace-unknown-ingest",
+                "batch_size": 10,
+                "grouping_strategy": "fifo",
+                "workspace_id": "workspace-unknown",
+            },
+        )
+
+        ingest_payload = json.loads(ingest_result[0].text)
+
+        assert ingest_payload["status"] == "ok"
+        assert ingest_payload["task_id"] == "workspace-unknown-ingest"
+        assert len(ingest_payload["claimed_entry_ids"]) == 2
+        assert ingest_payload["groups"]
         assert ingest_payload["groups"][0]["entries"][0]["status"] == "claimed"
     finally:
         runtime.close()

@@ -138,8 +138,8 @@ def resolve_pending_workspace_id(journal: System1Journal, workspace_id: str | No
     pending_count = journal.count_by_status(workspace_id=workspace_id).get("pending", 0)
     if pending_count > 0 or workspace_id is None:
         return workspace_id
-    if journal.count_by_status(workspace_id=None).get("pending", 0) > 0:
-        return None
+    if journal.count_by_status(workspace_id=_ALL_WORKSPACES).get("pending", 0) > 0:
+        return _ALL_WORKSPACES
     return workspace_id
 
 

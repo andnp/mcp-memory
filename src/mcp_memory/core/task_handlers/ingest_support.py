@@ -7,6 +7,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
+    INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
 )
 
@@ -20,12 +21,17 @@ def _build_ingest_result(
     released_ids: list[int],
     meaningful_actions: int,
     semantic_entry_dispositions: list[dict[str, Any]] | None = None,
+    recorded_touched_memory_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     entry_dispositions = _finalize_entry_dispositions(
         claimed_ids=claimed_ids,
         recoverable_ids=recoverable_ids,
         released_ids=released_ids,
         semantic_entry_dispositions=semantic_entry_dispositions or [],
+    )
+    touched_memory_ids = _merge_string_lists(
+        _memory_ids_for_dispositions(entry_dispositions, {"appended", "created", "matched_existing"}),
+        recorded_touched_memory_ids or [],
     )
     return {
         "created_memory_ids": created_ids,
@@ -36,7 +42,7 @@ def _build_ingest_result(
         "meaningful_actions": meaningful_actions,
         "processed_entry_ids": recoverable_ids,
         "entry_dispositions": entry_dispositions,
-        "touched_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended", "created", "matched_existing"}),
+        "touched_memory_ids": touched_memory_ids,
         "appended_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended"}),
         "matched_memory_ids": _memory_ids_for_dispositions(entry_dispositions, {"appended", "matched_existing"}),
     }
@@ -56,6 +62,7 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
     tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
     created_memory_ids = _coerce_string_list(response_payload.get("created_memory_ids"))
     entry_outcomes = _coerce_ingest_entry_outcomes(response_payload.get("entry_outcomes"))
+    cluster_outcomes = _coerce_ingest_cluster_outcomes(response_payload.get("cluster_outcomes"))
     response_has_touched_memory_ids = "touched_memory_ids" in response_payload
     response_has_matched_memory_ids = "matched_memory_ids" in response_payload
     touched_memory_ids = _coerce_string_list(response_payload.get("touched_memory_ids"))
@@ -71,6 +78,7 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
         "summary": _coerce_text_summary(getattr(agentic_result, "summary", None)) or _coerce_text_summary(response_payload.get("summary")),
         "created_memory_ids": created_memory_ids,
         "entry_outcomes": entry_outcomes,
+        "cluster_outcomes": cluster_outcomes,
         "touched_memory_ids": touched_memory_ids,
         "matched_memory_ids": matched_memory_ids,
         "meaningful_actions": _coerce_non_negative_int(response_payload.get("meaningful_actions")),
@@ -89,6 +97,7 @@ def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: s
             field_names=[
                 INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
                 INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
+                INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
                 INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
             ],
         )
@@ -189,6 +198,26 @@ def _recorded_ingest_entry_dispositions(ctx: ApplicationContext, task_id: str) -
             )
         )
     return normalized
+
+
+def _recorded_ingest_touched_memory_ids(ctx: ApplicationContext, task_id: str) -> list[str]:
+    if ctx.task_queue is None:
+        return []
+    try:
+        task = ctx.task_queue.get_task(task_id)
+    except ValueError:
+        return []
+    raw_memory_ids = task.data.get(INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY)
+    if not isinstance(raw_memory_ids, list):
+        return []
+    return sorted(
+        {
+            memory_id.strip()
+            for item in raw_memory_ids
+            for memory_id in [item if isinstance(item, str) else item.get("memory_id") if isinstance(item, dict) else None]
+            if isinstance(memory_id, str) and memory_id.strip()
+        }
+    )
 
 
 def _finalize_claimed_ingest_entries(
@@ -316,6 +345,36 @@ def _coerce_ingest_entry_outcomes(value: object) -> list[dict[str, Any]]:
                 reason=item.get("reason"),
             )
         )
+    return normalized
+
+
+def _coerce_ingest_cluster_outcomes(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entry_ids = [
+            entry_id
+            for entry_id in item.get("entry_ids", [])
+            if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
+        ]
+        memory_ids = _coerce_string_list(item.get("memory_ids"))
+        disposition = item.get("disposition")
+        if not entry_ids or not isinstance(disposition, str) or not disposition.strip():
+            continue
+        payload: dict[str, Any] = {
+            "entry_ids": sorted(set(entry_ids)),
+            "disposition": disposition.strip(),
+        }
+        if memory_ids:
+            payload["memory_ids"] = memory_ids
+        reason = item.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            payload["reason"] = reason.strip()
+        normalized.append(payload)
     return normalized
 
 
