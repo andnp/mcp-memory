@@ -34,8 +34,8 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
     assert config.provider_routing.low_priority_task_names == ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"]
-    assert config.provider_routing.model_burst_call_limit == 1
-    assert config.provider_routing.model_burst_window_seconds == 600.0
+    assert config.provider_routing.model_burst_call_limit == 2
+    assert config.provider_routing.model_burst_window_seconds == 300.0
     assert config.provider_routing.profiles["gemini-strong"].model == "gemini-3.1-pro-preview"
     assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"

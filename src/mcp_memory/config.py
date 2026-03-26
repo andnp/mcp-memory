@@ -93,8 +93,8 @@ class ProviderRoutingConfig:
     task_routes: dict[str, list[str]] = field(default_factory=dict)
     task_classes: dict[str, str] = field(default_factory=dict)
     profile_daily_call_limits: dict[str, int] = field(default_factory=dict)
-    model_burst_call_limit: int = 1
-    model_burst_window_seconds: float = 600.0
+    model_burst_call_limit: int = 2
+    model_burst_window_seconds: float = 300.0
     default_json_route: list[str] = field(default_factory=list)
     default_agentic_route: list[str] = field(default_factory=list)
     fallback_to_json_only: bool = False
@@ -410,8 +410,8 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
             if isinstance(data.get("task_classes", {}), dict) and isinstance(key, str) and isinstance(value, str)
         },
         profile_daily_call_limits=profile_daily_call_limits,
-        model_burst_call_limit=int(data.get("model_burst_call_limit", 1)),
-        model_burst_window_seconds=float(data.get("model_burst_window_seconds", 600.0)),
+        model_burst_call_limit=int(data.get("model_burst_call_limit", 2)),
+        model_burst_window_seconds=float(data.get("model_burst_window_seconds", 300.0)),
         default_json_route=_normalize_route_list(data.get("default_json_route", [])),
         default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
         fallback_to_json_only=bool(data.get("fallback_to_json_only", False)),
@@ -471,8 +471,8 @@ def _default_provider_routing_data() -> dict[str, Any]:
             "copilot-strong": 20,
             "copilot-mini": 50,
         },
-        "model_burst_call_limit": 1,
-        "model_burst_window_seconds": 600.0,
+        "model_burst_call_limit": 2,
+        "model_burst_window_seconds": 300.0,
         "default_json_route": ["gemini-cheap", "copilot-mini"],
         "default_agentic_route": ["gemini-cheap", "copilot-mini"],
         "fallback_to_json_only": False,
