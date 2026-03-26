@@ -119,7 +119,7 @@ async def handle_embedding_repair_task(
             vector_store.upsert(
                 source_kind="memory",
                 source_id=record.id,
-                workspace_id=record.workspace_ids[0] if record.workspace_ids else None,
+                workspace_id=None,
                 model_name=embedder.model_name,
                 embedding=embedding,
             )

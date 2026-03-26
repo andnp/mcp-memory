@@ -839,7 +839,7 @@ class RelationalMemorySearchService:
             self._vector_store.upsert(
                 source_kind="memory",
                 source_id=candidate.id,
-                workspace_id=candidate.workspace_ids[0] if candidate.workspace_ids else None,
+                workspace_id=None,
                 model_name=self._embedder.model_name,
                 embedding=embedding,
             )
