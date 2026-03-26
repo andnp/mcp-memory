@@ -190,6 +190,18 @@ def _with_runtime(workspace_root: str | None, action: Callable[[Any], _T]) -> _T
         runtime.close()
 
 
+def _with_management_service(
+    workspace_root: str | None,
+    action: Callable[[ManagementService], _T],
+    *,
+    workspace_id: str | None | object = ...,
+) -> _T:
+    return _with_runtime(
+        workspace_root,
+        lambda runtime: action(_build_management_service(runtime, workspace_id=workspace_id)),
+    )
+
+
 def _stash_thought(workspace_root: str | None, content: str) -> None:
     def _run(runtime) -> None:
         if runtime.journal is None:
@@ -253,8 +265,8 @@ def _show_logs(
     before: float | None,
     json_output: bool,
 ) -> None:
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_logs(
+    def _run(service: ManagementService) -> None:
+        payload = service.list_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -268,7 +280,7 @@ def _show_logs(
             return
         _render_logs_table(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 def _summarize_logs(
@@ -281,8 +293,8 @@ def _summarize_logs(
     before: float | None,
     json_output: bool,
 ) -> None:
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).summarize_logs(
+    def _run(service: ManagementService) -> None:
+        payload = service.summarize_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -295,7 +307,7 @@ def _summarize_logs(
             return
         _render_log_summary(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 def _prune_logs(
@@ -304,8 +316,8 @@ def _prune_logs(
     max_log_age_days: int | None,
     json_output: bool,
 ) -> None:
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).prune_logs(
+    def _run(service: ManagementService) -> None:
+        payload = service.prune_logs(
             max_runtime_logs=max_runtime_logs,
             max_log_age_days=max_log_age_days,
         )
@@ -317,7 +329,7 @@ def _prune_logs(
             f"policy max_runtime_logs={payload.max_runtime_logs} max_log_age_days={payload.max_log_age_days}"
         )
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:
@@ -1210,8 +1222,8 @@ def task_group() -> None:
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
     """List queued or running tasks."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_tasks(
+    def _run(service: ManagementService) -> None:
+        payload = service.list_tasks(
             status=status,
             limit=limit,
         )
@@ -1220,7 +1232,7 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
             return
         _render_task_table(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 @task_group.command(name="recent-runs")
@@ -1229,8 +1241,8 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Show recent completed background task runs and their sampling metadata."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(
+    def _run(service: ManagementService) -> None:
+        payload = service.list_recent_agent_runs(
             limit=limit,
             detail_level="full",
         )
@@ -1239,7 +1251,7 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
             return
         _render_recent_agent_runs_table(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 @task_group.command(name="sampling-summary")
@@ -1248,15 +1260,15 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
 def task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Summarize recent selection and ingest grouping strategy usage."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(limit=limit)
+    def _run(service: ManagementService) -> None:
+        payload = service.list_recent_agent_runs(limit=limit)
         summary = _build_sampling_summary(payload)
         if json_output:
             click.echo(json.dumps(summary, sort_keys=True))
             return
         _render_sampling_summary(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 @task_group.command(name="cancel")
@@ -1323,8 +1335,8 @@ def list_conversations_command(
     json_output: bool,
 ) -> None:
     """List recorded AI conversations."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(
+    def _run(service: ManagementService) -> None:
+        payload = service.list_ai_conversations(
             task_name=task_name,
             status=status,
             limit=limit,
@@ -1334,7 +1346,7 @@ def list_conversations_command(
             return
         _render_ai_conversation_table(payload)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 @conversation_group.command(name="show")
@@ -1343,8 +1355,8 @@ def list_conversations_command(
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def show_conversation_command(request_id: str, workspace_root: str | None, json_output: bool) -> None:
     """Show all recorded attempts for one AI request ID."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(request_id=request_id, limit=200)
+    def _run(service: ManagementService) -> None:
+        payload = service.list_ai_conversations(request_id=request_id, limit=200)
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
@@ -1359,7 +1371,7 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
             if conversation.error_text:
                 console.print(f"[red]Error:[/] {conversation.error_text}")
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 @search_group.command(name="health")
@@ -1367,14 +1379,14 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def search_health_command(workspace_root: str | None, json_output: bool) -> None:
     """Show semantic search health for the current runtime context."""
-    def _run(runtime) -> None:
-        payload = _build_management_service(runtime).get_health()
+    def _run(service: ManagementService) -> None:
+        payload = service.get_health()
         if json_output:
             click.echo(json.dumps(payload.search.model_dump(), sort_keys=True))
             return
         _render_search_health_table(payload.search)
 
-    _with_runtime(workspace_root, _run)
+    _with_management_service(workspace_root, _run)
 
 
 @search_group.command(name="repair")
