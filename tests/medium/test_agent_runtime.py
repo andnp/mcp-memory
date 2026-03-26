@@ -5550,6 +5550,8 @@ async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one
         assert "structural_review" in provider.prompts[0]
         assert "memory_dedup_review" in provider.prompts[0]
         assert "Treat this run as a structural-review campaign" in provider.prompts[0]
+        assert "Your workflow is a loop, not a single batch." in provider.prompts[0]
+        assert "Keep looping until internal_get_next_curator_batch returns no more records worth processing." in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -5613,6 +5615,8 @@ async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monk
         assert result["summary"] == "Curator completed Copilot MCP maintenance."
         assert result["execution_mode"] == "agentic_mcp"
         assert provider.prompts
+        assert "Immediately call internal_get_next_curator_batch" in provider.prompts[0]
+        assert "Only report final results after all looping work is complete." in provider.prompts[0]
         assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
         assert record.id in provider.prompts[0]
     finally:
@@ -5941,6 +5945,9 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized." in prompt
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in prompt
         assert "No-op is acceptable when no change adds clear value." in prompt
+        assert "Your workflow is a loop, not a one-shot response." in prompt
+        assert "Immediately call internal_get_next_curator_batch" in prompt
+        assert "Do not report incremental results between batches." in prompt
         assert seed_payload[0]["id"] == record.id
         assert seed_payload[0]["oversized_for_curator"] is True
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
@@ -6008,8 +6015,10 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
         assert seed_payload[0]["oversized_for_curator"] is False
         assert seed_payload[0]["retrieval_friction_flags"] == []
-        assert "Good memory anatomy: one focused durable takeaway" in prompt
-        assert "Bad memory smells from live retrieval telemetry" in prompt
+        assert "A good memory is self-contained" in prompt
+        assert "Treat frequently surfaced but rarely read records as retrieval-friction candidates" in prompt
+        assert "Your workflow is a loop, not a one-shot response." in prompt
+        assert "Keep looping until internal_get_next_curator_batch returns no records worth processing." in prompt
     finally:
         runtime.close()
 

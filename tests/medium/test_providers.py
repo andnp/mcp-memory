@@ -401,7 +401,7 @@ def test_split_provider_builders_support_copilot_agentic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_copilot_agentic_provider_uses_autopilot_and_inline_mcp_config(
+async def test_copilot_agentic_provider_uses_inline_mcp_config_without_autopilot(
     install_fake_subprocess,
 ) -> None:
     install_fake_subprocess.add(
@@ -422,7 +422,7 @@ async def test_copilot_agentic_provider_uses_autopilot_and_inline_mcp_config(
     assert result.status == "success"
     assert result.summary == "Performed maintenance."
     args, kwargs = install_fake_subprocess.calls[0]
-    assert args[:14] == (
+    assert args[:11] == (
         "copilot",
         "--model",
         "gpt-5-mini",
@@ -433,17 +433,18 @@ async def test_copilot_agentic_provider_uses_autopilot_and_inline_mcp_config(
         "--silent",
         "--no-ask-user",
         "--no-custom-instructions",
-        "--autopilot",
         "--allow-all-tools",
-        "--max-autopilot-continues",
-        "12",
     )
-    assert args[14] == "--available-tools"
-    available_tools = args[15]
+    assert args[11] == "--available-tools"
+    available_tools = args[12]
+    assert "mcp-memory-internal-task_complete" in available_tools
+    assert "mcp-memory-internal-internal_task_complete" in available_tools
     assert "mcp-memory-internal-internal_search_memory_records" in available_tools
     assert "mcp-memory-internal-internal_read_memory_record" in available_tools
-    assert args[16] == "--additional-mcp-config"
-    mcp_config = json.loads(args[17])
+    assert "mcp-memory-internal-internal_get_compatible_work_batch" in available_tools
+    assert "mcp-memory-internal-internal_complete_work_item" in available_tools
+    assert args[13] == "--additional-mcp-config"
+    mcp_config = json.loads(args[14])
     assert mcp_config["mcpServers"]["mcp-memory-internal"]["type"] == "stdio"
     assert mcp_config["mcpServers"]["mcp-memory-internal"]["command"] == "uv"
     assert mcp_config["mcpServers"]["mcp-memory-internal"]["args"] == [
@@ -453,7 +454,7 @@ async def test_copilot_agentic_provider_uses_autopilot_and_inline_mcp_config(
         "--workspace-root",
         "/tmp/workspace",
     ]
-    assert args[18:20] == ("--prompt", "Clean up the memory store.")
+    assert args[15:17] == ("--prompt", "Clean up the memory store.")
     assert kwargs == {"stdout": -1, "stderr": -1, "cwd": "/tmp/workspace"}
 
 
