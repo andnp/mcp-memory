@@ -46,6 +46,8 @@ Search is global-first.
 - the full corpus remains searchable
 - workspace context may upweight relevant memories
 - workspace context must not silently hard-filter the result set unless an explicit analytics/admin filter asks for it
+- autonomous maintenance agents should reason over the global corpus by default, even when launched from one workspace
+- cross-repository cleanup, consolidation, and reorganization are desirable when they improve the shared memory base
 
 ## 7. Analytics Behavior
 Dashboards, logs, provider usage, and similar telemetry may retain workspace as an optional dimension.
@@ -53,7 +55,14 @@ Dashboards, logs, provider usage, and similar telemetry may retain workspace as 
 - default operational views should favor global visibility
 - workspace filters should remain available for inspection and analytics
 
-## 8. Migration Direction
+## 8. Autonomous Maintenance Behavior
+Background agents curate one shared memory base, not per-project shards.
+
+- maintenance runs should optimize global retrieval quality and structural coherence
+- workspace context may help with ranking, hints, and analytics, but must not constrain the agent to one repository neighborhood by default
+- agents may reorganize related memories across repositories when the result is clearer, more durable, and better linked
+
+## 9. Migration Direction
 When existing code conflicts with these principles:
 
 - treat product principles as authoritative

@@ -13,6 +13,8 @@ Workspace context guides relevance and analytics without fragmenting runtime own
 - the store is global
 - workspace association is metadata, not a tenancy boundary
 - search may apply workspace-aware boosting rather than hard partitioning
+- autonomous maintenance agents should reason over the shared corpus, not default to per-project isolation
+- cross-repository maintenance is allowed when it improves the global memory graph
 
 ## 3. Progressive Discovery
 The public API should prefer search-first, read-second workflows.

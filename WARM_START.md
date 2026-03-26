@@ -5,7 +5,8 @@
 - relational-first runtime backed by SQLite
 - one shared global memory store under XDG data home
 - workspace identity derived from git root when available
-- workspace daemon owns runtime state and background workers
+- global daemon owns runtime state and background workers
+- workspace context is metadata for ranking and analytics, not an execution boundary
 - `mcp-memory run` is a thin MCP stdio proxy that auto-starts the daemon
 - `mcp-memory dashboard` ensures the daemon is running and prints the dashboard URL
 
