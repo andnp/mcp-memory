@@ -21,8 +21,6 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     defer_work_item as _defer_work_item,
     enqueue_review_work_item as _enqueue_review_work_item,
     release_work_item as _release_work_item,
-    run_claimed_review_work_item as _run_claimed_review_work_item,
-    run_sparse_frontier_review_task as _run_sparse_frontier_review_task,
     work_item_result_metadata as _work_item_result_metadata,
 )
 import mcp_memory.core.task_handlers.curator_support as _curator_support
@@ -30,9 +28,8 @@ import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
 import mcp_memory.core.task_handlers.defragmenter_support as _defragmenter_support
 import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_housekeeping
+import mcp_memory.core.task_handlers.relationship_review_handlers as _relationship_review_handlers
 import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
-import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
-import mcp_memory.core.task_handlers.relationship_review_support as _relationship_review_support
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.agentic_guardrails import (
     build_curator_guardrails,
@@ -43,9 +40,7 @@ from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
-    WORK_FAMILY_CONFLICT_REVIEW,
     EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_GRAPH_LINK_REVIEW,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
@@ -69,208 +64,10 @@ CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND = 8
 handle_project_manager_task = _maintenance_housekeeping.handle_project_manager_task
 handle_fact_checker_task = _maintenance_housekeeping.handle_fact_checker_task
 handle_sweeper_task = _maintenance_housekeeping.handle_sweeper_task
-
-
-async def handle_graph_linker_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-    provider: Any = None,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0}
-
-    if provider is not None:
-        claimed_review_result = await _run_claimed_review_work_item(
-            ctx,
-            task=task,
-            family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
-            load_candidates=_relationship_review_support.graph_link_review_candidates,
-            propose_pairs=lambda review_candidates: _relationship_proposals.propose_graph_links(
-                ctx,
-                review_candidates,
-                provider,
-            ),
-            apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs),
-        )
-        if claimed_review_result is not None:
-            return claimed_review_result
-
-    all_candidates = ctx.repository.list_memories(
-        workspace_id=_resolve_workspace_id(ctx, task),
-        status="active",
-        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-    )
-    sampled_batch = _sample_maintenance_candidates(
-        ctx,
-        task,
-        all_candidates,
-        allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
-        strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
-        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
-    )
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
-
-    proposed_pairs = await _relationship_proposals.propose_graph_links(ctx, candidates, provider)
-    created = _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs)
-
-    return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
-
-
-async def handle_graph_link_discovery_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0, "seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    all_candidates = ctx.repository.list_memories(
-        workspace_id=workspace_id,
-        status="active",
-        limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-    )
-    sampled_batch = _sample_maintenance_candidates(
-        ctx,
-        task,
-        all_candidates,
-        allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
-        strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
-        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
-    )
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
-    return await _run_sparse_frontier_review_task(
-        ctx,
-        task=task,
-        sampled_batch=sampled_batch,
-        candidates=candidates,
-        family_key=WORK_FAMILY_GRAPH_LINK_REVIEW,
-        propose_pairs=lambda review_candidates: _relationship_proposals.propose_graph_links(
-            ctx,
-            review_candidates,
-            provider=None,
-        ),
-        apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_graph_link_proposals(ctx, proposed_pairs),
-        should_seed=lambda proposed_pairs, review_candidates: (
-            len(proposed_pairs) < _relationship_proposals.GRAPH_LINKER_FALLBACK_LINK_TARGET
-            and len(review_candidates) > _relationship_proposals.GRAPH_LINKER_AI_MIN_CANDIDATES
-        ),
-        enqueue_review_work_item=lambda review_candidates: _relationship_review_support.enqueue_graph_link_review_work_item(
-            ctx,
-            task=task,
-            workspace_id=workspace_id,
-            candidates=review_candidates,
-            strategy_used=sampled_batch.strategy_used,
-        ),
-    )
-
-
-async def handle_conflict_detector_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-    provider: Any = None,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0}
-
-    if provider is not None:
-        claimed_review_result = await _run_claimed_review_work_item(
-            ctx,
-            task=task,
-            family_key=WORK_FAMILY_CONFLICT_REVIEW,
-            load_candidates=_relationship_review_support.conflict_review_candidates,
-            propose_pairs=lambda review_candidates: _relationship_proposals.propose_conflicts(
-                ctx,
-                review_candidates,
-                provider,
-            ),
-            apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs),
-        )
-        if claimed_review_result is not None:
-            return claimed_review_result
-
-    all_candidates = [
-        record
-        for record in ctx.repository.list_memories(
-            workspace_id=_resolve_workspace_id(ctx, task),
-            status="active",
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
-        if record.type in {"fact", "plan"}
-    ]
-    sampled_batch = _sample_maintenance_candidates(
-        ctx,
-        task,
-        all_candidates,
-        allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
-        strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
-        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
-    )
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
-
-    proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
-    created = _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs)
-
-    return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
-
-
-async def handle_conflict_screening_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0, "seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    all_candidates = [
-        record
-        for record in ctx.repository.list_memories(
-            workspace_id=workspace_id,
-            status="active",
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
-        if record.type in {"fact", "plan"}
-    ]
-    sampled_batch = _sample_maintenance_candidates(
-        ctx,
-        task,
-        all_candidates,
-        allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
-        strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
-        limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
-    )
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
-
-    return await _run_sparse_frontier_review_task(
-        ctx,
-        task=task,
-        sampled_batch=sampled_batch,
-        candidates=candidates,
-        family_key=WORK_FAMILY_CONFLICT_REVIEW,
-        propose_pairs=lambda review_candidates: _relationship_proposals.propose_conflicts(
-            ctx,
-            review_candidates,
-            provider=None,
-        ),
-        apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs),
-        should_seed=lambda proposed_pairs, review_candidates: (
-            not proposed_pairs and len(review_candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES
-        ),
-        enqueue_review_work_item=lambda review_candidates: _relationship_review_support.enqueue_conflict_review_work_item(
-            ctx,
-            task=task,
-            workspace_id=workspace_id,
-            candidates=review_candidates,
-            strategy_used=sampled_batch.strategy_used,
-        ),
-    )
+handle_graph_linker_task = _relationship_review_handlers.handle_graph_linker_task
+handle_graph_link_discovery_task = _relationship_review_handlers.handle_graph_link_discovery_task
+handle_conflict_detector_task = _relationship_review_handlers.handle_conflict_detector_task
+handle_conflict_screening_task = _relationship_review_handlers.handle_conflict_screening_task
 
 
 async def handle_defragmenter_task(
