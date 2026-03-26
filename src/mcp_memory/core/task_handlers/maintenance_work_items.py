@@ -4,8 +4,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.tasks import TaskRecord
 
 
@@ -89,22 +89,6 @@ def payload_memory_records(
             continue
         records.append(record)
     return records
-
-
-def sampling_batch_from_work_payload(payload: dict[str, Any], records: list[Any]) -> SamplingBatch:
-    requested_strategy = payload.get("strategy_used")
-    if not isinstance(requested_strategy, str):
-        requested_strategy = None
-    candidate_count = payload.get("candidate_count")
-    if not isinstance(candidate_count, int):
-        candidate_count = len(records)
-    return SamplingBatch(
-        requested_strategy=requested_strategy,
-        strategy_used=requested_strategy or "none",
-        strategy_fallback_reason=None,
-        candidate_count=candidate_count,
-        records=records,
-    )
 
 
 def work_item_result_metadata(

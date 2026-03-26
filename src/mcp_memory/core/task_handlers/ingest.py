@@ -781,12 +781,6 @@ def _resolve_entry_workspace_ids(entries, fallback_workspace_id: str) -> list[st
     return [fallback_workspace_id]
 
 
-def _primary_workspace_id(workspace_ids: list[str]) -> str | None:
-    if not workspace_ids:
-        return None
-    return workspace_ids[0]
-
-
 def _build_title(entries) -> str:
     if not entries:
         return "System 1 Note"
