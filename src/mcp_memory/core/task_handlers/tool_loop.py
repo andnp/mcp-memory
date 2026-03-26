@@ -153,13 +153,8 @@ def _build_prompt(
         base_prompt.strip(),
         "Available internal tools:",
         json.dumps(tool_specs, sort_keys=True),
-        (
-            "Respond with either `tool_calls` JSON or the final JSON result for this task."
-        ),
-        (
-            "Never claim positive actions unless they were executed through prior `tool_calls`. "
-            "If no tools were used, report `actions_taken: 0` and a no-op summary."
-        ),
+        "Respond with `tool_calls` JSON or final JSON.",
+        "Never claim positive actions without prior `tool_calls`. If no tools were used, report `actions_taken: 0` and a no-op summary.",
     ]
     if transcript:
         parts.extend(
@@ -177,20 +172,10 @@ def _compact_tool_spec(tool: Any) -> dict[str, Any]:
     required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
     property_names = [str(name) for name in properties]
     required_names = [name for name in property_names if name in {str(item) for item in required}]
-    optional_names = [name for name in property_names if name not in set(required_names)]
     return {
         "name": tool.name,
-        "description": _truncate_tool_description(tool.description),
         "required_fields": required_names,
-        "optional_fields": optional_names,
     }
-
-
-def _truncate_tool_description(value: object, *, limit: int = 96) -> str:
-    text = "" if not isinstance(value, str) else " ".join(value.strip().split())
-    if len(text) <= limit:
-        return text
-    return text[: max(limit - 1, 0)].rstrip() + "…"
 
 
 def _is_mutating_tool_name(name: str) -> bool:

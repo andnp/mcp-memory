@@ -5241,10 +5241,15 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
         assert "Aim for multiple coherent, high-value maintenance actions in one run" in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
-        assert "Treat the provided seed memories as a starting frontier" in provider.prompts[0]
+        assert "Your standing curator jobs are:" in provider.prompts[0]
+        assert "Tool mapping: use internal_update_memory_record" in provider.prompts[0]
+        assert "Actively look for multi-memory cleanups, not just single-record edits" in provider.prompts[0]
+        assert "do one extra neighborhood cleanup pass before moving on" in provider.prompts[0]
+        assert "Judge success at the neighborhood level" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
-        assert record.id in provider.prompts[0]
+        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
+        assert record.id not in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -5551,6 +5556,7 @@ async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one
         assert "memory_dedup_review" in provider.prompts[0]
         assert "Treat this run as a structural-review campaign" in provider.prompts[0]
         assert "Your workflow is a loop, not a single batch." in provider.prompts[0]
+        assert "you must spend some budget on adjacency discovery before concluding no-op" in provider.prompts[0]
         assert "Keep looping until internal_get_next_curator_batch returns no more records worth processing." in provider.prompts[0]
     finally:
         runtime.close()
@@ -5616,9 +5622,88 @@ async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monk
         assert result["execution_mode"] == "agentic_mcp"
         assert provider.prompts
         assert "Immediately call internal_get_next_curator_batch" in provider.prompts[0]
+        assert "Build a shortlist of concrete possible mutations" in provider.prompts[0]
+        assert "high-confidence and at least medium-impact" in provider.prompts[0]
+        assert "Your standing curator jobs are:" in provider.prompts[0]
+        assert "Tool mapping: use internal_update_memory_record" in provider.prompts[0]
+        assert "Actively look for multi-memory cleanups, not just single-record edits" in provider.prompts[0]
+        assert "Think in rotations in memory space" in provider.prompts[0]
+        assert "do one extra neighborhood cleanup pass before moving on" in provider.prompts[0]
+        assert "prefer a lightweight internal_update_memory_record rather than defaulting to no-op" in provider.prompts[0]
+        assert "which 1-3 mutation classes were considered but declined" in provider.prompts[0]
+        assert "A local read of the current batch alone is not enough to declare the frontier healthy" in provider.prompts[0]
         assert "Only report final results after all looping work is complete." in provider.prompts[0]
         assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
-        assert record.id in provider.prompts[0]
+        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
+        assert record.id not in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_agentic_prompt_accepts_semantic_sampling_strategy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _CopilotLikeAgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(
+                status="success",
+                summary="Curator completed semantic MCP maintenance.",
+                parsed={"summary": "Curator completed semantic MCP maintenance."},
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Related auth rollout note",
+            content="JWT rollout needs client coordination.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth", "rollout"],
+        )
+        assert record is not None
+
+        provider = _CopilotLikeAgenticProvider()
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-semantic-agentic-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id, "strategy": "semantic"},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        assert result["summary"] == "Curator completed semantic MCP maintenance."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert provider.prompts
+        assert "Sampling strategy: semantic" in provider.prompts[0]
+        assert "Immediately call internal_get_next_curator_batch" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -5942,11 +6027,14 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         end = prompt.index(suffix, start)
         seed_payload = json.loads(prompt[start:end])
 
-        assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized." in prompt
+        assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records." in prompt
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in prompt
         assert "No-op is acceptable when no change adds clear value." in prompt
         assert "Your workflow is a loop, not a one-shot response." in prompt
         assert "Immediately call internal_get_next_curator_batch" in prompt
+        assert "you must spend some budget on adjacency discovery before concluding no-op" in prompt
+        assert "Build a shortlist of concrete possible mutations" in prompt
+        assert "high-confidence and at least medium-impact" in prompt
         assert "Do not report incremental results between batches." in prompt
         assert seed_payload[0]["id"] == record.id
         assert seed_payload[0]["oversized_for_curator"] is True
@@ -6015,9 +6103,11 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
         assert seed_payload[0]["oversized_for_curator"] is False
         assert seed_payload[0]["retrieval_friction_flags"] == []
-        assert "A good memory is self-contained" in prompt
+        assert "Prefer focused durable memories with specific titles/summaries" in prompt
         assert "Treat frequently surfaced but rarely read records as retrieval-friction candidates" in prompt
         assert "Your workflow is a loop, not a one-shot response." in prompt
+        assert "your final summary must make clear whether adjacency review was actually performed" in prompt
+        assert "no concrete safe cleanup remains above the high-confidence/medium-impact bar" in prompt
         assert "Keep looping until internal_get_next_curator_batch returns no records worth processing." in prompt
     finally:
         runtime.close()
