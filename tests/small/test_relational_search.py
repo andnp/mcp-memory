@@ -1035,6 +1035,106 @@ def test_search_memories_prefers_summary_and_title_keyword_quality_over_content_
     assert float(strong_debug["keyword_token_coverage"]) > float(content_only_debug["keyword_token_coverage"])
 
 
+def test_search_memories_can_expand_results_when_scores_stay_dense(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    config = Config(
+        search_ranking=SearchRankingConfig(
+            adaptive_result_max=6,
+            adaptive_result_score_ratio_floor=0.7,
+            adaptive_result_min_score=0.0,
+            adaptive_result_max_score_gap=0.08,
+        )
+    )
+    service = RelationalMemorySearchService(repository, config)
+
+    records = []
+    for index in range(6):
+        record = repository.create_memory(
+            title=f"Dense result {index}",
+            content=f"Dense result content {index}.",
+            summary=f"Dense result summary {index}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["dense"],
+        )
+        assert record is not None
+        records.append(record)
+
+    score_by_id = {
+        record.id: score
+        for record, score in zip(
+            records,
+            [0.92, 0.89, 0.86, 0.84, 0.81, 0.78],
+            strict=False,
+        )
+    }
+
+    monkeypatch.setattr(
+        service,
+        "_semantic_scores",
+        lambda *_args, **_kwargs: score_by_id,
+    )
+
+    results = service.search_memories(
+        "semantic neighborhood",
+        workspace_id="workspace-alpha",
+        limit=3,
+        adaptive_limit=True,
+    )
+
+    assert [result.memory_id for result in results] == [record.id for record in records]
+
+
+def test_search_memories_stops_adaptive_expansion_on_large_score_drop(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    config = Config(
+        search_ranking=SearchRankingConfig(
+            adaptive_result_max=6,
+            adaptive_result_score_ratio_floor=0.96,
+            adaptive_result_min_score=0.0,
+            adaptive_result_max_score_gap=0.08,
+        )
+    )
+    service = RelationalMemorySearchService(repository, config)
+
+    records = []
+    for index in range(6):
+        record = repository.create_memory(
+            title=f"Band result {index}",
+            content=f"Band result content {index}.",
+            summary=f"Band result summary {index}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["band"],
+        )
+        assert record is not None
+        records.append(record)
+
+    score_by_id = {
+        record.id: score
+        for record, score in zip(
+            records,
+            [0.92, 0.89, 0.86, 0.75, 0.74, 0.73],
+            strict=False,
+        )
+    }
+
+    monkeypatch.setattr(
+        service,
+        "_semantic_scores",
+        lambda *_args, **_kwargs: score_by_id,
+    )
+
+    results = service.search_memories(
+        "semantic neighborhood",
+        workspace_id="workspace-alpha",
+        limit=3,
+        adaptive_limit=True,
+    )
+
+    assert [result.memory_id for result in results] == [record.id for record in records[:3]]
+
+
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)

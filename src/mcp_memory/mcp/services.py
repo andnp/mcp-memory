@@ -57,6 +57,7 @@ def search_memory_records_service(
         query=query,
         workspace_id=ctx.workspace_id,
         limit=optional_positive_int(arguments, "limit", 5),
+        adaptive_limit="limit" not in arguments,
         memory_type=optional_string(arguments, "memory_type"),
         status=optional_string(arguments, "status"),
         include_superseded=optional_bool(arguments, "include_superseded", False),

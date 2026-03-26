@@ -272,6 +272,10 @@ class SearchRankingConfig:
     access_bonus_scale: float = 0.1
     authority_link_step: float = 0.02
     authority_link_cap: int = 10
+    adaptive_result_max: int = 15
+    adaptive_result_score_ratio_floor: float = 0.7
+    adaptive_result_min_score: float = 0.35
+    adaptive_result_max_score_gap: float = 0.08
 
     def __post_init__(self) -> None:
         if self.rrf_k <= 0:
@@ -302,6 +306,14 @@ class SearchRankingConfig:
             raise ValueError("search_ranking.authority_link_step must be >= 0")
         if self.authority_link_cap < 0:
             raise ValueError("search_ranking.authority_link_cap must be >= 0")
+        if self.adaptive_result_max < 1:
+            raise ValueError("search_ranking.adaptive_result_max must be >= 1")
+        if not (0.0 <= self.adaptive_result_score_ratio_floor <= 1.0):
+            raise ValueError("search_ranking.adaptive_result_score_ratio_floor must be in [0.0, 1.0]")
+        if not (0.0 <= self.adaptive_result_min_score <= 1.0):
+            raise ValueError("search_ranking.adaptive_result_min_score must be in [0.0, 1.0]")
+        if not (0.0 <= self.adaptive_result_max_score_gap <= 1.0):
+            raise ValueError("search_ranking.adaptive_result_max_score_gap must be in [0.0, 1.0]")
 
 
 @dataclass
@@ -593,6 +605,10 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "access_bonus_scale": 0.1,
         "authority_link_step": 0.02,
         "authority_link_cap": 10,
+        "adaptive_result_max": 15,
+        "adaptive_result_score_ratio_floor": 0.7,
+        "adaptive_result_min_score": 0.35,
+        "adaptive_result_max_score_gap": 0.08,
     }
     document["provider_routing"] = _default_provider_routing_data()
     document["ingest_suppression"] = {

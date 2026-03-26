@@ -453,6 +453,8 @@ class RelationalMemorySearchService:
         query: str,
         workspace_id: str | None = None,
         limit: int = 5,
+        *,
+        adaptive_limit: bool = False,
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
@@ -461,18 +463,23 @@ class RelationalMemorySearchService:
         if not query.strip():
             return []
 
+        candidate_limit = (
+            max(limit, self._config.search_ranking.adaptive_result_max)
+            if adaptive_limit
+            else limit
+        )
         query_tokens = _query_tokens(query)
         keyword_ids = self._repository.search_keyword_memory_ids(
             query,
             status=status,
             include_superseded=include_superseded,
-            limit=50,
+            limit=max(50, candidate_limit),
         )
         semantic_ids, semantic_scores = self._semantic_candidate_ids(
             query,
             workspace_id=workspace_id,
             status=status,
-            limit=50,
+            limit=max(50, candidate_limit),
         )
         engine = RankingEngine(self._repository, self._config)
         rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
@@ -559,7 +566,12 @@ class RelationalMemorySearchService:
             ),
             reverse=True,
         )
-        ranked = ranked[:limit]
+        result_limit = self._resolved_result_limit(
+            ranked,
+            requested_limit=limit,
+            adaptive_limit=adaptive_limit,
+        )
+        ranked = ranked[:result_limit]
 
         if not keyword_ids and ranked:
             top_semantic_score = semantic_scores.get(ranked[0].memory_id, 0.0)
@@ -570,6 +582,35 @@ class RelationalMemorySearchService:
         if surfaced_ids:
             self._repository.touch_last_surfaced(surfaced_ids, _utc_now())
         return ranked
+
+    def _resolved_result_limit(
+        self,
+        ranked: Sequence[RelationalSearchResult],
+        *,
+        requested_limit: int,
+        adaptive_limit: bool,
+    ) -> int:
+        bounded_requested_limit = max(requested_limit, 1)
+        if len(ranked) <= bounded_requested_limit or not adaptive_limit:
+            return min(len(ranked), bounded_requested_limit)
+
+        ranking_config = self._config.search_ranking
+        adaptive_cap = max(bounded_requested_limit, ranking_config.adaptive_result_max)
+        result_limit = bounded_requested_limit
+        top_score = ranked[0].score
+        minimum_ratio_score = top_score * ranking_config.adaptive_result_score_ratio_floor
+        minimum_score = max(ranking_config.adaptive_result_min_score, minimum_ratio_score)
+
+        while result_limit < len(ranked) and result_limit < adaptive_cap:
+            previous_score = ranked[result_limit - 1].score
+            candidate_score = ranked[result_limit].score
+            if candidate_score < minimum_score:
+                break
+            if previous_score - candidate_score > ranking_config.adaptive_result_max_score_gap:
+                break
+            result_limit += 1
+
+        return result_limit
 
     def read_memory(self, memory_id: str):
         record = self._repository.get_memory(memory_id)

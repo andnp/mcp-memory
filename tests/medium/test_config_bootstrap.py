@@ -56,7 +56,11 @@ def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
         "access_half_life_days = 5.0\n"
         "access_bonus_scale = 0.08\n"
         "authority_link_step = 0.03\n"
-        "authority_link_cap = 8\n",
+        "authority_link_cap = 8\n"
+        "adaptive_result_max = 12\n"
+        "adaptive_result_score_ratio_floor = 0.75\n"
+        "adaptive_result_min_score = 0.4\n"
+        "adaptive_result_max_score_gap = 0.05\n",
         encoding="utf-8",
     )
 
@@ -71,6 +75,10 @@ def test_load_config_reads_search_ranking_overrides(tmp_path: Path) -> None:
     assert config.search_ranking.access_bonus_scale == 0.08
     assert config.search_ranking.authority_link_step == 0.03
     assert config.search_ranking.authority_link_cap == 8
+    assert config.search_ranking.adaptive_result_max == 12
+    assert config.search_ranking.adaptive_result_score_ratio_floor == 0.75
+    assert config.search_ranking.adaptive_result_min_score == 0.4
+    assert config.search_ranking.adaptive_result_max_score_gap == 0.05
 
 
 def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:

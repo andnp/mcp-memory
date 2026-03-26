@@ -56,6 +56,10 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.backups.max_snapshots == 24
     assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"
     assert loaded.search_ranking.rrf_k == 60.0
+    assert loaded.search_ranking.adaptive_result_max == 15
+    assert loaded.search_ranking.adaptive_result_score_ratio_floor == 0.7
+    assert loaded.search_ranking.adaptive_result_min_score == 0.35
+    assert loaded.search_ranking.adaptive_result_max_score_gap == 0.08
     assert loaded.memory.recency_plan.max_boost_amount == 0.15
     assert loaded.memory.recency_plan.boost_decay_rate == 0.97
     assert loaded.memory.recency_fact.max_boost_amount == 0.05
@@ -85,3 +89,8 @@ def test_search_ranking_config_rejects_invalid_semantic_only_abstain_threshold()
 def test_search_ranking_config_rejects_invalid_graph_expansion_only_penalty() -> None:
     with pytest.raises(ValueError, match="search_ranking.graph_expansion_only_penalty"):
         SearchRankingConfig(graph_expansion_only_penalty=1.5)
+
+
+def test_search_ranking_config_rejects_invalid_adaptive_result_max() -> None:
+    with pytest.raises(ValueError, match="search_ranking.adaptive_result_max"):
+        SearchRankingConfig(adaptive_result_max=0)

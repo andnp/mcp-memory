@@ -22,13 +22,18 @@ def get_memory_tools() -> list[Tool]:
             name="search_memory_records",
             description=(
                 "Search relational memory records with summary-first results. "
-                "Use the returned summaries to identify promising memories, then follow up with read_memory_record for full context."
+                "Use the returned summaries to identify promising memories, then follow up with read_memory_record for full context. "
+                "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional strict cap. Omit this unless you specifically need a fixed result count; omitted requests may return an adaptive number of high-confidence matches.",
+                    },
                     "memory_type": {"type": "string"},
                     "status": {"type": "string"},
                     "include_superseded": {"type": "boolean"},
