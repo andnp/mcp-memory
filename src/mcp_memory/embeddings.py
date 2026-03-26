@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass
 from hashlib import blake2b
@@ -48,17 +49,12 @@ class SentenceTransformerEmbedder:
         self._model: Any | None = None
         self._use_fallback = False
         self._fallback = HashingEmbedder(model_name=f"hash:{config.model}")
+        self._load_lock = threading.Lock()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        if self._model is None:
-            model = _load_sentence_transformer(self.model_name, local_files_only=True)
-            if model is None:
-                self._use_fallback = True
-            else:
-                self._model = model
-        if self._use_fallback:
+        if not self._ensure_model_loaded(allow_download=False):
             return self._fallback.embed(texts)
         assert self._model is not None
         vectors = self._model.encode(
@@ -70,14 +66,7 @@ class SentenceTransformerEmbedder:
         return [list(map(float, vector)) for vector in vectors]
 
     def cache_model(self) -> bool:
-        if self._model is not None and not self._use_fallback:
-            return True
-        model = _load_sentence_transformer(self.model_name, local_files_only=False)
-        if model is None:
-            return False
-        self._model = model
-        self._use_fallback = False
-        return True
+        return self._ensure_model_loaded(allow_download=True)
 
     def status(self) -> EmbedderStatus:
         return EmbedderStatus(
@@ -85,6 +74,38 @@ class SentenceTransformerEmbedder:
             backend="fallback" if self._use_fallback else "sentence-transformer",
             model_cached=_is_model_cached_locally(self.model_name),
         )
+
+    def _ensure_model_loaded(self, *, allow_download: bool) -> bool:
+        if self._model is not None:
+            return True
+        if self._use_fallback and not allow_download:
+            return False
+
+        with self._load_lock:
+            if self._model is not None:
+                return True
+            if self._use_fallback and not allow_download:
+                return False
+
+            model = self._load_model(allow_download=allow_download)
+            if model is None:
+                if not allow_download:
+                    self._use_fallback = True
+                return False
+
+            self._model = model
+            self._use_fallback = False
+            return True
+
+    def _load_model(self, *, allow_download: bool) -> Any | None:
+        cached_locally = _is_model_cached_locally(self.model_name)
+        if cached_locally:
+            model = _load_sentence_transformer(self.model_name, local_files_only=True)
+            if model is not None:
+                return model
+        if not allow_download:
+            return None
+        return _load_sentence_transformer(self.model_name, local_files_only=False)
 
 
 class HashingEmbedder:
