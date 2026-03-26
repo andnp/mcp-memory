@@ -44,6 +44,9 @@ from mcp_memory.serialization import (
 )
 
 
+_USE_SERVICE_WORKSPACE = object()
+
+
 class ManagementService:
     def __init__(self, ctx: ApplicationContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
@@ -185,11 +188,13 @@ class ManagementService:
     def list_ai_conversations(
         self,
         *,
+        workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
         request_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
     ) -> AIConversationListPayload:
+        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
         return AIConversationListPayload(
             conversations=[
                 AIConversationPayload(
@@ -216,6 +221,7 @@ class ManagementService:
                     duration_seconds=record.duration_seconds,
                 )
                 for record in self._provider_usage.list_conversations(
+                    workspace_id=effective_workspace_id,
                     request_id=request_id,
                     task_name=task_name,
                     status=status,
@@ -448,6 +454,7 @@ class ManagementService:
     def list_logs(
         self,
         *,
+        workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -458,6 +465,7 @@ class ManagementService:
     ) -> RuntimeLogListPayload:
         if self._db_manager is None:
             return RuntimeLogListPayload()
+        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
         return RuntimeLogListPayload(
             logs=[
                 RuntimeLogPayload(
@@ -470,6 +478,7 @@ class ManagementService:
                     data=record.data,
                 )
                 for record in self._runtime_logs.list_logs(
+                    workspace_id=effective_workspace_id,
                     level=level,
                     logger_name=logger_name,
                     source=source,
@@ -484,6 +493,7 @@ class ManagementService:
     def summarize_logs(
         self,
         *,
+        workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
         level: str | None = None,
         logger_name: str | None = None,
         source: str | None = None,
@@ -493,7 +503,9 @@ class ManagementService:
     ) -> RuntimeLogSummaryPayload:
         if self._db_manager is None:
             return RuntimeLogSummaryPayload()
+        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
         summary = self._runtime_logs.summarize_logs(
+            workspace_id=effective_workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
@@ -510,11 +522,14 @@ class ManagementService:
     def prune_logs(
         self,
         *,
+        workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
         max_runtime_logs: int | None = None,
         max_log_age_days: int | None = None,
     ) -> RuntimeLogPrunePayload:
         config = self._runtime_logs.retention_policy
+        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
         deleted = self._runtime_logs.prune_logs(
+            workspace_id=effective_workspace_id,
             max_runtime_logs=max_runtime_logs,
             max_age_days=max_log_age_days,
         )

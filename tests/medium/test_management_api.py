@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from datetime import UTC, datetime
 import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
@@ -22,13 +25,19 @@ from mcp_memory.mcp.runtime import create_runtime
 pytestmark = pytest.mark.medium
 
 
-async def _request_json(metadata, path: str, payload: dict | None = None) -> dict:
+async def _request_json(
+    metadata,
+    path: str,
+    payload: dict | None = None,
+    *,
+    timeout_seconds: float = 5,
+) -> dict:
     return await asyncio.to_thread(
         request_daemon_json,
         metadata,
         path,
         payload,
-        timeout_seconds=5,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -197,7 +206,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             "/api/admin/logs/prune",
             {"max_runtime_logs": 1, "max_log_age_days": 30},
         )
-        repair_search = await _request_json(metadata, "/api/admin/search/repair", {})
+        repair_search = await _request_json(metadata, "/api/admin/search/repair", {}, timeout_seconds=20)
         tasks = await _request_json(metadata, "/api/tasks", {"status": "failed"})
         record_thought = await _request_json(
             metadata,
@@ -737,6 +746,135 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
     assert global_overview.json()["memories"]["total"] == 3
     assert global_overview.json()["memory_metrics"]["total_memories"] == 3
     assert workspace_overview.json()["memories"]["total"] == 2
+
+
+def test_http_operator_lists_default_to_global_scope(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=None, cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=None, cwd=workspace_b)
+    try:
+        assert runtime_a.repository is not None
+        assert runtime_a.task_queue is not None
+        assert runtime_a.db_manager is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+
+        runtime_a.repository.create_memory(
+            title="Workspace A API fact",
+            content="Scoped to workspace A.",
+            workspace_ids=[runtime_a.workspace_id],
+            memory_type="fact",
+        )
+        runtime_b.repository.create_memory(
+            title="Workspace B API fact",
+            content="Scoped to workspace B.",
+            workspace_ids=[runtime_b.workspace_id],
+            memory_type="fact",
+        )
+        runtime_a.task_queue.enqueue("memory-curator", task_id="api-task-a", workspace_id=runtime_a.workspace_id)
+        runtime_a.task_queue.enqueue("deduplicator", task_id="api-task-b", workspace_id=runtime_b.workspace_id)
+        runtime_a.db_manager.get_connection().executemany(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (runtime_a.workspace_id, "daemon", "mcp_memory.server", "INFO", "workspace-a api log", 10.0, "{}"),
+                (runtime_b.workspace_id, "daemon", "mcp_memory.server", "INFO", "workspace-b api log", 20.0, "{}"),
+            ],
+        )
+        runtime_a.db_manager.get_connection().commit()
+        ProviderUsageRepository(runtime_a.db_manager, workspace_id=runtime_a.workspace_id).record_conversation(
+            request_id="api-req-a",
+            attempt=1,
+            task_name="memory-curator",
+            task_id="api-task-a",
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=1111,
+            prompt_text="prompt a",
+            response_text="response a",
+            parsed=None,
+            status="completed",
+            error_text=None,
+            started_at=30.0,
+            completed_at=32.0,
+        )
+        ProviderUsageRepository(runtime_b.db_manager, workspace_id=runtime_b.workspace_id).record_conversation(
+            request_id="api-req-b",
+            attempt=1,
+            task_name="deduplicator",
+            task_id="api-task-b",
+            provider_key="copilot-mini",
+            provider_name="Copilot CLI",
+            model_name="gpt-5-mini",
+            subprocess_pid=2222,
+            prompt_text="prompt b",
+            response_text="response b",
+            parsed=None,
+            status="completed",
+            error_text=None,
+            started_at=40.0,
+            completed_at=44.0,
+        )
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    with TestClient(app) as client:
+        global_tasks = client.get("/api/tasks")
+        workspace_tasks = client.get("/api/tasks", params={"scope": "workspace"})
+        global_memories = client.get("/api/memories")
+        workspace_memories = client.get("/api/memories", params={"scope": "workspace"})
+        global_search = client.post("/api/memories/search", json={"query": "API fact", "limit": 10})
+        workspace_search = client.post("/api/memories/search?scope=workspace", json={"query": "API fact", "limit": 10})
+        global_logs = client.post("/api/logs", json={"source": "daemon"})
+        workspace_logs = client.post("/api/logs?scope=workspace", json={"source": "daemon"})
+        global_conversations = client.post("/api/ai-conversations", json={"limit": 10})
+        workspace_conversations = client.post("/api/ai-conversations?scope=workspace", json={"limit": 10})
+
+    assert global_tasks.status_code == 200
+    global_task_ids = {task["id"] for task in global_tasks.json()["tasks"]}
+    workspace_task_ids = {task["id"] for task in workspace_tasks.json()["tasks"]}
+    assert {"api-task-a", "api-task-b"} <= global_task_ids
+    assert "api-task-a" in workspace_task_ids
+    assert "api-task-b" not in workspace_task_ids
+
+    assert global_memories.status_code == 200
+    global_memory_titles = {record["title"] for record in global_memories.json()["records"]}
+    workspace_memory_titles = {record["title"] for record in workspace_memories.json()["records"]}
+    assert {"Workspace A API fact", "Workspace B API fact"} <= global_memory_titles
+    assert "Workspace A API fact" in workspace_memory_titles
+    assert "Workspace B API fact" not in workspace_memory_titles
+
+    assert global_search.status_code == 200
+    assert {record["title"] for record in global_search.json()["results"]} == {"Workspace A API fact", "Workspace B API fact"}
+    workspace_results = workspace_search.json()["results"]
+    assert {record["title"] for record in workspace_results} == {"Workspace A API fact", "Workspace B API fact"}
+    assert workspace_results[0]["title"] == "Workspace A API fact"
+    workspace_a_result = next(record for record in workspace_results if record["title"] == "Workspace A API fact")
+    workspace_b_result = next(record for record in workspace_results if record["title"] == "Workspace B API fact")
+    assert workspace_a_result["score"] >= workspace_b_result["score"]
+
+    assert global_logs.status_code == 200
+    global_log_messages = {record["message"] for record in global_logs.json()["logs"]}
+    workspace_log_messages = {record["message"] for record in workspace_logs.json()["logs"]}
+    assert {"workspace-a api log", "workspace-b api log"} <= global_log_messages
+    assert "workspace-a api log" in workspace_log_messages
+    assert "workspace-b api log" not in workspace_log_messages
+
+    assert global_conversations.status_code == 200
+    global_request_ids = {record["request_id"] for record in global_conversations.json()["conversations"]}
+    workspace_request_ids = {record["request_id"] for record in workspace_conversations.json()["conversations"]}
+    assert {"api-req-a", "api-req-b"} <= global_request_ids
+    assert "api-req-a" in workspace_request_ids
+    assert "api-req-b" not in workspace_request_ids
 
 
 def test_daemon_lifespan_ensures_dashboard_frontend_is_built(monkeypatch, tmp_path: Path) -> None:

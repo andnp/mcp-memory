@@ -35,9 +35,10 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             now=optional_float(payload, "now"),
         ).model_dump()
     if path == "/api/tasks":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.list_tasks(
             status=optional_str(payload, "status"),
-            workspace_id=optional_str(payload, "workspace_id"),
+            workspace_id=effective_workspace_id,
             limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/record-thought":
@@ -47,16 +48,18 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             )
         )
     if path == "/api/memories":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.list_memories(
-            workspace_id=optional_str(payload, "workspace_id"),
+            workspace_id=effective_workspace_id,
             memory_type=optional_str(payload, "memory_type"),
             status=optional_str(payload, "status"),
             limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/memories/search":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.search_memories(
             query=required_str(payload, "query"),
-            workspace_id=optional_str(payload, "workspace_id"),
+            workspace_id=effective_workspace_id,
             memory_type=optional_str(payload, "memory_type"),
             status=optional_str(payload, "status"),
             include_superseded=bool_value(payload, "include_superseded", default=False),
@@ -64,7 +67,9 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             debug=bool_value(payload, "debug", default=False),
         ).model_dump()
     if path == "/api/logs":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.list_logs(
+            workspace_id=effective_workspace_id,
             level=optional_str(payload, "level"),
             logger_name=optional_str(payload, "logger_name"),
             source=optional_str(payload, "source"),
@@ -74,7 +79,9 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/logs/summary":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.summarize_logs(
+            workspace_id=effective_workspace_id,
             level=optional_str(payload, "level"),
             logger_name=optional_str(payload, "logger_name"),
             source=optional_str(payload, "source"),
@@ -83,7 +90,9 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             before=optional_float(payload, "before"),
         ).model_dump()
     if path == "/api/ai-conversations":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.list_ai_conversations(
+            workspace_id=effective_workspace_id,
             request_id=optional_str(payload, "request_id"),
             task_name=optional_str(payload, "task_name"),
             status=optional_str(payload, "status"),
@@ -101,7 +110,9 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             )
         }
     if path == "/api/admin/logs/prune":
+        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
         return routes.service.prune_logs(
+            workspace_id=effective_workspace_id,
             max_runtime_logs=optional_int(payload, "max_runtime_logs"),
             max_log_age_days=optional_int(payload, "max_log_age_days"),
         ).model_dump()
@@ -174,6 +185,13 @@ def normalize_request(path: str, payload: dict | None) -> tuple[str, dict[str, o
             else:
                 request_payload[key] = values
     return split.path or path, request_payload
+
+
+def _resolve_scoped_workspace_id(routes, payload: dict[str, object]) -> str | None:
+    return routes.service._resolve_scoped_workspace_id(
+        scope=optional_str(payload, "scope"),
+        workspace_id=optional_str(payload, "workspace_id"),
+    )
 
 
 def optional_str(payload: dict[str, object], key: str) -> str | None:

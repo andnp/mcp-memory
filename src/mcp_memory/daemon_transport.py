@@ -26,6 +26,7 @@ DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
 EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 30.0
 _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
+    "/api/admin/search/repair",
     "/api/memories/",
     "/internal/tools/search_memory_records",
     "/internal/tools/read_memory_record",

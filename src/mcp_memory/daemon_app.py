@@ -33,6 +33,17 @@ from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_
 logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
+_GLOBAL_DEFAULT_API_PATHS = {
+    "overview",
+    "metrics/nerd",
+    "tasks",
+    "memories",
+    "memories/search",
+    "logs",
+    "logs/summary",
+    "ai-conversations",
+    "admin/logs/prune",
+}
 
 
 def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
@@ -269,7 +280,7 @@ def create_daemon_app(
     @app.api_route("/api/{api_path:path}", methods=["GET", "POST"])
     async def dashboard_api(api_path: str, request: Request):
         payload = await _payload_from_http_request(request)
-        if api_path == "overview" and "scope" not in payload and "workspace_id" not in payload:
+        if api_path in _GLOBAL_DEFAULT_API_PATHS and "scope" not in payload and "workspace_id" not in payload:
             payload["scope"] = "global"
         try:
             result = dispatch_management_request(

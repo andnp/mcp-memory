@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from mcp_memory.cli import main
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
 pytest_plugins: list[str] = []
@@ -352,6 +353,44 @@ def test_logs_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
     assert payload["logs"][0]["message"] == "json log entry"
 
 
+def test_logs_command_reads_global_logs_across_workspaces(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)
+    try:
+        assert runtime_a.db_manager is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+        runtime_a.db_manager.get_connection().executemany(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (runtime_a.workspace_id, "daemon", "mcp_memory.server", "INFO", "workspace-a log", 10.0, "{}"),
+                (runtime_b.workspace_id, "daemon", "mcp_memory.server", "INFO", "workspace-b log", 20.0, "{}"),
+            ],
+        )
+        runtime_a.db_manager.get_connection().commit()
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    result = runner.invoke(
+        main,
+        ["log", "show", "--workspace-root", str(workspace_a), "--source", "daemon", "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert {row["message"] for row in payload["logs"]} == {"workspace-a log", "workspace-b log"}
+
+
 def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 
@@ -382,6 +421,102 @@ def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) 
     assert "By Level" in result.output
     assert "By Source" in result.output
     assert "daemon" in result.output
+
+
+def test_task_list_command_shows_global_tasks_across_workspaces(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)
+    try:
+        assert runtime_a.task_queue is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+        runtime_a.task_queue.enqueue("memory-curator", task_id="task-a", workspace_id=runtime_a.workspace_id)
+        runtime_a.task_queue.enqueue("deduplicator", task_id="task-b", workspace_id=runtime_b.workspace_id)
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    result = runner.invoke(
+        main,
+        ["task", "list", "--workspace-root", str(workspace_a), "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert {task["id"] for task in payload["tasks"]} == {"task-a", "task-b"}
+
+
+def test_conversation_list_command_reads_global_conversations_across_workspaces(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)
+    try:
+        assert runtime_a.db_manager is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+        ProviderUsageRepository(runtime_a.db_manager, workspace_id=runtime_a.workspace_id).record_conversation(
+            request_id="req-a",
+            attempt=1,
+            task_name="memory-curator",
+            task_id="task-a",
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=1111,
+            prompt_text="prompt a",
+            response_text="response a",
+            parsed=None,
+            status="completed",
+            error_text=None,
+            started_at=10.0,
+            completed_at=12.0,
+        )
+        ProviderUsageRepository(runtime_b.db_manager, workspace_id=runtime_b.workspace_id).record_conversation(
+            request_id="req-b",
+            attempt=1,
+            task_name="deduplicator",
+            task_id="task-b",
+            provider_key="copilot-mini",
+            provider_name="Copilot CLI",
+            model_name="gpt-5-mini",
+            subprocess_pid=2222,
+            prompt_text="prompt b",
+            response_text="response b",
+            parsed=None,
+            status="completed",
+            error_text=None,
+            started_at=20.0,
+            completed_at=24.0,
+        )
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    result = runner.invoke(
+        main,
+        ["conversation", "list", "--workspace-root", str(workspace_a), "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert {row["request_id"] for row in payload["conversations"]} == {"req-a", "req-b"}
 
 
 def test_log_prune_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
@@ -1226,3 +1361,52 @@ def test_conversation_commands_render_and_return_json(monkeypatch, tmp_path: Pat
     payload = json.loads(json_result.output)
     assert json_result.exit_code == 0
     assert payload["conversations"][0]["request_id"] == "req-cli-2"
+
+
+def test_conversation_list_labels_running_rows_as_heartbeat(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "req-cli-running",
+                1,
+                runtime.workspace_id,
+                "memory-curator",
+                "task-running",
+                "copilot-strong:agentic",
+                "Copilot CLI Agentic",
+                "claude-haiku-4.5",
+                7777,
+                "prompt text",
+                "response text",
+                None,
+                "running",
+                None,
+                1.0,
+                5.0,
+                4.0,
+            ),
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(
+        main,
+        ["conversation", "list", "--workspace-root", str(workspace), "--status", "running"],
+    )
+
+    assert result.exit_code == 0
+    assert "AI Conversations" in result.output
+    assert "Last Update" in result.output
+    assert "heartbeat" in result.output

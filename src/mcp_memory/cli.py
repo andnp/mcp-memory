@@ -245,7 +245,7 @@ def _show_logs(
 ) -> None:
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).list_logs(
+        payload = _build_management_service(runtime, workspace_id=None).list_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -274,7 +274,7 @@ def _summarize_logs(
 ) -> None:
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).summarize_logs(
+        payload = _build_management_service(runtime, workspace_id=None).summarize_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -298,7 +298,7 @@ def _prune_logs(
 ) -> None:
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).prune_logs(
+        payload = _build_management_service(runtime, workspace_id=None).prune_logs(
             max_runtime_logs=max_runtime_logs,
             max_log_age_days=max_log_age_days,
         )
@@ -824,10 +824,13 @@ def _render_ai_conversation_table(payload) -> None:
     table.add_column("PID", justify="right")
     table.add_column("Status", no_wrap=True)
     table.add_column("Duration", justify="right")
-    table.add_column("Completed", no_wrap=True)
+    table.add_column("Last Update", no_wrap=True)
     if not payload.conversations:
         table.add_row("-", "-", "-", "-", "-", "-", "-")
     for conversation in payload.conversations:
+        completion_label = _format_timestamp(conversation.completed_at)
+        if conversation.status == "running":
+            completion_label = f"heartbeat {completion_label}"
         table.add_row(
             conversation.request_id,
             str(conversation.attempt),
@@ -835,7 +838,7 @@ def _render_ai_conversation_table(payload) -> None:
             "-" if conversation.subprocess_pid is None else str(conversation.subprocess_pid),
             conversation.status,
             f"{conversation.duration_seconds:.2f}s",
-            _format_timestamp(conversation.completed_at),
+            completion_label,
         )
     console.print(table)
 
@@ -1202,9 +1205,8 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
     """List queued or running tasks."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).list_tasks(
+        payload = _build_management_service(runtime, workspace_id=None).list_tasks(
             status=status,
-            workspace_id=runtime.workspace_id,
             limit=limit,
         )
         if json_output:
@@ -1319,7 +1321,7 @@ def list_conversations_command(
     """List recorded AI conversations."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).list_ai_conversations(
+        payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(
             task_name=task_name,
             status=status,
             limit=limit,
@@ -1340,7 +1342,7 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
     """Show all recorded attempts for one AI request ID."""
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).list_ai_conversations(request_id=request_id, limit=200)
+        payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(request_id=request_id, limit=200)
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
