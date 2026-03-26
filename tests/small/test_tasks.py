@@ -504,6 +504,40 @@ def test_schedule_system1_ingest_resets_debounce_on_new_activity_below_threshold
     assert rescheduled.task.available_at == 3760.0
 
 
+def test_schedule_system1_ingest_uses_one_global_auto_task_across_workspaces(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    first_now = 100.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: first_now)
+    journal.record("note a", workspace_id="workspace-a")
+
+    first = schedule_system1_ingest(queue, journal, "workspace-a", now=first_now)
+
+    assert first is not None
+    assert first.created is True
+    assert first.task.workspace_id is None
+    assert first.task.data["workspace_id"] == "workspace-a"
+    assert first.task.data["journal_workspace_id"] == "*"
+
+    second_now = 160.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: second_now)
+    journal.record("note b", workspace_id="workspace-b")
+
+    second = schedule_system1_ingest(queue, journal, "workspace-b", now=second_now)
+
+    assert second is not None
+    assert second.created is False
+    assert second.task.id == first.task.id
+    assert second.task.workspace_id is None
+    assert second.task.data["workspace_id"] == "workspace-b"
+    assert second.task.data["journal_workspace_id"] == "*"
+    assert second.task.available_at == 3760.0
+
+
 def test_schedule_system1_ingest_threshold_respects_rate_limit_boundary(
     db_manager,
     monkeypatch,

@@ -36,7 +36,7 @@ def schedule_system1_ingest(
     )
 
     scheduled_at = time.time() if now is None else now
-    journal_workspace_id = resolve_pending_workspace_id(journal, workspace_id)
+    journal_workspace_id = resolve_pending_workspace_id(journal, None)
     pending_count = journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
     if pending_count <= 0:
         return None
@@ -76,29 +76,51 @@ def schedule_system1_ingest(
         task_data["rate_limited_until"] = rate_limited_until
     if suppressed_until is not None:
         task_data["suppressed_until"] = suppressed_until
-    task, created = task_queue.enqueue_unique(
-        task_name=SYSTEM1_INGEST_TASK_NAME,
-        workspace_id=workspace_id,
-        data=task_data,
-        priority=SYSTEM1_INGEST_PRIORITY,
-        available_at=available_at,
-    )
-    if (
-        not created
-        and task.status == "pending"
-        and _is_auto_scheduled_ingest_task(task)
-        and (
-            abs(available_at - task.available_at) > 1e-6
-            or task.priority != SYSTEM1_INGEST_PRIORITY
-            or task.data != task_data
-        )
-    ):
-        task = task_queue.update_pending_task(
-            task.id,
-            available_at=available_at,
+    existing = task_queue.find_open_task_any_workspace(SYSTEM1_INGEST_TASK_NAME)
+    if existing is not None:
+        task = existing
+        created = False
+        if (
+            task.status == "pending"
+            and _is_auto_scheduled_ingest_task(task)
+            and (
+                task.workspace_id is not None
+                or abs(available_at - task.available_at) > 1e-6
+                or task.priority != SYSTEM1_INGEST_PRIORITY
+                or task.data != task_data
+            )
+        ):
+            task = task_queue.update_pending_task(
+                task.id,
+                available_at=available_at,
+                data=task_data,
+                priority=SYSTEM1_INGEST_PRIORITY,
+            )
+    else:
+        task, created = task_queue.enqueue_unique(
+            task_name=SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=None,
             data=task_data,
             priority=SYSTEM1_INGEST_PRIORITY,
+            available_at=available_at,
         )
+        if (
+            not created
+            and task.status == "pending"
+            and _is_auto_scheduled_ingest_task(task)
+            and (
+                task.workspace_id is not None
+                or abs(available_at - task.available_at) > 1e-6
+                or task.priority != SYSTEM1_INGEST_PRIORITY
+                or task.data != task_data
+            )
+        ):
+            task = task_queue.update_pending_task(
+                task.id,
+                available_at=available_at,
+                data=task_data,
+                priority=SYSTEM1_INGEST_PRIORITY,
+            )
 
     return System1IngestScheduleResult(
         task=task,
