@@ -43,6 +43,13 @@ def _exit_cli_error(exc: Exception) -> None:
     sys.exit(1)
 
 
+def _run_or_exit(action: Callable[[], None]) -> None:
+    try:
+        action()
+    except Exception as exc:
+        _exit_cli_error(exc)
+
+
 def _run_stdio_proxy(
     debug_enabled: bool,
     workspace_root: str | None,
@@ -116,10 +123,7 @@ def _print_daemon_status(workspace_root: str | None) -> None:
 
 def _stop_daemon_command(workspace_root: str | None) -> None:
     stop_result = None
-    try:
-        stop_result = stop_daemon(workspace_root, None)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    stop_result = stop_daemon(workspace_root, None)
     if stop_result is None:
         console.print("[yellow]No daemon metadata found.[/]")
         return
@@ -140,11 +144,8 @@ def _stop_daemon_command(workspace_root: str | None) -> None:
 def _restart_daemon_command(workspace_root: str | None) -> None:
     metadata = None
     stop_result = None
-    try:
-        stop_result = stop_daemon(workspace_root, None)
-        metadata = ensure_daemon_started(workspace_root, None)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    stop_result = stop_daemon(workspace_root, None)
+    metadata = ensure_daemon_started(workspace_root, None)
     if metadata is None:
         return
     if isinstance(stop_result, DaemonStopResult):
@@ -156,11 +157,7 @@ def _restart_daemon_command(workspace_root: str | None) -> None:
 
 
 def _print_dashboard_url(workspace_root: str | None, *, open_browser: bool = False) -> None:
-    metadata = None
-    try:
-        metadata = ensure_daemon_started(workspace_root, None)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    metadata = ensure_daemon_started(workspace_root, None)
     if metadata is None:
         return
     dashboard_url = f"{metadata.base_url}/dashboard"
@@ -208,6 +205,151 @@ def _stash_thought(workspace_root: str | None, content: str) -> None:
             raise RuntimeError("journal_not_initialized")
         payload = RecordThoughtOperation(runtime.journal, runtime.task_queue, runtime.workspace_id).execute(content)
         click.echo(f"Thought stashed successfully (ID: {payload['entry']['id']})")
+
+    _with_runtime(workspace_root, _run)
+
+
+def _prefetch_embedding_model(workspace_root: str | None) -> None:
+    def _run(runtime) -> None:
+        embedder = runtime.embedder
+        if embedder is None:
+            raise RuntimeError("embedder_not_initialized")
+        cache_model = getattr(embedder, "cache_model", None)
+        if not callable(cache_model):
+            raise RuntimeError("embedder_cache_not_supported")
+        cached = bool(cache_model())
+        status = describe_embedder(embedder)
+        if not cached:
+            raise RuntimeError("embedding_model_cache_failed")
+        console.print(f"[green]Embedding model cached:[/] {status.model_name if status is not None else 'unknown'}")
+        if status is not None:
+            console.print(f"backend={status.backend} cached={status.model_cached}")
+
+    _with_runtime(workspace_root, _run)
+
+
+def _cancel_task(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
+    payload = _with_management_service(
+        workspace_root,
+        lambda service: service.cancel_task(task_id, cancelled_by="cli", reason=reason),
+    )
+    if json_output:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    console.print(f"[green]{payload['status']}[/]: {task_id}")
+    console.print(f"signal_sent={payload['signal_sent']} status={payload['task']['status']}")
+
+
+def _show_task(task_id: str, workspace_root: str | None, json_output: bool) -> None:
+    payload = _with_management_service(
+        workspace_root,
+        lambda service: service.get_task_detail(task_id),
+        workspace_id=None,
+    )
+    if json_output:
+        click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+        return
+    _render_task_detail(payload)
+
+
+def _show_search_health(workspace_root: str | None, json_output: bool) -> None:
+    def _run(service: ManagementService) -> None:
+        payload = service.get_health()
+        if json_output:
+            click.echo(json.dumps(payload.search.model_dump(), sort_keys=True))
+            return
+        _render_search_health_table(payload.search)
+
+    _with_management_service(workspace_root, _run)
+
+
+def _repair_search_index(workspace_root: str | None, json_output: bool) -> None:
+    payload = _with_management_service(workspace_root, lambda service: service.repair_search_index())
+    if json_output:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    if not payload["rebuilt"]:
+        console.print(f"[yellow]Search repair skipped:[/] {payload['reason']}")
+        return
+    console.print(f"[green]Search index rebuilt:[/] {payload['records_indexed']} records")
+
+
+def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
+    ensure_daemon_started(workspace_root, None)
+    payload = _with_management_service(
+        workspace_root,
+        lambda service: service.enqueue_background_task(agent_name, force=force),
+    )
+    console.print(f"[green]{payload['status']}[/]: {agent_name}")
+    console.print(f"task_id={payload['task']['id']} status={payload['task']['status']}")
+
+
+def _enqueue_all_agents(workspace_root: str | None, force: bool) -> None:
+    ensure_daemon_started(workspace_root, None)
+    results = _with_management_service(
+        workspace_root,
+        lambda service: [service.enqueue_background_task(task_name, force=force) for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES],
+    )
+    created_count = sum(1 for result in results if result["created"])
+    console.print(f"[green]Agents queued:[/] {created_count}/{len(results)} newly created")
+    for result in results:
+        console.print(f"- {result['task']['task_name']}: {result['status']}")
+
+
+def _show_stats_command(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
+    _with_runtime(
+        workspace_root,
+        lambda runtime: _show_stats(runtime, watch=watch, interval_seconds=interval, verbose=verbose),
+    )
+
+
+def _import_markdown_files(
+    file_paths: tuple[str, ...],
+    workspace_root: str | None,
+    workspace_ids: tuple[str, ...],
+    thought: bool,
+) -> None:
+    if not file_paths:
+        raise click.UsageError("Provide at least one markdown file path or glob pattern.")
+
+    def _run(runtime) -> None:
+        resolved_workspace_id = None
+        if workspace_ids:
+            resolved_workspace_id = next((wid.strip() for wid in workspace_ids if wid.strip()), None)
+        elif runtime.workspace_id is not None:
+            resolved_workspace_id = runtime.workspace_id
+
+        if thought:
+            if runtime.journal is None:
+                raise RuntimeError("journal_not_initialized")
+
+            recorded = record_markdown_memory_paths_as_thoughts(
+                runtime.journal,
+                list(file_paths),
+                workspace_id=resolved_workspace_id,
+            )
+            if runtime.task_queue is not None:
+                resume_paused_recurring_maintenance(runtime.task_queue)
+            for entry_id, file_name in recorded:
+                console.print(f"[green]Recorded thought:[/] {file_name} (entry {entry_id})")
+            console.print(f"[green]Recorded total:[/] {len(recorded)} thoughts → buffer")
+            return
+
+        if runtime.repository is None:
+            raise RuntimeError("repository_not_initialized")
+
+        resolved_workspace_ids = [workspace_id.strip() for workspace_id in workspace_ids if workspace_id.strip()]
+        if not resolved_workspace_ids and runtime.workspace_id is not None:
+            resolved_workspace_ids = [runtime.workspace_id]
+
+        imported_records = import_markdown_memory_paths(
+            runtime.repository,
+            list(file_paths),
+            resolved_workspace_ids,
+        )
+        for imported in imported_records:
+            console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
+        console.print(f"[green]Imported total:[/] {len(imported_records)}")
 
     _with_runtime(workspace_root, _run)
 
@@ -922,14 +1064,14 @@ def daemon_status(workspace_root: str | None) -> None:
 @workspace_root_option
 def daemon_stop(workspace_root: str | None) -> None:
     """Stop the global daemon if it is running."""
-    _stop_daemon_command(workspace_root)
+    _run_or_exit(lambda: _stop_daemon_command(workspace_root))
 
 
 @daemon_group.command(name="restart")
 @workspace_root_option
 def daemon_restart(workspace_root: str | None) -> None:
     """Restart the global daemon and print the active transport endpoint."""
-    _restart_daemon_command(workspace_root)
+    _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
 @daemon_group.command(name="dashboard")
@@ -937,7 +1079,7 @@ def daemon_restart(workspace_root: str | None) -> None:
 @click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
 def dashboard(workspace_root: str | None, open_browser: bool) -> None:
     """Ensure the daemon is running and print the active transport endpoint."""
-    _print_dashboard_url(workspace_root, open_browser=open_browser)
+    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=open_browser))
 
 
 @main.command(name="daemon-status", hidden=True)
@@ -949,20 +1091,20 @@ def daemon_status_alias(workspace_root: str | None) -> None:
 @main.command(name="daemon-stop", hidden=True)
 @workspace_root_option
 def daemon_stop_alias(workspace_root: str | None) -> None:
-    _stop_daemon_command(workspace_root)
+    _run_or_exit(lambda: _stop_daemon_command(workspace_root))
 
 
 @main.command(name="daemon-restart", hidden=True)
 @workspace_root_option
 def daemon_restart_alias(workspace_root: str | None) -> None:
-    _restart_daemon_command(workspace_root)
+    _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
 @main.command(name="dashboard", hidden=True)
 @workspace_root_option
 @click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
 def dashboard_alias(workspace_root: str | None, open_browser: bool) -> None:
-    _print_dashboard_url(workspace_root, open_browser=open_browser)
+    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=open_browser))
 
 
 @main.command(name="stash")
@@ -970,10 +1112,7 @@ def dashboard_alias(workspace_root: str | None, open_browser: bool) -> None:
 @click.argument("text", nargs=-1)
 def stash(workspace_root: str | None, text: tuple[str, ...]) -> None:
     """Record one raw thought into the System 1 journal."""
-    try:
-        _stash_thought(workspace_root, _resolve_stash_content(text))
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
 
 
 @main.group(name="log")
@@ -1184,25 +1323,7 @@ def hook_runner(workspace_root: str | None) -> None:
 @workspace_root_option
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""
-    def _run(runtime) -> None:
-        embedder = runtime.embedder
-        if embedder is None:
-            raise RuntimeError("embedder_not_initialized")
-        cache_model = getattr(embedder, "cache_model", None)
-        if not callable(cache_model):
-            raise RuntimeError("embedder_cache_not_supported")
-        cached = bool(cache_model())
-        status = describe_embedder(embedder)
-        if not cached:
-            raise RuntimeError("embedding_model_cache_failed")
-        console.print(f"[green]Embedding model cached:[/] {status.model_name if status is not None else 'unknown'}")
-        if status is not None:
-            console.print(f"backend={status.backend} cached={status.model_cached}")
-
-    try:
-        _with_runtime(workspace_root, _run)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
 
 
 @main.group(name="agents")
@@ -1278,18 +1399,7 @@ def task_sampling_summary_command(workspace_root: str | None, limit: int, json_o
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
     """Cancel a pending or running task."""
-    try:
-        payload = _with_runtime(
-            workspace_root,
-            lambda runtime: _build_management_service(runtime).cancel_task(task_id, cancelled_by="cli", reason=reason),
-        )
-        if json_output:
-            click.echo(json.dumps(payload, sort_keys=True))
-            return
-        console.print(f"[green]{payload['status']}[/]: {task_id}")
-        console.print(f"signal_sent={payload['signal_sent']} status={payload['task']['status']}")
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
 
 
 @task_group.command(name="show")
@@ -1298,17 +1408,7 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
     """Show one task and its persisted run result details."""
-    try:
-        payload = _with_runtime(
-            workspace_root,
-            lambda runtime: _build_management_service(runtime, workspace_id=None).get_task_detail(task_id),
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_task_detail(payload)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
 
 
 @main.group(name="conversation")
@@ -1379,14 +1479,7 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def search_health_command(workspace_root: str | None, json_output: bool) -> None:
     """Show semantic search health for the current runtime context."""
-    def _run(service: ManagementService) -> None:
-        payload = service.get_health()
-        if json_output:
-            click.echo(json.dumps(payload.search.model_dump(), sort_keys=True))
-            return
-        _render_search_health_table(payload.search)
-
-    _with_management_service(workspace_root, _run)
+    _show_search_health(workspace_root, json_output)
 
 
 @search_group.command(name="repair")
@@ -1394,17 +1487,7 @@ def search_health_command(workspace_root: str | None, json_output: bool) -> None
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
     """Rebuild semantic search embeddings for the current model."""
-    try:
-        payload = _with_runtime(workspace_root, lambda runtime: _build_management_service(runtime).repair_search_index())
-        if json_output:
-            click.echo(json.dumps(payload, sort_keys=True))
-            return
-        if not payload["rebuilt"]:
-            console.print(f"[yellow]Search repair skipped:[/] {payload['reason']}")
-            return
-        console.print(f"[green]Search index rebuilt:[/] {payload['records_indexed']} records")
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
 
 
 @agents.command(name="run")
@@ -1413,16 +1496,7 @@ def search_repair_command(workspace_root: str | None, json_output: bool) -> None
 @click.option("--force", is_flag=True, help="Enqueue a new task even if one is already open")
 def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
     """Trigger one background agent for the active workspace."""
-    ensure_daemon_started(workspace_root, None)
-    try:
-        payload = _with_runtime(
-            workspace_root,
-            lambda runtime: _build_management_service(runtime).enqueue_background_task(agent_name, force=force),
-        )
-        console.print(f"[green]{payload['status']}[/]: {agent_name}")
-        console.print(f"task_id={payload['task']['id']} status={payload['task']['status']}")
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
 
 
 @agents.command(name="run-all")
@@ -1430,21 +1504,7 @@ def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
 @click.option("--force", is_flag=True, help="Enqueue new tasks even if matching tasks are already open")
 def run_all_agents(workspace_root: str | None, force: bool) -> None:
     """Trigger all background agents for the active workspace."""
-    ensure_daemon_started(workspace_root, None)
-    try:
-        results = _with_runtime(
-            workspace_root,
-            lambda runtime: [
-                _build_management_service(runtime).enqueue_background_task(task_name, force=force)
-                for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES
-            ],
-        )
-        created_count = sum(1 for result in results if result["created"])
-        console.print(f"[green]Agents queued:[/] {created_count}/{len(results)} newly created")
-        for result in results:
-            console.print(f"- {result['task']['task_name']}: {result['status']}")
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
 
 
 @main.command(name="stats")
@@ -1460,13 +1520,7 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 @click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
 def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
     """Print background task and memory statistics."""
-    try:
-        _with_runtime(
-            workspace_root,
-            lambda runtime: _show_stats(runtime, watch=watch, interval_seconds=interval, verbose=verbose),
-        )
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
 
 
 @main.command(name="monitor")
@@ -1480,10 +1534,7 @@ def stats(workspace_root: str | None, watch: bool, interval: float, verbose: boo
 )
 def monitor(workspace_root: str | None, interval: float) -> None:
     """Open the live operations TUI."""
-    try:
-        run_monitor_tui(workspace_root, interval)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
 
 
 @main.command(name="import-markdown")
@@ -1507,55 +1558,7 @@ def import_markdown(
     thought: bool,
 ) -> None:
     """Import one or more markdown memory files into the relational store or thought buffer."""
-    if not file_paths:
-        raise click.UsageError("Provide at least one markdown file path or glob pattern.")
-
-    def _run(runtime) -> None:
-        resolved_workspace_id = None
-        if workspace_ids:
-            resolved_workspace_id = next(
-                (wid.strip() for wid in workspace_ids if wid.strip()),
-                None
-            )
-        elif runtime.workspace_id is not None:
-            resolved_workspace_id = runtime.workspace_id
-
-        if thought:
-            if runtime.journal is None:
-                raise RuntimeError("journal_not_initialized")
-
-            recorded = record_markdown_memory_paths_as_thoughts(
-                runtime.journal,
-                list(file_paths),
-                workspace_id=resolved_workspace_id,
-            )
-            if runtime.task_queue is not None:
-                resume_paused_recurring_maintenance(runtime.task_queue)
-            for entry_id, file_name in recorded:
-                console.print(f"[green]Recorded thought:[/] {file_name} (entry {entry_id})")
-            console.print(f"[green]Recorded total:[/] {len(recorded)} thoughts → buffer")
-            return
-
-        if runtime.repository is None:
-            raise RuntimeError("repository_not_initialized")
-
-        resolved_workspace_ids = [workspace_id.strip() for workspace_id in workspace_ids if workspace_id.strip()]
-        if not resolved_workspace_ids and runtime.workspace_id is not None:
-            resolved_workspace_ids = [runtime.workspace_id]
-
-        imported_records = import_markdown_memory_paths(
-            runtime.repository,
-            list(file_paths),
-            resolved_workspace_ids,
-        )
-        for imported in imported_records:
-            console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
-        console.print(f"[green]Imported total:[/] {len(imported_records)}")
-
-    try:
-        _with_runtime(workspace_root, _run)
-    except Exception as exc:
-        _exit_cli_error(exc)
+    _run_or_exit(lambda: _import_markdown_files(file_paths, workspace_root, workspace_ids, thought))
 
 
 def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:
