@@ -680,6 +680,7 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     assert "MCP Memory Dashboard" in dashboard.text or "Memory Command Center" in dashboard.text
     assert overview.status_code == 200
     assert overview.json()["memories"]["total"] >= 1
+    assert overview.json()["premium_usage"]["copilot_premium_requests_today"] == 0
     assert search.status_code == 200
     assert any(result["title"] == "HTTP dashboard fact" for result in search.json()["results"])
     assert record_thought.status_code == 200

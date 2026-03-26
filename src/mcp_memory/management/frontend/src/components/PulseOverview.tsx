@@ -9,6 +9,7 @@ export function PulseOverview({ overview }: PulseOverviewProps) {
     ['Memories', overview.memories.total],
     ['Memory Lines', overview.memory_metrics.total_memory_lines],
     ['Compressed Lines', overview.memory_metrics.total_lines_compressed],
+    ['Copilot Premium Today', overview.premium_usage.copilot_premium_requests_today],
     ['Thought Buffer', overview.memory_metrics.thought_buffer_entries],
     ['Failed Tasks', overview.tasks.failed_count],
     ['Embedding Backend', overview.embeddings.backend ?? 'none'],
@@ -16,11 +17,14 @@ export function PulseOverview({ overview }: PulseOverviewProps) {
   ];
 
   return (
-    <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+    <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
       {cards.map(([label, value]) => (
         <article key={label} className="metric-card">
           <p className="panel-title">{label}</p>
           <p className="mt-1 text-xl font-semibold text-text">{value}</p>
+          {label === 'Copilot Premium Today' ? (
+            <p className="mt-1 text-xs text-muted">{overview.premium_usage.copilot_premium_requests_last_day} in the last 24h</p>
+          ) : null}
         </article>
       ))}
     </section>

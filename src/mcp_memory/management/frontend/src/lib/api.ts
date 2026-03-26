@@ -98,6 +98,10 @@ export interface OverviewResponse {
     total_lines_compressed: number;
     thought_buffer_entries: number;
   };
+  premium_usage: {
+    copilot_premium_requests_today: number;
+    copilot_premium_requests_last_day: number;
+  };
   tasks: { failed_count: number };
   embeddings: { backend: string | null; model_name: string | null; model_cached: boolean };
   storage: { sqlite_bytes: number };

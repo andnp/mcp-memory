@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+import json
 from typing import Any
 import time
 
@@ -147,6 +149,116 @@ def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: s
         query += " AND workspace_id = ?"
         params.append(workspace_id)
     return conn.execute(query, params).fetchall()
+
+
+def list_ai_conversation_rows_since(db_manager, *, cutoff: float, upper_bound: float, workspace_id: str | None):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    query = (
+        "SELECT provider_key, completed_at, response_text, parsed_json "
+        "FROM ai_conversations WHERE completed_at >= ? AND completed_at <= ?"
+    )
+    params: list[object] = [cutoff, upper_bound]
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    return conn.execute(query, params).fetchall()
+
+
+def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, now: float | None = None) -> dict[str, int]:
+    if db_manager is None:
+        return {
+            "copilot_premium_requests_today": 0,
+            "copilot_premium_requests_last_day": 0,
+        }
+
+    current_time = time.time() if now is None else now
+    last_day_cutoff = current_time - 86_400
+    today_start = datetime.fromtimestamp(current_time, UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    query_cutoff = min(last_day_cutoff, today_start)
+
+    premium_requests_today = 0
+    premium_requests_last_day = 0
+    for row in list_ai_conversation_rows_since(
+        db_manager,
+        cutoff=query_cutoff,
+        upper_bound=current_time,
+        workspace_id=workspace_id,
+    ):
+        provider_key = str(row["provider_key"] or "")
+        if not provider_key.startswith("copilot"):
+            continue
+
+        premium_requests = extract_copilot_premium_requests(
+            response_text=row["response_text"],
+            parsed_json=row["parsed_json"],
+        )
+        if premium_requests <= 0:
+            continue
+
+        completed_at = float(row["completed_at"] or 0.0)
+        if completed_at >= last_day_cutoff:
+            premium_requests_last_day += premium_requests
+        if completed_at >= today_start:
+            premium_requests_today += premium_requests
+
+    return {
+        "copilot_premium_requests_today": premium_requests_today,
+        "copilot_premium_requests_last_day": premium_requests_last_day,
+    }
+
+
+def extract_copilot_premium_requests(*, response_text: str | None, parsed_json: str | None) -> int:
+    premium_requests: list[int] = []
+    premium_requests.extend(_premium_requests_from_maybe_json(parsed_json))
+    premium_requests.extend(_premium_requests_from_maybe_json(response_text))
+    return max(premium_requests, default=0)
+
+
+def _premium_requests_from_maybe_json(value: str | None) -> list[int]:
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+
+    premium_requests: list[int] = []
+    parsed_text = _try_json_loads(text)
+    if parsed_text is not None:
+        premium_requests.extend(_collect_premium_requests(parsed_text))
+        return premium_requests
+
+    for line in text.splitlines():
+        parsed_line = _try_json_loads(line.strip())
+        if parsed_line is not None:
+            premium_requests.extend(_collect_premium_requests(parsed_line))
+    return premium_requests
+
+
+def _try_json_loads(text: str) -> Any | None:
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _collect_premium_requests(payload: Any) -> list[int]:
+    results: list[int] = []
+    if isinstance(payload, dict):
+        premium_value = payload.get("premiumRequests")
+        if isinstance(premium_value, bool):
+            premium_value = None
+        if isinstance(premium_value, (int, float)):
+            results.append(int(premium_value))
+        for value in payload.values():
+            results.extend(_collect_premium_requests(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            results.extend(_collect_premium_requests(item))
+    return results
 
 
 def list_runtime_log_rows_since(

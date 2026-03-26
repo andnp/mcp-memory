@@ -73,6 +73,7 @@ from mcp_memory.management.models import (
 )
 from mcp_memory.management.reporting_queries import (
     build_queue_diagnostics,
+    summarize_copilot_premium_requests,
     list_memory_tool_event_rows_since,
     list_maintenance_task_run_rows_since,
     list_provider_policy_event_rows_since,
@@ -516,6 +517,11 @@ def build_nerd_metrics(
         provider_usage_repo=provider_usage_repo,
         workspace_id=workspace_id,
     )
+    copilot_premium_usage = summarize_copilot_premium_requests(
+        db_manager,
+        workspace_id=workspace_id,
+        now=generated_at,
+    )
 
     executed_provider_rows = len(provider_rows) - provider_skips
     provider_failure_rate = 0.0 if executed_provider_rows <= 0 else provider_failures / executed_provider_rows
@@ -538,6 +544,18 @@ def build_nerd_metrics(
         NerdStatPayload(key="provider_failure_rate", label="Provider failure rate", value=round(provider_failure_rate, 4), unit="pct"),
         NerdStatPayload(key="provider_skip_rate", label="Provider skip rate", value=round(provider_skip_rate, 4), unit="pct"),
         NerdStatPayload(key="premium_execution_count", label="Premium executions", value=float(premium_execution_count), unit="calls"),
+        NerdStatPayload(
+            key="copilot_premium_requests_today",
+            label="Copilot premium requests today",
+            value=float(copilot_premium_usage["copilot_premium_requests_today"]),
+            unit="calls",
+        ),
+        NerdStatPayload(
+            key="copilot_premium_requests_last_day",
+            label="Copilot premium requests last 24h",
+            value=float(copilot_premium_usage["copilot_premium_requests_last_day"]),
+            unit="calls",
+        ),
         NerdStatPayload(key="compatible_batch_calls", label="Compatible batch calls", value=float(compatible_batch_calls), unit="calls"),
         NerdStatPayload(
             key="work_items_per_premium_execution",

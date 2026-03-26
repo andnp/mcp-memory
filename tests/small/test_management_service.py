@@ -61,6 +61,8 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert overview.memory_metrics.total_memory_lines == 0
     assert overview.memory_metrics.total_summary_lines == 0
     assert overview.memory_metrics.thought_buffer_entries == 0
+    assert overview.premium_usage.copilot_premium_requests_today == 0
+    assert overview.premium_usage.copilot_premium_requests_last_day == 0
     assert overview.queue_diagnostics == []
     assert overview.failed_tasks == []
     assert overview.provider_usage == []
@@ -140,6 +142,50 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
             ("workspace-b", "daemon", "mcp_memory.tests", "INFO", "workspace-b log", 21.0, "{}"),
         ],
     )
+    now = time.time()
+    db_manager.get_connection().executemany(
+        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "req-a",
+                1,
+                "workspace-a",
+                "memory-curator",
+                "task-a",
+                "copilot-cli",
+                "Copilot CLI",
+                "gpt-5",
+                111,
+                "prompt",
+                '{"type":"result","usage":{"premiumRequests":3}}',
+                None,
+                "success",
+                None,
+                now - 120.0,
+                now - 60.0,
+                60.0,
+            ),
+            (
+                "req-b",
+                1,
+                "workspace-b",
+                "memory-curator",
+                "task-b",
+                "copilot-cli",
+                "Copilot CLI",
+                "gpt-5",
+                222,
+                "prompt",
+                '{"type":"result","usage":{"premiumRequests":5}}',
+                None,
+                "success",
+                None,
+                now - 180.0,
+                now - 90.0,
+                90.0,
+            ),
+        ],
+    )
     task_a = task_queue.enqueue(
         "graph-linker",
         task_id="workspace-a-maintenance",
@@ -178,6 +224,8 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
 
     assert scoped_overview.memories.total == 1
     assert scoped_overview.memory_metrics.total_memories == 1
+    assert scoped_overview.premium_usage.copilot_premium_requests_today == 3
+    assert scoped_overview.premium_usage.copilot_premium_requests_last_day == 3
     assert [record.title for record in scoped_overview.recent_memories] == ["Workspace A fact"]
     assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
     assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
@@ -187,6 +235,8 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
 
     assert global_overview.memories.total == 2
     assert global_overview.memory_metrics.total_memories == 2
+    assert global_overview.premium_usage.copilot_premium_requests_today == 8
+    assert global_overview.premium_usage.copilot_premium_requests_last_day == 8
     assert {record.title for record in global_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
     assert {item.provider_key for item in global_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
     assert [(item.key, item.count) for item in global_nerd.composition.by_workspace] == [
@@ -1045,6 +1095,28 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
     )
     db_manager.get_connection().execute(
+        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "req-premium",
+            1,
+            "workspace-a",
+            "memory-curator",
+            "task-premium",
+            "copilot-cli",
+            "Copilot CLI",
+            "gpt-5",
+            3333,
+            "prompt text",
+            '{"type":"message"}\n{"type":"result","usage":{"premiumRequests":13}}',
+            None,
+            "success",
+            None,
+            time.time() - 30.0,
+            time.time() - 10.0,
+            20.0,
+        ),
+    )
+    db_manager.get_connection().execute(
         "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "workspace-a",
@@ -1112,6 +1184,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.memories.by_status == {"active": 1, "stale": 1}
     assert overview.memory_metrics.total_memories == 2
     assert overview.memory_metrics.thought_buffer_entries == 0
+    assert overview.premium_usage.copilot_premium_requests_today == 13
+    assert overview.premium_usage.copilot_premium_requests_last_day == 13
     assert overview.agent_runs[0].task_name == "ingest-system1"
     assert overview.provider_usage[0].provider_key == "gemini-cli"
     assert overview.provider_usage[0].task_name == "memory-curator"
@@ -1162,7 +1236,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     curator_route = next(item for item in nerd_metrics.route_audit if item.task_name == "memory-curator")
     summarize_route = next(item for item in nerd_metrics.route_audit if item.task_name == "summarize-memory")
     assert curator_route.task_class == "premium_agentic"
-    assert curator_route.recent_provider_key == "gemini-cli"
+    assert curator_route.recent_provider_key == "copilot-cli"
     assert summarize_route.task_class == "deterministic"
     assert summarize_route.resolved_provider_key is None
     assert nerd_metrics.provider_policy.stats[0].key == "provider_policy_route_exhaustion_count"
@@ -1183,6 +1257,8 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert provider_policy_provider.top_reason_code == "provider_quota_exhausted"
     assert provider_policy_provider.active_admission_reason == "provider_quota_exhausted"
     assert any(stat.key == "orphan_rate" for stat in nerd_metrics.stats)
+    assert any(stat.key == "copilot_premium_requests_today" and stat.value == 13.0 for stat in nerd_metrics.stats)
+    assert any(stat.key == "copilot_premium_requests_last_day" and stat.value == 13.0 for stat in nerd_metrics.stats)
     assert all(alert.key != "curator_route_fallback" for alert in nerd_metrics.alerts)
 
 

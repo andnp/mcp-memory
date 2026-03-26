@@ -8,6 +8,7 @@ from mcp_memory.management.models import (
     MemoryMetricsPayload,
     OverviewCounts,
     OverviewPayload,
+    PremiumUsageSummaryPayload,
     ProviderUsagePayload,
     RuntimeLogPayload,
     StorageSummary,
@@ -20,6 +21,7 @@ from mcp_memory.management.reporting_queries import (
     fetch_pending_journal_metrics_row,
     fetch_task_count_rows,
     row_int,
+    summarize_copilot_premium_requests,
 )
 from mcp_memory.serialization import compact_memory_record_payload, task_payload
 
@@ -140,6 +142,9 @@ def build_overview(
         sqlite_bytes = sqlite_path.stat().st_size
 
     memory_metrics = build_memory_metrics(db_manager, workspace_id, task_queue)
+    premium_usage = PremiumUsageSummaryPayload(
+        **summarize_copilot_premium_requests(db_manager, workspace_id=workspace_id)
+    )
     agent_runs = build_agent_runs(task_queue, workspace_id)
     provider_usage = build_provider_usage(provider_usage_repo, workspace_id)
     recent_agent_runs = build_recent_agent_runs(db_manager, workspace_id, limit=20)
@@ -162,6 +167,7 @@ def build_overview(
         search=build_search_health(relational_search),
         execution_attempts=build_execution_attempt_health(db_manager, workspace_id),
         memory_metrics=memory_metrics,
+        premium_usage=premium_usage,
         queue_diagnostics=build_queue_diagnostics(task_queue, workspace_id),
         agent_runs=agent_runs,
         provider_usage=provider_usage,

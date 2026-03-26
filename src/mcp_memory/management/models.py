@@ -107,6 +107,11 @@ class JournalSummary(BaseModel):
     pending_count: int
 
 
+class PremiumUsageSummaryPayload(BaseModel):
+    copilot_premium_requests_today: int = 0
+    copilot_premium_requests_last_day: int = 0
+
+
 class MemoryMetricsPayload(BaseModel):
     total_memories: int
     total_memory_lines: int
@@ -723,6 +728,7 @@ class OverviewPayload(BaseModel):
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
     memory_metrics: MemoryMetricsPayload
+    premium_usage: PremiumUsageSummaryPayload = Field(default_factory=PremiumUsageSummaryPayload)
     queue_diagnostics: list[QueueDiagnosticPayload] = Field(default_factory=list)
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     provider_usage: list[ProviderUsagePayload] = Field(default_factory=list)
