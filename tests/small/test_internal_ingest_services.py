@@ -4,6 +4,7 @@ import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.task_submission import enqueue_summary_refresh_task
 from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME, SYSTEM1_INGEST_TASK_NAME
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.mcp.internal_service_support import _enqueue_summary_task
@@ -157,28 +158,44 @@ def test_enqueue_summary_task_coalesces_open_work_and_can_requeue_after_completi
 
     summary_tasks = ctx.task_queue.list_tasks(
         status="pending",
-        workspace_id=ctx.workspace_id,
+        workspace_id=None,
         limit=10,
     )
     summary_tasks = [task for task in summary_tasks if task.task_name == SUMMARIZE_MEMORY_TASK_NAME]
     assert len(summary_tasks) == 1
+    assert summary_tasks[0].workspace_id is None
     assert summary_tasks[0].data == {"memory_id": record.id}
     assert summary_tasks[0].priority == SUMMARIZE_MEMORY_PRIORITY
 
-    claimed = ctx.task_queue.claim_next(now=summary_tasks[0].available_at, workspace_id=ctx.workspace_id)
+    claimed = ctx.task_queue.claim_next(now=summary_tasks[0].available_at)
     assert claimed is not None
     assert claimed.task_name == SUMMARIZE_MEMORY_TASK_NAME
     ctx.task_queue.complete(claimed.id, completed_at=claimed.claimed_at or summary_tasks[0].available_at)
 
     _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
 
-    requeued = ctx.task_queue.find_open_task_with_data(
+    requeued = ctx.task_queue.find_open_task_with_data_any_workspace(
         SUMMARIZE_MEMORY_TASK_NAME,
-        workspace_id=ctx.workspace_id,
         data_fields={"memory_id": record.id},
     )
     assert requeued is not None
     assert requeued.id != claimed.id
+
+
+def test_enqueue_summary_refresh_task_dedupes_globally_across_workspace_contexts(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx_a = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    ctx_b = ApplicationContext(workspace_id="workspace-b", db_manager=db_manager, task_queue=queue)
+
+    first = enqueue_summary_refresh_task(ctx_a, memory_id="memory-shared")
+    second = enqueue_summary_refresh_task(ctx_b, memory_id="memory-shared")
+
+    assert first is not None
+    assert second is not None
+    assert first.id == second.id
+    assert first.workspace_id is None
+    assert second.workspace_id is None
+    assert first.data == {"memory_id": "memory-shared"}
 
 
 def test_internal_ingest_create_rejects_routine_completion_trace_payload(db_manager) -> None:

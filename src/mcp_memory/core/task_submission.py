@@ -14,10 +14,10 @@ def enqueue_summary_refresh_task(
     if ctx.task_queue is None:
         return None
 
-    workspace_id = workspace_ids[0] if workspace_ids else ctx.workspace_id
-    existing = ctx.task_queue.find_open_task_with_data(
+    del workspace_ids
+
+    existing = ctx.task_queue.find_open_task_with_data_any_workspace(
         SUMMARIZE_MEMORY_TASK_NAME,
-        workspace_id=workspace_id,
         data_fields={"memory_id": memory_id},
     )
     if existing is not None:
@@ -25,7 +25,7 @@ def enqueue_summary_refresh_task(
 
     return ctx.task_queue.enqueue(
         task_name=SUMMARIZE_MEMORY_TASK_NAME,
-        workspace_id=workspace_id,
+        workspace_id=None,
         data={"memory_id": memory_id},
         priority=SUMMARIZE_MEMORY_PRIORITY,
     )
