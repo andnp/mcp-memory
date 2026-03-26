@@ -23,6 +23,7 @@ from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
+from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
@@ -71,6 +72,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
     embedder = build_embedder(spec.config.embeddings)
     vector_store = SQLiteVectorStore(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
+    task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
     work_items = SQLiteWorkItemRepository(db_manager)
     embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
     relational_search = RelationalMemorySearchService(
@@ -105,6 +107,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         ai_provider=ai_json_provider,
         ai_provider_registry=provider_registry,
         provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
+        task_execution_attempts=task_execution_attempts,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
         embedder=embedder,
@@ -133,6 +136,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
 
     registry: dict[str, dict[str, object]] = {}
     usage_repository = ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id)
+    task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
 
     def add_profile(profile_key: str, ai_config) -> None:
         budget_limit = spec.config.provider_routing.profile_daily_call_limits.get(profile_key)
@@ -147,6 +151,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
                 task_queue=task_queue,
+                task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
                 model_burst_call_limit=spec.config.provider_routing.model_burst_call_limit,
@@ -162,6 +167,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
                 task_queue=task_queue,
+                task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
                 model_burst_call_limit=spec.config.provider_routing.model_burst_call_limit,

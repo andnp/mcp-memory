@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any
 
+import mcp_memory.core.tasks as task_queue_module
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.maintenance_idle import (
     build_idle_pause_result,
@@ -67,6 +68,7 @@ class RuntimeTaskWorker:
 
     async def stop(self, grace_period_seconds: float) -> None:
         self._stop_event.set()
+        await asyncio.to_thread(self._request_shutdown_cancellation_for_running_tasks)
         runner = self._runner
         reconciliation_runner = self._reconciliation_runner
         active_runners = [task for task in (runner, reconciliation_runner) if task is not None]
@@ -85,6 +87,22 @@ class RuntimeTaskWorker:
         finally:
             self._runner = None
             self._reconciliation_runner = None
+
+    def _request_shutdown_cancellation_for_running_tasks(self) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+        for task in task_queue.list_tasks(status="running", workspace_id=None, limit=200):
+            if task.cancellation_requested_at is not None:
+                continue
+            try:
+                task_queue.request_cancel(
+                    task.id,
+                    cancelled_by="daemon",
+                    reason="daemon_shutdown",
+                )
+            except ValueError:
+                continue
 
     async def _run_loop(self) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -171,6 +189,8 @@ class RuntimeTaskWorker:
                 task.id,
                 f"Unhandled runtime task worker error: {exc}",
                 self._retry_delay_seconds,
+                None,
+                current.execution_epoch,
             )
         except Exception:
             logger.exception(
@@ -223,11 +243,7 @@ class RuntimeTaskWorker:
         async with self._reconciliation_lock:
             current_time = time.time() if now is None else now
             await asyncio.to_thread(self._recover_leaked_work_items)
-            recovered_tasks = await asyncio.to_thread(
-                task_queue.recover_abandoned_running_tasks,
-                stale_after_seconds=self._abandoned_task_stale_after_seconds,
-                now=current_time,
-            )
+            recovered_tasks = await asyncio.to_thread(self._recover_running_tasks, current_time)
             recovered_task_ids: list[str] = []
             for recovered_task in recovered_tasks:
                 recovered_task_ids.append(recovered_task.id)
@@ -342,6 +358,8 @@ class RuntimeTaskWorker:
                 task_queue.fail_permanently,
                 task.id,
                 f"No task handler registered for {task.task_name}",
+                None,
+                task.execution_epoch,
             )
             return
 
@@ -358,6 +376,7 @@ class RuntimeTaskWorker:
                     task.id,
                     None,
                     build_idle_pause_result(task, idle_state),
+                    task.execution_epoch,
                 )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
                 return
@@ -374,19 +393,31 @@ class RuntimeTaskWorker:
             if current_task.status != "running":
                 return
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-                cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                cancelled_task = await asyncio.to_thread(
+                    task_queue.finalize_cancellation,
+                    task.id,
+                    cancelled_at=None,
+                    execution_epoch=task.execution_epoch,
+                )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             else:
                 failed_task = await asyncio.to_thread(
                     task_queue.fail_permanently,
                     task.id,
                     "Task interrupted during worker shutdown",
+                    None,
+                    task.execution_epoch,
                 )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
             raise
         except Exception as exc:
             if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-                cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+                cancelled_task = await asyncio.to_thread(
+                    task_queue.finalize_cancellation,
+                    task.id,
+                    cancelled_at=None,
+                    execution_epoch=task.execution_epoch,
+                )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
                 return
             retry_delay_seconds = self._retry_delay_seconds
@@ -398,6 +429,8 @@ class RuntimeTaskWorker:
                 task.id,
                 str(exc),
                 retry_delay_seconds,
+                None,
+                task.execution_epoch,
             )
             await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
             await self._schedule_follow_up(task, failed_task)
@@ -405,18 +438,144 @@ class RuntimeTaskWorker:
 
         normalized_result = result if isinstance(result, dict) else {}
         if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
-            cancelled_task = await asyncio.to_thread(task_queue.finalize_cancellation, task.id)
+            cancelled_task = await asyncio.to_thread(
+                task_queue.finalize_cancellation,
+                task.id,
+                cancelled_at=None,
+                execution_epoch=task.execution_epoch,
+            )
             await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
             await self._schedule_follow_up(task, cancelled_task)
             return
-        completed_task = await asyncio.to_thread(task_queue.complete, task.id, None, normalized_result)
+        completed_task = await asyncio.to_thread(
+            task_queue.complete,
+            task.id,
+            None,
+            normalized_result,
+            task.execution_epoch,
+        )
         await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
         await self._schedule_follow_up(task, completed_task)
 
+    def _recover_running_tasks(self, current_time: float) -> list[TaskRecord]:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return []
+        attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
+        if attempt_repository is None:
+            return task_queue.recover_abandoned_running_tasks(
+                stale_after_seconds=self._abandoned_task_stale_after_seconds,
+                now=current_time,
+            )
+        recovered: list[TaskRecord] = []
+        running_tasks = task_queue.list_tasks(status="running", workspace_id=None, limit=200)
+        for task in running_tasks:
+            recovered_task = self._recover_running_task(
+                task_queue,
+                task,
+                attempt_repository=attempt_repository,
+                current_time=current_time,
+            )
+            if recovered_task is not None:
+                recovered.append(recovered_task)
+        return recovered
+
+    def _recover_running_task(self, task_queue, task: TaskRecord, *, attempt_repository, current_time: float) -> TaskRecord | None:
+        recent_activity_at = max(
+            task.updated_at,
+            task.started_at or task.updated_at,
+            task.claimed_at or task.updated_at,
+        )
+        subprocess_pid = task.subprocess_pid
+        if attempt_repository is not None:
+            try:
+                attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=task.execution_epoch)
+            except ValueError:
+                attempt = None
+            else:
+                attempt_activity_at = max(
+                    attempt.started_at,
+                    attempt.last_heartbeat_at or attempt.started_at,
+                )
+                recent_activity_at = max(recent_activity_at, attempt_activity_at)
+                if attempt.subprocess_pid is not None:
+                    subprocess_pid = attempt.subprocess_pid
+
+        is_stale = max(current_time - recent_activity_at, 0.0) >= self._abandoned_task_stale_after_seconds
+        if subprocess_pid is not None:
+            if task_queue_module._is_process_alive(subprocess_pid):
+                return None
+            if not is_stale:
+                return None
+            if task.cancellation_requested_at is not None:
+                return self._recover_terminal_task(
+                    task_queue,
+                    lambda: task_queue.finalize_cancellation(
+                        task.id,
+                        cancelled_at=current_time,
+                        execution_epoch=task.execution_epoch,
+                    ),
+                )
+            return self._recover_terminal_task(
+                task_queue,
+                lambda: task_queue.fail_permanently(
+                    task.id,
+                    f"Provider subprocess {subprocess_pid} exited unexpectedly",
+                    failed_at=current_time,
+                    execution_epoch=task.execution_epoch,
+                ),
+            )
+        if task.cancellation_requested_at is not None:
+            return self._recover_terminal_task(
+                task_queue,
+                lambda: task_queue.finalize_cancellation(
+                    task.id,
+                    cancelled_at=current_time,
+                    execution_epoch=task.execution_epoch,
+                ),
+            )
+        if not is_stale:
+            return None
+        return self._recover_terminal_task(
+            task_queue,
+            lambda: task_queue.fail_permanently(
+                task.id,
+                "Task was abandoned without an active provider subprocess",
+                failed_at=current_time,
+                execution_epoch=task.execution_epoch,
+            ),
+        )
+
+    def _recover_terminal_task(self, task_queue, callback: Callable[[], TaskRecord]) -> TaskRecord:
+        retry_transition = getattr(task_queue, "_retry_recovery_transition", None)
+        if callable(retry_transition):
+            return retry_transition(callback)
+        return callback()
+
     def _reconcile_terminal_task_state(self, task: TaskRecord) -> None:
+        self._reconcile_task_execution_attempt(task)
         self._reconcile_task_conversations(task)
         self._release_task_work_items(task)
         self._release_task_embedding_repairs(task)
+
+    def _reconcile_task_execution_attempt(self, task: TaskRecord) -> None:
+        attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
+        if attempt_repository is None or task.status not in {"completed", "failed", "cancelled"}:
+            return
+        attempt_status = "success" if task.status == "completed" else "cancelled" if task.status == "cancelled" else "error"
+        error_text = None if task.status == "completed" else task.last_error
+        termination_reason = None if task.status == "completed" else f"task_{task.status}"
+        try:
+            attempt_repository.finish_attempt(
+                task_id=task.id,
+                execution_epoch=task.execution_epoch,
+                status=attempt_status,
+                completed_at=task.completed_at or task.updated_at,
+                error_text=error_text,
+                termination_reason=termination_reason,
+            )
+        except ValueError:
+            return
 
     def _reconcile_task_conversations(self, task: TaskRecord) -> None:
         if task.status not in {"failed", "cancelled"}:

@@ -14,6 +14,7 @@ import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
+from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
 
@@ -300,9 +301,13 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "embeddings" in health
         assert "backend" in health["embeddings"]
         assert health["search"]["semantic_enabled"] is True
+        assert "execution_attempts" in health
+        assert health["execution_attempts"]["running_task_count"] >= 0
         assert overview["memories"]["total"] == 2
         assert overview["embeddings"]["model_name"] is not None
         assert overview["search"]["semantic_enabled"] is True
+        assert "execution_attempts" in overview
+        assert overview["execution_attempts"]["missing_attempt_count"] >= 0
         assert overview["memory_metrics"]["total_memories"] == 2
         assert overview["queue_diagnostics"]
         assert all(item["pending_state"] in {"scheduled", "runnable"} for item in overview["queue_diagnostics"])
@@ -339,6 +344,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "running_attempt_count" for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "stale_attempt_count" for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "premium_execution_count" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "compatible_batch_calls" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "work_items_per_premium_execution" and stat["value"] == 3.0 for stat in nerd_metrics["stats"])
@@ -795,6 +802,58 @@ async def test_daemon_zmq_dispatch_rejects_invalid_transport_payload_shapes(tmp_
         "status": "error",
         "error": "transport_payload_must_be_object",
     }
+
+
+@pytest.mark.asyncio
+async def test_daemon_zmq_dispatch_processes_tool_requests_concurrently(monkeypatch, tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+
+    def slow_service(_ctx: ApplicationContext, arguments: dict) -> dict:
+        time.sleep(0.25)
+        return {"status": "ok", "query": arguments.get("query")}
+
+    monkeypatch.setattr(
+        "mcp_memory.mcp.transport.tool_services",
+        lambda: {"search_memory_records": slow_service},
+    )
+
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: None,
+        max_concurrent_requests=4,
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        async def _worker(index: int) -> tuple[int, str, float]:
+            started_at = time.monotonic()
+            payload = await asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/internal/tools/search_memory_records",
+                {"query": f"query-{index}"},
+                timeout_seconds=2.0,
+            )
+            elapsed = time.monotonic() - started_at
+            return index, payload["contents"][0]["text"], elapsed
+
+        started_at = time.monotonic()
+        results = await asyncio.gather(*(_worker(index) for index in range(4)))
+        total_elapsed = time.monotonic() - started_at
+    finally:
+        await server.stop()
+
+    assert len(results) == 4
+    assert total_elapsed < 0.7
+    for index, payload_text, elapsed in results:
+        payload = json.loads(payload_text)
+        assert payload == {"status": "ok", "query": f"query-{index}"}
+        assert elapsed < 0.7
 
 
 def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp_path: Path) -> None:

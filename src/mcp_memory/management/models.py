@@ -35,6 +35,17 @@ class SearchHealthPayload(BaseModel):
     integrity_check_error: str | None = None
 
 
+class ExecutionAttemptHealthPayload(BaseModel):
+    stale_after_seconds: float = 0.0
+    running_task_count: int = 0
+    running_attempt_count: int = 0
+    fresh_attempt_count: int = 0
+    stale_attempt_count: int = 0
+    missing_attempt_count: int = 0
+    live_subprocess_count: int = 0
+    dead_subprocess_count: int = 0
+
+
 class HealthPayload(BaseModel):
     status: str
     workspace_id: str | None = None
@@ -46,6 +57,7 @@ class HealthPayload(BaseModel):
     task_queue_enabled: bool
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
+    execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
 
 
 class OverviewCounts(BaseModel):
@@ -709,6 +721,7 @@ class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
+    execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
     memory_metrics: MemoryMetricsPayload
     queue_diagnostics: list[QueueDiagnosticPayload] = Field(default_factory=list)
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)

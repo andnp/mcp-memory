@@ -26,6 +26,7 @@ from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from tests.sdk.providers import FakeAsyncProcess
 
 
@@ -747,6 +748,7 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
     assert queue.claim_next(now=1.0) is not None
 
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
     provider = InstrumentedAIProvider(
         GeminiCLIProvider(command="gemini", model="gemini-3-flash-preview", max_retries=0),
         usage_repository=repository,
@@ -754,7 +756,13 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
         provider_name="Gemini CLI",
         model_name="gemini-3-flash-preview",
         task_queue=queue,
-    ).with_usage_context(task_name="graph-linker", task_id=task.id, workspace_id="workspace-a")
+        task_execution_attempts=attempt_repository,
+    ).with_usage_context(
+        task_name="graph-linker",
+        task_id=task.id,
+        execution_epoch=1,
+        workspace_id="workspace-a",
+    )
 
     result = await provider.ask("link related memories")
 
@@ -764,6 +772,7 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
     conversation_row = db_manager.get_connection().execute(
         "SELECT request_id, task_id, task_name, subprocess_pid, prompt_text, response_text, status FROM ai_conversations ORDER BY id DESC LIMIT 1"
     ).fetchone()
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
     refreshed = queue.get_task(task.id)
 
     assert result == {"actions": []}
@@ -778,6 +787,9 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
     assert conversation_row["subprocess_pid"] == 7777
     assert conversation_row["prompt_text"] == "link related memories"
     assert conversation_row["response_text"] == '{"actions": []}'
+    assert attempt.request_id == usage_row["request_id"]
+    assert attempt.subprocess_pid == 7777
+    assert attempt.status == "success"
     assert refreshed.subprocess_pid is None
     assert refreshed.active_request_id is None
 
@@ -912,6 +924,7 @@ async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conver
     assert queue.claim_next(now=1.0) is not None
 
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
     provider = InstrumentedAIProvider(
         _Provider(),
         usage_repository=repository,
@@ -919,7 +932,13 @@ async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conver
         provider_name="Gemini CLI",
         model_name="gemini-3-flash-preview",
         task_queue=queue,
-    ).with_usage_context(task_name="memory-curator", task_id=task.id, workspace_id="workspace-a")
+        task_execution_attempts=attempt_repository,
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id=task.id,
+        execution_epoch=1,
+        workspace_id="workspace-a",
+    )
 
     provider_task = asyncio.create_task(provider.ask("keep going"))
     await started.wait()
@@ -931,14 +950,111 @@ async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conver
 
     refreshed_task = queue.get_task(task.id)
     running_conversation = repository.list_conversations(status="running", limit=1)[0]
+    running_attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
     assert refreshed_task.updated_at == pytest.approx(heartbeat_at)
     assert running_conversation.completed_at == pytest.approx(heartbeat_at)
     assert running_conversation.duration_seconds == pytest.approx(2.5)
+    assert running_attempt.last_heartbeat_at == pytest.approx(heartbeat_at)
+    assert running_attempt.status == "running"
 
     release.set()
     result = await provider_task
+    finished_attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
 
     assert result == {"ok": True}
+    assert finished_attempt.status == "success"
+    assert finished_attempt.completed_at == pytest.approx(completed_at)
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_attempt_telemetry_after_recovery_terminalization(
+    db_manager,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "started_at": 10.0,
+                }
+            )
+            started.set()
+            await release.wait()
+            self._observer(
+                {
+                    "event": "heartbeat",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "started_at": 10.0,
+                    "heartbeat_at": 11.0,
+                    "elapsed_seconds": 1.0,
+                }
+            )
+            self._observer(
+                {
+                    "event": "finished",
+                    "attempt": 1,
+                    "status": "success",
+                    "prompt": prompt,
+                    "subprocess_pid": 31337,
+                    "raw_text": '{"ok": true}',
+                    "parsed": {"ok": True},
+                    "error": None,
+                    "started_at": 10.0,
+                    "completed_at": 12.0,
+                    "duration_seconds": 2.0,
+                }
+            )
+            return {"ok": True}
+
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("memory-curator", available_at=0.0, task_id="observer-race-task")
+    assert queue.claim_next(now=1.0) is not None
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id=task.id,
+        execution_epoch=1,
+        workspace_id="workspace-a",
+    )
+
+    provider_task = asyncio.create_task(provider.ask("race the reconciler"))
+    await started.wait()
+    queue.fail_permanently(task.id, "Task was abandoned without an active provider subprocess", failed_at=10.5)
+
+    release.set()
+    result = await provider_task
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+
+    assert result == {"ok": True}
+    assert queue.get_task(task.id).status == "failed"
+    assert attempt.status == "success"
+    assert attempt.completed_at == pytest.approx(12.0)
+    assert attempt.termination_reason is None
 
 
 @pytest.mark.asyncio

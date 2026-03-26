@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -46,7 +47,7 @@ def text_response(payload: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, sort_keys=True))]
 
 
-def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
+def _call_service_sync(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
     try:
         return text_response(service(ctx, arguments))
     except FileNotFoundError as exc:
@@ -57,6 +58,10 @@ def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict)
         return text_response(
             {"status": "error", "error": "invalid_arguments", "detail": str(exc)}
         )
+
+
+async def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
+    return await asyncio.to_thread(_call_service_sync, service, ctx, arguments)
 
 
 def tool_services() -> dict[str, ToolService]:
@@ -124,7 +129,7 @@ async def dispatch_memory_tool(
             }
         )
 
-    return call_service(service, ctx, arguments)
+    return await call_service(service, ctx, arguments)
 
 
 async def dispatch_internal_memory_tool(
@@ -152,4 +157,4 @@ async def dispatch_internal_memory_tool(
             }
         )
 
-    return call_service(service, ctx, arguments)
+    return await call_service(service, ctx, arguments)

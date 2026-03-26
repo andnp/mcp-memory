@@ -29,6 +29,7 @@ class ProviderSelectionInputs:
 class ProviderSelectionRequest:
     task_name: str
     task_id: str | None = None
+    execution_epoch: int | None = None
     workspace_id: str | None = None
 
 
@@ -249,6 +250,7 @@ def select_provider_for_inputs(
         ProviderSelectionRequest(
             task_name=task_name,
             task_id=task.id,
+            execution_epoch=task.execution_epoch,
             workspace_id=task.workspace_id,
         ),
         agentic_task_names=agentic_task_names,
@@ -302,7 +304,12 @@ def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionR
     binder = getattr(selected_provider, "with_usage_context", None)
     if not callable(binder):
         return selected_provider
-    return binder(task_name=request.task_name, task_id=request.task_id, workspace_id=request.workspace_id)
+    return binder(
+        task_name=request.task_name,
+        task_id=request.task_id,
+        execution_epoch=request.execution_epoch,
+        workspace_id=request.workspace_id,
+    )
 
 
 def _candidate_route_keys_for_task(*, routing, registry: dict[str, Any], task_name: str, prefer_agentic: bool) -> list[str]:

@@ -41,6 +41,27 @@ def fetch_task_count_rows(db_manager, workspace_id: str | None):
     return conn.execute(query, params).fetchall()
 
 
+def fetch_running_task_attempt_rows(db_manager, workspace_id: str | None):
+    if db_manager is None:
+        return []
+    conn = db_manager.get_connection()
+    query = (
+        "SELECT tasks.id AS task_id, tasks.workspace_id, tasks.updated_at, tasks.started_at, tasks.claimed_at, "
+        "tasks.execution_epoch, attempt.status AS attempt_status, attempt.started_at AS attempt_started_at, "
+        "attempt.last_heartbeat_at, attempt.subprocess_pid AS attempt_subprocess_pid "
+        "FROM tasks "
+        "LEFT JOIN task_execution_attempts AS attempt "
+        "ON attempt.task_id = tasks.id AND attempt.execution_epoch = tasks.execution_epoch "
+        "WHERE tasks.status = 'running'"
+    )
+    params: list[object] = []
+    if workspace_id is not None:
+        query += " AND tasks.workspace_id = ?"
+        params.append(workspace_id)
+    query += " ORDER BY tasks.updated_at DESC, tasks.id DESC"
+    return conn.execute(query, params).fetchall()
+
+
 def fetch_memory_metrics_row(db_manager, workspace_id: str | None):
     if db_manager is None:
         return None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
-import inspect
 import logging
 import os
 import signal
@@ -188,10 +187,7 @@ def create_daemon_app(
         except DaemonLockTimeoutError as exc:
             raise RuntimeError("daemon_runtime_lock_unavailable:global") from exc
 
-        if "enable_background_repair_queue" in inspect.signature(create_runtime_from_spec).parameters:
-            runtime = create_runtime_from_spec(spec, enable_background_repair_queue=True)
-        else:
-            runtime = create_runtime_from_spec(spec)
+        runtime = create_runtime_from_spec(spec)
         assert runtime.db_manager is not None
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)
@@ -332,13 +328,14 @@ async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderSer
     request_ctx = _context_for_request(ctx, arguments)
     assert request_ctx.db_manager is not None
     await _cancel_idle_shutdown_task(app)
+    request_timestamp = _hook_payload_timestamp(arguments)
     response: dict[str, Any] = dict(
         HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_start(
             str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
             arguments,
         )
     )
-    response["active_client_count"] = hook_service.get_active_client_count()
+    response["active_client_count"] = hook_service.get_active_client_count(now=request_timestamp)
     response["shutdown_scheduled"] = False
     return response
 
@@ -352,13 +349,14 @@ async def _handle_post_tool_use(ctx, arguments: dict[str, Any]) -> dict[str, Any
 async def _handle_session_end(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
     request_ctx = _context_for_request(ctx, arguments)
     assert request_ctx.db_manager is not None
+    request_timestamp = _hook_payload_timestamp(arguments)
     response: dict[str, Any] = dict(
         HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_end(
             str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
             arguments,
         )
     )
-    active_client_count = hook_service.get_active_client_count()
+    active_client_count = hook_service.get_active_client_count(now=request_timestamp)
     should_schedule_shutdown = bool(app.state.enable_idle_shutdown) and active_client_count == 0
     if should_schedule_shutdown:
         _schedule_idle_shutdown_if_needed(app)
@@ -367,3 +365,17 @@ async def _handle_session_end(app: FastAPI, ctx, hook_service: HookReminderServi
     response["active_client_count"] = active_client_count
     response["shutdown_scheduled"] = should_schedule_shutdown
     return response
+
+
+def _hook_payload_timestamp(arguments: dict[str, Any]) -> float | None:
+    raw = arguments.get("timestamp")
+    if isinstance(raw, bool):
+        return float(int(raw))
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return float(raw.strip())
+        except ValueError:
+            return None
+    return None

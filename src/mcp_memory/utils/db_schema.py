@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -21,6 +21,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             workspace_id TEXT,
             data TEXT DEFAULT '{}',
             status TEXT NOT NULL DEFAULT 'pending',
+            execution_epoch INTEGER NOT NULL DEFAULT 0,
             priority INTEGER NOT NULL DEFAULT 100,
             retries_count INTEGER NOT NULL DEFAULT 0,
             max_retries INTEGER NOT NULL DEFAULT 3,
@@ -166,6 +167,26 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             retry_delay_seconds REAL
         );
 
+        CREATE TABLE IF NOT EXISTS task_execution_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            execution_epoch INTEGER NOT NULL,
+            workspace_id TEXT,
+            task_name TEXT,
+            request_id TEXT,
+            subprocess_pid INTEGER,
+            provider_key TEXT,
+            provider_name TEXT,
+            model_name TEXT,
+            status TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            last_heartbeat_at REAL,
+            completed_at REAL,
+            error_text TEXT,
+            termination_reason TEXT,
+            UNIQUE(task_id, execution_epoch)
+        );
+
         CREATE TABLE IF NOT EXISTS ai_conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT NOT NULL,
@@ -300,6 +321,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_system1_journal_recoverable_until ON system1_journal(status, recoverable_until)"
     )
     ensure_column(conn, "tasks", "workspace_id", "TEXT")
+    ensure_column(conn, "tasks", "execution_epoch", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "tasks", "priority", "INTEGER NOT NULL DEFAULT 100")
     ensure_column(conn, "tasks", "retries_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "tasks", "max_retries", "INTEGER NOT NULL DEFAULT 3")
@@ -358,6 +380,29 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "reason_category", "TEXT")
     ensure_column(conn, "provider_usage", "reason_code", "TEXT")
     ensure_column(conn, "provider_usage", "retry_delay_seconds", "REAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_execution_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            execution_epoch INTEGER NOT NULL,
+            workspace_id TEXT,
+            task_name TEXT,
+            request_id TEXT,
+            subprocess_pid INTEGER,
+            provider_key TEXT,
+            provider_name TEXT,
+            model_name TEXT,
+            status TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            last_heartbeat_at REAL,
+            completed_at REAL,
+            error_text TEXT,
+            termination_reason TEXT,
+            UNIQUE(task_id, execution_epoch)
+        )
+        """
+    )
     ensure_column(conn, "ai_conversations", "reason_category", "TEXT")
     ensure_column(conn, "ai_conversations", "reason_code", "TEXT")
     ensure_column(conn, "ai_conversations", "retry_delay_seconds", "REAL")
@@ -509,6 +554,14 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON provider_usage(provider_key, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_provider_usage_reason_created_at
             ON provider_usage(reason_code, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_workspace_started_at
+            ON task_execution_attempts(workspace_id, started_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_task_started_at
+            ON task_execution_attempts(task_id, started_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_status_started_at
+            ON task_execution_attempts(status, started_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_request_id
+            ON task_execution_attempts(request_id);
 
         CREATE INDEX IF NOT EXISTS idx_ai_conversations_request_id
             ON ai_conversations(request_id);

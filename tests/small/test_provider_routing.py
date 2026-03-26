@@ -38,6 +38,7 @@ class _FakeProvider:
         *,
         task_name: str | None,
         task_id: str | None = None,
+        execution_epoch: int | None = None,
         workspace_id: str | None = None,
     ) -> object:
         return {
@@ -599,7 +600,14 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
         def supports_agentic(self) -> bool:
             return True
 
-        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            execution_epoch: int | None = None,
+            workspace_id: str | None = None,
+        ):
             self.bound_calls.append(
                 {
                     "task_name": task_name,
@@ -664,6 +672,7 @@ def test_select_provider_for_request_records_real_route_skip_but_route_audit_doe
             *,
             task_name: str | None,
             task_id: str | None = None,
+            execution_epoch: int | None = None,
             workspace_id: str | None = None,
         ) -> object:
             return _BoundSkippingProvider(

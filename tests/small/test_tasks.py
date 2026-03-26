@@ -24,8 +24,9 @@ from mcp_memory.core.task_handlers import (
     RECURRING_TASK_INTERVAL_SECONDS,
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
-from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
 
@@ -58,12 +59,57 @@ def test_sqlite_task_queue_enqueue_and_claim_order(db_manager) -> None:
     assert claimed.data == {"kind": "ingest"}
     assert claimed.workspace_id == "workspace-a"
     assert claimed.status == "running"
+    assert claimed.execution_epoch == 1
     assert claimed.claimed_at == 15.0
     assert queue.claim_next(now=15.0) is None
 
     untouched = queue.get_task(late.id)
     assert untouched.status == "pending"
+    assert untouched.execution_epoch == 0
     assert untouched.available_at == 20.0
+
+
+def test_sqlite_task_queue_claim_next_increments_execution_epoch_per_attempt(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("epoch-task", task_id="epoch-task", available_at=0.0, max_retries=3)
+
+    first_claim = queue.claim_next(now=1.0)
+    assert first_claim is not None
+    assert first_claim.id == task.id
+    assert first_claim.execution_epoch == 1
+
+    retried = queue.fail(task.id, "temporary failure", failed_at=2.0, retry_delay_seconds=0.0)
+    assert retried.status == "pending"
+    assert retried.execution_epoch == 1
+
+    second_claim = queue.claim_next(now=3.0)
+
+    assert second_claim is not None
+    assert second_claim.id == task.id
+    assert second_claim.execution_epoch == 2
+
+
+def test_sqlite_task_queue_rejects_stale_execution_epoch_updates(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("stale-epoch-task", task_id="stale-epoch-task", available_at=0.0, max_retries=3)
+
+    first_claim = queue.claim_next(now=1.0)
+    assert first_claim is not None
+    queue.fail(task.id, "retry me", failed_at=2.0, retry_delay_seconds=0.0, execution_epoch=first_claim.execution_epoch)
+
+    second_claim = queue.claim_next(now=3.0)
+    assert second_claim is not None
+    assert second_claim.execution_epoch == 2
+
+    with pytest.raises(ValueError, match="execution epoch 1"):
+        queue.touch_running_task(task.id, updated_at=4.0, execution_epoch=1)
+
+    with pytest.raises(ValueError, match="execution epoch 1"):
+        queue.complete(task.id, completed_at=5.0, execution_epoch=1)
+
+    running = queue.get_task(task.id)
+    assert running.status == "running"
+    assert running.execution_epoch == 2
 
 
 def test_sqlite_task_queue_claim_next_can_filter_by_workspace(db_manager) -> None:
@@ -309,6 +355,38 @@ def test_sqlite_task_queue_cancels_dead_stale_subprocess_when_cancellation_reque
     assert cancelled.status == "cancelled"
     assert cancelled.last_error == "operator_cancelled"
     assert cancelled.subprocess_pid is None
+
+
+def test_sqlite_task_queue_retries_recovery_transition_after_transient_database_lock(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("pid-dead-task", task_id="pid-dead-task-retry", available_at=0.0)
+
+    assert queue.claim_next(now=10.0) is not None
+    queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-dead", updated_at=12.0)
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    attempts = 0
+    original_fail_permanently = queue.fail_permanently
+
+    def flaky_fail_permanently(task_id: str, error: str, failed_at: float | None = None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return original_fail_permanently(task_id, error, failed_at=failed_at)
+
+    monkeypatch.setattr(queue, "fail_permanently", flaky_fail_permanently)
+
+    recovered = queue.recover_abandoned_running_tasks(now=1000.0, stale_after_seconds=300.0)
+
+    assert attempts == 2
+    assert [item.id for item in recovered] == [task.id]
+    failed = queue.get_task(task.id)
+    assert failed.status == "failed"
+    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
 
 
 def test_sqlite_task_queue_summarize_task_runs_aggregates_status_and_compression(db_manager) -> None:
@@ -1146,6 +1224,102 @@ async def test_runtime_task_worker_reconciles_running_conversation_for_recovered
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_uses_attempt_heartbeat_to_keep_running_task_alive(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "heartbeat-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="attempt-heartbeat-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    attempt_repository.start_attempt(
+        task_id=task.id,
+        execution_epoch=claimed.execution_epoch,
+        task_name=task.task_name,
+        request_id="req-attempt-heartbeat",
+        subprocess_pid=9999,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        started_at=1.0,
+    )
+    attempt_repository.heartbeat_attempt(
+        task_id=task.id,
+        execution_epoch=claimed.execution_epoch,
+        heartbeat_at=950.0,
+        subprocess_pid=9999,
+    )
+
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+        workspace_id="workspace-a",
+    )
+    worker = RuntimeTaskWorker(ctx, handlers={"heartbeat-task": lambda context, queued_task: None})
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+
+    running = queue.get_task(task.id)
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
+    assert running.status == "running"
+    assert attempt.status == "running"
+    assert attempt.last_heartbeat_at == pytest.approx(950.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_reconciles_attempt_for_recovered_dead_process(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "orphaned-attempt-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="orphaned-attempt-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    attempt_repository.start_attempt(
+        task_id=task.id,
+        execution_epoch=claimed.execution_epoch,
+        task_name=task.task_name,
+        request_id="req-orphaned-attempt",
+        subprocess_pid=9999,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        started_at=1.0,
+    )
+
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+        workspace_id="workspace-a",
+    )
+    worker = RuntimeTaskWorker(ctx, handlers={"orphaned-attempt-task": lambda context, queued_task: None})
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+
+    failed = queue.get_task(task.id)
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
+    assert failed.status == "failed"
+    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert attempt.status == "error"
+    assert attempt.completed_at == pytest.approx(1000.0)
+    assert attempt.termination_reason == "task_failed"
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_cancels_stalled_task_after_reconciliation_and_drains_queue(
     db_manager,
     monkeypatch,
@@ -1302,6 +1476,51 @@ async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled
     cancelled = queue.get_task(task.id)
     assert cancelled.status == "cancelled"
     assert cancelled.cancellation_reason == "operator_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_requests_shutdown_cancellation_for_running_tasks(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "shutdown-me",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="shutdown-me",
+    )
+
+    started = asyncio.Event()
+    released = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_handler(_ctx: ApplicationContext, queued_task: TaskRecord) -> None:
+        started.set()
+        try:
+            await released.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"shutdown-me": blocking_handler},
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=30.0,
+    )
+
+    await worker.start()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await worker.stop(0.05)
+    finally:
+        released.set()
+
+    task_after_stop = queue.get_task(task.id)
+
+    assert cancelled.is_set()
+    assert task_after_stop.status == "cancelled"
+    assert task_after_stop.cancellation_reason == "daemon_shutdown"
+    assert task_after_stop.cancelled_by == "daemon"
 
 
 @pytest.mark.asyncio

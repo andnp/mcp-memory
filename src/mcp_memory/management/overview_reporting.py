@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.agent_run_reporting import build_agent_runs, build_recent_agent_runs
-from mcp_memory.management.health_reporting import build_embedding_status, build_search_health
+from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.models import (
     JournalSummary,
     MemoryMetricsPayload,
@@ -160,6 +160,7 @@ def build_overview(
         memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
         embeddings=build_embedding_status(embedder),
         search=build_search_health(relational_search),
+        execution_attempts=build_execution_attempt_health(db_manager, workspace_id),
         memory_metrics=memory_metrics,
         queue_diagnostics=build_queue_diagnostics(task_queue, workspace_id),
         agent_runs=agent_runs,

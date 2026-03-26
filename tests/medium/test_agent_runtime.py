@@ -969,7 +969,14 @@ async def test_ingest_handler_skips_agentic_provider_for_low_novelty_routed_batc
                 self.run_agent_calls = 0
                 self._budget_key = "copilot-mini"
 
-            def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+            def with_usage_context(
+                self,
+                *,
+                task_name: str | None,
+                task_id: str | None = None,
+                execution_epoch: int | None = None,
+                workspace_id: str | None = None,
+            ):
                 return self
 
             def supports_agentic(self) -> bool:
@@ -5631,7 +5638,14 @@ async def test_memory_curator_same_run_fails_over_to_next_agentic_route_on_ordin
             self.prompts: list[str] = []
             self.usage_contexts: list[dict[str, str | None]] = []
 
-        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            execution_epoch: int | None = None,
+            workspace_id: str | None = None,
+        ):
             self.usage_contexts.append(
                 {
                     "task_name": task_name,
@@ -5736,7 +5750,14 @@ async def test_memory_curator_does_not_same_run_failover_on_retry_delay_error(mo
             self._summary = summary
             self.prompts: list[str] = []
 
-        def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            execution_epoch: int | None = None,
+            workspace_id: str | None = None,
+        ):
             return self
 
         def supports_agentic(self) -> bool:

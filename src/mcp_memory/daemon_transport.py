@@ -99,6 +99,7 @@ class DaemonZmqServer:
         routes_provider,
         socket_path: Path,
         metadata_provider,
+        max_concurrent_requests: int = 8,
     ) -> None:
         self._context_factory = context_factory
         self._hook_handlers = hook_handlers
@@ -108,6 +109,9 @@ class DaemonZmqServer:
         self._context = zmq.asyncio.Context.instance()
         self._socket: zmq.asyncio.Socket | None = None
         self._task: asyncio.Task | None = None
+        self._max_concurrent_requests = max(int(max_concurrent_requests), 1)
+        self._request_semaphore = asyncio.Semaphore(self._max_concurrent_requests)
+        self._inflight_tasks: set[asyncio.Task[tuple[bytes, dict]]] = set()
 
     async def start(self) -> None:
         _remove_stale_socket(self._socket_path)
@@ -129,24 +133,60 @@ class DaemonZmqServer:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self._inflight_tasks:
+            inflight = tuple(self._inflight_tasks)
+            for task in inflight:
+                task.cancel()
+            await asyncio.gather(*inflight, return_exceptions=True)
+            self._inflight_tasks.clear()
         if self._socket is not None:
             self._socket.close(0)
             self._socket = None
         _remove_stale_socket(self._socket_path)
 
     async def _serve(self) -> None:
-        assert self._socket is not None
-        while True:
-            try:
-                frames = await self._socket.recv_multipart()
-            except asyncio.CancelledError:
-                return
-            if len(frames) < 2:
-                continue
-            identity = frames[0]
-            payload_frame = frames[-1]
+        socket = self._socket
+        assert socket is not None
+        recv_task = asyncio.ensure_future(socket.recv_multipart())
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {recv_task, *self._inflight_tasks},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if recv_task in done:
+                    completed_recv_task = recv_task
+                    try:
+                        frames = completed_recv_task.result()
+                    except asyncio.CancelledError:
+                        return
+                    if len(frames) >= 2:
+                        identity = frames[0]
+                        payload_frame = frames[-1]
+                        self._inflight_tasks.add(asyncio.create_task(self._dispatch_request(identity, payload_frame)))
+                    recv_task = asyncio.ensure_future(socket.recv_multipart())
+                else:
+                    completed_recv_task = None
+
+                completed_requests = [task for task in done if task is not completed_recv_task]
+                for task in completed_requests:
+                    self._inflight_tasks.discard(task)
+                    if task.cancelled():
+                        continue
+                    try:
+                        identity, response = task.result()
+                    except Exception:
+                        continue
+                    await socket.send_multipart([identity, json.dumps(response, sort_keys=True).encode("utf-8")])
+        finally:
+            recv_task.cancel()
+            await asyncio.gather(recv_task, return_exceptions=True)
+
+    async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict]:
+        async with self._request_semaphore:
             response = await self._dispatch(payload_frame)
-            await self._socket.send_multipart([identity, json.dumps(response, sort_keys=True).encode("utf-8")])
+        return identity, response
 
     async def _dispatch(self, payload_frame: bytes) -> dict:
         try:

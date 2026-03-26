@@ -11,7 +11,7 @@ from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
-from mcp_memory.management.health_reporting import build_embedding_status, build_search_health
+from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.overview_reporting import build_overview
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
@@ -89,6 +89,7 @@ class ManagementService:
             task_queue_enabled=self._runtime_info.task_queue_enabled,
             embeddings=embedder_status,
             search=build_search_health(self._relational_search),
+            execution_attempts=build_execution_attempt_health(self._db_manager, self._workspace_id),
         )
 
     def get_overview(

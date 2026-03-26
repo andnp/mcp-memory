@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
@@ -12,6 +13,10 @@ from mcp_memory.core.provider_admission import evaluate_provider_admission
 from mcp_memory.core.provider_admission import should_persist_admission_backoff
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentedAIProvider:
@@ -25,8 +30,10 @@ class InstrumentedAIProvider:
         model_name: str,
         task_name: str | None = None,
         task_id: str | None = None,
+        execution_epoch: int | None = None,
         workspace_id: str | None = None,
         task_queue = None,
+        task_execution_attempts: TaskExecutionAttemptRepository | None = None,
         budget_key: str | None = None,
         daily_call_limit: int | None = None,
         model_burst_call_limit: int | None = None,
@@ -40,15 +47,24 @@ class InstrumentedAIProvider:
         self._model_name = model_name
         self._task_name = task_name
         self._task_id = task_id
+        self._execution_epoch = execution_epoch
         self._workspace_id = workspace_id
         self._task_queue = task_queue
+        self._task_execution_attempts = task_execution_attempts
         self._budget_key = budget_key or provider_key
         self._daily_call_limit = daily_call_limit
         self._model_burst_call_limit = model_burst_call_limit
         self._model_burst_window_seconds = model_burst_window_seconds
         self._block_test_execution = block_test_execution
 
-    def with_usage_context(self, *, task_name: str | None, task_id: str | None = None, workspace_id: str | None = None):
+    def with_usage_context(
+        self,
+        *,
+        task_name: str | None,
+        task_id: str | None = None,
+        execution_epoch: int | None = None,
+        workspace_id: str | None = None,
+    ):
         return InstrumentedAIProvider(
             self._provider,
             usage_repository=self._usage_repository,
@@ -57,13 +73,65 @@ class InstrumentedAIProvider:
             model_name=self._model_name,
             task_name=task_name,
             task_id=task_id,
+            execution_epoch=execution_epoch,
             workspace_id=workspace_id,
             task_queue=self._task_queue,
+            task_execution_attempts=self._task_execution_attempts,
             budget_key=self._budget_key,
             daily_call_limit=self._daily_call_limit,
             model_burst_call_limit=self._model_burst_call_limit,
             model_burst_window_seconds=self._model_burst_window_seconds,
             block_test_execution=self._block_test_execution,
+        )
+
+    def _record_attempt_start(self, *, request_id: str, payload: dict, started_at: float) -> None:
+        if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
+            return
+        started_value = float(payload.get("started_at", started_at))
+        self._task_execution_attempts.start_attempt(
+            task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
+            task_name=self._task_name,
+            request_id=request_id,
+            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            started_at=started_value,
+        )
+
+    def _record_attempt_heartbeat(self, *, request_id: str, payload: dict) -> None:
+        if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
+            return
+        self._task_execution_attempts.heartbeat_attempt(
+            task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
+            heartbeat_at=float(payload.get("heartbeat_at", time.time())),
+            request_id=request_id,
+            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+        )
+
+    def _finish_attempt(
+        self,
+        *,
+        request_id: str,
+        status: str,
+        completed_at: float,
+        subprocess_pid: int | None,
+        error_text: str | None,
+        termination_reason: str | None,
+    ) -> None:
+        if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
+            return
+        self._task_execution_attempts.finish_attempt(
+            task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
+            status=status,
+            completed_at=completed_at,
+            request_id=request_id,
+            subprocess_pid=subprocess_pid,
+            error_text=error_text,
+            termination_reason=termination_reason,
         )
 
     def _guard_test_execution(self) -> None:
@@ -149,13 +217,8 @@ class InstrumentedAIProvider:
         def _observer(payload: dict) -> None:
             nonlocal last_event
             last_event = payload
-            if payload.get("event") == "started" and self._task_queue is not None and self._task_id is not None:
-                self._task_queue.set_running_process(
-                    self._task_id,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                    request_id=request_id,
-                )
             if payload.get("event") == "started":
+                self._record_attempt_start(request_id=request_id, payload=payload, started_at=started_at)
                 started_value = float(payload.get("started_at", started_at))
                 self._usage_repository.record_conversation(
                     request_id=request_id,
@@ -180,8 +243,18 @@ class InstrumentedAIProvider:
                 return
             if payload.get("event") == "heartbeat":
                 heartbeat_at = float(payload.get("heartbeat_at", time.time()))
+                self._record_attempt_heartbeat(request_id=request_id, payload=payload)
                 if self._task_queue is not None and self._task_id is not None:
-                    self._task_queue.touch_running_task(self._task_id, updated_at=heartbeat_at)
+                    _safe_task_queue_update(
+                        self._task_queue,
+                        task_id=self._task_id,
+                        operation="touch_running_task",
+                        callback=lambda: self._task_queue.touch_running_task(
+                            self._task_id,
+                            updated_at=heartbeat_at,
+                            execution_epoch=self._execution_epoch,
+                        ),
+                    )
                 self._usage_repository.touch_running_conversation(
                     request_id=request_id,
                     completed_at=heartbeat_at,
@@ -190,6 +263,14 @@ class InstrumentedAIProvider:
                 return
             if payload.get("event") != "finished":
                 return
+            self._finish_attempt(
+                request_id=request_id,
+                status=str(payload.get("status", "finished")),
+                completed_at=float(payload.get("completed_at", time.time())),
+                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                error_text=_coerce_text(payload.get("error")),
+                termination_reason=_coerce_text(payload.get("reason_code")),
+            )
             self._usage_repository.record_conversation(
                 request_id=request_id,
                 attempt=int(payload.get("attempt", 1)),
@@ -210,8 +291,6 @@ class InstrumentedAIProvider:
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
 
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
@@ -250,8 +329,14 @@ class InstrumentedAIProvider:
                 retry_delay_seconds=None,
                 completed_at=completed_at,
             )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
+            self._finish_attempt(
+                request_id=request_id,
+                status="cancelled",
+                completed_at=completed_at,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                error_text="Command cancelled",
+                termination_reason="provider_cancelled",
+            )
             raise
         except Exception as exc:
             completed_at = time.time()
@@ -296,8 +381,14 @@ class InstrumentedAIProvider:
                     active_until=completed_at + float(classification.retry_delay_seconds or 0.0),
                     updated_at=completed_at,
                 )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
+            self._finish_attempt(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="error"),
+                completed_at=completed_at,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                error_text=classification.error_text,
+                termination_reason=classification.reason_code,
+            )
             raise
         self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
         completed_at = time.time()
@@ -325,8 +416,14 @@ class InstrumentedAIProvider:
             reason_code=None,
             retry_delay_seconds=None,
         )
-        if self._task_queue is not None and self._task_id is not None:
-            self._task_queue.clear_running_process(self._task_id, updated_at=completed_at)
+        self._finish_attempt(
+            request_id=request_id,
+            status=_extract_status(last_event, fallback="success"),
+            completed_at=completed_at,
+            subprocess_pid=_extract_subprocess_pid(last_event),
+            error_text=None,
+            termination_reason=None,
+        )
         return response
 
     async def ask(self, prompt: str) -> dict:
@@ -363,13 +460,8 @@ class InstrumentedAIProvider:
         def _observer(payload: dict) -> None:
             nonlocal last_event
             last_event = payload
-            if payload.get("event") == "started" and self._task_queue is not None and self._task_id is not None:
-                self._task_queue.set_running_process(
-                    self._task_id,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                    request_id=request_id,
-                )
             if payload.get("event") == "started":
+                self._record_attempt_start(request_id=request_id, payload=payload, started_at=started_at)
                 started_value = float(payload.get("started_at", started_at))
                 self._usage_repository.record_conversation(
                     request_id=request_id,
@@ -394,8 +486,18 @@ class InstrumentedAIProvider:
                 return
             if payload.get("event") == "heartbeat":
                 heartbeat_at = float(payload.get("heartbeat_at", time.time()))
+                self._record_attempt_heartbeat(request_id=request_id, payload=payload)
                 if self._task_queue is not None and self._task_id is not None:
-                    self._task_queue.touch_running_task(self._task_id, updated_at=heartbeat_at)
+                    _safe_task_queue_update(
+                        self._task_queue,
+                        task_id=self._task_id,
+                        operation="touch_running_task",
+                        callback=lambda: self._task_queue.touch_running_task(
+                            self._task_id,
+                            updated_at=heartbeat_at,
+                            execution_epoch=self._execution_epoch,
+                        ),
+                    )
                 self._usage_repository.touch_running_conversation(
                     request_id=request_id,
                     completed_at=heartbeat_at,
@@ -404,6 +506,14 @@ class InstrumentedAIProvider:
                 return
             if payload.get("event") != "finished":
                 return
+            self._finish_attempt(
+                request_id=request_id,
+                status=str(payload.get("status", "finished")),
+                completed_at=float(payload.get("completed_at", time.time())),
+                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+                error_text=_coerce_text(payload.get("error")),
+                termination_reason=_coerce_text(payload.get("reason_code")),
+            )
             self._usage_repository.record_conversation(
                 request_id=request_id,
                 attempt=int(payload.get("attempt", 1)),
@@ -424,8 +534,6 @@ class InstrumentedAIProvider:
                 started_at=float(payload.get("started_at", started_at)),
                 completed_at=float(payload.get("completed_at", time.time())),
             )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
 
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
@@ -463,8 +571,14 @@ class InstrumentedAIProvider:
                 retry_delay_seconds=None,
                 completed_at=completed_at,
             )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
+            self._finish_attempt(
+                request_id=request_id,
+                status="cancelled",
+                completed_at=completed_at,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                error_text="Command cancelled",
+                termination_reason="provider_cancelled",
+            )
             raise
         except Exception as exc:
             completed_at = time.time()
@@ -509,8 +623,14 @@ class InstrumentedAIProvider:
                     active_until=completed_at + float(classification.retry_delay_seconds or 0.0),
                     updated_at=completed_at,
                 )
-            if self._task_queue is not None and self._task_id is not None:
-                self._task_queue.clear_running_process(self._task_id)
+            self._finish_attempt(
+                request_id=request_id,
+                status=_extract_status(last_event, fallback="error"),
+                completed_at=completed_at,
+                subprocess_pid=_extract_subprocess_pid(last_event),
+                error_text=classification.error_text,
+                termination_reason=classification.reason_code,
+            )
             raise
         self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
         completed_at = time.time()
@@ -538,9 +658,27 @@ class InstrumentedAIProvider:
             reason_code=None if result.status == "success" else "agent_run_unsuccessful",
             retry_delay_seconds=None,
         )
-        if self._task_queue is not None and self._task_id is not None:
-            self._task_queue.clear_running_process(self._task_id, updated_at=completed_at)
+        self._finish_attempt(
+            request_id=request_id,
+            status=_extract_status(last_event, fallback=result.status),
+            completed_at=completed_at,
+            subprocess_pid=_extract_subprocess_pid(last_event),
+            error_text=None if result.status == "success" else result.summary,
+            termination_reason=None if result.status == "success" else "agent_run_unsuccessful",
+        )
         return result
+
+
+def _safe_task_queue_update(task_queue, *, task_id: str, operation: str, callback: Callable[[], object]) -> None:
+    try:
+        callback()
+    except ValueError as exc:
+        if "is not running" not in str(exc):
+            raise
+        logger.debug(
+            "Ignoring provider observer task-state update after task terminalization",
+            extra={"task_id": task_id, "operation": operation},
+        )
 
 
 def _coerce_pid(value: object) -> int | None:

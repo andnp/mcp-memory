@@ -1,5 +1,7 @@
+import asyncio
 import json
 from pathlib import Path
+import time
 
 import pytest
 
@@ -79,3 +81,24 @@ async def test_removed_tools_are_rejected_as_unknown_tool() -> None:
         assert payload["status"] == "error"
         assert payload["error"] == "unknown_tool"
         assert payload["tool"] == tool_name
+
+
+@pytest.mark.asyncio
+async def test_call_memory_tool_offloads_sync_service_work(monkeypatch) -> None:
+    def slow_service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        time.sleep(0.25)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        "mcp_memory.mcp.transport.tool_services",
+        lambda: {"search_memory_records": slow_service},
+    )
+
+    ticker = asyncio.create_task(asyncio.sleep(0.05, result="tick"))
+    tool_task = asyncio.create_task(
+        call_memory_tool(ApplicationContext(), "search_memory_records", {"query": "resilience"})
+    )
+
+    assert await asyncio.wait_for(ticker, timeout=0.2) == "tick"
+    payload = json.loads((await tool_task)[0].text)
+    assert payload == {"status": "ok"}

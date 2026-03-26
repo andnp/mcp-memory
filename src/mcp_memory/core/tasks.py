@@ -12,6 +12,8 @@ from mcp_memory.utils.db import DatabaseManager
 
 
 _ANY_WORKSPACE = object()
+_RECOVERY_LOCK_RETRY_ATTEMPTS = 3
+_RECOVERY_LOCK_RETRY_DELAY_SECONDS = 0.05
 
 
 @dataclass
@@ -31,6 +33,7 @@ class TaskRecord:
     started_at: float | None
     completed_at: float | None
     last_error: str | None
+    execution_epoch: int = 0
     subprocess_pid: int | None = None
     active_request_id: str | None = None
     cancellation_requested_at: float | None = None
@@ -100,6 +103,7 @@ class SQLiteTaskQueue:
                 workspace_id,
                 data,
                 status,
+                execution_epoch,
                 priority,
                 retries_count,
                 max_retries,
@@ -110,7 +114,7 @@ class SQLiteTaskQueue:
                 started_at,
                 completed_at,
                 last_error
-            ) VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, 'pending', 0, ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
             """,
             (
                 task_identifier,
@@ -186,6 +190,7 @@ class SQLiteTaskQueue:
                 """
                 UPDATE tasks
                 SET status = 'running',
+                    execution_epoch = execution_epoch + 1,
                     updated_at = ?,
                     claimed_at = ?,
                     started_at = COALESCE(started_at, ?),
@@ -215,17 +220,15 @@ class SQLiteTaskQueue:
         task_id: str,
         completed_at: float | None = None,
         run_result: dict[str, Any] | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if completed_at is None else completed_at
         conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT task_name, workspace_id, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
-            (task_id,),
-        ).fetchone()
+        row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
         if row is None:
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
 
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET status = 'completed',
@@ -234,13 +237,15 @@ class SQLiteTaskQueue:
                 last_error = NULL,
                 subprocess_pid = NULL,
                 active_request_id = NULL
-            WHERE id = ? AND status = 'running'
             """,
-            (now, now, task_id),
-        )
+            task_id,
+            now,
+            now,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         self._insert_task_run(
             conn,
             task_id=task_id,
@@ -261,22 +266,20 @@ class SQLiteTaskQueue:
         error: str,
         retry_delay_seconds: float = 0.0,
         failed_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if failed_at is None else failed_at
         conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT task_name, workspace_id, retries_count, max_retries, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
-            (task_id,),
-        ).fetchone()
+        row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
         if row is None:
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
 
         next_retries = int(row["retries_count"]) + 1
         terminal = next_retries >= int(row["max_retries"])
         status = "failed" if terminal else "pending"
         available_at = now if terminal else now + retry_delay_seconds
         completed_at = now if terminal else None
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET status = ?,
@@ -288,13 +291,19 @@ class SQLiteTaskQueue:
                 last_error = ?,
                 subprocess_pid = NULL,
                 active_request_id = NULL
-            WHERE id = ? AND status = 'running'
             """,
-            (status, next_retries, now, available_at, completed_at, error, task_id),
-        )
+            task_id,
+            status,
+            next_retries,
+            now,
+            available_at,
+            completed_at,
+            error,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} could not be updated")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         self._insert_task_run(
             conn,
             task_id=task_id,
@@ -314,17 +323,15 @@ class SQLiteTaskQueue:
         task_id: str,
         error: str,
         failed_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if failed_at is None else failed_at
         conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT task_name, workspace_id, max_retries, claimed_at, started_at FROM tasks WHERE id = ? AND status = 'running'",
-            (task_id,),
-        ).fetchone()
+        row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
         if row is None:
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
 
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET status = 'failed',
@@ -336,13 +343,17 @@ class SQLiteTaskQueue:
                 last_error = ?,
                 subprocess_pid = NULL,
                 active_request_id = NULL
-            WHERE id = ? AND status = 'running'
             """,
-            (now, now, now, error, task_id),
-        )
+            task_id,
+            now,
+            now,
+            now,
+            error,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} could not be updated")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         self._insert_task_run(
             conn,
             task_id=task_id,
@@ -364,22 +375,26 @@ class SQLiteTaskQueue:
         subprocess_pid: int | None,
         request_id: str | None,
         updated_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if updated_at is None else updated_at
         conn = self._db.get_connection()
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET subprocess_pid = ?,
                 active_request_id = ?,
                 updated_at = ?
-            WHERE id = ? AND status = 'running'
             """,
-            (subprocess_pid, request_id, now, task_id),
-        )
+            task_id,
+            subprocess_pid,
+            request_id,
+            now,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         conn.commit()
         return self.get_task(task_id)
 
@@ -388,12 +403,14 @@ class SQLiteTaskQueue:
         task_id: str,
         *,
         updated_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         return self.set_running_process(
             task_id,
             subprocess_pid=None,
             request_id=None,
             updated_at=updated_at,
+            execution_epoch=execution_epoch,
         )
 
     def touch_running_task(
@@ -401,20 +418,22 @@ class SQLiteTaskQueue:
         task_id: str,
         *,
         updated_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if updated_at is None else updated_at
         conn = self._db.get_connection()
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET updated_at = ?
-            WHERE id = ? AND status = 'running'
             """,
-            (now, task_id),
-        )
+            task_id,
+            now,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         conn.commit()
         return self.get_task(task_id)
 
@@ -502,18 +521,16 @@ class SQLiteTaskQueue:
         task_id: str,
         *,
         cancelled_at: float | None = None,
+        execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if cancelled_at is None else cancelled_at
         conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT * FROM tasks WHERE id = ? AND status = 'running'",
-            (task_id,),
-        ).fetchone()
+        row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
         if row is None:
-            raise ValueError(f"Task {task_id} is not running")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         reason = str(row["cancellation_reason"] or "cancelled")
         cancelled_by = row["cancelled_by"]
-        cursor = conn.execute(
+        cursor = conn.execute(*self._running_task_update_statement(
             """
             UPDATE tasks
             SET status = 'cancelled',
@@ -523,13 +540,17 @@ class SQLiteTaskQueue:
                 last_error = ?,
                 subprocess_pid = NULL,
                 active_request_id = NULL
-            WHERE id = ? AND status = 'running'
             """,
-            (now, now, now, reason, task_id),
-        )
+            task_id,
+            now,
+            now,
+            now,
+            reason,
+            execution_epoch=execution_epoch,
+        ))
         if cursor.rowcount != 1:
             conn.rollback()
-            raise ValueError(f"Task {task_id} could not be cancelled")
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
         self._insert_task_run(
             conn,
             task_id=task_id,
@@ -566,28 +587,49 @@ class SQLiteTaskQueue:
                 if not is_stale:
                     continue
                 if task.cancellation_requested_at is not None:
-                    recovered.append(self.finalize_cancellation(task.id, cancelled_at=current_time))
+                    recovered.append(
+                        self._retry_recovery_transition(
+                            lambda: self.finalize_cancellation(task.id, cancelled_at=current_time)
+                        )
+                    )
                 else:
                     recovered.append(
-                        self.fail_permanently(
-                            task.id,
-                            f"Provider subprocess {task.subprocess_pid} exited unexpectedly",
-                            failed_at=current_time,
+                        self._retry_recovery_transition(
+                            lambda: self.fail_permanently(
+                                task.id,
+                                f"Provider subprocess {task.subprocess_pid} exited unexpectedly",
+                                failed_at=current_time,
+                            )
                         )
                     )
                 continue
             if task.cancellation_requested_at is not None:
-                recovered.append(self.finalize_cancellation(task.id, cancelled_at=current_time))
+                recovered.append(
+                    self._retry_recovery_transition(
+                        lambda: self.finalize_cancellation(task.id, cancelled_at=current_time)
+                    )
+                )
                 continue
             if is_stale:
                 recovered.append(
-                    self.fail_permanently(
-                        task.id,
-                        "Task was abandoned without an active provider subprocess",
-                        failed_at=current_time,
+                    self._retry_recovery_transition(
+                        lambda: self.fail_permanently(
+                            task.id,
+                            "Task was abandoned without an active provider subprocess",
+                            failed_at=current_time,
+                        )
                     )
                 )
         return recovered
+
+    def _retry_recovery_transition(self, callback):
+        for attempt in range(_RECOVERY_LOCK_RETRY_ATTEMPTS):
+            try:
+                return callback()
+            except sqlite3.OperationalError as exc:
+                if "database is locked" not in str(exc).lower() or attempt + 1 >= _RECOVERY_LOCK_RETRY_ATTEMPTS:
+                    raise
+                time.sleep(_RECOVERY_LOCK_RETRY_DELAY_SECONDS * (attempt + 1))
 
     def get_task(self, task_id: str) -> TaskRecord:
         row = self._db.get_connection().execute(
@@ -597,6 +639,33 @@ class SQLiteTaskQueue:
         if row is None:
             raise ValueError(f"Task {task_id} was not found")
         return self._row_to_record(row)
+
+    def _get_running_task_row(self, conn, task_id: str, *, execution_epoch: int | None):
+        query = "SELECT * FROM tasks WHERE id = ? AND status = 'running'"
+        params: list[object] = [task_id]
+        if execution_epoch is not None:
+            query += " AND execution_epoch = ?"
+            params.append(execution_epoch)
+        return conn.execute(query, params).fetchone()
+
+    def _running_task_update_statement(
+        self,
+        base_query: str,
+        task_id: str,
+        *params: object,
+        execution_epoch: int | None,
+    ) -> tuple[str, tuple[object, ...]]:
+        query = base_query + "\n            WHERE id = ? AND status = 'running'"
+        query_params: list[object] = [*params, task_id]
+        if execution_epoch is not None:
+            query += " AND execution_epoch = ?"
+            query_params.append(execution_epoch)
+        return query, tuple(query_params)
+
+    def _running_task_mismatch_error(self, task_id: str, *, execution_epoch: int | None) -> ValueError:
+        if execution_epoch is None:
+            return ValueError(f"Task {task_id} is not running")
+        return ValueError(f"Task {task_id} is not running for execution epoch {execution_epoch}")
 
     def update_pending_task(
         self,
@@ -940,6 +1009,7 @@ class SQLiteTaskQueue:
             data=dict(json.loads(data)),
             workspace_id=row["workspace_id"],
             status=str(row["status"]),
+            execution_epoch=int(row["execution_epoch"]),
             priority=int(row["priority"]),
             retries_count=int(row["retries_count"]),
             max_retries=int(row["max_retries"]),

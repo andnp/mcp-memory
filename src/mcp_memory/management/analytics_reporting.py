@@ -25,7 +25,7 @@ from mcp_memory.management.agent_run_reporting import (
     extract_run_result_metadata,
     format_result_summary,
 )
-from mcp_memory.management.health_reporting import build_search_health
+from mcp_memory.management.health_reporting import build_execution_attempt_health, build_search_health
 from mcp_memory.management.models import (
     AgentThroughputBucketPayload,
     GraphTopologyPayload,
@@ -439,6 +439,12 @@ def build_nerd_metrics(
         scheduled_count=sum(1 for row in queue_rows if row.pending_state == "scheduled"),
         oldest_age_seconds=round(max((row.age_seconds for row in runnable_queue_rows), default=0.0), 4),
     )
+    execution_attempt_health = build_execution_attempt_health(
+        db_manager,
+        workspace_id,
+        stale_after_seconds=60.0,
+        now=generated_at,
+    )
 
     graph_topology = build_graph_topology(db_manager, workspace_id, memory_rows=memory_rows)
     memory_lifecycle = build_memory_lifecycle(db_manager, workspace_id, memory_rows=memory_rows)
@@ -517,6 +523,12 @@ def build_nerd_metrics(
 
     stats = [
         NerdStatPayload(key="queue_oldest_age", label="Oldest runnable age", value=queue_snapshot.oldest_age_seconds, unit="s"),
+        NerdStatPayload(key="running_task_count", label="Running tasks", value=float(execution_attempt_health.running_task_count), unit="count"),
+        NerdStatPayload(key="running_attempt_count", label="Running execution attempts", value=float(execution_attempt_health.running_attempt_count), unit="count"),
+        NerdStatPayload(key="fresh_attempt_count", label="Fresh execution attempts", value=float(execution_attempt_health.fresh_attempt_count), unit="count"),
+        NerdStatPayload(key="stale_attempt_count", label="Stale execution attempts", value=float(execution_attempt_health.stale_attempt_count), unit="count"),
+        NerdStatPayload(key="missing_attempt_count", label="Missing execution attempts", value=float(execution_attempt_health.missing_attempt_count), unit="count"),
+        NerdStatPayload(key="dead_attempt_subprocess_count", label="Dead attempt subprocesses", value=float(execution_attempt_health.dead_subprocess_count), unit="count"),
         NerdStatPayload(key="runs_last_window", label="Runs in window", value=float(len(task_rows)), unit="runs"),
         NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if str(row["status"]) == "failed")), unit="runs"),
         NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),
@@ -578,6 +590,7 @@ def build_nerd_metrics(
         provider_policy=provider_policy,
         alerts=build_nerd_alerts(
             queue_snapshot=queue_snapshot,
+            execution_attempt_health=execution_attempt_health,
             graph_topology=graph_topology,
             memory_lifecycle=memory_lifecycle,
             search_quality=search_quality,
@@ -1726,6 +1739,7 @@ def _string_counter_top_key(counter: Counter[str]) -> str | None:
 def build_nerd_alerts(
     *,
     queue_snapshot: QueueSnapshotPayload,
+    execution_attempt_health,
     graph_topology: GraphTopologyPayload,
     memory_lifecycle: MemoryLifecyclePayload,
     search_quality: SearchQualityPayload,
@@ -1744,6 +1758,42 @@ def build_nerd_alerts(
                 value=round(queue_snapshot.oldest_age_seconds, 4),
                 threshold=300.0,
                 unit="s",
+            )
+        )
+    if execution_attempt_health.stale_attempt_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="stale_attempt_count",
+                severity="warning",
+                label="Stale execution attempts present",
+                message="One or more running tasks have stale execution-attempt heartbeats.",
+                value=float(execution_attempt_health.stale_attempt_count),
+                threshold=0.0,
+                unit="count",
+            )
+        )
+    if execution_attempt_health.missing_attempt_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="missing_attempt_count",
+                severity="warning",
+                label="Missing execution attempts present",
+                message="One or more running tasks do not have a matching execution-attempt ledger row.",
+                value=float(execution_attempt_health.missing_attempt_count),
+                threshold=0.0,
+                unit="count",
+            )
+        )
+    if execution_attempt_health.dead_subprocess_count > 0:
+        alerts.append(
+            NerdAlertPayload(
+                key="dead_attempt_subprocess_count",
+                severity="warning",
+                label="Dead execution subprocesses detected",
+                message="One or more running execution attempts reference subprocesses that are no longer alive.",
+                value=float(execution_attempt_health.dead_subprocess_count),
+                threshold=0.0,
+                unit="count",
             )
         )
     if provider_failure_rate >= 0.2:
