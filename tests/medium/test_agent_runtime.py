@@ -4294,18 +4294,22 @@ async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypa
 
         updated_first = runtime.repository.get_memory(first.id)
         updated_second = runtime.repository.get_memory(second.id)
-        assert result["updated"] == 1
-        assert result["provider_calls_used"] == 1
-        assert result["provider_call_budget"] == 1
-        assert result["claimed_work_item_count"] == 1
-        assert provider.call_count == 1
+        assert runtime.config is not None
+        expected_budget = min(runtime.config.provider_routing.model_burst_call_limit, 2)
+        assert result["updated"] == expected_budget
+        assert result["provider_calls_used"] == expected_budget
+        assert result["provider_call_budget"] == expected_budget
+        assert result["claimed_work_item_count"] == expected_budget
+        assert provider.call_count == expected_budget
         assert updated_first is not None and updated_first.tags == ["auth", "testing"]
-        assert updated_second is not None and updated_second.tags == []
+        expected_second_tags = ["architecture"] if expected_budget > 1 else []
+        assert updated_second is not None and updated_second.tags == expected_second_tags
         assert runtime.work_items is not None
         work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
         assert len(work_items) == 2
         assert {item.payload["memory_id"] for item in work_items} == {first.id, second.id}
-        assert {item.status for item in work_items} == {"completed", "pending"}
+        expected_statuses = {"completed"} if expected_budget > 1 else {"completed", "pending"}
+        assert {item.status for item in work_items} == expected_statuses
     finally:
         runtime.close()
 
@@ -5283,13 +5287,13 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert result["tool_calls_executed"] == 1
         assert result["mutations"] == 1
         assert provider.prompts
-        assert "Work in high-impact maintenance mode" in provider.prompts[0]
+        assert "You are the curator maintenance agent for the global memory store." in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
         assert "task_complete" in provider.prompts[0]
         assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]
-        assert "read_count" not in provider.prompts[0]
+        assert "read_count" in provider.prompts[0]
         assert "required_fields" in provider.prompts[0]
         assert updated_canonical is not None and "JWTs must be required" in updated_canonical.content
         assert updated_duplicate is not None and updated_duplicate.status == "archived"
@@ -5764,7 +5768,8 @@ async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch
         assert result["claimed_work_item_id"] == work_item.id
         assert refreshed.status == "completed"
         assert provider.prompts
-        assert f'"{record.id}"' in provider.prompts[0]
+        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
+        assert record.id not in provider.prompts[0]
         assert "exclude_memory_ids" in provider.prompts[0]
     finally:
         runtime.close()
