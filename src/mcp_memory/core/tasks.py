@@ -623,7 +623,7 @@ class SQLiteTaskQueue:
                 )
         return recovered
 
-    def _retry_recovery_transition(self, callback):
+    def _retry_recovery_transition(self, callback: Callable[[], TaskRecord]) -> TaskRecord:
         for attempt in range(_RECOVERY_LOCK_RETRY_ATTEMPTS):
             try:
                 return callback()
@@ -631,6 +631,7 @@ class SQLiteTaskQueue:
                 if "database is locked" not in str(exc).lower() or attempt + 1 >= _RECOVERY_LOCK_RETRY_ATTEMPTS:
                     raise
                 time.sleep(_RECOVERY_LOCK_RETRY_DELAY_SECONDS * (attempt + 1))
+        raise RuntimeError("recovery transition retries exhausted")
 
     def get_task(self, task_id: str) -> TaskRecord:
         row = self._db.get_connection().execute(

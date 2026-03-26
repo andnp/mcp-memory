@@ -330,19 +330,20 @@ def _coerce_ingest_entry_outcomes(value: object) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        entry_id = item.get("entry_id")
+        item_dict = cast(dict[str, Any], item)
+        entry_id = item_dict.get("entry_id")
         if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id <= 0:
             continue
-        raw_disposition = item.get("disposition", item.get("outcome"))
+        raw_disposition = item_dict.get("disposition", item_dict.get("outcome"))
         if not isinstance(raw_disposition, str) or not raw_disposition.strip():
             continue
         normalized.append(
             _build_semantic_entry_disposition(
                 entry_id=entry_id,
                 disposition=raw_disposition.strip(),
-                memory_id=item.get("memory_id"),
-                memory_title=item.get("memory_title"),
-                reason=item.get("reason"),
+                memory_id=item_dict.get("memory_id"),
+                memory_title=item_dict.get("memory_title"),
+                reason=item_dict.get("reason"),
             )
         )
     return normalized
@@ -356,13 +357,14 @@ def _coerce_ingest_cluster_outcomes(value: object) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             continue
+        item_dict = cast(dict[str, Any], item)
         entry_ids = [
             entry_id
-            for entry_id in item.get("entry_ids", [])
+            for entry_id in item_dict.get("entry_ids", [])
             if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
         ]
-        memory_ids = _coerce_string_list(item.get("memory_ids"))
-        disposition = item.get("disposition")
+        memory_ids = _coerce_string_list(item_dict.get("memory_ids"))
+        disposition = item_dict.get("disposition")
         if not entry_ids or not isinstance(disposition, str) or not disposition.strip():
             continue
         payload: dict[str, Any] = {
@@ -371,7 +373,7 @@ def _coerce_ingest_cluster_outcomes(value: object) -> list[dict[str, Any]]:
         }
         if memory_ids:
             payload["memory_ids"] = memory_ids
-        reason = item.get("reason")
+        reason = item_dict.get("reason")
         if isinstance(reason, str) and reason.strip():
             payload["reason"] = reason.strip()
         normalized.append(payload)

@@ -761,6 +761,7 @@ def test_http_operator_lists_default_to_global_scope(monkeypatch, tmp_path: Path
     runtime_b = create_runtime(workspace_root_override=None, cwd=workspace_b)
     try:
         assert runtime_a.repository is not None
+        assert runtime_b.repository is not None
         assert runtime_a.task_queue is not None
         assert runtime_a.db_manager is not None
         assert runtime_a.workspace_id is not None

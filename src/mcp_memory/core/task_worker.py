@@ -5,7 +5,7 @@ from collections.abc import Callable
 from inspect import isawaitable, iscoroutinefunction
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 import mcp_memory.core.tasks as task_queue_module
 from mcp_memory.context import ApplicationContext
@@ -549,7 +549,7 @@ class RuntimeTaskWorker:
     def _recover_terminal_task(self, task_queue, callback: Callable[[], TaskRecord]) -> TaskRecord:
         retry_transition = getattr(task_queue, "_retry_recovery_transition", None)
         if callable(retry_transition):
-            return retry_transition(callback)
+            return cast(Callable[[Callable[[], TaskRecord]], TaskRecord], retry_transition)(callback)
         return callback()
 
     def _reconcile_terminal_task_state(self, task: TaskRecord) -> None:

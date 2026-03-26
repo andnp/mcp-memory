@@ -38,8 +38,8 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.provider_routing.profile_daily_call_limits["copilot-strong"] == 20
     assert loaded.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
     assert loaded.provider_routing.profile_daily_call_limits["gemini-cheap"] == 100
-    assert loaded.provider_routing.model_burst_call_limit == 1
-    assert loaded.provider_routing.model_burst_window_seconds == 600.0
+    assert loaded.provider_routing.model_burst_call_limit == 2
+    assert loaded.provider_routing.model_burst_window_seconds == 300.0
     assert loaded.provider_routing.profiles["copilot-strong"].provider == "copilot-cli"
     assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
     assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"

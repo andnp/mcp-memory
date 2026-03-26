@@ -46,8 +46,10 @@ async def test_record_thought_enqueues_single_ingest_task_at_threshold(
         assert runtime.task_queue is not None
         counts = runtime.task_queue.count_by_status()
         assert counts == {"pending": 1}
-        pending_tasks = runtime.task_queue.list_tasks(status="pending", workspace_id=runtime.workspace_id, limit=5)
+        pending_tasks = runtime.task_queue.list_tasks(status="pending", limit=5)
         assert len(pending_tasks) == 1
+        assert pending_tasks[0].workspace_id is None
+        assert pending_tasks[0].data["workspace_id"] == runtime.workspace_id
         assert pending_tasks[0].available_at <= pending_tasks[0].updated_at
     finally:
         runtime.close()

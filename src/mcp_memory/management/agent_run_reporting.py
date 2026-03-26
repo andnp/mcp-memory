@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.models import (
@@ -313,18 +313,19 @@ def _coerce_ingest_entry_dispositions(value: object) -> list[IngestEntryDisposit
     for item in value:
         if not isinstance(item, dict):
             continue
-        entry_id = item.get("entry_id")
-        disposition = item.get("disposition")
+        item_dict = cast(dict[str, Any], item)
+        entry_id = item_dict.get("entry_id")
+        disposition = item_dict.get("disposition")
         if not isinstance(entry_id, int) or isinstance(entry_id, bool) or not isinstance(disposition, str):
             continue
         payloads.append(
             IngestEntryDispositionPayload(
                 entry_id=entry_id,
                 disposition=disposition,
-                finalization_status=_coerce_str(item.get("finalization_status")),
-                memory_id=_coerce_str(item.get("memory_id")),
-                memory_title=_coerce_str(item.get("memory_title")),
-                reason=_coerce_str(item.get("reason")),
+                finalization_status=_coerce_str(item_dict.get("finalization_status")),
+                memory_id=_coerce_str(item_dict.get("memory_id")),
+                memory_title=_coerce_str(item_dict.get("memory_title")),
+                reason=_coerce_str(item_dict.get("reason")),
             )
         )
     return payloads

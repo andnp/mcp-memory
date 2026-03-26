@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from inspect import isawaitable
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
@@ -132,8 +132,9 @@ def _normalize_tool_calls(raw_tool_calls: object) -> list[dict[str, Any]]:
     for item in raw_tool_calls:
         if not isinstance(item, dict):
             continue
-        name = item.get("name")
-        arguments = item.get("arguments", {})
+        item_dict = cast(dict[str, Any], item)
+        name = item_dict.get("name")
+        arguments = item_dict.get("arguments", {})
         if not isinstance(name, str) or not name.strip() or not isinstance(arguments, dict):
             continue
         normalized.append({"name": name.strip(), "arguments": dict(arguments)})

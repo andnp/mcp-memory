@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
+from typing import cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
@@ -34,7 +35,7 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
-from mcp_memory.runtime_log_store import RuntimeLogRepository
+from mcp_memory.runtime_log_store import RuntimeLogRepository, _AllWorkspacesSentinel
 from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
@@ -45,6 +46,15 @@ from mcp_memory.serialization import (
 
 
 _USE_SERVICE_WORKSPACE = object()
+
+
+def _resolve_log_workspace_id(
+    service_workspace_id: str | None,
+    workspace_id: str | None | object,
+) -> str | None | _AllWorkspacesSentinel:
+    if workspace_id is _USE_SERVICE_WORKSPACE:
+        return service_workspace_id
+    return cast(str | None | _AllWorkspacesSentinel, workspace_id)
 
 
 class ManagementService:
@@ -194,7 +204,7 @@ class ManagementService:
         status: str | None = None,
         limit: int = 50,
     ) -> AIConversationListPayload:
-        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
+        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
         return AIConversationListPayload(
             conversations=[
                 AIConversationPayload(
@@ -465,7 +475,7 @@ class ManagementService:
     ) -> RuntimeLogListPayload:
         if self._db_manager is None:
             return RuntimeLogListPayload()
-        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
+        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
         return RuntimeLogListPayload(
             logs=[
                 RuntimeLogPayload(
@@ -503,7 +513,7 @@ class ManagementService:
     ) -> RuntimeLogSummaryPayload:
         if self._db_manager is None:
             return RuntimeLogSummaryPayload()
-        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
+        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
         summary = self._runtime_logs.summarize_logs(
             workspace_id=effective_workspace_id,
             level=level,
@@ -527,7 +537,7 @@ class ManagementService:
         max_log_age_days: int | None = None,
     ) -> RuntimeLogPrunePayload:
         config = self._runtime_logs.retention_policy
-        effective_workspace_id = self._workspace_id if workspace_id is _USE_SERVICE_WORKSPACE else workspace_id
+        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
         deleted = self._runtime_logs.prune_logs(
             workspace_id=effective_workspace_id,
             max_runtime_logs=max_runtime_logs,

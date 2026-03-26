@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.work_item_store import compatibility_group_families
 
@@ -52,7 +52,8 @@ def count_named_tool_calls_from_stats(tool_counts: object, *, tool_name: str) ->
             continue
         if used_name != tool_name and not used_name.endswith(suffix):
             continue
-        count = payload.get("count")
+        payload_dict = cast(dict[str, Any], payload)
+        count = payload_dict.get("count")
         if isinstance(count, int) and not isinstance(count, bool) and count > 0:
             total += count
     return total

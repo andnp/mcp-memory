@@ -484,6 +484,7 @@ def _merge_provider_routing_defaults(raw_provider_routing: object) -> dict[str, 
     defaults = _default_provider_routing_data()
     if not isinstance(raw_provider_routing, dict):
         return defaults
+    raw_provider_routing = cast(dict[str, Any], raw_provider_routing)
 
     merged = dict(defaults)
     for key in (

@@ -7,6 +7,7 @@ import json
 import math
 from statistics import mean, median
 import time
+from typing import Any, cast
 
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
@@ -1450,14 +1451,14 @@ def build_retrieval_analytics(
                 caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
             continue
 
-        info = memory_info[memory_id]
+        info = cast(dict[str, Any], memory_info[memory_id])
         memory_accumulator = memory_accumulators.setdefault(
             memory_id,
             _RetrievalMemoryAccumulator(
-                title=info["title"],
-                memory_type=info["memory_type"],
-                status=info["status"],
-                tags=list(info["tags"]),
+                title=str(info["title"]),
+                memory_type=str(info["memory_type"]),
+                status=str(info["status"]),
+                tags=list(cast(list[str], info["tags"])),
             ),
         )
         bucket_start = int(created_at // bucket_seconds) * bucket_seconds
@@ -1734,7 +1735,8 @@ def _runtime_log_data(row) -> dict[str, object]:
 def _runtime_log_task_name(log_data: dict[str, object]) -> str:
     extra = log_data.get("extra")
     if isinstance(extra, dict):
-        task_name = extra.get("task_name")
+        extra_dict = cast(dict[str, object], extra)
+        task_name = extra_dict.get("task_name")
         if isinstance(task_name, str) and task_name.strip():
             return task_name.strip()
     return "unknown"

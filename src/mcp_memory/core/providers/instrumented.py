@@ -245,12 +245,14 @@ class InstrumentedAIProvider:
                 heartbeat_at = float(payload.get("heartbeat_at", time.time()))
                 self._record_attempt_heartbeat(request_id=request_id, payload=payload)
                 if self._task_queue is not None and self._task_id is not None:
+                    task_queue = self._task_queue
+                    task_id = self._task_id
                     _safe_task_queue_update(
-                        self._task_queue,
-                        task_id=self._task_id,
+                        task_queue,
+                        task_id=task_id,
                         operation="touch_running_task",
-                        callback=lambda: self._task_queue.touch_running_task(
-                            self._task_id,
+                        callback=lambda: task_queue.touch_running_task(
+                            task_id,
                             updated_at=heartbeat_at,
                             execution_epoch=self._execution_epoch,
                         ),
@@ -488,12 +490,14 @@ class InstrumentedAIProvider:
                 heartbeat_at = float(payload.get("heartbeat_at", time.time()))
                 self._record_attempt_heartbeat(request_id=request_id, payload=payload)
                 if self._task_queue is not None and self._task_id is not None:
+                    task_queue = self._task_queue
+                    task_id = self._task_id
                     _safe_task_queue_update(
-                        self._task_queue,
-                        task_id=self._task_id,
+                        task_queue,
+                        task_id=task_id,
                         operation="touch_running_task",
-                        callback=lambda: self._task_queue.touch_running_task(
-                            self._task_id,
+                        callback=lambda: task_queue.touch_running_task(
+                            task_id,
                             updated_at=heartbeat_at,
                             execution_epoch=self._execution_epoch,
                         ),

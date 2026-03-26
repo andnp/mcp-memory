@@ -46,8 +46,10 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
         first = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite journal progress"}))
         second = _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite worker retries"}))
         _payload_text(await call_memory_tool(runtime, "record_thought", {"content": "Capture sqlite search flow"}))
-        ingest_task = runtime.task_queue.find_open_task("ingest-system1", runtime.workspace_id)
+        ingest_task = runtime.task_queue.find_open_task_any_workspace("ingest-system1")
         assert ingest_task is not None
+        assert ingest_task.workspace_id is None
+        assert ingest_task.data["workspace_id"] == runtime.workspace_id
         runtime.task_queue.update_pending_task(ingest_task.id, available_at=time.time())
 
         worker = build_runtime_task_worker(runtime)

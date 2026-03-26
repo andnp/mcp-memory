@@ -349,7 +349,7 @@ async def _analyze_ingest_actions(
     actions = _extract_ingest_actions(response.response)
     if not isinstance(actions, list):
         raise ValueError("provider returned invalid actions")
-    normalized_actions = [action for action in actions if isinstance(action, dict)]
+    normalized_actions = [dict(cast(dict[str, Any], action)) for action in actions if isinstance(action, dict)]
     return normalized_actions, response.mutating_tool_calls
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import (
@@ -512,5 +512,6 @@ def _count_mutating_agentic_tool_calls(value: object) -> int:
     for name, payload in value.items():
         if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
             continue
-        total += _coerce_non_negative_int(payload.get("count"))
+        payload_dict = cast(dict[str, Any], payload)
+        total += _coerce_non_negative_int(payload_dict.get("count"))
     return total

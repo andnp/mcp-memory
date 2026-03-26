@@ -112,7 +112,7 @@ class DaemonZmqServer:
         self._task: asyncio.Task | None = None
         self._max_concurrent_requests = max(int(max_concurrent_requests), 1)
         self._request_semaphore = asyncio.Semaphore(self._max_concurrent_requests)
-        self._inflight_tasks: set[asyncio.Task[tuple[bytes, dict]]] = set()
+        self._inflight_tasks: set[asyncio.Task[object]] = set()
 
     async def start(self) -> None:
         _remove_stale_socket(self._socket_path)
@@ -170,7 +170,11 @@ class DaemonZmqServer:
                 else:
                     completed_recv_task = None
 
-                completed_requests = [task for task in done if task is not completed_recv_task]
+                completed_requests = [
+                    cast(asyncio.Task[tuple[bytes, dict]], task)
+                    for task in done
+                    if task is not completed_recv_task
+                ]
                 for task in completed_requests:
                     self._inflight_tasks.discard(task)
                     if task.cancelled():
