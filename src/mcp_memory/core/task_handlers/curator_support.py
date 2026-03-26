@@ -30,9 +30,12 @@ CURATOR_MAX_BATCH_RECORDS = 24
 CURATOR_MAX_MEMORY_CHARS = 4000
 CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
+CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
 CURATOR_MAX_TAGS = 6
+CURATOR_LOW_READ_REVIEW_THRESHOLD = 3
+CURATOR_THIN_SPLIT_CHILD_MAX_CHARS = 800
 CURATOR_ALLOWED_STRATEGIES = (
     ANOMALY_STRATEGY,
     COLD_STORAGE_STRATEGY,
@@ -147,6 +150,18 @@ def select_curator_seed_batch(
             record.updated_at,
         ),
     )
+    retrieval_friction_candidates = sorted(
+        [record for record in sampled_candidates if retrieval_friction_flags(record)],
+        key=lambda record: (
+            len(retrieval_friction_flags(record)),
+            1 if getattr(record, "last_surfaced_at", None) else 0,
+            _sort_curator_timestamp(getattr(record, "last_surfaced_at", None)),
+            -record.read_count,
+            -len(record.content.strip()),
+            _sort_curator_timestamp(record.updated_at),
+        ),
+        reverse=True,
+    )
 
     seed_records: list[Any] = []
     oversized_candidates = [record for record in largest_candidates if is_oversized_curator_memory(record)]
@@ -155,6 +170,11 @@ def select_curator_seed_batch(
         anomaly_candidates = largest_candidates
 
     extend_unique_seed_records(seed_records, anomaly_candidates, CURATOR_SIZE_ANOMALY_SEED_RECORDS)
+    extend_unique_seed_records(
+        seed_records,
+        retrieval_friction_candidates,
+        min(limit, len(seed_records) + CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS),
+    )
     extend_unique_seed_records(
         seed_records,
         sort_recent_curator_candidates(candidates),
@@ -172,12 +192,16 @@ def select_curator_seed_batch(
 
 def curator_seed_payload_item(record) -> dict[str, Any]:
     summary_source = record.summary or record.content
+    retrieval_flags = retrieval_friction_flags(record)
     return {
         "id": record.id,
         "type": record.type,
         "status": record.status,
+        "read_count": record.read_count,
+        "last_surfaced_at": getattr(record, "last_surfaced_at", None),
         "content_size_chars": len(record.content.strip()),
         "oversized_for_curator": is_oversized_curator_memory(record),
+        "retrieval_friction_flags": retrieval_flags,
         "title": truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
         "summary": truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
@@ -198,6 +222,9 @@ def build_json_tool_loop_prompt(
         "Improve the store by merging, refining, rewriting, retagging, relinking, archiving, or deleting archived garbage when justified.\n"
         "Treat this run as a structural-review campaign: finishing the current frontier does not automatically mean the provider session should end.\n"
         "Work in high-impact maintenance mode: prefer several coherent high-value improvements in one run when the store clearly supports them.\n"
+        "A good memory is self-contained: one durable claim, decision, anomaly, or reusable lesson with enough concrete evidence/context that a future agent can trust and reuse it quickly.\n"
+        "Prefer titles and summaries that reveal the actual conclusion. Rewrite vague summaries such as 'Covers ...', 'Added ...', or similarly generic blurbs into specific takeaways.\n"
+        "Treat frequently surfaced but rarely read records as retrieval-friction candidates, especially when they are mixed-topic blobs, thin split-child stubs, generic summaries, or poorly tagged notes.\n"
         f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] so you can confirm or widen the current frontier before mutating.\n"
         "Treat the seed memories as a starting frontier, not a hard boundary; widen only when they hint at nearby duplicates, contradictions, or oversized clusters.\n"
         f"When the current frontier is exhausted, you may continue by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families)}, and limit=1.\n"
@@ -208,6 +235,7 @@ def build_json_tool_loop_prompt(
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized. Prefer splitting them into smaller focused records with links such as DEPENDS_ON or AMENDS instead of growing one blob.\n"
         f"Avoid creating or growing memories past {CURATOR_MAX_MEMORY_CHARS} characters unless no reasonable split exists.\n"
+        "When you rewrite or split a memory, leave each resulting record independently understandable instead of producing cryptic fragments that only make sense with the parent open.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
         "Before stopping, check once more for any adjacent worthwhile maintenance action; no-op is fine when another step would be low-value or unsafe.\n"
         f"When your pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
@@ -229,6 +257,9 @@ def build_agentic_prompt(
         "You are the memory-curator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
         "Treat this run as a structural-review campaign: the session should keep going while compatible structural work remains high-value and safe.\n"
+        "Good memory anatomy: one focused durable takeaway, concrete supporting details, a title/summary that names the conclusion, and tags that make the record discoverable later.\n"
+        "Bad memory smells from live retrieval telemetry include generic summaries, mixed-topic blobs, thin split-child fragments, and memories that keep getting surfaced but almost never opened.\n"
+        "When you see those smells, prefer rewriting, retitling, resummarizing, retagging, splitting, or archiving so future agents can decide faster whether the memory is worth opening.\n"
         f"Start by calling internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids={json.dumps([record.id for record in seed_records], sort_keys=True)} so you can widen beyond the current frontier only when justified.\n"
         "Treat the provided seed memories as a starting frontier and the active frontier for this run; widen only when they imply nearby duplicates, contradictions, taxonomy cleanup, or oversized clusters.\n"
         f"After finishing the active frontier, you may claim more compatible structural work by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families)}, and limit=1.\n"
@@ -238,6 +269,7 @@ def build_agentic_prompt(
         "Do not end the provider session merely because the initial handler-local frontier is complete if a compatible structural follow-on item is still worth doing.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+        "If you split or rewrite a record, make each resulting memory self-contained enough to stand alone in search results.\n"
         "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
         "Before finishing, do one more quick search/list/read pass for any adjacent high-value maintenance opportunity.\n"
@@ -354,6 +386,22 @@ def is_oversized_curator_memory(record) -> bool:
     return len(record.content.strip()) > CURATOR_MAX_MEMORY_CHARS
 
 
+def retrieval_friction_flags(record) -> list[str]:
+    flags: list[str] = []
+    normalized_summary = _normalize_curator_text(record.summary)
+    if normalized_summary.startswith("covers ") or normalized_summary.startswith("added "):
+        flags.append("generic_summary")
+    if record.type == "observation" and not record.tags:
+        flags.append("untagged_observation")
+    if getattr(record, "last_surfaced_at", None) and record.read_count <= CURATOR_LOW_READ_REVIEW_THRESHOLD:
+        flags.append("surfaced_low_read")
+    if record.metadata.get("split_from_memory_id") and len(record.content.strip()) <= CURATOR_THIN_SPLIT_CHILD_MAX_CHARS:
+        flags.append("thin_split_child")
+    if is_oversized_curator_memory(record):
+        flags.append("oversized_blob")
+    return flags
+
+
 def should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
     return sum(task.id.encode("utf-8")) % CURATOR_LARGEST_MEMORY_PASS_INTERVAL == 0
 
@@ -379,6 +427,10 @@ def truncate_text(value: str | None, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _normalize_curator_text(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
 
 
 def _requested_sampling_strategy(task: TaskRecord) -> str | None:

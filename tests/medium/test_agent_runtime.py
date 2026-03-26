@@ -206,6 +206,9 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     )
 
     assert "Preserve concrete symbols, file paths, thresholds, IDs, error strings, config keys, and commit refs" in prompt
+    assert "A good memory is focused and durable" in prompt
+    assert "Good memory anatomy: a specific title" in prompt
+    assert "Bad memory patterns: routine progress logs, mixed unrelated topics, vague summaries" in prompt
     assert "When uncertain, prefer narrow concrete observations over broad abstraction." in prompt
     assert "Aim to drain the queue for this task in one run" in prompt
     assert "Include explicit per-entry outcomes for every claimed entry" in prompt
@@ -6001,8 +6004,12 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert seed_payload
         assert seed_payload[0]["id"] == record.id
         assert seed_payload[0]["title"] == "Auth rollout note"
+        assert seed_payload[0]["read_count"] == record.read_count
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
         assert seed_payload[0]["oversized_for_curator"] is False
+        assert seed_payload[0]["retrieval_friction_flags"] == []
+        assert "Good memory anatomy: one focused durable takeaway" in prompt
+        assert "Bad memory smells from live retrieval telemetry" in prompt
     finally:
         runtime.close()
 
@@ -6271,6 +6278,54 @@ def test_memory_curator_size_anomaly_pass_can_surface_largest_memory(monkeypatch
 
         assert len(seed_records) == min(10, CURATOR_MAX_SEED_RECORDS)
         assert largest.id in {record.id for record in seed_records}
+    finally:
+        runtime.close()
+
+
+def test_memory_curator_retrieval_friction_candidates_are_seeded(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        base_time = datetime(2026, 1, 1, tzinfo=UTC)
+        for index in range(20):
+            created = runtime.repository.create_memory(
+                title=f"Routine observation {index}",
+                content="Short routine maintenance note.",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="observation",
+                tags=["routine"],
+                created_at=(base_time + timedelta(days=index)).isoformat(),
+                updated_at=(base_time + timedelta(days=index)).isoformat(),
+            )
+            assert created is not None
+
+        flagged = runtime.repository.create_memory(
+            title="Maintenance handler slice",
+            content="Tiny child note that needs a more self-contained rewrite.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            summary="Covers maintenance cleanup follow-up.",
+            metadata={"split_from_memory_id": "parent-memory"},
+            tags=["maintenance"],
+            created_at=(base_time - timedelta(days=30)).isoformat(),
+            updated_at=(base_time - timedelta(days=29)).isoformat(),
+        )
+        assert flagged is not None
+        flagged = runtime.repository.update_memory(
+            flagged.id,
+            last_surfaced_at=(base_time + timedelta(days=60)).isoformat(),
+        )
+        assert flagged is not None
+
+        seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
+
+        assert flagged.id in {record.id for record in seed_records}
     finally:
         runtime.close()
 
