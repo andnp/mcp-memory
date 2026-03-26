@@ -23,6 +23,7 @@ from mcp_memory.core.task_handlers import (
     SYSTEM1_INGEST_TASK_NAME,
     RECURRING_TASK_INTERVAL_SECONDS,
 )
+from mcp_memory.core import tasks as tasks_module
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -278,6 +279,62 @@ def test_database_manager_waits_for_short_write_lock_release(db_manager) -> None
     assert task.id == "delayed-write"
     assert elapsed_seconds >= 0.08
     assert elapsed_seconds < (SQLITE_BUSY_TIMEOUT_MILLISECONDS / 1000.0)
+
+
+def test_sqlite_task_queue_extend_running_task_data_int_list_preserves_concurrent_updates(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("concurrent-data-merge", task_id="concurrent-data-merge")
+    other_queue = SQLiteTaskQueue(db_manager)
+
+    first_decode_started = threading.Event()
+    release_first_decode = threading.Event()
+    original_decode = tasks_module._decode_json_object
+    decode_calls = 0
+    decode_lock = threading.Lock()
+
+    def controlled_decode(value):
+        nonlocal decode_calls
+        with decode_lock:
+            decode_calls += 1
+            call_number = decode_calls
+        if call_number == 1:
+            first_decode_started.set()
+            assert release_first_decode.wait(timeout=5.0)
+        return original_decode(value)
+
+    monkeypatch.setattr(tasks_module, "_decode_json_object", controlled_decode)
+
+    errors: list[BaseException] = []
+
+    def write_values(target_queue: SQLiteTaskQueue, values: list[int]) -> None:
+        try:
+            target_queue.extend_running_task_data_int_list(
+                task.id,
+                field_name="ingest_handled_entry_ids",
+                values=values,
+            )
+        except BaseException as exc:  # pragma: no cover - failure path captured in assertion
+            errors.append(exc)
+
+    first_writer = threading.Thread(target=write_values, args=(queue, [101]), name="first-writer")
+    second_writer = threading.Thread(target=write_values, args=(other_queue, [202]), name="second-writer")
+
+    first_writer.start()
+    assert first_decode_started.wait(timeout=5.0)
+
+    second_writer.start()
+    time.sleep(0.05)
+    release_first_decode.set()
+
+    first_writer.join()
+    second_writer.join()
+
+    assert errors == []
+    updated = queue.get_task(task.id)
+    assert updated.data["ingest_handled_entry_ids"] == [101, 202]
 
 
 def test_sqlite_task_queue_does_not_recover_dead_subprocess_before_stale_threshold(

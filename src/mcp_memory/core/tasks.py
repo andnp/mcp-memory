@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -715,40 +716,27 @@ class SQLiteTaskQueue:
         if not normalized_values:
             return self.get_task(task_id)
 
-        conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
-            (task_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Task {task_id} is not open")
 
-        task_data = _decode_json_object(row["data"])
-        existing_values = task_data.get(field_name)
-        if not isinstance(existing_values, list):
-            existing_values = []
-        merged_values = sorted(
-            {
-                *[
-                    int(value)
-                    for value in existing_values
-                    if isinstance(value, int) and not isinstance(value, bool) and value > 0
-                ],
-                *normalized_values,
-            }
-        )
-        task_data[field_name] = merged_values
+        def _merge(task_data: dict[str, Any]) -> bool:
+            existing_values = task_data.get(field_name)
+            if not isinstance(existing_values, list):
+                existing_values = []
+            merged_values = sorted(
+                {
+                    *[
+                        int(value)
+                        for value in existing_values
+                        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+                    ],
+                    *normalized_values,
+                }
+            )
+            if merged_values == existing_values:
+                return False
+            task_data[field_name] = merged_values
+            return True
 
-        now = time.time()
-        cursor = conn.execute(
-            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
-            (json.dumps(task_data, sort_keys=True), now, task_id),
-        )
-        if cursor.rowcount != 1:
-            conn.rollback()
-            raise ValueError(f"Task {task_id} is not open")
-        conn.commit()
-        return self.get_task(task_id)
+        return self._mutate_running_task_data(task_id, mutate=_merge)
 
     def extend_running_task_data_object_list(
         self,
@@ -764,30 +752,15 @@ class SQLiteTaskQueue:
         if not normalized_values:
             return self.get_task(task_id)
 
-        conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
-            (task_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Task {task_id} is not open")
 
-        task_data = _decode_json_object(row["data"])
-        existing_values = task_data.get(field_name)
-        if not isinstance(existing_values, list):
-            existing_values = []
-        task_data[field_name] = [*existing_values, *normalized_values]
+        def _append(task_data: dict[str, Any]) -> bool:
+            existing_values = task_data.get(field_name)
+            if not isinstance(existing_values, list):
+                existing_values = []
+            task_data[field_name] = [*existing_values, *normalized_values]
+            return True
 
-        now = time.time()
-        cursor = conn.execute(
-            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
-            (json.dumps(task_data, sort_keys=True), now, task_id),
-        )
-        if cursor.rowcount != 1:
-            conn.rollback()
-            raise ValueError(f"Task {task_id} is not open")
-        conn.commit()
-        return self.get_task(task_id)
+        return self._mutate_running_task_data(task_id, mutate=_append)
 
     def clear_running_task_data_keys(
         self,
@@ -799,33 +772,51 @@ class SQLiteTaskQueue:
         if not normalized_field_names:
             return self.get_task(task_id)
 
+
+        def _clear(task_data: dict[str, Any]) -> bool:
+            updated = False
+            for field_name in normalized_field_names:
+                if field_name in task_data:
+                    task_data.pop(field_name, None)
+                    updated = True
+            return updated
+
+        return self._mutate_running_task_data(task_id, mutate=_clear)
+
+    def _mutate_running_task_data(
+        self,
+        task_id: str,
+        *,
+        mutate: Callable[[dict[str, Any]], bool],
+    ) -> TaskRecord:
         conn = self._db.get_connection()
-        row = conn.execute(
-            "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
-            (task_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Task {task_id} is not open")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT data FROM tasks WHERE id = ? AND status IN ('pending', 'running')",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Task {task_id} is not open")
 
-        task_data = _decode_json_object(row["data"])
-        updated = False
-        for field_name in normalized_field_names:
-            if field_name in task_data:
-                task_data.pop(field_name, None)
-                updated = True
+            task_data = _decode_json_object(row["data"])
+            updated = mutate(task_data)
 
-        if not updated:
-            return self.get_task(task_id)
+            if not updated:
+                conn.rollback()
+                return self.get_task(task_id)
 
-        now = time.time()
-        cursor = conn.execute(
-            "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
-            (json.dumps(task_data, sort_keys=True), now, task_id),
-        )
-        if cursor.rowcount != 1:
+            now = time.time()
+            cursor = conn.execute(
+                "UPDATE tasks SET data = ?, updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+                (json.dumps(task_data, sort_keys=True), now, task_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Task {task_id} is not open")
+            conn.commit()
+        except Exception:
             conn.rollback()
-            raise ValueError(f"Task {task_id} is not open")
-        conn.commit()
+            raise
         return self.get_task(task_id)
 
     def find_open_task(
