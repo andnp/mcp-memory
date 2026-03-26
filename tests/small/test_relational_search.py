@@ -753,6 +753,38 @@ def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db
     assert results[0].memory_id == auth_record.id
 
 
+def test_workspace_scoped_search_keeps_global_semantic_candidates(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=SQLiteVectorStore(db_manager),
+    )
+
+    local_record = repository.create_memory(
+        title="Workspace alpha identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls for alpha.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    remote_record = repository.create_memory(
+        title="Workspace beta identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls for beta.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        tags=["auth"],
+    )
+    assert local_record is not None and remote_record is not None
+
+    results = service.search_memories("permissions security", workspace_id="workspace-alpha", limit=5)
+
+    assert [result.memory_id for result in results[:2]] == [local_record.id, remote_record.id]
+
+
 def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)

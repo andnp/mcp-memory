@@ -696,7 +696,6 @@ class RelationalMemorySearchService:
             source_kind="memory",
             model_name=self._embedder.model_name,
             query_embedding=query_embedding,
-            workspace_id=workspace_id,
             limit=limit,
         )
 
