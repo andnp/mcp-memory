@@ -7,11 +7,6 @@ from pathlib import Path
 from typing import Any
 
 
-def fsync_path(path: Path) -> None:
-    with open(path, "rb") as handle:
-        os.fsync(handle.fileno())
-
-
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(

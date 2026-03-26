@@ -7,7 +7,6 @@ import time
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
-from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_policy import is_deterministic_task
 from mcp_memory.core.tasks import TaskRecord
@@ -74,31 +73,6 @@ class AgenticRouteFailoverProvider:
         if not self._providers:
             raise AttributeError(name)
         return getattr(self._providers[0], name)
-
-
-
-
-def select_provider_for_task(
-    ctx: ApplicationContext,
-    provider: Any,
-    agentic_provider: Any,
-    task_name: str,
-    task: TaskRecord,
-    *,
-    agentic_task_names: set[str],
-):
-    return select_provider_for_inputs(
-        ProviderSelectionInputs(
-            config=ctx.config,
-            ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
-            provider_policy_events=getattr(ctx, "provider_policy_events", None),
-        ),
-        provider,
-        agentic_provider,
-        task_name,
-        task,
-        agentic_task_names=agentic_task_names,
-    )
 
 
 def select_provider_for_request(

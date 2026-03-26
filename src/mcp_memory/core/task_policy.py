@@ -72,7 +72,3 @@ def task_class_for_task(config: Config | None, task_name: str) -> str:
 
 def is_deterministic_task(config: Config | None, task_name: str) -> bool:
     return task_class_for_task(config, task_name) == TASK_CLASS_DETERMINISTIC
-
-
-def is_agentic_task(config: Config | None, task_name: str) -> bool:
-    return task_class_for_task(config, task_name) in {TASK_CLASS_CHEAP_AGENTIC, TASK_CLASS_PREMIUM_AGENTIC}
