@@ -1265,5 +1265,3 @@ def _normalize_tag_values(tags: list[str]) -> list[str]:
         seen.add(normalized_tag)
         normalized.append(normalized_tag)
     return sorted(normalized)
-
-
