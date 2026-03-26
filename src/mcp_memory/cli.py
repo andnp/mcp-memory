@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import sys
 import time
 from types import SimpleNamespace
+from typing import Any, TypeVar
 import webbrowser
 
 import click
@@ -33,6 +35,7 @@ from mcp_memory.server import MCPServer
 
 console = Console()
 workspace_root_option = click.option("--workspace-root", help="Override the active workspace root")
+_T = TypeVar("_T")
 
 
 def _exit_cli_error(exc: Exception) -> None:
@@ -179,15 +182,22 @@ def _resolve_stash_content(text_parts: tuple[str, ...]) -> str:
     raise click.UsageError("Provide stash text as arguments or via stdin.")
 
 
-def _stash_thought(workspace_root: str | None, content: str) -> None:
+def _with_runtime(workspace_root: str | None, action: Callable[[Any], _T]) -> _T:
     runtime = create_runtime(workspace_root_override=workspace_root)
     try:
+        return action(runtime)
+    finally:
+        runtime.close()
+
+
+def _stash_thought(workspace_root: str | None, content: str) -> None:
+    def _run(runtime) -> None:
         if runtime.journal is None:
             raise RuntimeError("journal_not_initialized")
         payload = RecordThoughtOperation(runtime.journal, runtime.task_queue, runtime.workspace_id).execute(content)
         click.echo(f"Thought stashed successfully (ID: {payload['entry']['id']})")
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 def _render_logs_table(payload) -> None:
@@ -243,8 +253,7 @@ def _show_logs(
     before: float | None,
     json_output: bool,
 ) -> None:
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
@@ -258,8 +267,8 @@ def _show_logs(
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_logs_table(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 def _summarize_logs(
@@ -272,8 +281,7 @@ def _summarize_logs(
     before: float | None,
     json_output: bool,
 ) -> None:
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).summarize_logs(
             level=None if level is None else level.upper(),
             logger_name=logger_name,
@@ -286,8 +294,8 @@ def _summarize_logs(
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_log_summary(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 def _prune_logs(
@@ -296,8 +304,7 @@ def _prune_logs(
     max_log_age_days: int | None,
     json_output: bool,
 ) -> None:
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).prune_logs(
             max_runtime_logs=max_runtime_logs,
             max_log_age_days=max_log_age_days,
@@ -309,8 +316,8 @@ def _prune_logs(
         console.print(
             f"policy max_runtime_logs={payload.max_runtime_logs} max_log_age_days={payload.max_log_age_days}"
         )
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:
@@ -1165,8 +1172,7 @@ def hook_runner(workspace_root: str | None) -> None:
 @workspace_root_option
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         embedder = runtime.embedder
         if embedder is None:
             raise RuntimeError("embedder_not_initialized")
@@ -1180,10 +1186,11 @@ def prefetch_model(workspace_root: str | None) -> None:
         console.print(f"[green]Embedding model cached:[/] {status.model_name if status is not None else 'unknown'}")
         if status is not None:
             console.print(f"backend={status.backend} cached={status.model_cached}")
+
+    try:
+        _with_runtime(workspace_root, _run)
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @main.group(name="agents")
@@ -1203,8 +1210,7 @@ def task_group() -> None:
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
     """List queued or running tasks."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_tasks(
             status=status,
             limit=limit,
@@ -1213,8 +1219,8 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_task_table(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @task_group.command(name="recent-runs")
@@ -1223,8 +1229,7 @@ def list_tasks_command(workspace_root: str | None, status: str | None, limit: in
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Show recent completed background task runs and their sampling metadata."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(
             limit=limit,
             detail_level="full",
@@ -1233,8 +1238,8 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_recent_agent_runs_table(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @task_group.command(name="sampling-summary")
@@ -1243,16 +1248,15 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
 def task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Summarize recent selection and ingest grouping strategy usage."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_recent_agent_runs(limit=limit)
         summary = _build_sampling_summary(payload)
         if json_output:
             click.echo(json.dumps(summary, sort_keys=True))
             return
         _render_sampling_summary(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @task_group.command(name="cancel")
@@ -1262,9 +1266,11 @@ def task_sampling_summary_command(workspace_root: str | None, limit: int, json_o
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
     """Cancel a pending or running task."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).cancel_task(task_id, cancelled_by="cli", reason=reason)
+        payload = _with_runtime(
+            workspace_root,
+            lambda runtime: _build_management_service(runtime).cancel_task(task_id, cancelled_by="cli", reason=reason),
+        )
         if json_output:
             click.echo(json.dumps(payload, sort_keys=True))
             return
@@ -1272,8 +1278,6 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
         console.print(f"signal_sent={payload['signal_sent']} status={payload['task']['status']}")
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @task_group.command(name="show")
@@ -1282,17 +1286,17 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
     """Show one task and its persisted run result details."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime, workspace_id=None).get_task_detail(task_id)
+        payload = _with_runtime(
+            workspace_root,
+            lambda runtime: _build_management_service(runtime, workspace_id=None).get_task_detail(task_id),
+        )
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_task_detail(payload)
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @main.group(name="conversation")
@@ -1319,8 +1323,7 @@ def list_conversations_command(
     json_output: bool,
 ) -> None:
     """List recorded AI conversations."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(
             task_name=task_name,
             status=status,
@@ -1330,8 +1333,8 @@ def list_conversations_command(
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
         _render_ai_conversation_table(payload)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @conversation_group.command(name="show")
@@ -1340,8 +1343,7 @@ def list_conversations_command(
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def show_conversation_command(request_id: str, workspace_root: str | None, json_output: bool) -> None:
     """Show all recorded attempts for one AI request ID."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime, workspace_id=None).list_ai_conversations(request_id=request_id, limit=200)
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
@@ -1356,8 +1358,8 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
             console.print(conversation.response_text or "-")
             if conversation.error_text:
                 console.print(f"[red]Error:[/] {conversation.error_text}")
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @search_group.command(name="health")
@@ -1365,15 +1367,14 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def search_health_command(workspace_root: str | None, json_output: bool) -> None:
     """Show semantic search health for the current runtime context."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         payload = _build_management_service(runtime).get_health()
         if json_output:
             click.echo(json.dumps(payload.search.model_dump(), sort_keys=True))
             return
         _render_search_health_table(payload.search)
-    finally:
-        runtime.close()
+
+    _with_runtime(workspace_root, _run)
 
 
 @search_group.command(name="repair")
@@ -1381,9 +1382,8 @@ def search_health_command(workspace_root: str | None, json_output: bool) -> None
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
     """Rebuild semantic search embeddings for the current model."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).repair_search_index()
+        payload = _with_runtime(workspace_root, lambda runtime: _build_management_service(runtime).repair_search_index())
         if json_output:
             click.echo(json.dumps(payload, sort_keys=True))
             return
@@ -1393,8 +1393,6 @@ def search_repair_command(workspace_root: str | None, json_output: bool) -> None
         console.print(f"[green]Search index rebuilt:[/] {payload['records_indexed']} records")
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @agents.command(name="run")
@@ -1404,15 +1402,15 @@ def search_repair_command(workspace_root: str | None, json_output: bool) -> None
 def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
     """Trigger one background agent for the active workspace."""
     ensure_daemon_started(workspace_root, None)
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        payload = _build_management_service(runtime).enqueue_background_task(agent_name, force=force)
+        payload = _with_runtime(
+            workspace_root,
+            lambda runtime: _build_management_service(runtime).enqueue_background_task(agent_name, force=force),
+        )
         console.print(f"[green]{payload['status']}[/]: {agent_name}")
         console.print(f"task_id={payload['task']['id']} status={payload['task']['status']}")
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @agents.command(name="run-all")
@@ -1421,18 +1419,20 @@ def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
 def run_all_agents(workspace_root: str | None, force: bool) -> None:
     """Trigger all background agents for the active workspace."""
     ensure_daemon_started(workspace_root, None)
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        service = _build_management_service(runtime)
-        results = [service.enqueue_background_task(task_name, force=force) for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES]
+        results = _with_runtime(
+            workspace_root,
+            lambda runtime: [
+                _build_management_service(runtime).enqueue_background_task(task_name, force=force)
+                for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES
+            ],
+        )
         created_count = sum(1 for result in results if result["created"])
         console.print(f"[green]Agents queued:[/] {created_count}/{len(results)} newly created")
         for result in results:
             console.print(f"- {result['task']['task_name']}: {result['status']}")
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @main.command(name="stats")
@@ -1448,13 +1448,13 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 @click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
 def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
     """Print background task and memory statistics."""
-    runtime = create_runtime(workspace_root_override=workspace_root)
     try:
-        _show_stats(runtime, watch=watch, interval_seconds=interval, verbose=verbose)
+        _with_runtime(
+            workspace_root,
+            lambda runtime: _show_stats(runtime, watch=watch, interval_seconds=interval, verbose=verbose),
+        )
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 @main.command(name="monitor")
@@ -1498,8 +1498,7 @@ def import_markdown(
     if not file_paths:
         raise click.UsageError("Provide at least one markdown file path or glob pattern.")
 
-    runtime = create_runtime(workspace_root_override=workspace_root)
-    try:
+    def _run(runtime) -> None:
         resolved_workspace_id = None
         if workspace_ids:
             resolved_workspace_id = next(
@@ -1523,26 +1522,28 @@ def import_markdown(
             for entry_id, file_name in recorded:
                 console.print(f"[green]Recorded thought:[/] {file_name} (entry {entry_id})")
             console.print(f"[green]Recorded total:[/] {len(recorded)} thoughts → buffer")
-        else:
-            if runtime.repository is None:
-                raise RuntimeError("repository_not_initialized")
+            return
 
-            resolved_workspace_ids = [workspace_id.strip() for workspace_id in workspace_ids if workspace_id.strip()]
-            if not resolved_workspace_ids and runtime.workspace_id is not None:
-                resolved_workspace_ids = [runtime.workspace_id]
+        if runtime.repository is None:
+            raise RuntimeError("repository_not_initialized")
 
-            imported_records = import_markdown_memory_paths(
-                runtime.repository,
-                list(file_paths),
-                resolved_workspace_ids,
-            )
-            for imported in imported_records:
-                console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
-            console.print(f"[green]Imported total:[/] {len(imported_records)}")
+        resolved_workspace_ids = [workspace_id.strip() for workspace_id in workspace_ids if workspace_id.strip()]
+        if not resolved_workspace_ids and runtime.workspace_id is not None:
+            resolved_workspace_ids = [runtime.workspace_id]
+
+        imported_records = import_markdown_memory_paths(
+            runtime.repository,
+            list(file_paths),
+            resolved_workspace_ids,
+        )
+        for imported in imported_records:
+            console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
+        console.print(f"[green]Imported total:[/] {len(imported_records)}")
+
+    try:
+        _with_runtime(workspace_root, _run)
     except Exception as exc:
         _exit_cli_error(exc)
-    finally:
-        runtime.close()
 
 
 def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:
