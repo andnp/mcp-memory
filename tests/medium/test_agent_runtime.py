@@ -227,6 +227,9 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     assert "Good memory anatomy: a specific title" in prompt
     assert "Bad memory patterns: routine progress logs, mixed unrelated topics, vague summaries" in prompt
     assert "You are not a simple promotion script" in prompt
+    assert "Anti-bucket rule: do not append into a memory whose current title/scope is materially narrower than the new evidence" in prompt
+    assert "Append only when the source entry and target memory clearly share the same subsystem, decision thread, or durable operational invariant" in prompt
+    assert "This belongs in the target memory because both are fundamentally about ___" in prompt
     assert "Standing ingest jobs: append into the right canonical memory" in prompt
     assert "Treat one claimed batch as a small maintenance campaign" in prompt
     assert "internal_update_memory_record" in prompt
@@ -235,6 +238,8 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     assert "internal_archive_memory_record" in prompt
     assert "internal_create_memory_link or internal_delete_memory_link" in prompt
     assert "Include task_id='ingest-prompt-test' on those adjacent cleanup mutations" in prompt
+    assert "When the best existing target is close but too narrow, prefer light refactoring first" in prompt
+    assert "Prefer a narrowly named sibling memory over stuffing more detail into a broad operational bucket" in prompt
     assert "When uncertain, prefer narrow concrete observations over broad abstraction." in prompt
     assert "When multiple claimed entries only make sense together, keep them together" in prompt
     assert "Aim to drain the queue for this task in one run" in prompt
@@ -245,7 +250,7 @@ def test_build_ingest_agent_prompt_requests_concrete_auditable_entry_outcomes() 
     assert '"cluster_outcomes": [{"entry_ids": [123, 124], "disposition": "created_cluster"|"appended_cluster"|"refactored_cluster"|"linked_cluster"|"ignored_cluster"' in prompt
     assert "Do not make vague claims like 'matched existing canonical memories'" in prompt
     assert "Provide a reason whenever an entry outcome is ignored, no_mutation, or matched_existing." in prompt
-    assert "Do not create memories that only log task completion, queue progress, tool usage" in prompt
+    assert "Do not create memories that only log task completion, queue progress, tool usage, repo state snapshots, temporary runtime-health snapshots, one-off validation summaries" in prompt
     assert "Use workspace_id 'workspace-test' when you need a fallback workspace for created or updated memories." in prompt
 
 
