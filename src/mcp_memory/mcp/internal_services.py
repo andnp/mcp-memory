@@ -46,11 +46,55 @@ def internal_read_memory_record_service(ctx: ApplicationContext, arguments: dict
     return read_memory_record_service(ctx, arguments, caller_kind="internal")
 
 
+def _normalize_internal_workspace_scope(workspace_id: str | None) -> str | None:
+    if workspace_id is None:
+        return None
+    normalized = workspace_id.strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if lowered == "global":
+        return None
+    if lowered in {"all", "any"}:
+        return "*"
+    return normalized
+
+
+def _task_workspace_scope(ctx: ApplicationContext, task_id: str | None) -> str | None:
+    if not task_id:
+        return None
+    task_queue = getattr(ctx, "task_queue", None)
+    if task_queue is None:
+        return None
+    try:
+        task = task_queue.get_task(task_id)
+    except ValueError:
+        return None
+    task_workspace = task.data.get("workspace_id")
+    if isinstance(task_workspace, str):
+        return _normalize_internal_workspace_scope(task_workspace)
+    if isinstance(task.workspace_id, str):
+        return _normalize_internal_workspace_scope(task.workspace_id)
+    return None
+
+
+def _resolve_internal_workspace_scope(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    task_id_key: str = "task_id",
+) -> str | None:
+    explicit_workspace_id = _normalize_internal_workspace_scope(optional_string(arguments, "workspace_id"))
+    if "workspace_id" in arguments:
+        return explicit_workspace_id
+    return _task_workspace_scope(ctx, optional_string(arguments, task_id_key))
+
+
 def internal_list_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
     if ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
     records = ctx.repository.list_memories(
-        workspace_id=optional_string(arguments, "workspace_id") or ctx.workspace_id,
+        workspace_id=_resolve_internal_workspace_scope(ctx, arguments),
         memory_type=optional_string(arguments, "memory_type"),
         status=optional_string(arguments, "status"),
         limit=optional_positive_int(arguments, "limit", 10),
@@ -82,7 +126,7 @@ def internal_get_work_batch_service(ctx: ApplicationContext, arguments: dict) ->
     task_id = require_string(arguments, "task_id")
     family_key = require_string(arguments, "family_key")
     execution_lane = require_string(arguments, "execution_lane")
-    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    workspace_id = _resolve_internal_workspace_scope(ctx, arguments)
     limit = optional_positive_int(arguments, "limit", 20)
     lease_ttl_seconds = float(optional_positive_int(arguments, "lease_ttl_seconds", 1800))
     records = work_items.claim_batch(
@@ -126,7 +170,7 @@ def internal_get_compatible_work_batch_service(ctx: ApplicationContext, argument
     task_id = require_string(arguments, "task_id")
     compatibility_group = require_string(arguments, "compatibility_group")
     execution_lane = require_string(arguments, "execution_lane")
-    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    workspace_id = _resolve_internal_workspace_scope(ctx, arguments)
     limit = optional_positive_int(arguments, "limit", 20)
     lease_ttl_seconds = float(optional_positive_int(arguments, "lease_ttl_seconds", 1800))
     family_keys = compatibility_group_families(
@@ -267,7 +311,7 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
 
     task_id = optional_string(arguments, "task_id") or f"{DEDUPLICATOR_TASK_NAME}:internal"
     strategy = optional_string(arguments, "strategy")
-    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    workspace_id = _resolve_internal_workspace_scope(ctx, arguments)
     limit = optional_positive_int(arguments, "limit", 100)
     candidates = [
         record
@@ -310,13 +354,16 @@ def internal_get_next_curator_batch_service(ctx: ApplicationContext, arguments: 
 
     task_id = optional_string(arguments, "task_id") or f"{CURATOR_TASK_NAME}:internal"
     strategy = optional_string(arguments, "strategy")
-    workspace_id = optional_string(arguments, "workspace_id") or ctx.workspace_id
+    workspace_id = _resolve_internal_workspace_scope(ctx, arguments)
     limit = optional_positive_int(arguments, "limit", CURATOR_MAX_SEED_RECORDS)
     exclude_memory_ids = set(string_list(arguments, "exclude_memory_ids"))
+    task_data = {"strategy": strategy} if strategy else {}
+    if workspace_id is not None:
+        task_data["workspace_id"] = workspace_id
     task = TaskRecord(
         id=task_id,
         task_name=CURATOR_TASK_NAME,
-        data={"workspace_id": workspace_id, **({"strategy": strategy} if strategy else {})},
+        data=task_data,
         workspace_id=workspace_id,
         status="running",
         priority=100,

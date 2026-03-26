@@ -257,17 +257,16 @@ def build_agent_prompt(
     work_item_batch_limit: int,
     max_batches_per_run: int,
 ) -> str:
-    workspace_scope = workspace_id or "global"
     lightweight_families = list(campaign_family_keys(COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW))
     return (
         "You are the taxonomist maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly.\n"
         "Treat this run as a lightweight-review campaign: if the current tagging batch is done, keep the same provider session alive while compatible lightweight work remains productive and safe.\n"
         f"Aim to drain eligible {WORK_FAMILY_MEMORY_TAGGING} work for this task in one run without leaving the family boundary.\n"
-        f"Repeatedly call internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', workspace_id='{workspace_scope}', and limit={work_item_batch_limit}.\n"
+        f"Repeatedly call internal_get_work_batch using task_id='{task.id}', family_key='{WORK_FAMILY_MEMORY_TAGGING}', execution_lane='{EXECUTION_LANE_AGENTIC}', and limit={work_item_batch_limit}.\n"
         f"Stop when the batch comes back empty, when you finish {max_batches_per_run} batch pulls, or when lease/time safety suggests you should stop.\n"
         "For each claimed work item, read the target memory, normalize its tags to a concise canonical set, use internal_update_memory_record when the tag set should change, and then finalize the work item.\n"
-        f"After the active tagging frontier is exhausted, you may continue with lightweight follow-on work by calling internal_get_compatible_work_batch using task_id='{task.id}', compatibility_group='lightweight_review', execution_lane='{EXECUTION_LANE_AGENTIC}', allowed_families={lightweight_families}, workspace_id='{workspace_scope}', and limit={work_item_batch_limit}.\n"
+        f"After the active tagging frontier is exhausted, you may continue with lightweight follow-on work by calling internal_get_compatible_work_batch using task_id='{task.id}', compatibility_group='lightweight_review', execution_lane='{EXECUTION_LANE_AGENTIC}', allowed_families={lightweight_families}, and limit={work_item_batch_limit}.\n"
         "For claimed graph_link_review items, inspect payload.candidate_memory_ids, read the candidate memories, and create safe typed links with internal_create_memory_link when justified. For claimed conflict_review items, inspect payload.candidate_memory_ids, read the candidate memories, and add CONTRADICTS links only when the conflict is explicit and evidence-backed.\n"
         "When you claim follow-on lightweight work, complete, release, defer, or heartbeat that work item yourself through the work-item lifecycle tools before moving on.\n"
         "Do not stop the provider session just because the initial tagging loop ended if one more compatible lightweight item would still be high-yield.\n"
