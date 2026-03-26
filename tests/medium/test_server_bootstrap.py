@@ -528,9 +528,9 @@ async def test_call_internal_memory_tool_can_create_record_and_enqueue_summary(m
         )
         created_payload = json.loads(created_result[0].text)
         created_id = created_payload["record"]["id"]
-        summary_task = runtime.task_queue.find_open_task(
+        summary_task = runtime.task_queue.find_open_task_with_data_any_workspace(
             "summarize-memory",
-            runtime.workspace_id or "global",
+            data_fields={"memory_id": created_id},
         )
 
         assert created_payload["status"] == "ok"
