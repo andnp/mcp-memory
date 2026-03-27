@@ -1391,6 +1391,89 @@ def test_management_service_ignores_scheduled_tasks_for_oldest_runnable_age(db_m
     assert all(alert.key != "queue_oldest_age" for alert in nerd_metrics.alerts)
 
 
+def test_management_service_operator_health_snapshot_aggregates_recent_signals(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id=None)
+
+    recent_iso = datetime.now(UTC).isoformat()
+    repository.create_memory(
+        title="Recent operator edit",
+        content="Fresh memory update for snapshot reporting.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=recent_iso,
+    )
+
+    db_manager.get_connection().execute(
+        "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "workspace-a",
+            "daemon",
+            "mcp_memory.tests",
+            "ERROR",
+            "recent operator error",
+            time.time(),
+            "{}",
+        ),
+    )
+
+    task = task_queue.enqueue(
+        "graph-linker",
+        task_id="snapshot-run-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=10.0) is not None
+    task_queue.complete(task.id, completed_at=12.0, run_result={"updated": 1})
+
+    provider_usage.record_conversation(
+        request_id="snapshot-conversation",
+        attempt=1,
+        task_name="graph-linker",
+        task_id=task.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=1111,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="error",
+        error_text="provider timeout",
+        started_at=time.time() - 30.0,
+        completed_at=time.time() - 20.0,
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id=None,
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    snapshot = service.get_operator_health_snapshot(
+        recent_error_limit=5,
+        recent_run_limit=5,
+        conversation_limit=5,
+        recent_memory_limit=5,
+    )
+
+    assert snapshot.scope == "global"
+    assert snapshot.status == "warn"
+    assert "recent_error_logs" in snapshot.alerts
+    assert "recent_ai_errors" in snapshot.alerts
+    assert snapshot.logs.by_level["ERROR"] == 1
+    assert snapshot.logs.recent_errors[0].message == "recent operator error"
+    assert snapshot.tasks.recent_status_counts == {"completed": 1}
+    assert snapshot.tasks.recent[0].task_id == task.id
+    assert snapshot.conversations.by_status == {"error": 1}
+    assert snapshot.conversations.recent[0].request_id == "snapshot-conversation"
+    assert snapshot.memory_activity.updated_last_15_minutes == 1
+    assert snapshot.memory_activity.recent[0].title == "Recent operator edit"
+
+
 def test_management_service_can_record_thought_into_journal(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     journal = System1Journal(db_manager)

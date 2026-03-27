@@ -806,6 +806,89 @@ def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Pat
     assert "Recent Agent Runs" not in result.output
 
 
+def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=str(workspace_a), cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=str(workspace_b), cwd=workspace_b)
+    try:
+        assert runtime_a.db_manager is not None
+        assert runtime_a.repository is not None
+        assert runtime_a.task_queue is not None
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+
+        runtime_a.repository.create_memory(
+            title="CLI health memory",
+            content="Fresh edit for operator snapshot.",
+            workspace_ids=[runtime_a.workspace_id],
+            memory_type="fact",
+        )
+        runtime_a.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime_a.workspace_id,
+                "daemon",
+                "mcp_memory.tests",
+                "ERROR",
+                "cli health error",
+                time.time(),
+                "{}",
+            ),
+        )
+        task = runtime_a.task_queue.enqueue(
+            "graph-linker",
+            task_id="cli-health-task",
+            workspace_id=runtime_a.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime_a.task_queue.claim_next(now=10.0) is not None
+        runtime_a.task_queue.complete(task.id, completed_at=11.0, run_result={"updated": 1})
+        ProviderUsageRepository(runtime_a.db_manager, workspace_id=runtime_b.workspace_id).record_conversation(
+            request_id="cli-health-conversation",
+            attempt=1,
+            task_name="deduplicator",
+            task_id="task-b",
+            provider_key="copilot-mini",
+            provider_name="Copilot CLI",
+            model_name="gpt-5-mini",
+            subprocess_pid=2222,
+            prompt_text="prompt",
+            response_text="response",
+            parsed=None,
+            status="error",
+            error_text="provider unavailable",
+            started_at=time.time() - 20.0,
+            completed_at=time.time() - 10.0,
+        )
+        runtime_a.db_manager.get_connection().commit()
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    result = runner.invoke(
+        main,
+        ["health", "--workspace-root", str(workspace_a), "--scope", "global", "--json"],
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["scope"] == "global"
+    assert payload["status"] == "warn"
+    assert "recent_error_logs" in payload["alerts"]
+    assert payload["logs"]["by_level"]["ERROR"] == 1
+    assert payload["conversations"]["by_status"]["error"] == 1
+    assert payload["tasks"]["recent_status_counts"]["completed"] == 1
+    assert any(item["title"] == "CLI health memory" for item in payload["memory_activity"]["recent"])
+
+
 def test_stats_command_top_reads_show_memory_status(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
 

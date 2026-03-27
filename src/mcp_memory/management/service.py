@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 import os
 from pathlib import Path
 import time
@@ -24,6 +26,11 @@ from mcp_memory.management.models import (
     MemorySearchResultPayload,
     MemorySearchPayload,
     NerdMetricsPayload,
+    OperatorConversationDigestPayload,
+    OperatorHealthSnapshotPayload,
+    OperatorLogDigestPayload,
+    OperatorMemoryActivityPayload,
+    OperatorTaskDigestPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -103,6 +110,74 @@ class ManagementService:
             embeddings=embedder_status,
             search=build_search_health(self._relational_search),
             execution_attempts=build_execution_attempt_health(self._db_manager, self._workspace_id),
+        )
+
+    def get_operator_health_snapshot(
+        self,
+        *,
+        log_window_minutes: int = 15,
+        recent_error_limit: int = 10,
+        recent_run_limit: int = 10,
+        conversation_window_hours: int = 24,
+        conversation_limit: int = 10,
+        recent_memory_limit: int = 10,
+    ) -> OperatorHealthSnapshotPayload:
+        generated_at = time.time()
+        logs_after = generated_at - (max(log_window_minutes, 0) * 60)
+        conversations_after = generated_at - (max(conversation_window_hours, 0) * 3600)
+
+        health = self.get_health()
+        log_summary = self.summarize_logs(after=logs_after)
+        recent_errors = self.list_logs(level="ERROR", after=logs_after, limit=recent_error_limit).logs
+        recent_runs = self.list_recent_agent_runs(limit=recent_run_limit, detail_level="compact").runs
+        recent_run_status_counts = dict(sorted(Counter(run.status for run in recent_runs).items()))
+        conversation_counts = self._count_recent_conversations(after=conversations_after)
+        recent_conversations = self.list_ai_conversations(limit=conversation_limit).conversations
+        recent_memories = self.list_memories(workspace_id=self._workspace_id, limit=recent_memory_limit).records
+
+        alerts: list[str] = []
+        if not health.runtime_active:
+            alerts.append("runtime_inactive")
+        if health.search.degraded:
+            alerts.append("search_degraded")
+        if health.execution_attempts.stale_attempt_count > 0:
+            alerts.append("stale_execution_attempts")
+        if health.execution_attempts.dead_subprocess_count > 0:
+            alerts.append("dead_execution_subprocesses")
+        if log_summary.by_level.get("ERROR", 0) > 0:
+            alerts.append("recent_error_logs")
+        if conversation_counts.get("error", 0) > 0:
+            alerts.append("recent_ai_errors")
+
+        return OperatorHealthSnapshotPayload(
+            generated_at=generated_at,
+            scope="global" if self._workspace_id is None else "workspace",
+            workspace_id=self._workspace_id,
+            status="warn" if alerts else "ok",
+            alerts=alerts,
+            health=health,
+            logs=OperatorLogDigestPayload(
+                window_minutes=max(log_window_minutes, 0),
+                total=log_summary.total,
+                by_level=log_summary.by_level,
+                recent_errors=recent_errors,
+            ),
+            tasks=OperatorTaskDigestPayload(
+                recent_status_counts=recent_run_status_counts,
+                recent=recent_runs,
+            ),
+            conversations=OperatorConversationDigestPayload(
+                window_hours=max(conversation_window_hours, 0),
+                total=sum(conversation_counts.values()),
+                by_status=conversation_counts,
+                recent=recent_conversations,
+            ),
+            memory_activity=OperatorMemoryActivityPayload(
+                updated_last_15_minutes=self._count_recent_memory_updates(minutes=15),
+                updated_last_hour=self._count_recent_memory_updates(minutes=60),
+                updated_last_day=self._count_recent_memory_updates(minutes=24 * 60),
+                recent=recent_memories,
+            ),
         )
 
     def get_overview(
@@ -565,6 +640,45 @@ class ManagementService:
         if not candidate.is_file():
             return None
         return candidate
+
+    def _count_recent_conversations(self, *, after: float) -> dict[str, int]:
+        if self._db_manager is None:
+            return {}
+        query = (
+            "SELECT status, COUNT(*) AS count FROM ai_conversations "
+            "WHERE completed_at >= ?"
+        )
+        params: list[object] = [after]
+        if self._workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(self._workspace_id)
+        query += " GROUP BY status ORDER BY status ASC"
+        rows = self._db_manager.get_connection().execute(query, params).fetchall()
+        return {str(row["status"]): int(row["count"] or 0) for row in rows}
+
+    def _count_recent_memory_updates(self, *, minutes: int) -> int:
+        if self._db_manager is None:
+            return 0
+        cutoff = datetime.now(UTC) - timedelta(minutes=max(minutes, 0))
+        cutoff_iso = cutoff.isoformat()
+        params: list[object] = [cutoff_iso]
+        if self._workspace_id is None:
+            row = self._db_manager.get_connection().execute(
+                "SELECT COUNT(*) AS count FROM memories WHERE julianday(updated_at) >= julianday(?)",
+                params,
+            ).fetchone()
+        else:
+            row = self._db_manager.get_connection().execute(
+                (
+                    "SELECT COUNT(DISTINCT memories.id) AS count "
+                    "FROM memories "
+                    "JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id "
+                    "WHERE julianday(memories.updated_at) >= julianday(?) "
+                    "AND memory_workspaces.workspace_id = ?"
+                ),
+                [*params, self._workspace_id],
+            ).fetchone()
+        return 0 if row is None else int(row["count"] or 0)
 
 
 

@@ -303,6 +303,21 @@ def _show_stats_command(workspace_root: str | None, watch: bool, interval: float
     )
 
 
+def _show_operator_health_snapshot(workspace_root: str | None, scope: str, json_output: bool) -> None:
+    def _run(service: ManagementService) -> None:
+        payload = service.get_operator_health_snapshot()
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_operator_health_snapshot(payload)
+
+    _with_management_service(
+        workspace_root,
+        _run,
+        workspace_id=None if scope == "global" else ..., 
+    )
+
+
 def _import_markdown_files(
     file_paths: tuple[str, ...],
     workspace_root: str | None,
@@ -1004,6 +1019,83 @@ def _render_ai_conversation_table(payload) -> None:
     console.print(table)
 
 
+def _render_operator_health_snapshot(payload) -> None:
+    console.print(f"[bold]Operator Health Snapshot:[/] status={payload.status} scope={payload.scope}")
+    console.print(f"[bold]Generated:[/] {_format_timestamp(payload.generated_at)}")
+    console.print(f"[bold]Workspace context:[/] {payload.workspace_id or 'global'}")
+    console.print(f"[bold]Alerts:[/] {', '.join(payload.alerts) if payload.alerts else 'none'}")
+
+    runtime_table = Table(title="Runtime")
+    runtime_table.add_column("Metric")
+    runtime_table.add_column("Value")
+    runtime_table.add_row("Runtime active", str(payload.health.runtime_active))
+    runtime_table.add_row("Client count", str(payload.health.client_count))
+    runtime_table.add_row("Task queue enabled", str(payload.health.task_queue_enabled))
+    runtime_table.add_row("DB path", payload.health.db_path or "-")
+    console.print(runtime_table)
+
+    _render_search_health_table(payload.health.search)
+    _render_execution_attempt_health_table(payload.health.execution_attempts)
+
+    log_table = Table(title=f"Recent Logs ({payload.logs.window_minutes}m)")
+    log_table.add_column("Metric")
+    log_table.add_column("Value")
+    log_table.add_row("Total", str(payload.logs.total))
+    log_table.add_row(
+        "By level",
+        ", ".join(f"{level}={count}" for level, count in sorted(payload.logs.by_level.items())) or "none",
+    )
+    log_table.add_row("Recent errors", str(len(payload.logs.recent_errors)))
+    console.print(log_table)
+    if payload.logs.recent_errors:
+        _render_logs_table(type("_Payload", (), {"logs": payload.logs.recent_errors})())
+
+    task_table = Table(title="Recent Task Runs")
+    task_table.add_column("Metric")
+    task_table.add_column("Value")
+    task_table.add_row(
+        "Recent statuses",
+        ", ".join(f"{status}={count}" for status, count in sorted(payload.tasks.recent_status_counts.items())) or "none",
+    )
+    task_table.add_row("Runs included", str(len(payload.tasks.recent)))
+    console.print(task_table)
+    if payload.tasks.recent:
+        _render_recent_agent_runs_table(type("_Payload", (), {"runs": payload.tasks.recent})())
+
+    conversation_table = Table(title=f"Recent Conversations ({payload.conversations.window_hours}h)")
+    conversation_table.add_column("Metric")
+    conversation_table.add_column("Value")
+    conversation_table.add_row("Total", str(payload.conversations.total))
+    conversation_table.add_row(
+        "By status",
+        ", ".join(
+            f"{status}={count}" for status, count in sorted(payload.conversations.by_status.items())
+        ) or "none",
+    )
+    conversation_table.add_row("Rows included", str(len(payload.conversations.recent)))
+    console.print(conversation_table)
+    if payload.conversations.recent:
+        _render_ai_conversation_table(type("_Payload", (), {"conversations": payload.conversations.recent})())
+
+    memory_table = Table(title="Recent Memory Activity")
+    memory_table.add_column("Metric")
+    memory_table.add_column("Value")
+    memory_table.add_row("Updated last 15m", str(payload.memory_activity.updated_last_15_minutes))
+    memory_table.add_row("Updated last 1h", str(payload.memory_activity.updated_last_hour))
+    memory_table.add_row("Updated last 24h", str(payload.memory_activity.updated_last_day))
+    memory_table.add_row("Rows included", str(len(payload.memory_activity.recent)))
+    console.print(memory_table)
+    if payload.memory_activity.recent:
+        recent_memories = Table(title="Recent Memory Edits")
+        recent_memories.add_column("Updated", no_wrap=True)
+        recent_memories.add_column("Type", no_wrap=True)
+        recent_memories.add_column("Status", no_wrap=True)
+        recent_memories.add_column("Title")
+        for record in payload.memory_activity.recent:
+            recent_memories.add_row(record.updated_at, record.type, record.status, record.title)
+        console.print(recent_memories)
+
+
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.pass_context
@@ -1521,6 +1613,21 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
     """Print background task and memory statistics."""
     _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
+
+
+@main.command(name="health")
+@workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Inspect the whole shared runtime or only the active workspace context.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
+    """Print an AI-friendly operator health snapshot."""
+    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
 
 
 @main.command(name="monitor")

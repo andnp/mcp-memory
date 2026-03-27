@@ -60,6 +60,45 @@ class HealthPayload(BaseModel):
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
 
 
+class OperatorLogDigestPayload(BaseModel):
+    window_minutes: int = 15
+    total: int = 0
+    by_level: dict[str, int] = Field(default_factory=dict)
+    recent_errors: list["RuntimeLogPayload"] = Field(default_factory=list)
+
+
+class OperatorTaskDigestPayload(BaseModel):
+    recent_status_counts: dict[str, int] = Field(default_factory=dict)
+    recent: list["AgentRunHistoryPayload"] = Field(default_factory=list)
+
+
+class OperatorConversationDigestPayload(BaseModel):
+    window_hours: int = 24
+    total: int = 0
+    by_status: dict[str, int] = Field(default_factory=dict)
+    recent: list["AIConversationPayload"] = Field(default_factory=list)
+
+
+class OperatorMemoryActivityPayload(BaseModel):
+    updated_last_15_minutes: int = 0
+    updated_last_hour: int = 0
+    updated_last_day: int = 0
+    recent: list["CompactMemoryRecord"] = Field(default_factory=list)
+
+
+class OperatorHealthSnapshotPayload(BaseModel):
+    generated_at: float
+    scope: str
+    workspace_id: str | None = None
+    status: str = "ok"
+    alerts: list[str] = Field(default_factory=list)
+    health: HealthPayload
+    logs: OperatorLogDigestPayload = Field(default_factory=OperatorLogDigestPayload)
+    tasks: OperatorTaskDigestPayload = Field(default_factory=OperatorTaskDigestPayload)
+    conversations: OperatorConversationDigestPayload = Field(default_factory=OperatorConversationDigestPayload)
+    memory_activity: OperatorMemoryActivityPayload = Field(default_factory=OperatorMemoryActivityPayload)
+
+
 class OverviewCounts(BaseModel):
     total: int
     by_type: dict[str, int] = Field(default_factory=dict)
