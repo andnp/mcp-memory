@@ -5,6 +5,7 @@ from types import ModuleType
 from typing import Any
 
 from mcp_memory.storage.bootstrap import StorageBootstrapState
+from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
 
 
@@ -28,28 +29,44 @@ def inspect_postgres_bootstrap_state(dsn: str) -> StorageBootstrapState:
     psycopg, _ = load_postgres_driver_modules()
     with psycopg.connect(dsn) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM information_schema.tables
-                    WHERE table_schema = current_schema()
-                      AND table_name = %s
-                )
-                """,
-                ("schema_metadata",),
+            return _inspect_postgres_bootstrap_state_on_cursor(cursor)
+
+
+def ensure_postgres_schema(dsn: str) -> StorageBootstrapState:
+    psycopg, _ = load_postgres_driver_modules()
+    with psycopg.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            current_state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
+            apply_postgres_migrations(
+                cursor,
+                current_version=current_state.schema_version if current_state.schema_metadata_present else None,
             )
-            table_row = cursor.fetchone()
-            schema_metadata_present = bool(table_row[0]) if table_row is not None else False
-            schema_version: int | None = None
-            if schema_metadata_present:
-                cursor.execute(
-                    "SELECT value FROM schema_metadata WHERE key = %s",
-                    ("schema_version",),
-                )
-                version_row = cursor.fetchone()
-                if version_row is not None and version_row[0] is not None:
-                    schema_version = int(version_row[0])
+            return _inspect_postgres_bootstrap_state_on_cursor(cursor)
+
+
+def _inspect_postgres_bootstrap_state_on_cursor(cursor) -> StorageBootstrapState:
+    cursor.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = current_schema()
+              AND table_name = %s
+        )
+        """,
+        ("schema_metadata",),
+    )
+    table_row = cursor.fetchone()
+    schema_metadata_present = bool(table_row[0]) if table_row is not None else False
+    schema_version: int | None = None
+    if schema_metadata_present:
+        cursor.execute(
+            "SELECT value FROM schema_metadata WHERE key = %s",
+            ("schema_version",),
+        )
+        version_row = cursor.fetchone()
+        if version_row is not None and version_row[0] is not None:
+            schema_version = int(version_row[0])
     return StorageBootstrapState(
         backend="postgres",
         schema_metadata_present=schema_metadata_present,
@@ -65,9 +82,9 @@ def build_postgres_runtime_components(
 ) -> StorageBackendResources:
     del embedder
     del enable_background_repair_queue
-    bootstrap_state = inspect_postgres_bootstrap_state(spec.config.storage.postgres.dsn)
+    bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres.dsn)
     raise PostgresBackendNotImplementedError(
-        "storage backend 'postgres' bootstrap inspection completed "
+        "storage backend 'postgres' schema bootstrap completed "
         f"(schema_metadata_present={bootstrap_state.schema_metadata_present}, schema_version={bootstrap_state.schema_version}); "
         "repository wiring is still pending"
     )
