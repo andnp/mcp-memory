@@ -1,50 +1,43 @@
 from __future__ import annotations
 
-import importlib
-from types import ModuleType
 from typing import Any
 
+from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.storage.bootstrap import StorageBootstrapState
+from mcp_memory.storage.postgres_connection import (
+    PostgresConnectionManager,
+)
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
+from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
 
 
-class PostgresDriverMissingError(RuntimeError):
-    pass
+def inspect_postgres_bootstrap_state(config: PostgresStorageConfig) -> StorageBootstrapState:
+    state: StorageBootstrapState | None = None
+    with PostgresConnectionManager(config) as manager:
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
+    assert state is not None
+    return state
 
 
-def load_postgres_driver_modules() -> tuple[ModuleType, ModuleType]:
-    try:
-        return (
-            importlib.import_module("psycopg"),
-            importlib.import_module("psycopg_pool"),
-        )
-    except ModuleNotFoundError as exc:
-        raise PostgresDriverMissingError(
-            "Postgres backend requires psycopg and psycopg_pool; install project dependencies before enabling storage.backend='postgres'"
-        ) from exc
+def ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+    state: StorageBootstrapState | None = None
+    with PostgresConnectionManager(config) as manager:
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                current_state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
+                apply_postgres_migrations(
+                    cursor,
+                    current_version=current_state.schema_version if current_state.schema_metadata_present else None,
+                )
+                state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
+    assert state is not None
+    return state
 
 
-def inspect_postgres_bootstrap_state(dsn: str) -> StorageBootstrapState:
-    psycopg, _ = load_postgres_driver_modules()
-    with psycopg.connect(dsn) as connection:
-        with connection.cursor() as cursor:
-            return _inspect_postgres_bootstrap_state_on_cursor(cursor)
-
-
-def ensure_postgres_schema(dsn: str) -> StorageBootstrapState:
-    psycopg, _ = load_postgres_driver_modules()
-    with psycopg.connect(dsn) as connection:
-        with connection.cursor() as cursor:
-            current_state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
-            apply_postgres_migrations(
-                cursor,
-                current_version=current_state.schema_version if current_state.schema_metadata_present else None,
-            )
-            return _inspect_postgres_bootstrap_state_on_cursor(cursor)
-
-
-def _inspect_postgres_bootstrap_state_on_cursor(cursor) -> StorageBootstrapState:
+def _inspect_postgres_bootstrap_state_on_cursor(cursor: CursorLike) -> StorageBootstrapState:
     cursor.execute(
         """
         SELECT EXISTS (
@@ -66,7 +59,11 @@ def _inspect_postgres_bootstrap_state_on_cursor(cursor) -> StorageBootstrapState
         )
         version_row = cursor.fetchone()
         if version_row is not None and version_row[0] is not None:
-            schema_version = int(version_row[0])
+            raw_version = version_row[0]
+            if isinstance(raw_version, str | int):
+                schema_version = int(raw_version)
+            else:
+                raise TypeError("schema_metadata schema_version must be stored as text or integer")
     return StorageBootstrapState(
         backend="postgres",
         schema_metadata_present=schema_metadata_present,
@@ -82,7 +79,7 @@ def build_postgres_runtime_components(
 ) -> StorageBackendResources:
     del embedder
     del enable_background_repair_queue
-    bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres.dsn)
+    bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres)
     raise PostgresBackendNotImplementedError(
         "storage backend 'postgres' schema bootstrap completed "
         f"(schema_metadata_present={bootstrap_state.schema_metadata_present}, schema_version={bootstrap_state.schema_version}); "

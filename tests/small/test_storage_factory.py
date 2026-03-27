@@ -9,12 +9,7 @@ from mcp_memory.config import Config, PostgresStorageConfig, StorageConfig
 from mcp_memory.mcp.runtime import RuntimeSpec
 from mcp_memory.storage.factory import PostgresBackendNotImplementedError, build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
-from mcp_memory.storage.postgres import (
-    PostgresDriverMissingError,
-    ensure_postgres_schema,
-    inspect_postgres_bootstrap_state,
-    load_postgres_driver_modules,
-)
+from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
 
 
 pytestmark = pytest.mark.small
@@ -38,8 +33,8 @@ def test_storage_factory_rejects_postgres_until_backend_is_implemented(
         lock_path=tmp_path / "daemon.lock",
     )
 
-    def fake_ensure_postgres_schema(dsn: str) -> StorageBootstrapState:
-        assert dsn == "postgresql://memory@example.invalid/mcp_memory"
+    def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+        assert config.dsn == "postgresql://memory@example.invalid/mcp_memory"
         return StorageBootstrapState(
             backend="postgres",
             schema_metadata_present=True,
@@ -53,16 +48,6 @@ def test_storage_factory_rejects_postgres_until_backend_is_implemented(
 
     with pytest.raises(PostgresBackendNotImplementedError, match="schema bootstrap completed"):
         build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
-
-
-def test_load_postgres_driver_modules_raises_helpful_error_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_import_module(name: str):
-        raise ModuleNotFoundError(name)
-
-    monkeypatch.setattr("mcp_memory.storage.postgres.importlib.import_module", fake_import_module)
-
-    with pytest.raises(PostgresDriverMissingError, match="requires psycopg and psycopg_pool"):
-        load_postgres_driver_modules()
 
 
 def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,6 +74,8 @@ def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pyte
             return self._result
 
     class FakeConnection:
+        cursor_instance = FakeCursor()
+
         def __enter__(self) -> FakeConnection:
             return self
 
@@ -96,7 +83,20 @@ def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pyte
             return False
 
         def cursor(self) -> FakeCursor:
-            return FakeCursor()
+            return self.cursor_instance
+
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def getconn(self) -> FakeConnection:
+            return FakeConnection()
+
+        def putconn(self, connection: FakeConnection) -> None:
+            del connection
+
+        def close(self) -> None:
+            return None
 
     class FakePsycopgModule:
         @staticmethod
@@ -108,12 +108,14 @@ def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pyte
         if name == "psycopg":
             return FakePsycopgModule()
         if name == "psycopg_pool":
-            return SimpleNamespace()
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
         raise ModuleNotFoundError(name)
 
-    monkeypatch.setattr("mcp_memory.storage.postgres.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
 
-    state = inspect_postgres_bootstrap_state("postgresql://memory@example.invalid/mcp_memory")
+    state = inspect_postgres_bootstrap_state(
+        PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory")
+    )
 
     assert state == StorageBootstrapState(
         backend="postgres",
@@ -167,6 +169,19 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         def cursor(self) -> FakeCursor:
             return self.cursor_instance
 
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def getconn(self) -> FakeConnection:
+            return FakeConnection()
+
+        def putconn(self, connection: FakeConnection) -> None:
+            del connection
+
+        def close(self) -> None:
+            return None
+
     class FakePsycopgModule:
         @staticmethod
         def connect(dsn: str) -> FakeConnection:
@@ -177,12 +192,14 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         if name == "psycopg":
             return FakePsycopgModule()
         if name == "psycopg_pool":
-            return SimpleNamespace()
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
         raise ModuleNotFoundError(name)
 
-    monkeypatch.setattr("mcp_memory.storage.postgres.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
 
-    state = ensure_postgres_schema("postgresql://memory@example.invalid/mcp_memory")
+    state = ensure_postgres_schema(
+        PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory")
+    )
 
     assert state == StorageBootstrapState(
         backend="postgres",
