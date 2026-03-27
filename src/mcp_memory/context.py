@@ -5,9 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from mcp_memory.config import Config
-from mcp_memory.core.journal import System1Journal
-from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.utils.db import DatabaseManager
 
 
 @dataclass
@@ -16,9 +13,10 @@ class ApplicationContext:
     workspace_id: str | None = None
     workspace_root: Path | None = None
     memory_path: Path | None = None
-    db_manager: DatabaseManager | None = None
-    journal: System1Journal | None = None
-    repository: RelationalMemoryRepository | None = None
+    storage_backend: str | None = None
+    db_manager: Any = None
+    journal: Any = None
+    repository: Any = None
     relational_search: Any = None
     task_queue: Any = None
     ai_json_provider: Any = None
@@ -34,5 +32,8 @@ class ApplicationContext:
     search_health: Any = None
 
     def close(self) -> None:
-        if self.db_manager is not None:
-            self.db_manager.close()
+        if self.db_manager is None:
+            return
+        close_method = getattr(self.db_manager, "close", None)
+        if callable(close_method):
+            close_method()

@@ -2,7 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.config import AIConfig, BackupsConfig, DaemonConfig, MemoryConfig, SearchRankingConfig, ensure_default_config_exists, load_config
+from mcp_memory.config import (
+    AIConfig,
+    BackupsConfig,
+    DaemonConfig,
+    MemoryConfig,
+    SearchRankingConfig,
+    ensure_default_config_exists,
+    load_config,
+    resolve_memory_path,
+)
 
 
 pytestmark = pytest.mark.small
@@ -50,6 +59,12 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.copilot_cli.command == "copilot"
     assert loaded.opencode.command == "opencode"
     assert loaded.ollama.command == "ollama"
+    assert loaded.storage.backend == "sqlite"
+    assert loaded.storage.sqlite.path == ""
+    assert loaded.storage.postgres.pool_min == 1
+    assert loaded.storage.postgres.pool_max == 10
+    assert loaded.storage.cache.enabled is False
+    assert loaded.storage.cache.mode == "readonly"
     assert loaded.daemon.port == 4242
     assert loaded.backups.enabled is True
     assert loaded.backups.interval_seconds == 3600.0
@@ -94,3 +109,36 @@ def test_search_ranking_config_rejects_invalid_graph_expansion_only_penalty() ->
 def test_search_ranking_config_rejects_invalid_adaptive_result_max() -> None:
     with pytest.raises(ValueError, match="search_ranking.adaptive_result_max"):
         SearchRankingConfig(adaptive_result_max=0)
+
+
+def test_storage_config_rejects_unknown_backend(tmp_path: Path) -> None:
+    config_path = tmp_path / "invalid-storage-config.toml"
+    config_path.write_text(
+        """
+[storage]
+backend = "mystery"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="storage.backend"):
+        load_config(config_path)
+
+
+def test_resolve_memory_path_uses_storage_sqlite_path(tmp_path: Path) -> None:
+    configured_root = tmp_path / "custom-memories"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+    f"""
+[storage]
+backend = "sqlite"
+
+[storage.sqlite]
+path = "{configured_root}"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert resolve_memory_path(loaded) == configured_root

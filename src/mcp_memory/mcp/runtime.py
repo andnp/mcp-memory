@@ -16,21 +16,14 @@ from mcp_memory.config import (
     resolve_workspace_root,
 )
 from mcp_memory.context import ApplicationContext
-from mcp_memory.embeddings import SQLiteVectorStore, build_embedder
-from mcp_memory.core.journal import System1Journal
+from mcp_memory.embeddings import build_embedder
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
 from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
-from mcp_memory.work_item_store import SQLiteWorkItemRepository
-from mcp_memory.core.tasks import SQLiteTaskQueue
-from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
-from mcp_memory.relational.repository import RelationalMemoryRepository
-from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.core.storage import ensure_memory_dirs
-from mcp_memory.utils.db import DatabaseManager
+from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
 
 
 MCPRuntime = ApplicationContext
@@ -66,28 +59,13 @@ def resolve_runtime_spec(
 
 
 def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queue: bool = False) -> ApplicationContext:
-    db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
-    journal = System1Journal(db_manager)
-    repository = RelationalMemoryRepository(db_manager)
     embedder = build_embedder(spec.config.embeddings)
-    vector_store = SQLiteVectorStore(db_manager)
-    task_queue = SQLiteTaskQueue(db_manager)
-    task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
-    work_items = SQLiteWorkItemRepository(db_manager)
-    embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
-    relational_search = RelationalMemorySearchService(
-        repository,
-        spec.config,
+    storage = build_storage_runtime_components(
+        spec,
         embedder=embedder,
-        vector_store=vector_store,
-        db_manager=db_manager,
-        task_queue=task_queue,
-        work_items=work_items,
-        embedding_repair_queue=embedding_repair_queue,
-        background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
+        enable_background_repair_queue=enable_background_repair_queue,
     )
-    relational_search.run_startup_health_check()
-    provider_registry = _build_provider_registry(spec=spec, db_manager=db_manager, task_queue=task_queue)
+    provider_registry = _build_provider_registry(spec=spec, storage=storage)
     default_profile_key = _default_profile_key(spec.config)
     default_bundle = {} if default_profile_key is None else provider_registry.get(default_profile_key, {})
     ai_json_provider = default_bundle.get("json")
@@ -97,22 +75,23 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         workspace_id=spec.workspace_id,
         workspace_root=spec.workspace_root,
         memory_path=spec.memory_path,
-        db_manager=db_manager,
-        journal=journal,
-        repository=repository,
-        relational_search=relational_search,
-        task_queue=task_queue,
+        storage_backend=storage.backend,
+        db_manager=storage.db_manager,
+        journal=storage.journal,
+        repository=storage.repository,
+        relational_search=storage.relational_search,
+        task_queue=storage.task_queue,
         ai_json_provider=ai_json_provider,
         ai_agent_provider=ai_agent_provider,
         ai_provider=ai_json_provider,
         ai_provider_registry=provider_registry,
-        provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
-        task_execution_attempts=task_execution_attempts,
-        work_items=work_items,
-        embedding_repair_queue=embedding_repair_queue,
+        provider_policy_events=storage.provider_policy_events,
+        task_execution_attempts=storage.task_execution_attempts,
+        work_items=storage.work_items,
+        embedding_repair_queue=storage.embedding_repair_queue,
         embedder=embedder,
-        vector_store=vector_store,
-        search_health=relational_search.get_health(),
+        vector_store=storage.vector_store,
+        search_health=storage.relational_search.get_health(),
     )
 
 
@@ -130,13 +109,13 @@ def _default_profile_key(config: Config) -> str | None:
     return config.ai.provider
 
 
-def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, task_queue: SQLiteTaskQueue) -> dict[str, dict[str, object]]:
+def _build_provider_registry(*, spec: RuntimeSpec, storage: StorageBackendResources) -> dict[str, dict[str, object]]:
     if _runtime_providers_disabled_for_tests():
         return {}
 
     registry: dict[str, dict[str, object]] = {}
-    usage_repository = ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id)
-    task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
+    usage_repository = ProviderUsageRepository(storage.db_manager, workspace_id=spec.workspace_id)
+    task_execution_attempts = TaskExecutionAttemptRepository(storage.db_manager, workspace_id=spec.workspace_id)
 
     def add_profile(profile_key: str, ai_config) -> None:
         budget_limit = spec.config.provider_routing.profile_daily_call_limits.get(profile_key)
@@ -150,7 +129,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 provider_name=getattr(json_provider, "provider_name", profile_key),
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
-                task_queue=task_queue,
+                task_queue=storage.task_queue,
                 task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
@@ -166,7 +145,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, db_manager: DatabaseManager, 
                 provider_name=getattr(agentic_provider, "provider_name", f"{profile_key}:agentic"),
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
-                task_queue=task_queue,
+                task_queue=storage.task_queue,
                 task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,

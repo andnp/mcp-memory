@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from hashlib import sha1
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 import logging
 import os
 import re
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_APP_NAME = "mcp-memory"
 GLOBAL_DAEMON_IDENTITY = "global"
+StorageBackendKind = Literal["sqlite", "postgres"]
+StorageCacheMode = Literal["readonly", "writeback"]
 
 
 @dataclass
@@ -217,6 +219,61 @@ class DaemonConfig:
 
 
 @dataclass
+class SQLiteStorageConfig:
+    path: str = ""
+
+
+@dataclass
+class PostgresStorageConfig:
+    dsn: str = ""
+    pool_min: int = 1
+    pool_max: int = 10
+    statement_timeout_ms: int = 30000
+    lock_timeout_ms: int = 5000
+    application_name: str = DEFAULT_APP_NAME
+
+    def __post_init__(self) -> None:
+        if self.pool_min < 1:
+            raise ValueError("storage.postgres.pool_min must be >= 1")
+        if self.pool_max < self.pool_min:
+            raise ValueError("storage.postgres.pool_max must be >= storage.postgres.pool_min")
+        if self.statement_timeout_ms < 1:
+            raise ValueError("storage.postgres.statement_timeout_ms must be >= 1")
+        if self.lock_timeout_ms < 1:
+            raise ValueError("storage.postgres.lock_timeout_ms must be >= 1")
+        if not self.application_name.strip():
+            raise ValueError("storage.postgres.application_name must be non-empty")
+
+
+@dataclass
+class StorageCacheConfig:
+    enabled: bool = False
+    mode: StorageCacheMode = "readonly"
+    max_cached_search_docs: int = 50000
+    max_outbox_entries: int = 10000
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"readonly", "writeback"}:
+            raise ValueError("storage.cache.mode must be 'readonly' or 'writeback'")
+        if self.max_cached_search_docs < 1:
+            raise ValueError("storage.cache.max_cached_search_docs must be >= 1")
+        if self.max_outbox_entries < 1:
+            raise ValueError("storage.cache.max_outbox_entries must be >= 1")
+
+
+@dataclass
+class StorageConfig:
+    backend: StorageBackendKind = "sqlite"
+    sqlite: SQLiteStorageConfig = field(default_factory=SQLiteStorageConfig)
+    postgres: PostgresStorageConfig = field(default_factory=PostgresStorageConfig)
+    cache: StorageCacheConfig = field(default_factory=StorageCacheConfig)
+
+    def __post_init__(self) -> None:
+        if self.backend not in {"sqlite", "postgres"}:
+            raise ValueError("storage.backend must be 'sqlite' or 'postgres'")
+
+
+@dataclass
 class BackupsConfig:
     enabled: bool = True
     interval_seconds: float = 3600.0
@@ -324,6 +381,7 @@ class Config:
     copilot_cli: CopilotCLIConfig = field(default_factory=CopilotCLIConfig)
     opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
     ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     backups: BackupsConfig = field(default_factory=BackupsConfig)
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
@@ -416,6 +474,18 @@ def _load_provider_routing_config(data: dict[str, Any]) -> ProviderRoutingConfig
         default_agentic_route=_normalize_route_list(data.get("default_agentic_route", [])),
         fallback_to_json_only=bool(data.get("fallback_to_json_only", False)),
         low_priority_task_names=_normalize_route_list(data.get("low_priority_task_names", [])),
+    )
+
+
+def _load_storage_config(data: dict[str, Any]) -> StorageConfig:
+    sqlite_data = data.get("sqlite", {})
+    postgres_data = data.get("postgres", {})
+    cache_data = data.get("cache", {})
+    return StorageConfig(
+        backend=cast(StorageBackendKind, str(data.get("backend", "sqlite"))),
+        sqlite=_load_dataclass_from_dict(SQLiteStorageConfig, sqlite_data if isinstance(sqlite_data, dict) else {}),
+        postgres=_load_dataclass_from_dict(PostgresStorageConfig, postgres_data if isinstance(postgres_data, dict) else {}),
+        cache=_load_dataclass_from_dict(StorageCacheConfig, cache_data if isinstance(cache_data, dict) else {}),
     )
 
 
@@ -573,6 +643,26 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     document["copilot_cli"] = {"command": "copilot"}
     document["opencode"] = {"command": "opencode"}
     document["ollama"] = {"command": "ollama"}
+    document["storage"] = {
+        "backend": "sqlite",
+        "sqlite": {
+            "path": "",
+        },
+        "postgres": {
+            "dsn": "",
+            "pool_min": 1,
+            "pool_max": 10,
+            "statement_timeout_ms": 30000,
+            "lock_timeout_ms": 5000,
+            "application_name": DEFAULT_APP_NAME,
+        },
+        "cache": {
+            "enabled": False,
+            "mode": "readonly",
+            "max_cached_search_docs": 50000,
+            "max_outbox_entries": 10000,
+        },
+    }
     document["daemon"] = {
         "host": "127.0.0.1",
         "port": 4242,
@@ -670,6 +760,7 @@ def load_config(config_path: Path | None = None) -> Config:
         copilot_cli=_load_dataclass_from_dict(CopilotCLIConfig, raw.get("copilot_cli", {})),
         opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),
         ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
+        storage=_load_storage_config(raw.get("storage", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
         backups=_load_dataclass_from_dict(BackupsConfig, raw.get("backups", {})),
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
@@ -704,7 +795,9 @@ def resolve_workspace_id(
 
 
 def resolve_memory_path(config: Config) -> Path:
-    del config
+    configured_path = config.storage.sqlite.path.strip()
+    if configured_path:
+        return Path(configured_path).expanduser()
     return resolve_global_data_dir() / DEFAULT_APP_NAME / "memories"
 
 
