@@ -7,10 +7,11 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, SQLiteVectorStore
-from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord, RelationalMemoryRepository
+from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
 
@@ -32,6 +33,56 @@ DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN = 8
 
 
 logger = logging.getLogger(__name__)
+
+
+class SearchRepositoryLike(Protocol):
+    def search_keyword_memory_ids(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[str]: ...
+
+    def get_ranking_candidates(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RankedMemoryCandidate]: ...
+
+    def get_links(
+        self,
+        memory_id: str,
+        direction: str = "outgoing",
+        link_type: str | None = None,
+    ) -> list[MemoryLink]: ...
+
+    def count_incoming_links(self, memory_id: str) -> int: ...
+
+    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False) -> int: ...
+
+    def record_access(
+        self,
+        memory_id: str,
+        access_score: float,
+        accessed_at: str,
+        increment_read_count: bool = False,
+    ) -> RelationalMemoryRecord | None: ...
+
+    def get_memory(self, memory_id: str) -> RelationalMemoryRecord | None: ...
+
+    def list_memories(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[RelationalMemoryRecord]: ...
 
 
 @dataclass(slots=True)
@@ -136,7 +187,7 @@ class ScoringWeights:
 class RankingEngine:
     def __init__(
         self,
-        repository: RelationalMemoryRepository,
+        repository: SearchRepositoryLike,
         config: Config,
         *,
         weights: ScoringWeights | None = None,
@@ -350,7 +401,7 @@ class RankingEngine:
 class RelationalMemorySearchService:
     def __init__(
         self,
-        repository: RelationalMemoryRepository,
+        repository: SearchRepositoryLike,
         config: Config,
         *,
         embedder: Embedder | None = None,

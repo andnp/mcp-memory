@@ -9,6 +9,8 @@ from uuid import UUID
 
 import pytest
 
+from mcp_memory.config import Config
+from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 
 
@@ -89,6 +91,8 @@ class FakeCursor:
             self._result = [(tag_name,) for tag_name in tag_names]
         elif normalized.startswith("SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memories(normalized, arguments)
+        elif normalized.startswith("WITH tag_agg AS ("):
+            self._search_keyword_memory_ids(normalized, arguments)
         elif normalized.startswith("INSERT INTO links (source_id, target_id, type, context)"):
             source_id, target_id, link_type, context = map(str, arguments)
             self._state.links[(source_id, target_id, link_type)] = context
@@ -194,6 +198,48 @@ class FakeCursor:
                 memory[column_name] = value
         self._result = []
 
+    def _search_keyword_memory_ids(self, normalized: str, arguments: SqlParams) -> None:
+        raw_tokens = arguments[0]
+        if not isinstance(raw_tokens, list | tuple):
+            raise TypeError("expected token sequence")
+        tokens = [str(token).lower() for token in raw_tokens]
+        limit = self._as_int(arguments[-1])
+        workspace_id: str | None = None
+        memory_type: str | None = None
+        status: str | None = None
+        include_superseded = "NOT EXISTS (SELECT 1 FROM links supersedes" not in normalized
+        argument_index = 2
+        if "JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id" in normalized:
+            workspace_id = str(arguments[argument_index])
+            argument_index += 1
+        if "memories.type = %s" in normalized:
+            memory_type = str(arguments[argument_index])
+            argument_index += 1
+        if "memories.status = %s" in normalized:
+            status = str(arguments[argument_index])
+
+        ranked_rows: list[tuple[str, float, str]] = []
+        for memory in self._state.memories.values():
+            memory_id = str(memory["id"])
+            if workspace_id is not None and workspace_id not in self._state.memory_workspaces.get(memory_id, set()):
+                continue
+            if memory_type is not None and str(memory["type"]) != memory_type:
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
+            if not include_superseded and any(
+                target_id == memory_id and link_type == "SUPERSEDES"
+                for _source_id, target_id, link_type in self._state.links
+            ):
+                continue
+            score = self._keyword_score(memory_id, memory, tokens)
+            if score <= 0.0:
+                continue
+            ranked_rows.append((memory_id, score, str(memory["updated_at"])))
+
+        ranked_rows.sort(key=lambda item: (item[1], item[2], item[0]), reverse=True)
+        self._result = [(memory_id, score) for memory_id, score, _updated_at in ranked_rows[:limit]]
+
     def _select_links(self, normalized: str, arguments: SqlParams) -> None:
         direction_key = "target_id" if "WHERE target_id = %s" in normalized else "source_id"
         memory_id = str(arguments[0])
@@ -232,6 +278,25 @@ class FakeCursor:
             key=lambda memory: (str(memory["updated_at"]), str(memory["created_at"]), str(memory["id"])),
             reverse=True,
         )
+
+    def _keyword_score(self, memory_id: str, memory: dict[str, object], tokens: list[str]) -> float:
+        tag_names = [
+            self._state.tags[tag_id]
+            for tag_id in self._state.memory_tags.get(memory_id, set())
+            if tag_id in self._state.tags
+        ]
+        searchable_fields = [
+            (str(memory["title"]).lower(), 3.0),
+            (str(memory.get("summary") or "").lower(), 2.0),
+            (" ".join(sorted(tag_names)).lower(), 1.5),
+            (str(memory["content"]).lower(), 1.0),
+        ]
+        total = 0.0
+        for token in tokens:
+            for haystack, weight in searchable_fields:
+                if token and token in haystack:
+                    total += weight
+        return total
 
     def _as_int(self, value: object) -> int:
         if isinstance(value, bool):
@@ -496,3 +561,124 @@ def test_postgres_repository_loads_json_metadata_objects(
     fetched = repository.get_memory(created.id)
     assert fetched is not None
     assert fetched.metadata == {"phase": 2, "priority": "high"}
+
+
+def test_postgres_repository_keyword_candidates_use_postgres_fts_shape_and_hide_superseded(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    old_plan = repository.create_memory(
+        title="Legacy auth rollout",
+        content="Old auth rollout plan.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    current_plan = repository.create_memory(
+        title="Current auth rollout",
+        content="Current auth rollout plan.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    cross_workspace = repository.create_memory(
+        title="Auth notes",
+        content="Shared auth notes.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        tags=["auth"],
+    )
+    assert old_plan is not None and current_plan is not None and cross_workspace is not None
+
+    repository.add_link(current_plan.id, old_plan.id, "SUPERSEDES")
+
+    ids = repository.search_keyword_memory_ids(
+        "auth rollout",
+        workspace_id="workspace-alpha",
+        limit=10,
+    )
+
+    assert ids == [current_plan.id]
+
+
+def test_postgres_search_service_prioritizes_workspace_and_hides_superseded(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+    service = RelationalMemorySearchService(repository, Config())
+
+    old_plan = repository.create_memory(
+        title="Legacy auth plan",
+        content="Old auth plan for workspace alpha.",
+        summary="Old plan summary.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+        created_at="2026-02-01T10:00:00+00:00",
+        updated_at="2026-02-01T10:00:00+00:00",
+    )
+    current_plan = repository.create_memory(
+        title="Current auth plan",
+        content="Current auth plan for workspace alpha.",
+        summary="Current plan summary.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+        created_at="2026-03-10T10:00:00+00:00",
+        updated_at="2026-03-10T10:00:00+00:00",
+    )
+    cross_workspace = repository.create_memory(
+        title="Cross workspace auth fact",
+        content="Shared auth fact for another workspace.",
+        summary="Shared fact summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        tags=["auth"],
+        created_at="2026-03-09T10:00:00+00:00",
+        updated_at="2026-03-09T10:00:00+00:00",
+    )
+    assert old_plan is not None and current_plan is not None and cross_workspace is not None
+
+    repository.add_link(current_plan.id, old_plan.id, "SUPERSEDES", "Replaced during redesign")
+
+    results = service.search_memories("auth plan", workspace_id="workspace-alpha", limit=5)
+
+    assert [result.memory_id for result in results] == [current_plan.id, cross_workspace.id]
+    assert results[0].summary == "Current plan summary."
+    assert results[0].workspace_ids == ["workspace-alpha"]
+
+
+def test_postgres_search_service_updates_last_surfaced_timestamps(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+    service = RelationalMemorySearchService(repository, Config())
+
+    active = repository.create_memory(
+        title="Search pipeline active",
+        content="Active search pipeline note.",
+        summary="Active summary.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        tags=["search"],
+    )
+    stale = repository.create_memory(
+        title="Search pipeline stale",
+        content="Stale search pipeline note.",
+        summary="Stale summary.",
+        memory_type="plan",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        tags=["search"],
+    )
+    assert active is not None and stale is not None
+
+    results = service.search_memories("search pipeline", workspace_id="workspace-alpha", limit=5)
+
+    assert [result.memory_id for result in results] == [active.id, stale.id]
+    refreshed_active = repository.get_memory(active.id)
+    refreshed_stale = repository.get_memory(stale.id)
+    assert refreshed_active is not None and refreshed_active.last_surfaced_at is not None
+    assert refreshed_stale is not None and refreshed_stale.last_surfaced_at is not None

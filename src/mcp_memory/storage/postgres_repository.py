@@ -8,7 +8,9 @@ from uuid import uuid4
 
 from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.relational.repository import (
+    FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
+    RankedMemoryCandidate,
     RelationalMemoryRecord,
     VALID_MEMORY_STATUSES,
     VALID_MEMORY_TYPES,
@@ -224,6 +226,139 @@ class PostgresRelationalMemoryRepository:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
                 return [self._hydrate_record(cursor, row) for row in rows]
+
+    def search_keyword_memory_ids(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[str]:
+        tokens = [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+        if not tokens:
+            return []
+
+        clauses = [
+            """
+            EXISTS (
+                SELECT 1
+                FROM unnest(%s::text[]) AS token
+                WHERE search_documents.search_document @@ plainto_tsquery('simple', token)
+            )
+            """
+        ]
+        params: list[object] = [tokens, tokens]
+        joins: list[str] = []
+        if workspace_id is not None:
+            joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
+            clauses.append("memory_workspaces.workspace_id = %s")
+            params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = %s")
+            params.append(memory_type)
+        if status is not None:
+            clauses.append("memories.status = %s")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        params.append(limit)
+        query_sql = (
+            """
+            WITH tag_agg AS (
+                SELECT memory_tags.memory_id, STRING_AGG(tags.name, ' ' ORDER BY tags.name) AS tags_text
+                FROM memory_tags
+                JOIN tags ON tags.id = memory_tags.tag_id
+                GROUP BY memory_tags.memory_id
+            ),
+            search_documents AS (
+                SELECT
+                    memories.id,
+                    (
+                        setweight(to_tsvector('simple', COALESCE(memories.title, '')), 'A')
+                        || setweight(to_tsvector('simple', COALESCE(memories.summary, '')), 'A')
+                        || setweight(to_tsvector('simple', COALESCE(tag_agg.tags_text, '')), 'B')
+                        || setweight(to_tsvector('simple', COALESCE(memories.content, '')), 'C')
+                    ) AS search_document
+                FROM memories
+                LEFT JOIN tag_agg ON tag_agg.memory_id = memories.id
+            )
+            SELECT DISTINCT memories.id,
+                (
+                    SELECT COALESCE(SUM(ts_rank_cd(search_documents.search_document, plainto_tsquery('simple', token))), 0.0)
+                    FROM unnest(%s::text[]) AS token
+                    WHERE search_documents.search_document @@ plainto_tsquery('simple', token)
+                ) AS rank
+            FROM search_documents
+            JOIN memories ON memories.id = search_documents.id
+            """
+            + (" ".join(joins) + " " if joins else "")
+            + "WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY rank DESC, memories.updated_at DESC LIMIT %s"
+        )
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query_sql, tuple(params))
+                rows = cursor.fetchall()
+                return [str(row[0]) for row in rows]
+
+    def get_ranking_candidates(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RankedMemoryCandidate]:
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return []
+
+        ranked_candidates: list[RankedMemoryCandidate] = []
+        for memory_id in normalized_ids:
+            record = self.get_memory(memory_id)
+            if record is None:
+                continue
+            if status is not None and record.status != status:
+                continue
+            incoming_links = self.get_links(memory_id, direction="incoming")
+            incoming_link_type_counts: dict[str, int] = {}
+            for link in incoming_links:
+                incoming_link_type_counts[link.link_type] = incoming_link_type_counts.get(link.link_type, 0) + 1
+            has_incoming_supersedes = incoming_link_type_counts.get("SUPERSEDES", 0) > 0
+            if has_incoming_supersedes and not include_superseded:
+                continue
+            ranked_candidates.append(
+                RankedMemoryCandidate(
+                    record=record,
+                    incoming_links_count=len(incoming_links),
+                    has_incoming_supersedes=has_incoming_supersedes,
+                    incoming_link_type_counts=incoming_link_type_counts,
+                )
+            )
+        return ranked_candidates
+
+    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
+        del best_effort
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return 0
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                for memory_id in normalized_ids:
+                    cursor.execute(
+                        "UPDATE memories SET last_surfaced_at = %s WHERE id = %s",
+                        (surfaced_at, memory_id),
+                    )
+            connection.commit()
+        return len(normalized_ids)
 
     def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
         normalized_workspace_ids = self._normalize_values(workspace_ids)

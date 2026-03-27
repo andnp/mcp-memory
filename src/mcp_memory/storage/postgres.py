@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 from mcp_memory.config import PostgresStorageConfig
-from mcp_memory.relational.search import SearchHealthStatus
+from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres_connection import (
     PostgresConnectionManager,
@@ -22,43 +21,6 @@ class UnsupportedPostgresRuntimeComponent:
     def __getattr__(self, name: str) -> Any:
         raise PostgresBackendNotImplementedError(
             f"storage backend 'postgres' does not yet support {self._feature_name}; attempted to access {name}"
-        )
-
-
-class UnsupportedPostgresSearchService(UnsupportedPostgresRuntimeComponent):
-    def __init__(self) -> None:
-        super().__init__("semantic search")
-        self._health = SearchHealthStatus(
-            semantic_enabled=False,
-            available=False,
-            last_error="storage backend 'postgres' does not yet support semantic search",
-        )
-
-    def get_health(self) -> SearchHealthStatus:
-        return replace(self._health)
-
-    def run_startup_health_check(self) -> SearchHealthStatus:
-        return self.get_health()
-
-    def search_memories(self, *args: object, **kwargs: object) -> list[object]:
-        del args
-        del kwargs
-        raise PostgresBackendNotImplementedError(
-            "storage backend 'postgres' does not yet support semantic search"
-        )
-
-    def read_memory(self, *args: object, **kwargs: object) -> object:
-        del args
-        del kwargs
-        raise PostgresBackendNotImplementedError(
-            "storage backend 'postgres' does not yet support search read flows"
-        )
-
-    def rebuild_semantic_index(self, *args: object, **kwargs: object) -> dict[str, object]:
-        del args
-        del kwargs
-        raise PostgresBackendNotImplementedError(
-            "storage backend 'postgres' does not yet support semantic index rebuilds"
         )
 
 
@@ -140,7 +102,7 @@ def build_postgres_runtime_components(
     unsupported_work_items = UnsupportedPostgresRuntimeComponent("work items")
     unsupported_embedding_repairs = UnsupportedPostgresRuntimeComponent("embedding repair queue")
     unsupported_vector_store = UnsupportedPostgresRuntimeComponent("vector store")
-    relational_search = UnsupportedPostgresSearchService()
+    relational_search = RelationalMemorySearchService(repository, spec.config)
     if not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None:
         raise PostgresBackendNotImplementedError(
             "storage backend 'postgres' schema bootstrap did not complete successfully"
