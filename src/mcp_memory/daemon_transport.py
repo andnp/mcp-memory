@@ -28,10 +28,8 @@ _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
     "/api/admin/search/repair",
     "/api/memories/",
-    "/internal/tools/search_memory_records",
-    "/internal/tools/read_memory_record",
-    "/internal/maintenance/tools/internal_search_memory_records",
-    "/internal/maintenance/tools/internal_read_memory_record",
+    "/internal/tools",
+    "/internal/maintenance/tools",
 )
 
 

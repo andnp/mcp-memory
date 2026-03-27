@@ -26,16 +26,27 @@ class DatabaseManager:
         self._initialize_schema_on(conn)
         conn.close()
 
-    def _open_connection(self) -> sqlite3.Connection:
+    def _open_connection(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        busy_timeout_milliseconds: int | None = None,
+    ) -> sqlite3.Connection:
+        effective_timeout_seconds = SQLITE_BUSY_TIMEOUT_SECONDS if timeout_seconds is None else max(timeout_seconds, 0.0)
+        effective_busy_timeout_milliseconds = (
+            SQLITE_BUSY_TIMEOUT_MILLISECONDS
+            if busy_timeout_milliseconds is None
+            else max(busy_timeout_milliseconds, 0)
+        )
         conn = sqlite3.connect(
             str(self._db_path),
             check_same_thread=False,
-            timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+            timeout=effective_timeout_seconds,
         )
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
-        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS};")
+        conn.execute(f"PRAGMA busy_timeout={effective_busy_timeout_milliseconds};")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -46,6 +57,17 @@ class DatabaseManager:
             conn = self._open_connection()
             self._local.connection = conn
         return conn
+
+    def open_connection(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+        busy_timeout_milliseconds: int | None = None,
+    ) -> sqlite3.Connection:
+        return self._open_connection(
+            timeout_seconds=timeout_seconds,
+            busy_timeout_milliseconds=busy_timeout_milliseconds,
+        )
 
     @property
     def db_path(self):

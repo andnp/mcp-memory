@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -234,5 +235,43 @@ def test_build_nerd_metrics_includes_retrieval_analytics(monkeypatch, tmp_path: 
         common_timeline = next(series for series in payload.retrieval.tag_timelines if series.key == "common-tag")
         assert sum(bucket.count for bucket in common_timeline.read_buckets) == 3
         assert sum(bucket.count for bucket in common_timeline.search_buckets) == expected_search_hits
+    finally:
+        runtime.close()
+
+
+def test_search_memory_records_service_returns_results_while_sqlite_write_lock_is_held(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+
+        record = runtime.repository.create_memory(
+            title="Parallel search reliability",
+            content="Parallel searches should still return results under telemetry write lock contention.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="fact",
+            tags=["search", "reliability"],
+        )
+        assert record is not None
+
+        lock_conn = sqlite3.connect(str(runtime.db_manager.db_path), timeout=0.1)
+        try:
+            lock_conn.execute("PRAGMA journal_mode=WAL;")
+            lock_conn.execute("BEGIN IMMEDIATE")
+
+            payload = search_memory_records_service(runtime, {"query": "parallel search reliability", "limit": 5})
+
+            assert payload["status"] == "ok"
+            assert [row["memory_id"] for row in payload["results"]] == [record.id]
+        finally:
+            lock_conn.rollback()
+            lock_conn.close()
     finally:
         runtime.close()

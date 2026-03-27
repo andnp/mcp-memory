@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -13,6 +15,10 @@ VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "refle
 VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
 FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 _SUMMARY_UNSET = object()
+_NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -367,19 +373,28 @@ class RelationalMemoryRepository:
         ).fetchone()
         return 0 if row is None else int(row[0])
 
-    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str):
+    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return 0
 
-        conn = self._db.get_connection()
+        conn = self._db.get_connection() if not best_effort else self._db.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
         placeholders = ",".join("?" for _ in normalized_ids)
-        with conn:
-            cursor = conn.execute(
-                f"UPDATE memories SET last_surfaced_at = ? WHERE id IN ({placeholders})",
-                [surfaced_at, *normalized_ids],
-            )
-        return cursor.rowcount
+        try:
+            with conn:
+                cursor = conn.execute(
+                    f"UPDATE memories SET last_surfaced_at = ? WHERE id IN ({placeholders})",
+                    [surfaced_at, *normalized_ids],
+                )
+            return cursor.rowcount
+        except sqlite3.OperationalError as exc:
+            if not best_effort or "locked" not in str(exc).lower():
+                raise
+            logger.debug("Skipping last_surfaced_at update due to SQLite lock contention")
+            return 0
+        finally:
+            if best_effort:
+                conn.close()
 
     def record_access(
         self,

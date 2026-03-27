@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import logging
+import sqlite3
 import time
 
 from mcp_memory.utils.db import DatabaseManager
+
+
+logger = logging.getLogger(__name__)
+_NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
 
 
 class RetrievalTelemetryRepository:
@@ -55,11 +61,12 @@ class RetrievalTelemetryRepository:
                 )
             )
 
-        self._db_manager.get_connection().executemany(
-            "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
+        self._best_effort_write(
+            lambda conn: conn.executemany(
+                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
         )
-        self._db_manager.get_connection().commit()
 
     def record_read(
         self,
@@ -73,18 +80,32 @@ class RetrievalTelemetryRepository:
             return
 
         event_time = time.time() if created_at is None else created_at
-        self._db_manager.get_connection().execute(
-            "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                invocation_id,
-                self._workspace_id,
-                caller_kind,
-                "read",
-                memory_id,
-                None,
-                None,
-                None,
-                event_time,
-            ),
+        self._best_effort_write(
+            lambda conn: conn.execute(
+                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    invocation_id,
+                    self._workspace_id,
+                    caller_kind,
+                    "read",
+                    memory_id,
+                    None,
+                    None,
+                    None,
+                    event_time,
+                ),
+            )
         )
-        self._db_manager.get_connection().commit()
+
+    def _best_effort_write(self, operation) -> None:
+        assert self._db_manager is not None
+        conn = self._db_manager.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
+        try:
+            with conn:
+                operation(conn)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            logger.debug("Skipping retrieval telemetry write due to SQLite lock contention")
+        finally:
+            conn.close()

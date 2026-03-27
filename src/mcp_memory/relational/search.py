@@ -580,7 +580,7 @@ class RelationalMemorySearchService:
 
         surfaced_ids = [result.memory_id for result in ranked]
         if surfaced_ids:
-            self._repository.touch_last_surfaced(surfaced_ids, _utc_now())
+            self._repository.touch_last_surfaced(surfaced_ids, _utc_now(), best_effort=True)
         return ranked
 
     def _resolved_result_limit(
