@@ -7,7 +7,10 @@ from .postgres_connection import (
     build_postgres_connection_kwargs,
     load_postgres_driver_modules,
 )
+from .postgres_repository import PostgresRelationalMemoryRepository
 from .postgres import (
+    UnsupportedPostgresRuntimeComponent,
+    UnsupportedPostgresSearchService,
     build_postgres_runtime_components,
     ensure_postgres_schema,
     inspect_postgres_bootstrap_state,
@@ -26,10 +29,13 @@ __all__ = [
     "POSTGRES_MIGRATIONS",
     "POSTGRES_SCHEMA_VERSION",
     "PooledPostgresConnectionLease",
+    "PostgresRelationalMemoryRepository",
     "RuntimeSpecLike",
     "SessionManager",
     "StorageBootstrapState",
     "StorageBackendResources",
+    "UnsupportedPostgresRuntimeComponent",
+    "UnsupportedPostgresSearchService",
     "apply_postgres_migrations",
     "build_postgres_connection_kwargs",
     "build_postgres_runtime_components",

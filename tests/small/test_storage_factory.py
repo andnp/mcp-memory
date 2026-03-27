@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-
 import pytest
 
 from mcp_memory.config import Config, PostgresStorageConfig, StorageConfig
-from mcp_memory.mcp.runtime import RuntimeSpec
-from mcp_memory.storage.factory import PostgresBackendNotImplementedError, build_storage_runtime_components
+from mcp_memory.mcp.runtime import RuntimeSpec, _build_provider_registry
+from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
-from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
+from mcp_memory.storage.postgres import UnsupportedPostgresSearchService, ensure_postgres_schema, inspect_postgres_bootstrap_state
+from mcp_memory.storage.types import StorageBackendResources
 
 
 pytestmark = pytest.mark.small
 
 
-def test_storage_factory_rejects_postgres_until_backend_is_implemented(
+def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsupported_edges(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,8 +46,14 @@ def test_storage_factory_rejects_postgres_until_backend_is_implemented(
         fake_ensure_postgres_schema,
     )
 
-    with pytest.raises(PostgresBackendNotImplementedError, match="schema bootstrap completed"):
-        build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
+    storage = build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
+
+    assert storage.backend == "postgres"
+    assert storage.repository is not None
+    assert isinstance(storage.relational_search, UnsupportedPostgresSearchService)
+    assert storage.relational_search.get_health().available is False
+    with pytest.raises(NotImplementedError, match="task queue"):
+        storage.task_queue.enqueue_unique("test-task", data={}, workspace_id=None)
 
 
 def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,3 +218,35 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         schema_metadata_present=True,
         schema_version=1,
     )
+
+
+def test_build_provider_registry_skips_non_sqlite_backends(tmp_path: Path) -> None:
+    spec = RuntimeSpec(
+        memory_path=tmp_path / "memories",
+        config=Config(
+            storage=StorageConfig(
+                backend="postgres",
+                postgres=PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"),
+            )
+        ),
+        workspace_id="workspace-123",
+        workspace_root=tmp_path,
+        lock_path=tmp_path / "daemon.lock",
+    )
+    storage = StorageBackendResources(
+        backend="postgres",
+        db_manager=object(),
+        journal=object(),
+        repository=object(),
+        relational_search=object(),
+        task_queue=object(),
+        provider_policy_events=object(),
+        task_execution_attempts=object(),
+        work_items=object(),
+        embedding_repair_queue=object(),
+        vector_store=object(),
+    )
+
+    registry = _build_provider_registry(spec=spec, storage=storage)
+
+    assert registry == {}

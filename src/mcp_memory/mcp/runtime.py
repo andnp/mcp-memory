@@ -112,6 +112,8 @@ def _default_profile_key(config: Config) -> str | None:
 def _build_provider_registry(*, spec: RuntimeSpec, storage: StorageBackendResources) -> dict[str, dict[str, object]]:
     if _runtime_providers_disabled_for_tests():
         return {}
+    if storage.backend != "sqlite":
+        return {}
 
     registry: dict[str, dict[str, object]] = {}
     usage_repository = ProviderUsageRepository(storage.db_manager, workspace_id=spec.workspace_id)
