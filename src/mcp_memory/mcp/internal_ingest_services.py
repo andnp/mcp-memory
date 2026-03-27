@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from typing import Any
-
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingest_claim_lifecycle import (
+    _journal_entry_payload,
+    _normalize_ingest_entry_ids,
+    _record_ingest_tool_invocation,
+    _record_successful_ingest_entry_dispositions,
+    _record_successful_ingest_entry_ids,
+    _record_touched_memory_ids,
+)
 from mcp_memory.core.ingest_provenance import (
     build_ingest_appended_metadata,
     build_ingest_created_metadata,
 )
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
-from mcp_memory.mcp.internal_ingest_keys import (
-    INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
-    INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
-    INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
-    INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
-)
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _memory_write_quality_error,
@@ -235,110 +235,3 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
     if warnings:
         payload["warnings"] = warnings
     return payload
-
-
-def _normalize_ingest_entry_ids(arguments: dict[str, Any], field_name: str) -> list[int]:
-    raw_entry_ids = arguments.get(field_name)
-    if not isinstance(raw_entry_ids, list) or not raw_entry_ids:
-        raise ValueError(f"{field_name} must contain at least one entry id")
-
-    normalized: list[int] = []
-    seen: set[int] = set()
-    for item in raw_entry_ids:
-        value: int | None = None
-        if isinstance(item, bool):
-            value = None
-        elif isinstance(item, int):
-            value = item
-        elif isinstance(item, str) and item.strip().isdigit():
-            value = int(item.strip())
-        if value is None or value <= 0 or value in seen:
-            if value is None or value <= 0:
-                raise ValueError(f"{field_name} must contain only positive integer ids")
-            continue
-        seen.add(value)
-        normalized.append(value)
-    if not normalized:
-        raise ValueError(f"{field_name} must contain at least one entry id")
-    return normalized
-
-
-def _journal_entry_payload(entry) -> dict[str, Any]:
-    return {
-        "id": entry.id,
-        "content": entry.content,
-        "workspace_id": entry.workspace_id,
-        "timestamp": entry.timestamp,
-        "status": entry.status,
-    }
-
-
-def _record_successful_ingest_entry_ids(ctx: ApplicationContext, *, task_id: str, entry_ids: list[int]) -> None:
-    if ctx.task_queue is None:
-        return
-    try:
-        ctx.task_queue.extend_running_task_data_int_list(
-            task_id,
-            field_name=INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
-            values=entry_ids,
-        )
-    except ValueError:
-        return
-
-
-def _record_successful_ingest_entry_dispositions(
-    ctx: ApplicationContext,
-    *,
-    task_id: str,
-    entry_dispositions: list[dict[str, Any]],
-) -> None:
-    if ctx.task_queue is None:
-        return
-    try:
-        ctx.task_queue.extend_running_task_data_object_list(
-            task_id,
-            field_name=INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
-            values=entry_dispositions,
-        )
-    except ValueError:
-        return
-
-
-def _record_ingest_tool_invocation(
-    ctx: ApplicationContext,
-    *,
-    task_id: str,
-    tool_name: str,
-    mutation: bool,
-) -> None:
-    if ctx.task_queue is None:
-        return
-    try:
-        ctx.task_queue.extend_running_task_data_object_list(
-            task_id,
-            field_name=INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
-            values=[
-                {
-                    "tool_name": tool_name,
-                    "mutation": mutation,
-                }
-            ],
-        )
-    except ValueError:
-        return
-
-
-def _record_touched_memory_ids(ctx: ApplicationContext, *, task_id: str, memory_ids: list[str]) -> None:
-    if ctx.task_queue is None:
-        return
-    normalized_memory_ids = [memory_id for memory_id in memory_ids if isinstance(memory_id, str) and memory_id.strip()]
-    if not normalized_memory_ids:
-        return
-    try:
-        ctx.task_queue.extend_running_task_data_object_list(
-            task_id,
-            field_name=INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
-            values=[{"memory_id": memory_id.strip()} for memory_id in normalized_memory_ids],
-        )
-    except ValueError:
-        return

@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-from mcp_memory.context import ApplicationContext
-from mcp_memory.mcp.internal_ingest_keys import (
-    INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
-    INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
-    INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
-    INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
+from mcp_memory.core.ingest_claim_lifecycle import (
+    _finalize_claimed_ingest_entries as _finalize_claimed_ingest_entries,
+    _recorded_ingest_entry_dispositions as _recorded_ingest_entry_dispositions,
+    _recorded_ingest_handled_entry_ids as _recorded_ingest_handled_entry_ids,
+    _recorded_ingest_run_metadata as _recorded_ingest_run_metadata,
+    _recorded_ingest_tool_usage as _recorded_ingest_tool_usage,
+    _recorded_ingest_touched_memory_ids as _recorded_ingest_touched_memory_ids,
+    _reset_recorded_ingest_handled_entry_ids as _reset_recorded_ingest_handled_entry_ids,
 )
 
 
@@ -86,158 +88,6 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
         "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
         "tool_names_used": _extract_agentic_tool_names(tool_payload.get("byName")),
     }
-
-
-def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> None:
-    if ctx.task_queue is None:
-        return
-    try:
-        ctx.task_queue.clear_running_task_data_keys(
-            task_id,
-            field_names=[
-                INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
-                INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
-                INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY,
-                INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
-            ],
-        )
-    except ValueError:
-        return
-
-
-def _recorded_ingest_tool_usage(ctx: ApplicationContext, task_id: str) -> dict[str, Any]:
-    if ctx.task_queue is None:
-        return {
-            "tool_calls_executed": 0,
-            "mutations": 0,
-            "tool_names_used": [],
-        }
-    try:
-        task = ctx.task_queue.get_task(task_id)
-    except ValueError:
-        return {
-            "tool_calls_executed": 0,
-            "mutations": 0,
-            "tool_names_used": [],
-        }
-
-    raw_invocations = task.data.get(INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY)
-    if not isinstance(raw_invocations, list):
-        return {
-            "tool_calls_executed": 0,
-            "mutations": 0,
-            "tool_names_used": [],
-        }
-
-    normalized_invocations: list[dict[str, Any]] = []
-    for item in raw_invocations:
-        if not isinstance(item, dict):
-            continue
-        tool_name = item.get("tool_name")
-        if not isinstance(tool_name, str) or not tool_name.strip():
-            continue
-        normalized_invocations.append(
-            {
-                "tool_name": tool_name.strip(),
-                "mutation": bool(item.get("mutation")),
-            }
-        )
-
-    return {
-        "tool_calls_executed": len(normalized_invocations),
-        "mutations": sum(1 for item in normalized_invocations if item["mutation"]),
-        "tool_names_used": sorted({item["tool_name"] for item in normalized_invocations}),
-    }
-
-
-def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> list[int]:
-    if ctx.task_queue is None:
-        return []
-    try:
-        task = ctx.task_queue.get_task(task_id)
-    except ValueError:
-        return []
-    raw_entry_ids = task.data.get(INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY)
-    if not isinstance(raw_entry_ids, list):
-        return []
-    return [
-        entry_id
-        for entry_id in raw_entry_ids
-        if isinstance(entry_id, int) and not isinstance(entry_id, bool) and entry_id > 0
-    ]
-
-
-def _recorded_ingest_entry_dispositions(ctx: ApplicationContext, task_id: str) -> list[dict[str, Any]]:
-    if ctx.task_queue is None:
-        return []
-    try:
-        task = ctx.task_queue.get_task(task_id)
-    except ValueError:
-        return []
-    raw_entry_dispositions = task.data.get(INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY)
-    if not isinstance(raw_entry_dispositions, list):
-        return []
-
-    normalized: list[dict[str, Any]] = []
-    for item in raw_entry_dispositions:
-        if not isinstance(item, dict):
-            continue
-        entry_id = item.get("entry_id")
-        if not isinstance(entry_id, int) or isinstance(entry_id, bool) or entry_id <= 0:
-            continue
-        disposition = item.get("disposition")
-        if not isinstance(disposition, str) or not disposition.strip():
-            continue
-        normalized.append(
-            _build_semantic_entry_disposition(
-                entry_id=entry_id,
-                disposition=disposition.strip(),
-                memory_id=item.get("memory_id"),
-                memory_title=item.get("memory_title"),
-                reason=item.get("reason"),
-            )
-        )
-    return normalized
-
-
-def _recorded_ingest_touched_memory_ids(ctx: ApplicationContext, task_id: str) -> list[str]:
-    if ctx.task_queue is None:
-        return []
-    try:
-        task = ctx.task_queue.get_task(task_id)
-    except ValueError:
-        return []
-    raw_memory_ids = task.data.get(INGEST_TOUCHED_MEMORY_IDS_TASK_DATA_KEY)
-    if not isinstance(raw_memory_ids, list):
-        return []
-    return sorted(
-        {
-            memory_id.strip()
-            for item in raw_memory_ids
-            for memory_id in [item if isinstance(item, str) else item.get("memory_id") if isinstance(item, dict) else None]
-            if isinstance(memory_id, str) and memory_id.strip()
-        }
-    )
-
-
-def _finalize_claimed_ingest_entries(
-    ctx: ApplicationContext,
-    *,
-    task_id: str,
-    handled_entry_ids: list[int],
-) -> tuple[list[int], list[int], list[int]]:
-    if ctx.journal is None:
-        return [], [], []
-    claimed_ids = ctx.journal.get_claimed_entry_ids(task_id)
-    claimed_entry_id_set = set(claimed_ids)
-    handled_claimed_entry_ids = [entry_id for entry_id in handled_entry_ids if entry_id in claimed_entry_id_set]
-    recoverable_ids = ctx.journal.move_claimed_entry_ids_to_recoverable(task_id, handled_claimed_entry_ids)
-    recoverable_entry_id_set = set(recoverable_ids)
-    released_ids = ctx.journal.release_claimed_entry_ids(
-        task_id,
-        [entry_id for entry_id in claimed_ids if entry_id not in recoverable_entry_id_set],
-    )
-    return claimed_ids, recoverable_ids, released_ids
 
 
 def _build_semantic_entry_dispositions(

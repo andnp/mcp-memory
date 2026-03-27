@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingest_claim_lifecycle import (
+    _finalize_claimed_ingest_entries,
+    _recorded_ingest_run_metadata,
+    _reset_recorded_ingest_handled_entry_ids,
+)
 from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
 from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
 from mcp_memory.core.task_handlers.ingest_batch_support import build_ingest_groups
@@ -10,13 +15,7 @@ from mcp_memory.core.task_handlers.ingest_batch_support import entry_similarity
 from mcp_memory.core.task_handlers.ingest_batch_support import process_ingest_batch
 from mcp_memory.core.task_handlers.ingest_support import (
     _build_ingest_result,
-    _finalize_claimed_ingest_entries,
     _normalize_ingest_agentic_result,
-    _recorded_ingest_entry_dispositions,
-    _recorded_ingest_handled_entry_ids,
-    _recorded_ingest_touched_memory_ids,
-    _recorded_ingest_tool_usage,
-    _reset_recorded_ingest_handled_entry_ids,
 )
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
@@ -106,7 +105,8 @@ async def handle_ingest_system1_task(
                 )
             )
             normalized = _normalize_ingest_agentic_result(agentic_result)
-            authoritative_tool_usage = _recorded_ingest_tool_usage(ctx, task.id)
+            recorded_run_metadata = _recorded_ingest_run_metadata(ctx, task.id)
+            authoritative_tool_usage = recorded_run_metadata["tool_usage"]
             meaningful_actions = max(normalized["meaningful_actions"], authoritative_tool_usage["mutations"])
             if (
                 pending_count_before_run > 0
@@ -116,9 +116,9 @@ async def handle_ingest_system1_task(
             ):
                 journal.release_claims(task.id)
             else:
-                semantic_entry_dispositions = _recorded_ingest_entry_dispositions(ctx, task.id)
-                handled_entry_ids = _recorded_ingest_handled_entry_ids(ctx, task.id)
-                touched_memory_ids = _recorded_ingest_touched_memory_ids(ctx, task.id)
+                semantic_entry_dispositions = recorded_run_metadata["entry_dispositions"]
+                handled_entry_ids = recorded_run_metadata["handled_entry_ids"]
+                touched_memory_ids = recorded_run_metadata["touched_memory_ids"]
                 meaningful_actions = max(meaningful_actions, 1 if handled_entry_ids else 0)
 
                 claimed_ids, recoverable_ids, released_ids = _finalize_claimed_ingest_entries(

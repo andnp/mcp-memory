@@ -4,6 +4,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingest_claim_lifecycle import _record_ingest_tool_invocation, _record_touched_memory_ids
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _enqueue_summary_task,
@@ -12,28 +13,15 @@ from mcp_memory.mcp.internal_service_support import (
     _merge_memory_metadata,
     _normalize_tags,
 )
-from mcp_memory.mcp.internal_ingest_keys import INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY
 from mcp_memory.mcp.validation import optional_object, optional_string, optional_bool, require_string, string_list
 from mcp_memory.serialization import memory_record_payload
 
 
 def _maybe_record_ingest_tool_invocation(ctx: ApplicationContext, arguments: dict[str, Any], *, tool_name: str) -> None:
     task_id = optional_string(arguments, "task_id")
-    if task_id is None or ctx.task_queue is None:
+    if task_id is None:
         return
-    try:
-        ctx.task_queue.extend_running_task_data_object_list(
-            task_id,
-            field_name=INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
-            values=[
-                {
-                    "tool_name": tool_name,
-                    "mutation": True,
-                }
-            ],
-        )
-    except ValueError:
-        return
+    _record_ingest_tool_invocation(ctx, task_id=task_id, tool_name=tool_name, mutation=True)
 
 
 def _maybe_record_ingest_touched_memory_ids(
@@ -43,19 +31,9 @@ def _maybe_record_ingest_touched_memory_ids(
     memory_ids: list[str],
 ) -> None:
     task_id = optional_string(arguments, "task_id")
-    if task_id is None or ctx.task_queue is None:
+    if task_id is None:
         return
-    normalized_memory_ids = [memory_id.strip() for memory_id in memory_ids if isinstance(memory_id, str) and memory_id.strip()]
-    if not normalized_memory_ids:
-        return
-    try:
-        ctx.task_queue.extend_running_task_data_object_list(
-            task_id,
-            field_name="ingest_touched_memory_ids",
-            values=[{"memory_id": memory_id} for memory_id in normalized_memory_ids],
-        )
-    except ValueError:
-        return
+    _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=memory_ids)
 
 
 def internal_append_memory_content_service(ctx: ApplicationContext, arguments: dict) -> dict:
