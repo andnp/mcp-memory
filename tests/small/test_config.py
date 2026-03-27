@@ -125,6 +125,37 @@ backend = "mystery"
         load_config(config_path)
 
 
+def test_load_config_rejects_postgres_backend_without_dsn(tmp_path: Path) -> None:
+    config_path = tmp_path / "postgres-without-dsn.toml"
+    config_path.write_text(
+        """
+[storage]
+backend = "postgres"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="storage.postgres.dsn"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_postgres_backend_with_non_postgres_scheme(tmp_path: Path) -> None:
+    config_path = tmp_path / "postgres-invalid-scheme.toml"
+    config_path.write_text(
+        """
+[storage]
+backend = "postgres"
+
+[storage.postgres]
+dsn = "sqlite:///tmp/memory.db"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="postgres:// or postgresql://"):
+        load_config(config_path)
+
+
 def test_resolve_memory_path_uses_storage_sqlite_path(tmp_path: Path) -> None:
     configured_root = tmp_path / "custom-memories"
     config_path = tmp_path / "config.toml"

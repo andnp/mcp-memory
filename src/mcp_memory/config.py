@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import tomllib
+from urllib.parse import urlsplit
 
 import tomlkit
 
@@ -271,6 +272,13 @@ class StorageConfig:
     def __post_init__(self) -> None:
         if self.backend not in {"sqlite", "postgres"}:
             raise ValueError("storage.backend must be 'sqlite' or 'postgres'")
+        if self.backend == "postgres":
+            normalized_dsn = self.postgres.dsn.strip()
+            if not normalized_dsn:
+                raise ValueError("storage.postgres.dsn must be set when storage.backend is 'postgres'")
+            scheme = urlsplit(normalized_dsn).scheme.lower()
+            if scheme not in {"postgres", "postgresql"}:
+                raise ValueError("storage.postgres.dsn must use the postgres:// or postgresql:// scheme")
 
 
 @dataclass
