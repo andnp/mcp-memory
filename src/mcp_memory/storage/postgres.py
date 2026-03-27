@@ -32,6 +32,7 @@ def ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapSta
                     cursor,
                     current_version=current_state.schema_version if current_state.schema_metadata_present else None,
                 )
+                connection.commit()
                 state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
     assert state is not None
     return state

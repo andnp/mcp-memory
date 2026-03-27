@@ -169,6 +169,12 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         def cursor(self) -> FakeCursor:
             return self.cursor_instance
 
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
     class FakeConnectionPool:
         def __init__(self, **kwargs) -> None:
             del kwargs
