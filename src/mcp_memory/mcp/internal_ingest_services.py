@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.ingest_claim_lifecycle import (
-    _journal_entry_payload,
     _normalize_ingest_entry_ids,
     _record_ingest_tool_invocation,
     _record_successful_ingest_entry_dispositions,
@@ -13,7 +12,7 @@ from mcp_memory.core.ingest_provenance import (
     build_ingest_appended_metadata,
     build_ingest_created_metadata,
 )
-from mcp_memory.core.system1_scheduling import resolve_pending_workspace_id
+from mcp_memory.core.task_handlers.ingest_claim_batch_support import build_next_ingest_batch_payload
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _memory_write_quality_error,
@@ -23,7 +22,6 @@ from mcp_memory.mcp.internal_service_support import (
 )
 from mcp_memory.mcp.validation import (
     optional_object,
-    optional_positive_int,
     optional_string,
     require_string,
     string_list,
@@ -32,62 +30,7 @@ from mcp_memory.mcp.validation import (
 from mcp_memory.serialization import memory_record_payload
 
 def internal_get_next_ingest_batch_service(ctx: ApplicationContext, arguments: dict) -> dict:
-    if ctx.journal is None:
-        return {"status": "error", "error": "journal_not_initialized"}
-
-    from mcp_memory.core.task_handlers.ingest import _build_ingest_groups, _resolve_grouping_strategy
-
-    task_id = require_string(arguments, "task_id")
-    requested_workspace_id = optional_string(arguments, "workspace_id")
-    journal_workspace_id = resolve_pending_workspace_id(
-        ctx.journal,
-        requested_workspace_id,
-    )
-    workspace_id = requested_workspace_id or ctx.workspace_id or "workspace-unknown"
-    batch_size = optional_positive_int(arguments, "batch_size", 20)
-    grouping_strategy_requested = optional_string(arguments, "grouping_strategy")
-    grouping_strategy_used, grouping_fallback_reason = _resolve_grouping_strategy(
-        ctx,
-        requested_strategy=grouping_strategy_requested,
-    )
-
-    entries = ctx.journal.claim_pending(
-        task_id=task_id,
-        limit=batch_size,
-        workspace_id=journal_workspace_id,
-    )
-    groups = _build_ingest_groups(
-        ctx,
-        entries,
-        workspace_id,
-        task_id=task_id,
-        grouping_strategy=grouping_strategy_used,
-    )
-    pending_remaining = ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
-    _record_ingest_tool_invocation(
-        ctx,
-        task_id=task_id,
-        tool_name="internal_get_next_ingest_batch",
-        mutation=False,
-    )
-    return {
-        "status": "ok",
-        "task_id": task_id,
-        "requested_grouping_strategy": grouping_strategy_requested,
-        "grouping_strategy_used": grouping_strategy_used,
-        "grouping_fallback_reason": grouping_fallback_reason,
-        "claimed_entry_ids": [entry.id for entry in entries],
-        "pending_remaining": pending_remaining,
-        "has_more": pending_remaining > 0,
-        "group_count": len(groups),
-        "groups": [
-            {
-                "group_index": index,
-                "entries": [_journal_entry_payload(entry) for entry in group],
-            }
-            for index, group in enumerate(groups)
-        ],
-    }
+    return build_next_ingest_batch_payload(ctx, arguments)
 
 
 def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContext, arguments: dict) -> dict:
