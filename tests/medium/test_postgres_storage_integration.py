@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
@@ -521,3 +522,91 @@ async def test_postgres_integration_runtime_worker_periodic_reconciliation_relea
         assert released_work_item.lease_owner is None
         assert released_repair.status == "pending"
         assert released_repair.lease_owner is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_recurring_follow_up_applies_jitter(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        task = queue.enqueue(
+            CURATOR_TASK_NAME,
+            workspace_id=None,
+            data={"workspace_id": None, "trigger": "recurring_schedule", "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]},
+            available_at=0.0,
+            task_id="postgres-curator-follow-up-jitter",
+        )
+        claimed = queue.claim_next(now=100.0)
+        assert claimed is not None
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(db_manager=manager, task_queue=queue),
+            handlers={CURATOR_TASK_NAME: lambda context, queued_task: None},
+            poll_interval_seconds=0.01,
+        )
+        monkeypatch.setattr("mcp_memory.core.task_worker.compute_recurring_jitter_seconds", lambda interval_seconds: 18.0)
+
+        completed_task = queue.complete(task.id, completed_at=140.0, run_result={"mutations": 1}, execution_epoch=claimed.execution_epoch)
+
+        await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+
+        follow_up = queue.find_open_task(CURATOR_TASK_NAME, None)
+
+        assert follow_up is not None
+        assert follow_up.id != task.id
+        assert follow_up.available_at == pytest.approx(140.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] + 18.0)
+        assert follow_up.data["trigger"] == "recurring_follow_up"
+        assert follow_up.data["jitter_seconds"] == pytest.approx(18.0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_requests_shutdown_cancellation_for_running_tasks(
+    postgres_storage_config,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        task = queue.enqueue(
+            "shutdown-me",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-shutdown-me",
+        )
+
+        started = asyncio.Event()
+        released = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def blocking_handler(_ctx: ApplicationContext, queued_task) -> None:
+            started.set()
+            try:
+                await released.wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(db_manager=manager, task_queue=queue, workspace_id="workspace-a"),
+            handlers={"shutdown-me": blocking_handler},
+            poll_interval_seconds=0.01,
+            abandoned_recovery_interval_seconds=30.0,
+        )
+
+        await worker.start()
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            await worker.stop(0.05)
+        finally:
+            released.set()
+
+        task_after_stop = queue.get_task(task.id)
+
+        assert cancelled.is_set()
+        assert task_after_stop.status == "cancelled"
+        assert task_after_stop.cancellation_reason == "daemon_shutdown"
+        assert task_after_stop.cancelled_by == "daemon"
