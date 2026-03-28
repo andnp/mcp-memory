@@ -174,6 +174,13 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[object, ...]]:
         return list(self._result)
 
+    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        for row in rows:
+            self.execute(query, row)
+
+    def close(self) -> None:
+        return None
+
     def _filter_runtime_logs(self, rows: list[dict[str, object]], clauses: str, params: list[object]) -> list[dict[str, object]]:
         filtered = rows
         if not clauses:
@@ -292,6 +299,7 @@ def test_postgres_runtime_log_repository_prunes_by_age_and_count() -> None:
     records = repository.list_logs(limit=10)
 
     assert [record.message for record in records] == ["drop by count", "keep two"]
+    repository.close()
 
 
 def test_postgres_structured_log_handler_writes_runtime_log() -> None:
@@ -311,6 +319,8 @@ def test_postgres_structured_log_handler_writes_runtime_log() -> None:
     logs = repository.list_logs(limit=10)
     assert logs[0].message == "hello world"
     assert logs[0].source == "stdio"
+    repository.close()
+    handler.close()
 
 
 def test_postgres_runtime_log_repository_summarize_logs_aggregates_all_matching_rows() -> None:
@@ -327,6 +337,7 @@ def test_postgres_runtime_log_repository_summarize_logs_aggregates_all_matching_
     assert summary.total == 3
     assert summary.by_level == {"ERROR": 1, "WARNING": 2}
     assert summary.by_source == {"daemon": 3}
+    repository.close()
 
 
 def test_postgres_task_execution_attempt_repository_records_attempt_lifecycle() -> None:

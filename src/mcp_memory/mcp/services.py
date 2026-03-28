@@ -45,7 +45,11 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
 
 
 def _retrieval_telemetry_repository(ctx: ApplicationContext) -> RetrievalTelemetryRepository:
-    return RetrievalTelemetryRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+    repository = ctx.retrieval_telemetry
+    if repository is None:
+        repository = RetrievalTelemetryRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+        ctx.retrieval_telemetry = repository
+    return repository
 
 
 def _log_slow_memory_tool_operation(

@@ -7,6 +7,7 @@ import time
 
 from mcp_memory.config import LoggingConfig, PostgresStorageConfig
 from mcp_memory.runtime_log_store import RuntimeLogRecord, RuntimeLogSummary, _ALL_WORKSPACES, _AllWorkspacesSentinel, _build_log_filters, _decode_log_data
+from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
@@ -53,6 +54,17 @@ class _StoredRuntimeLog:
     data_json: object
 
 
+@dataclass(frozen=True)
+class _PendingRuntimeLog:
+    workspace_id: str | None
+    source: str
+    logger_name: str
+    level: str
+    message: str
+    created_at: float
+    data_json: str
+
+
 class PostgresRuntimeLogRepository:
     def __init__(
         self,
@@ -65,6 +77,13 @@ class PostgresRuntimeLogRepository:
         self._workspace_id = workspace_id
         self._config = config if config is not None else LoggingConfig()
         self._last_retention_at = 0.0
+        self._writer = BufferedWriter[_PendingRuntimeLog](
+            self._flush_log_batch,
+            name="postgres-runtime-logs",
+            low_watermark=1,
+            high_watermark=128,
+            flush_interval_seconds=0.01,
+        )
 
     @property
     def retention_policy(self) -> LoggingConfig:
@@ -82,25 +101,24 @@ class PostgresRuntimeLogRepository:
     ) -> None:
         if self._sessions is None:
             return
-        with self._sessions.open_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
-                    """,
-                    (
-                        self._workspace_id,
-                        source,
-                        logger_name,
-                        level,
-                        message,
-                        created_at,
-                        json.dumps(data, sort_keys=True),
-                    ),
-                )
-            connection.commit()
+        self._writer.write(
+            _PendingRuntimeLog(
+                workspace_id=self._workspace_id,
+                source=source,
+                logger_name=logger_name,
+                level=level,
+                message=message,
+                created_at=created_at,
+                data_json=json.dumps(data, sort_keys=True),
+            )
+        )
         self.apply_retention_policy(now=created_at)
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()
 
     def list_logs(
         self,
@@ -116,6 +134,7 @@ class PostgresRuntimeLogRepository:
     ) -> list[RuntimeLogRecord]:
         if self._sessions is None:
             return []
+        self.flush()
         resolved_workspace_id = _normalize_workspace_id(workspace_id)
         where_clause, params = _build_log_filters(
             workspace_id=resolved_workspace_id,
@@ -149,6 +168,7 @@ class PostgresRuntimeLogRepository:
     ) -> RuntimeLogSummary:
         if self._sessions is None:
             return RuntimeLogSummary(total=0)
+        self.flush()
         resolved_workspace_id = _normalize_workspace_id(workspace_id)
         where_clause, params = _build_log_filters(
             workspace_id=resolved_workspace_id,
@@ -205,6 +225,7 @@ class PostgresRuntimeLogRepository:
     ) -> int:
         if self._sessions is None:
             return 0
+        self.flush()
         resolved_workspace_id = _normalize_workspace_id(workspace_id)
         effective_max_runtime_logs = self._config.max_runtime_logs if max_runtime_logs is None else max_runtime_logs
         effective_max_age_days = self._config.max_log_age_days if max_age_days is None else max_age_days
@@ -249,6 +270,32 @@ class PostgresRuntimeLogRepository:
             data=_decode_log_data(log_record.data_json),
         )
 
+    def _flush_log_batch(self, batch: list[_PendingRuntimeLog]) -> None:
+        if self._sessions is None or not batch:
+            return
+        rows = [
+            (
+                item.workspace_id,
+                item.source,
+                item.logger_name,
+                item.level,
+                item.message,
+                item.created_at,
+                item.data_json,
+            )
+            for item in batch
+        ]
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    rows,
+                )
+            connection.commit()
+
 
 class PostgresStructuredLogHandler(logging.Handler):
     def __init__(
@@ -292,6 +339,7 @@ class PostgresStructuredLogHandler(logging.Handler):
 
     def close(self) -> None:
         try:
+            self._repository.close()
             if self._owns_session_manager:
                 self._session_manager.close()
         finally:

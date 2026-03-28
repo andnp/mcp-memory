@@ -25,6 +25,7 @@ class ApplicationContext:
     ai_provider_registry: dict[str, Any] | None = None
     provider_usage: Any = None
     runtime_logs: Any = None
+    retrieval_telemetry: Any = None
     provider_policy_events: Any = None
     task_execution_attempts: Any = None
     work_items: Any = None
@@ -34,8 +35,11 @@ class ApplicationContext:
     search_health: Any = None
 
     def close(self) -> None:
-        if self.db_manager is None:
-            return
-        close_method = getattr(self.db_manager, "close", None)
-        if callable(close_method):
-            close_method()
+        for resource in (self.retrieval_telemetry, self.runtime_logs, self.repository):
+            close_method = getattr(resource, "close", None)
+            if callable(close_method):
+                close_method()
+        if self.db_manager is not None:
+            close_method = getattr(self.db_manager, "close", None)
+            if callable(close_method):
+                close_method()
