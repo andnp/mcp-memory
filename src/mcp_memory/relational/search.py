@@ -139,6 +139,13 @@ class GraphExpansionInfo:
 
 
 @dataclass(slots=True)
+class SemanticCandidatePool:
+    candidates: list[RelationalMemoryRecord]
+    candidate_ids: list[str] | None = None
+    speculative: bool = False
+
+
+@dataclass(slots=True)
 class RankingSignals:
     matched_by_keyword: bool = False
     matched_by_semantic: bool = False
@@ -534,6 +541,7 @@ class RelationalMemorySearchService:
             include_superseded=include_superseded,
             keyword_ids=keyword_ids,
             query_tokens=query_tokens,
+            requested_limit=candidate_limit,
             limit=max(50, candidate_limit),
         )
         engine = RankingEngine(self._repository, self._config)
@@ -825,14 +833,18 @@ class RelationalMemorySearchService:
         include_superseded: bool,
         keyword_ids: Sequence[str],
         query_tokens: Sequence[str],
+        requested_limit: int,
         limit: int,
     ) -> tuple[list[str], dict[str, float]]:
-        candidates, bounded_candidate_ids = self._semantic_candidate_pool(
+        candidate_pool = self._semantic_candidate_pool(
             keyword_ids,
             query_tokens,
             status=status,
             include_superseded=include_superseded,
+            requested_limit=requested_limit,
         )
+        candidates = candidate_pool.candidates
+        bounded_candidate_ids = candidate_pool.candidate_ids
         if bounded_candidate_ids is not None:
             semantic_scores = self._semantic_scores(
                 query,
@@ -841,6 +853,19 @@ class RelationalMemorySearchService:
                 candidate_ids=bounded_candidate_ids,
                 limit=limit,
             )
+            if candidate_pool.speculative and self._should_broaden_semantic_search(
+                candidates,
+                semantic_scores,
+                workspace_id=workspace_id,
+                requested_limit=requested_limit,
+            ):
+                candidates = self._repository.list_memories(status=status, limit=500)
+                semantic_scores = self._semantic_scores(
+                    query,
+                    candidates,
+                    None,
+                    limit=limit,
+                )
         else:
             semantic_scores = self._semantic_scores(
                 query,
@@ -866,16 +891,22 @@ class RelationalMemorySearchService:
         *,
         status: str | None,
         include_superseded: bool,
-    ) -> tuple[list[RelationalMemoryRecord], list[str] | None]:
-        bounded_candidates = self._bounded_semantic_candidates(
+        requested_limit: int,
+    ) -> SemanticCandidatePool:
+        bounded_candidates, speculative = self._bounded_semantic_candidates(
             keyword_ids,
             query_tokens,
             status=status,
             include_superseded=include_superseded,
+            requested_limit=requested_limit,
         )
         if bounded_candidates is not None:
-            return bounded_candidates, [candidate.id for candidate in bounded_candidates]
-        return self._repository.list_memories(status=status, limit=500), None
+            return SemanticCandidatePool(
+                candidates=bounded_candidates,
+                candidate_ids=[candidate.id for candidate in bounded_candidates],
+                speculative=speculative,
+            )
+        return SemanticCandidatePool(candidates=self._repository.list_memories(status=status, limit=500))
 
     def _bounded_semantic_candidates(
         self,
@@ -884,9 +915,10 @@ class RelationalMemorySearchService:
         *,
         status: str | None,
         include_superseded: bool,
-    ) -> list[RelationalMemoryRecord] | None:
+        requested_limit: int,
+    ) -> tuple[list[RelationalMemoryRecord] | None, bool]:
         if not keyword_ids or not getattr(self._vector_store, "supports_candidate_filtering", False):
-            return None
+            return None, False
 
         keyword_candidates = self._repository.get_ranking_candidates(
             list(keyword_ids),
@@ -894,19 +926,55 @@ class RelationalMemorySearchService:
             include_superseded=include_superseded,
         )
         if not keyword_candidates:
-            return None
+            return None, False
 
+        evaluated_candidates = keyword_candidates[:LEXICAL_STRENGTH_EVAL_LIMIT]
         strongest_keyword_coverage = max(
-            (
-                _keyword_token_coverage(query_tokens, keyword_candidate.record)
-                for keyword_candidate in keyword_candidates[:LEXICAL_STRENGTH_EVAL_LIMIT]
-            ),
+            (_keyword_token_coverage(query_tokens, keyword_candidate.record) for keyword_candidate in evaluated_candidates),
             default=0.0,
         )
         if strongest_keyword_coverage < self._config.search_ranking.keyword_coverage_floor:
-            return None
+            speculative_keyword_floor = (
+                self._config.search_ranking.keyword_coverage_floor
+                * self._config.search_ranking.adaptive_result_score_ratio_floor
+            )
+            if (
+                strongest_keyword_coverage < speculative_keyword_floor
+                or len(keyword_candidates) < max(requested_limit, 1)
+            ):
+                return None, False
+            return [keyword_candidate.record for keyword_candidate in keyword_candidates], True
 
-        return [keyword_candidate.record for keyword_candidate in keyword_candidates]
+        return [keyword_candidate.record for keyword_candidate in keyword_candidates], False
+
+    def _should_broaden_semantic_search(
+        self,
+        candidates: Sequence[RelationalMemoryRecord],
+        semantic_scores: dict[str, float],
+        *,
+        workspace_id: str | None,
+        requested_limit: int,
+    ) -> bool:
+        if not semantic_scores:
+            return True
+        effective_limit = max(requested_limit, 1)
+        ranked_ids = _rank_semantic_candidate_ids(
+            list(candidates),
+            semantic_scores,
+            workspace_id=workspace_id,
+            limit=effective_limit,
+            workspace_multiplier=self._config.search_ranking.workspace_multiplier,
+        )
+        if len(ranked_ids) < effective_limit:
+            return True
+
+        top_score = semantic_scores.get(ranked_ids[0], 0.0)
+        minimum_score = max(
+            self._config.search_ranking.adaptive_result_min_score,
+            top_score * self._config.search_ranking.adaptive_result_score_ratio_floor,
+        )
+        cutoff_score = semantic_scores.get(ranked_ids[effective_limit - 1], 0.0)
+        return top_score < self._config.search_ranking.adaptive_result_min_score or cutoff_score < minimum_score
 
     def _expand_graph_candidate_scores(
         self,

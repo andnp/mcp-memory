@@ -720,6 +720,10 @@ class _CountingFakeEmbedder(_FakeEmbedder):
         return super().embed(texts)
 
 
+class _CandidateFilteringVectorStore:
+    supports_candidate_filtering = True
+
+
 def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(
@@ -751,6 +755,117 @@ def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db
 
     assert results
     assert results[0].memory_id == auth_record.id
+
+
+def test_search_memories_uses_speculative_bounded_semantic_scores_for_dense_keyword_neighborhoods(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    records = []
+    for index in range(5):
+        record = repository.create_memory(
+            title=f"Postgres backend note {index}",
+            content="Postgres backend guidance for shared deployments.",
+            summary="Postgres backend summary.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["postgres"],
+        )
+        assert record is not None
+        records.append(record)
+
+    call_modes: list[str] = []
+    score_by_id = {
+        record.id: score
+        for record, score in zip(records, [0.92, 0.89, 0.86, 0.83, 0.8], strict=False)
+    }
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        if candidate_ids is None:
+            raise AssertionError("global semantic fallback should not run for dense speculative bounded results")
+        call_modes.append("bounded")
+        assert set(candidate_ids) == {record.id for record in records}
+        return score_by_id
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results = service.search_memories(
+        "postgres backend storage latency",
+        workspace_id="workspace-alpha",
+        limit=3,
+    )
+
+    assert call_modes == ["bounded"]
+    assert len(results) == 3
+    assert {result.memory_id for result in results}.issubset({record.id for record in records})
+
+
+def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bounded_scores_are_sparse(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    lexical_records = []
+    for index in range(3):
+        record = repository.create_memory(
+            title=f"Postgres backend note {index}",
+            content="Postgres backend guidance for shared deployments.",
+            summary="Postgres backend summary.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["postgres"],
+        )
+        assert record is not None
+        lexical_records.append(record)
+
+    semantic_only = repository.create_memory(
+        title="Shared storage latency diagnosis",
+        content="Shared storage latency diagnosis for Postgres deployments.",
+        summary="Latency diagnosis summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["latency"],
+    )
+    assert semantic_only is not None
+
+    call_modes: list[str] = []
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        if candidate_ids is not None:
+            call_modes.append("bounded")
+            return {
+                lexical_records[0].id: 0.91,
+                lexical_records[1].id: 0.9,
+            }
+        call_modes.append("global")
+        return {
+            semantic_only.id: 0.99,
+            lexical_records[0].id: 0.91,
+            lexical_records[1].id: 0.9,
+            lexical_records[2].id: 0.89,
+        }
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results = service.search_memories(
+        "postgres backend storage latency",
+        workspace_id="workspace-alpha",
+        limit=3,
+    )
+
+    assert call_modes == ["bounded", "global"]
+    assert semantic_only.id in {result.memory_id for result in results}
 
 
 def test_workspace_scoped_search_keeps_global_semantic_candidates(db_manager) -> None:
