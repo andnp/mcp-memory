@@ -962,6 +962,11 @@ class RelationalMemorySearchService:
         self._refresh_background_repair_health_snapshot()
 
     def _refresh_background_repair_health_snapshot(self) -> None:
+        if not self._health.semantic_enabled:
+            self._health.queued_repair_backlog_count = 0
+            self._health.running_repair_count = 0
+            self._health.oldest_queued_repair_age_seconds = None
+            return
         if self._embedding_repair_queue is not None:
             snapshot = self._embedding_repair_queue.backlog_snapshot()
             self._health.queued_repair_backlog_count = snapshot.queued_count
@@ -996,6 +1001,7 @@ class RelationalMemorySearchService:
             self._health.oldest_queued_repair_age_seconds = None
         else:
             self._health.oldest_queued_repair_age_seconds = max(time.time() - float(oldest_created_at), 0.0)
+
 
 def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
     tag_text = ", ".join(record.tags)

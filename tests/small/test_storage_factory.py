@@ -41,7 +41,7 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
         return StorageBootstrapState(
             backend="postgres",
             schema_metadata_present=True,
-            schema_version=4,
+            schema_version=5,
         )
 
     monkeypatch.setattr(
@@ -156,7 +156,7 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
                 self._result = None if self.schema_version is None else (self.schema_version,)
                 return
             if normalized.startswith("INSERT INTO schema_metadata"):
-                assert params in {("schema_version", "1"), ("schema_version", "2"), ("schema_version", "3"), ("schema_version", "4")}
+                assert params in {("schema_version", "1"), ("schema_version", "2"), ("schema_version", "3"), ("schema_version", "4"), ("schema_version", "5")}
                 self.schema_metadata_present = True
                 assert params is not None
                 self.schema_version = str(params[1])
@@ -221,7 +221,7 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
     assert state == StorageBootstrapState(
         backend="postgres",
         schema_metadata_present=True,
-        schema_version=4,
+        schema_version=5,
     )
 
 

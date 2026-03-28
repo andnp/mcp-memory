@@ -3,8 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.config import PostgresStorageConfig
+from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
+from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
+from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
+from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres_connection import (
@@ -94,12 +98,11 @@ def build_postgres_runtime_components(
     embedder: Any,
     enable_background_repair_queue: bool,
 ) -> StorageBackendResources:
-    del embedder
     del enable_background_repair_queue
     bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres)
     connection_manager = PostgresConnectionManager(spec.config.storage.postgres)
     repository = PostgresRelationalMemoryRepository(connection_manager)
-    unsupported_journal = UnsupportedPostgresRuntimeComponent("system1 journal")
+    journal = PostgresSystem1Journal(connection_manager)
     unsupported_task_queue = UnsupportedPostgresRuntimeComponent("task queue")
     provider_policy_events = PostgresProviderPolicyEventRepository(connection_manager, workspace_id=spec.workspace_id)
     provider_usage = PostgresProviderUsageRepository(connection_manager, workspace_id=spec.workspace_id)
@@ -109,10 +112,18 @@ def build_postgres_runtime_components(
         config=spec.config.logging,
     )
     task_execution_attempts = PostgresTaskExecutionAttemptRepository(connection_manager, workspace_id=spec.workspace_id)
-    unsupported_work_items = UnsupportedPostgresRuntimeComponent("work items")
-    unsupported_embedding_repairs = UnsupportedPostgresRuntimeComponent("embedding repair queue")
-    unsupported_vector_store = UnsupportedPostgresRuntimeComponent("vector store")
-    relational_search = RelationalMemorySearchService(repository, spec.config)
+    work_items = PostgresWorkItemRepository(connection_manager)
+    embedding_repair_queue = PostgresEmbeddingRepairQueue(connection_manager)
+    vector_store = PostgresVectorStore(connection_manager)
+    relational_search = RelationalMemorySearchService(
+        repository,
+        spec.config,
+        embedder=embedder,
+        vector_store=vector_store,
+        task_queue=None,
+        work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
+    )
     if not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None:
         raise PostgresBackendNotImplementedError(
             "storage backend 'postgres' schema bootstrap did not complete successfully"
@@ -120,7 +131,7 @@ def build_postgres_runtime_components(
     return StorageBackendResources(
         backend="postgres",
         db_manager=connection_manager,
-        journal=unsupported_journal,
+        journal=journal,
         repository=repository,
         relational_search=relational_search,
         task_queue=unsupported_task_queue,
@@ -128,7 +139,7 @@ def build_postgres_runtime_components(
         runtime_logs=runtime_logs,
         provider_policy_events=provider_policy_events,
         task_execution_attempts=task_execution_attempts,
-        work_items=unsupported_work_items,
-        embedding_repair_queue=unsupported_embedding_repairs,
-        vector_store=unsupported_vector_store,
+        work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
+        vector_store=vector_store,
     )

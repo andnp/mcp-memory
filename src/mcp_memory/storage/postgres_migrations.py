@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 4
+POSTGRES_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -223,6 +223,132 @@ POSTGRES_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_task_id_created ON provider_policy_events(task_id, created_at DESC, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_workspace_created ON provider_policy_events(workspace_id, created_at DESC, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_event_kind_created ON provider_policy_events(event_kind, created_at DESC, id DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=5,
+        name="add_operational_runtime_stores",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                task_name TEXT NOT NULL,
+                workspace_id TEXT,
+                data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                status TEXT NOT NULL DEFAULT 'pending',
+                execution_epoch INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 100,
+                retries_count INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                created_at DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                available_at DOUBLE PRECISION NOT NULL,
+                claimed_at DOUBLE PRECISION,
+                started_at DOUBLE PRECISION,
+                completed_at DOUBLE PRECISION,
+                last_error TEXT,
+                subprocess_pid INTEGER,
+                active_request_id TEXT,
+                cancellation_requested_at DOUBLE PRECISION,
+                cancelled_at DOUBLE PRECISION,
+                cancellation_reason TEXT,
+                cancelled_by TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                task_name TEXT NOT NULL,
+                workspace_id TEXT,
+                status TEXT NOT NULL,
+                started_at DOUBLE PRECISION NOT NULL,
+                completed_at DOUBLE PRECISION NOT NULL,
+                duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+                result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                error_text TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS system1_journal (
+                id BIGSERIAL PRIMARY KEY,
+                content TEXT NOT NULL,
+                workspace_id TEXT,
+                author TEXT,
+                timestamp DOUBLE PRECISION NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claim_task_id TEXT,
+                claimed_at DOUBLE PRECISION,
+                recoverable_until DOUBLE PRECISION
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS embeddings (
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                workspace_id TEXT,
+                model_name TEXT NOT NULL,
+                embedding_json JSONB NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (source_kind, source_id, model_name)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_items (
+                id TEXT PRIMARY KEY,
+                family_key TEXT NOT NULL,
+                execution_lane TEXT NOT NULL,
+                workspace_id TEXT,
+                payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority INTEGER NOT NULL DEFAULT 100,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                available_at DOUBLE PRECISION NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                claimed_at DOUBLE PRECISION,
+                completed_at DOUBLE PRECISION,
+                lease_owner TEXT,
+                lease_expires_at DOUBLE PRECISION,
+                idempotency_key TEXT UNIQUE,
+                last_error TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS embedding_repair_queue (
+                id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL,
+                workspace_id TEXT,
+                model_name TEXT NOT NULL,
+                memory_updated_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                available_at DOUBLE PRECISION NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                claimed_at DOUBLE PRECISION,
+                completed_at DOUBLE PRECISION,
+                lease_owner TEXT,
+                lease_expires_at DOUBLE PRECISION,
+                last_error TEXT,
+                UNIQUE (memory_id, model_name, memory_updated_at)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(status, available_at, priority, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_task_runs_task_name_completed_at ON task_runs(task_name, completed_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_task_runs_workspace_task_name_completed_at ON task_runs(workspace_id, task_name, completed_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_system1_journal_status ON system1_journal(status)",
+            "CREATE INDEX IF NOT EXISTS idx_system1_journal_claim_task_id ON system1_journal(claim_task_id)",
+            "CREATE INDEX IF NOT EXISTS idx_system1_journal_recoverable_until ON system1_journal(status, recoverable_until)",
+            "CREATE INDEX IF NOT EXISTS idx_embeddings_source_kind_id ON embeddings(source_kind, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_embeddings_workspace_kind ON embeddings(workspace_id, source_kind)",
+            "CREATE INDEX IF NOT EXISTS idx_work_items_ready ON work_items(status, family_key, execution_lane, available_at, priority, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_work_items_workspace_ready ON work_items(workspace_id, status, family_key, execution_lane, available_at, priority, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_work_items_lease_owner ON work_items(lease_owner, status, lease_expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_ready ON embedding_repair_queue(status, available_at, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_workspace_ready ON embedding_repair_queue(workspace_id, status, available_at, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_lease_owner ON embedding_repair_queue(lease_owner, status, lease_expires_at)",
         ),
     ),
 )
