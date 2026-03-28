@@ -28,6 +28,7 @@ class FakePostgresState:
     tag_ids_by_name: dict[str, int] = field(default_factory=dict)
     memory_tags: dict[str, set[int]] = field(default_factory=dict)
     links: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    memory_search_documents: set[str] = field(default_factory=set)
     next_tag_id: int = 1
 
 
@@ -91,8 +92,14 @@ class FakeCursor:
             self._result = [(tag_name,) for tag_name in tag_names]
         elif normalized.startswith("SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memories(normalized, arguments)
-        elif normalized.startswith("WITH tag_agg AS ("):
+        elif normalized.startswith("SELECT DISTINCT memories.id,"):
             self._search_keyword_memory_ids(normalized, arguments)
+        elif normalized.startswith("INSERT INTO memory_search_documents ("):
+            self._state.memory_search_documents.add(str(arguments[0]))
+            self._result = []
+        elif normalized == "DELETE FROM memory_search_documents WHERE memory_id = %s":
+            self._state.memory_search_documents.discard(str(arguments[0]))
+            self._result = []
         elif normalized.startswith("INSERT INTO links (source_id, target_id, type, context)"):
             source_id, target_id, link_type, context = map(str, arguments)
             self._state.links[(source_id, target_id, link_type)] = context
@@ -221,6 +228,8 @@ class FakeCursor:
         ranked_rows: list[tuple[str, float, str]] = []
         for memory in self._state.memories.values():
             memory_id = str(memory["id"])
+            if self._state.memory_search_documents and memory_id not in self._state.memory_search_documents:
+                continue
             if workspace_id is not None and workspace_id not in self._state.memory_workspaces.get(memory_id, set()):
                 continue
             if memory_type is not None and str(memory["type"]) != memory_type:

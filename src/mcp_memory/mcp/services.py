@@ -59,15 +59,18 @@ def _log_slow_memory_tool_operation(
         return
     runtime_logs = getattr(ctx, "runtime_logs", None)
     if runtime_logs is not None:
-        runtime_logs.write_log(
-            source="memory-tool",
-            logger_name=__name__,
-            level="WARNING",
-            message=f"Slow {tool_name} operation",
-            created_at=time(),
-            data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)} | data,
-        )
-        return
+        try:
+            runtime_logs.write_log(
+                source="memory-tool",
+                logger_name=__name__,
+                level="WARNING",
+                message=f"Slow {tool_name} operation",
+                created_at=time(),
+                data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)} | data,
+            )
+            return
+        except Exception:  # pragma: no cover - defensive fallback for locked telemetry/log stores
+            logger.warning("Failed to persist slow %s log; falling back to process logger", tool_name, exc_info=True)
     logger.warning("Slow %s operation: %.3fms %s", tool_name, duration_ms, data)
 
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 import json
+import logging
 from pathlib import Path
 import sys
 import time
@@ -377,6 +379,33 @@ def _resolve_default_sqlite_db_path() -> Path:
     return resolve_memory_path(config) / "indices" / "memory.db"
 
 
+@contextmanager
+def _suppress_config_bootstrap_logging(enabled: bool):
+    if not enabled:
+        yield
+        return
+    config_logger = logging.getLogger("mcp_memory.config")
+    previous_disabled = config_logger.disabled
+    config_logger.disabled = True
+    try:
+        yield
+    finally:
+        config_logger.disabled = previous_disabled
+
+
+@contextmanager
+def _suppress_all_logging(enabled: bool):
+    if not enabled:
+        yield
+        return
+    previous_disable_level = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous_disable_level)
+
+
 def _migrate_sqlite_to_postgres_command(
     sqlite_path: Path | None,
     postgres_dsn: str | None,
@@ -384,18 +413,21 @@ def _migrate_sqlite_to_postgres_command(
     allow_non_empty_target: bool,
     json_output: bool,
 ) -> None:
-    config = load_config()
-    resolved_sqlite_path = (sqlite_path or _resolve_default_sqlite_db_path()).expanduser().resolve()
-    resolved_postgres_dsn = postgres_dsn.strip() if isinstance(postgres_dsn, str) and postgres_dsn.strip() else config.storage.postgres.dsn.strip()
-    if not resolved_postgres_dsn:
-        raise click.UsageError("Provide --postgres-dsn or set storage.postgres.dsn in config.toml.")
+    with _suppress_all_logging(json_output):
+        with _suppress_config_bootstrap_logging(json_output):
+            config = load_config()
+            default_sqlite_path = _resolve_default_sqlite_db_path() if sqlite_path is None else sqlite_path
+        resolved_sqlite_path = default_sqlite_path.expanduser().resolve()
+        resolved_postgres_dsn = postgres_dsn.strip() if isinstance(postgres_dsn, str) and postgres_dsn.strip() else config.storage.postgres.dsn.strip()
+        if not resolved_postgres_dsn:
+            raise click.UsageError("Provide --postgres-dsn or set storage.postgres.dsn in config.toml.")
 
-    summary = migrate_sqlite_to_postgres(
-        resolved_sqlite_path,
-        replace(config.storage.postgres, dsn=resolved_postgres_dsn),
-        dry_run=dry_run,
-        allow_non_empty_target=allow_non_empty_target,
-    )
+        summary = migrate_sqlite_to_postgres(
+            resolved_sqlite_path,
+            replace(config.storage.postgres, dsn=resolved_postgres_dsn),
+            dry_run=dry_run,
+            allow_non_empty_target=allow_non_empty_target,
+        )
     if json_output:
         click.echo(json.dumps(summary.to_dict(), sort_keys=True))
         return

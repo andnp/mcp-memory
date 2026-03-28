@@ -11,6 +11,7 @@ from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
+from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.types import StorageBackendResources
@@ -156,9 +157,10 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
                 self._result = None if self.schema_version is None else (self.schema_version,)
                 return
             if normalized.startswith("INSERT INTO schema_metadata"):
-                assert params in {("schema_version", "1"), ("schema_version", "2"), ("schema_version", "3"), ("schema_version", "4"), ("schema_version", "5")}
-                self.schema_metadata_present = True
                 assert params is not None
+                assert params[0] == "schema_version"
+                assert int(str(params[1])) in range(1, POSTGRES_SCHEMA_VERSION + 1)
+                self.schema_metadata_present = True
                 self.schema_version = str(params[1])
                 self._result = None
                 return
@@ -221,7 +223,7 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
     assert state == StorageBootstrapState(
         backend="postgres",
         schema_metadata_present=True,
-        schema_version=5,
+        schema_version=POSTGRES_SCHEMA_VERSION,
     )
 
 
