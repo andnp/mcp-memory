@@ -372,3 +372,152 @@ async def test_postgres_integration_runtime_worker_reconciles_attempt_for_recove
         assert attempt.status == "error"
         assert attempt.completed_at == pytest.approx(1000.0)
         assert attempt.termination_reason == "task_failed"
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_releases_leaked_work_items_and_embedding_repairs_for_terminal_task(
+    postgres_storage_config,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        work_items = PostgresWorkItemRepository(manager)
+        repair_queue = PostgresEmbeddingRepairQueue(manager)
+        task = queue.enqueue(
+            "memory-curator",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-terminal-cleanup-task",
+        )
+        claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+        assert claimed is not None
+
+        work_item, created = work_items.enqueue_unique(
+            family_key="memory_tagging",
+            execution_lane=EXECUTION_LANE_DETERMINISTIC,
+            payload={"memory_id": "memory-1"},
+            workspace_id="workspace-a",
+            priority=10,
+            available_at=5.0,
+            idempotency_key="memory-tagging:memory-1",
+        )
+        claimed_work_items = work_items.claim_batch(
+            family_key="memory_tagging",
+            execution_lane=EXECUTION_LANE_DETERMINISTIC,
+            lease_owner=task.id,
+            limit=10,
+            workspace_id="workspace-a",
+            now=10.0,
+        )
+
+        repair_item, repair_created = repair_queue.enqueue_unique(
+            memory_id="memory-1",
+            workspace_id="workspace-a",
+            model_name="mini-embed",
+            memory_updated_at="2026-03-28T00:00:00+00:00",
+            available_at=5.0,
+        )
+        claimed_repairs = repair_queue.claim_batch(
+            lease_owner=task.id,
+            limit=10,
+            workspace_id="workspace-a",
+            now=10.0,
+        )
+
+        completed_task = queue.complete(task.id, completed_at=20.0, execution_epoch=claimed.execution_epoch)
+        worker = RuntimeTaskWorker(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                work_items=work_items,
+                embedding_repair_queue=repair_queue,
+                workspace_id="workspace-a",
+            ),
+            handlers={"memory-curator": lambda context, queued_task: None},
+        )
+
+        worker._reconcile_terminal_task_state(completed_task)  # noqa: SLF001
+
+        released_work_item = work_items.get_item(work_item.id)
+        released_repair = repair_queue.get_item(repair_item.id)
+
+        assert created is True
+        assert repair_created is True
+        assert [item.id for item in claimed_work_items] == [work_item.id]
+        assert [item.id for item in claimed_repairs] == [repair_item.id]
+        assert released_work_item.status == "pending"
+        assert released_work_item.lease_owner is None
+        assert released_repair.status == "pending"
+        assert released_repair.lease_owner is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_periodic_reconciliation_releases_orphaned_work_items_and_embedding_repairs(
+    postgres_storage_config,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        work_items = PostgresWorkItemRepository(manager)
+        repair_queue = PostgresEmbeddingRepairQueue(manager)
+
+        work_item, created = work_items.enqueue_unique(
+            family_key="memory_tagging",
+            execution_lane=EXECUTION_LANE_DETERMINISTIC,
+            payload={"memory_id": "memory-orphaned"},
+            workspace_id="workspace-a",
+            priority=10,
+            available_at=5.0,
+            idempotency_key="memory-tagging:memory-orphaned",
+        )
+        claimed_work_items = work_items.claim_batch(
+            family_key="memory_tagging",
+            execution_lane=EXECUTION_LANE_DETERMINISTIC,
+            lease_owner="missing-task",
+            limit=10,
+            workspace_id="workspace-a",
+            now=10.0,
+        )
+
+        repair_item, repair_created = repair_queue.enqueue_unique(
+            memory_id="memory-orphaned",
+            workspace_id="workspace-a",
+            model_name="mini-embed",
+            memory_updated_at="2026-03-29T00:00:00+00:00",
+            available_at=5.0,
+        )
+        claimed_repairs = repair_queue.claim_batch(
+            lease_owner="missing-task",
+            limit=10,
+            workspace_id="workspace-a",
+            now=10.0,
+        )
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                work_items=work_items,
+                embedding_repair_queue=repair_queue,
+                workspace_id="workspace-a",
+            ),
+            handlers={},
+            abandoned_task_stale_after_seconds=300.0,
+        )
+
+        await worker._run_reconciliation_pass(now=20.0, reason="periodic")  # noqa: SLF001
+
+        released_work_item = work_items.get_item(work_item.id)
+        released_repair = repair_queue.get_item(repair_item.id)
+
+        assert created is True
+        assert repair_created is True
+        assert [item.id for item in claimed_work_items] == [work_item.id]
+        assert [item.id for item in claimed_repairs] == [repair_item.id]
+        assert queue.list_tasks(status="running", workspace_id=None, limit=10) == []
+        assert released_work_item.status == "pending"
+        assert released_work_item.lease_owner is None
+        assert released_repair.status == "pending"
+        assert released_repair.lease_owner is None
