@@ -234,6 +234,7 @@ def create_daemon_app(
             metadata_path=metadata_path,
         )
         await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
+        await warmup_task
         app.state.routes = routes
         app.state.idle_shutdown_task = None
         app.state.backup_task = backup_task

@@ -4,6 +4,7 @@ import asyncio
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from datetime import UTC, datetime
 import json
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -511,6 +512,53 @@ async def test_daemon_lifespan_attempts_embedding_model_cache(monkeypatch, tmp_p
             await asyncio.sleep(0.05)
             assert cache_calls == ["called"]
     finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_daemon_lifespan_waits_for_embedding_model_cache_before_ready(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    cache_started = threading.Event()
+    release_cache = threading.Event()
+
+    class FakeEmbedder:
+        model_name = "fake-local-model"
+
+        def cache_model(self) -> bool:
+            cache_started.set()
+            assert release_cache.wait(timeout=1.0)
+            return True
+
+    runtime.embedder = FakeEmbedder()
+    monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    lifespan = app.router.lifespan_context(app)
+    enter_task: asyncio.Task[object] | None = None
+
+    try:
+        enter_task = asyncio.create_task(lifespan.__aenter__())
+        await asyncio.to_thread(cache_started.wait, 1.0)
+        assert cache_started.is_set() is True
+        assert enter_task is not None
+        assert enter_task.done() is False
+
+        release_cache.set()
+        assert enter_task is not None
+        await asyncio.wait_for(enter_task, timeout=1.0)
+        assert hasattr(app.state, "metadata")
+    finally:
+        if enter_task is not None and not enter_task.done():
+            enter_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await enter_task
+        elif enter_task is not None:
+            await lifespan.__aexit__(None, None, None)
         runtime.close()
 
 
