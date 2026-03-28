@@ -1538,6 +1538,18 @@ def test_management_service_operator_health_snapshot_aggregates_recent_signals(d
             "{}",
         ),
     )
+    db_manager.get_connection().execute(
+        "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "workspace-a",
+            "daemon",
+            "mcp_memory.core.provider_policy",
+            "WARNING",
+            "Provider routing exhausted all configured routes",
+            time.time(),
+            '{"extra":{"task_name":"graph-linker"}}',
+        ),
+    )
 
     task = task_queue.enqueue(
         "graph-linker",
@@ -1547,6 +1559,53 @@ def test_management_service_operator_health_snapshot_aggregates_recent_signals(d
     )
     assert task_queue.claim_next(now=10.0) is not None
     task_queue.complete(task.id, completed_at=12.0, run_result={"updated": 1})
+
+    retry_task = task_queue.enqueue(
+        "graph-linker",
+        task_id="snapshot-run-2",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=13.0) is not None
+    task_queue.fail(retry_task.id, "retry me", retry_delay_seconds=30.0, failed_at=14.0)
+
+    db_manager.get_connection().execute(
+        "INSERT INTO provider_policy_events (workspace_id, task_name, task_id, event_kind, warning_kind, provider_key, provider_name, model_name, route_key, candidate_routes_json, reason_category, reason_code, retry_delay_seconds, warning_suppressed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "workspace-a",
+            "graph-linker",
+            task.id,
+            "route_exhausted",
+            "provider_routing_exhausted",
+            None,
+            None,
+            None,
+            None,
+            '["gemini-cheap","copilot-mini"]',
+            None,
+            None,
+            None,
+            0,
+            time.time(),
+        ),
+    )
+    db_manager.get_connection().execute(
+        "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "workspace-a",
+            "graph-linker",
+            "gemini-cli",
+            "Gemini CLI",
+            "gemini-3-flash-preview",
+            "skipped",
+            0.0,
+            time.time(),
+            "quota reset pending",
+            "upstream",
+            "provider_quota_exhausted",
+            90.0,
+        ),
+    )
 
     provider_usage.record_conversation(
         request_id="snapshot-conversation",
@@ -1584,15 +1643,26 @@ def test_management_service_operator_health_snapshot_aggregates_recent_signals(d
     assert snapshot.scope == "global"
     assert snapshot.status == "warn"
     assert "recent_error_logs" in snapshot.alerts
+    assert "recent_task_retries" in snapshot.alerts
     assert "recent_ai_errors" in snapshot.alerts
+    assert "provider_policy_churn" in snapshot.alerts
     assert snapshot.logs.by_level["ERROR"] == 1
     assert snapshot.logs.recent_errors[0].message == "recent operator error"
-    assert snapshot.tasks.recent_status_counts == {"completed": 1}
-    assert snapshot.tasks.recent[0].task_id == task.id
+    assert snapshot.warnings.total == 1
+    assert snapshot.warnings.recent[0].logger_name == "mcp_memory.core.provider_policy"
+    assert snapshot.tasks.recent_status_counts == {"completed": 1, "retry": 1}
+    assert [run.task_id for run in snapshot.tasks.recent] == [retry_task.id, task.id]
+    assert snapshot.tasks.recent_failure_count == 0
+    assert snapshot.tasks.recent_retry_count == 1
+    assert snapshot.tasks.recent_retries[0].task_id == retry_task.id
     assert snapshot.conversations.by_status == {"error": 1}
     assert snapshot.conversations.recent[0].request_id == "snapshot-conversation"
     assert snapshot.memory_activity.updated_last_15_minutes == 1
     assert snapshot.memory_activity.recent[0].title == "Recent operator edit"
+    provider_policy_stats = {stat.key: stat.value for stat in snapshot.provider_policy.stats}
+    assert provider_policy_stats["provider_policy_route_exhaustion_count"] == 1.0
+    assert provider_policy_stats["provider_policy_admission_skip_count"] == 1.0
+    assert snapshot.provider_policy.by_task[0].task_name == "graph-linker"
 
 
 def test_management_service_can_record_thought_into_journal(db_manager) -> None:

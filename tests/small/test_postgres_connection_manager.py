@@ -48,9 +48,16 @@ def test_postgres_connection_manager_returns_borrow_to_pool_on_close(monkeypatch
     returned_connections: list[object] = []
     closed_pools: list[str] = []
     rollbacks: list[str] = []
+
     class FakeConnection:
+        broken = False
+        closed = False
+
         def rollback(self) -> None:
             rollbacks.append("rolled-back")
+
+        def close(self) -> None:
+            self.closed = True
 
     raw_connection = FakeConnection()
 
@@ -109,11 +116,17 @@ def test_postgres_connection_lease_rolls_back_on_exception(monkeypatch: pytest.M
     rollbacks: list[str] = []
 
     class FakeConnection:
+        broken = False
+        closed = False
+
         def commit(self) -> None:
             return None
 
         def rollback(self) -> None:
             rollbacks.append("rolled-back")
+
+        def close(self) -> None:
+            self.closed = True
 
     raw_connection = FakeConnection()
 
@@ -156,8 +169,14 @@ def test_postgres_connection_lease_resets_transaction_before_context_exit(monkey
     rollbacks: list[str] = []
 
     class FakeConnection:
+        broken = False
+        closed = False
+
         def rollback(self) -> None:
             rollbacks.append("rolled-back")
+
+        def close(self) -> None:
+            self.closed = True
 
     raw_connection = FakeConnection()
 
@@ -191,4 +210,114 @@ def test_postgres_connection_lease_resets_transaction_before_context_exit(monkey
     manager.close()
 
     assert rollbacks == ["rolled-back"]
+    assert returned_connections == [raw_connection]
+
+
+def test_postgres_connection_lease_discards_broken_borrow_before_returning_to_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    returned_connections: list[object] = []
+    closed_connections: list[str] = []
+    rollbacks: list[str] = []
+
+    class FakeConnection:
+        broken = True
+        closed = False
+
+        def rollback(self) -> None:
+            rollbacks.append("rolled-back")
+
+        def close(self) -> None:
+            closed_connections.append("closed")
+            self.closed = True
+
+    raw_connection = FakeConnection()
+
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def getconn(self) -> FakeConnection:
+            return raw_connection
+
+        def putconn(self, connection: object) -> None:
+            returned_connections.append(connection)
+
+        def close(self) -> None:
+            return None
+
+    def fake_import_module(name: str):
+        if name == "psycopg":
+            return SimpleNamespace()
+        if name == "psycopg_pool":
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
+
+    manager = PostgresConnectionManager(PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"))
+
+    with manager.open_connection() as connection:
+        assert connection is raw_connection
+
+    manager.close()
+
+    assert rollbacks == []
+    assert closed_connections == ["closed"]
+    assert returned_connections == [raw_connection]
+
+
+def test_postgres_connection_lease_discards_connection_when_exception_cleanup_reset_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    returned_connections: list[object] = []
+    closed_connections: list[str] = []
+    rollbacks: list[str] = []
+
+    class FakeConnection:
+        broken = False
+        closed = False
+
+        def rollback(self) -> None:
+            rollbacks.append("rollback-attempted")
+            raise RuntimeError("reset failed")
+
+        def close(self) -> None:
+            closed_connections.append("closed")
+            self.closed = True
+
+    raw_connection = FakeConnection()
+
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def getconn(self) -> FakeConnection:
+            return raw_connection
+
+        def putconn(self, connection: object) -> None:
+            returned_connections.append(connection)
+
+        def close(self) -> None:
+            return None
+
+    def fake_import_module(name: str):
+        if name == "psycopg":
+            return SimpleNamespace()
+        if name == "psycopg_pool":
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
+
+    manager = PostgresConnectionManager(PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with manager.open_connection() as _connection:
+            raise RuntimeError("boom")
+
+    manager.close()
+
+    assert rollbacks == ["rollback-attempted"]
+    assert closed_connections == ["closed"]
     assert returned_connections == [raw_connection]

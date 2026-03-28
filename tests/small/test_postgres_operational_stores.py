@@ -93,6 +93,25 @@ class FakeCursor:
                 for row in rows[:limit]
             ]
             return
+        if normalized.startswith("SELECT COUNT(*) FROM runtime_logs"):
+            rows = list(self._state.runtime_logs)
+            clauses = normalized.split(" WHERE ", 1)[1] if " WHERE " in normalized else ""
+            rows = self._filter_runtime_logs(rows, clauses, list(arguments))
+            self._result = [(len(rows),)]
+            return
+        if normalized.startswith("SELECT level, source, COUNT(*) FROM runtime_logs"):
+            rows = list(self._state.runtime_logs)
+            clauses = normalized.split(" WHERE ", 1)[1].split(" GROUP BY ", 1)[0] if " WHERE " in normalized else ""
+            rows = self._filter_runtime_logs(rows, clauses, list(arguments))
+            grouped: dict[tuple[str, str], int] = {}
+            for row in rows:
+                key = (str(row["level"]), str(row["source"]))
+                grouped[key] = grouped.get(key, 0) + 1
+            self._result = [
+                (level, source, count)
+                for (level, source), count in sorted(grouped.items())
+            ]
+            return
         if normalized == "DELETE FROM runtime_logs WHERE id = %s":
             log_id = _as_int(arguments[0])
             self._state.runtime_logs = [row for row in self._state.runtime_logs if _as_int(row["id"]) != log_id]
@@ -292,6 +311,22 @@ def test_postgres_structured_log_handler_writes_runtime_log() -> None:
     logs = repository.list_logs(limit=10)
     assert logs[0].message == "hello world"
     assert logs[0].source == "stdio"
+
+
+def test_postgres_runtime_log_repository_summarize_logs_aggregates_all_matching_rows() -> None:
+    session_manager = FakeSessionManager()
+    repository = PostgresRuntimeLogRepository(session_manager, workspace_id=None)
+
+    repository.write_log(source="daemon", logger_name="mcp_memory.policy", level="WARNING", message="warning one", created_at=100.0, data={})
+    repository.write_log(source="daemon", logger_name="mcp_memory.policy", level="WARNING", message="warning two", created_at=101.0, data={})
+    repository.write_log(source="daemon", logger_name="mcp_memory.policy", level="ERROR", message="error one", created_at=102.0, data={})
+    repository.write_log(source="stdio", logger_name="mcp_memory.other", level="INFO", message="info one", created_at=103.0, data={})
+
+    summary = repository.summarize_logs(source="daemon", after=100.0)
+
+    assert summary.total == 3
+    assert summary.by_level == {"ERROR": 1, "WARNING": 2}
+    assert summary.by_source == {"daemon": 3}
 
 
 def test_postgres_task_execution_attempt_repository_records_attempt_lifecycle() -> None:

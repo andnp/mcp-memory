@@ -149,22 +149,40 @@ class PostgresRuntimeLogRepository:
     ) -> RuntimeLogSummary:
         if self._sessions is None:
             return RuntimeLogSummary(total=0)
-        records = self.list_logs(
-            workspace_id=workspace_id,
+        resolved_workspace_id = _normalize_workspace_id(workspace_id)
+        where_clause, params = _build_log_filters(
+            workspace_id=resolved_workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
             query=query,
             after=after,
             before=before,
-            limit=10_000,
         )
+        total_sql = "SELECT COUNT(*) FROM runtime_logs" + where_clause.replace("?", "%s")
+        grouped_sql = (
+            "SELECT level, source, COUNT(*) FROM runtime_logs"
+            + where_clause.replace("?", "%s")
+            + " GROUP BY level, source"
+        )
+
         by_level: dict[str, int] = {}
         by_source: dict[str, int] = {}
-        for record in records:
-            by_level[record.level] = by_level.get(record.level, 0) + 1
-            by_source[record.source] = by_source.get(record.source, 0) + 1
-        return RuntimeLogSummary(total=len(records), by_level=by_level, by_source=by_source)
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(total_sql, tuple(params))
+                total_row = cursor.fetchone()
+                total = 0 if total_row is None else _coerce_int(total_row[0])
+
+                cursor.execute(grouped_sql, tuple(params))
+                for row in cursor.fetchall():
+                    level_name = str(row[0])
+                    source_name = str(row[1])
+                    count = _coerce_int(row[2])
+                    by_level[level_name] = by_level.get(level_name, 0) + count
+                    by_source[source_name] = by_source.get(source_name, 0) + count
+
+        return RuntimeLogSummary(total=total, by_level=by_level, by_source=by_source)
 
     def apply_retention_policy(self, *, now: float | None = None) -> int:
         current_time = time.time() if now is None else now

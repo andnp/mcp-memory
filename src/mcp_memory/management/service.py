@@ -17,7 +17,7 @@ from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
-from mcp_memory.management.analytics_reporting import build_nerd_metrics
+from mcp_memory.management.analytics_reporting import build_nerd_metrics, build_provider_policy_rollups
 from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.overview_reporting import build_overview
 from mcp_memory.management.models import (
@@ -37,6 +37,7 @@ from mcp_memory.management.models import (
     OperatorLogDigestPayload,
     OperatorMemoryActivityPayload,
     OperatorTaskDigestPayload,
+    OperatorWarningDigestPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -45,6 +46,7 @@ from mcp_memory.management.models import (
     TaskListPayload,
 )
 from mcp_memory.management.reporting_queries import list_memory_tool_event_rows_since
+from mcp_memory.management.reporting_queries import list_provider_policy_event_rows_since, list_provider_usage_rows_since, list_runtime_log_rows_since
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
@@ -175,6 +177,7 @@ class ManagementService:
         *,
         log_window_minutes: int = 15,
         recent_error_limit: int = 10,
+        recent_warning_limit: int = 10,
         recent_run_limit: int = 10,
         conversation_window_hours: int = 24,
         conversation_limit: int = 10,
@@ -187,12 +190,17 @@ class ManagementService:
         health = self.get_health()
         log_summary = self.summarize_logs(after=logs_after)
         recent_errors = self.list_logs(level="ERROR", after=logs_after, limit=recent_error_limit).logs
-        recent_runs = self.list_recent_agent_runs(limit=recent_run_limit, detail_level="compact").runs
+        recent_warnings = self.list_logs(level="WARNING", after=logs_after, limit=recent_warning_limit).logs
+        recent_run_rows = self.list_recent_agent_runs(limit=max(recent_run_limit * 5, recent_run_limit), detail_level="compact").runs
+        recent_runs = recent_run_rows[:recent_run_limit]
         recent_run_status_counts = dict(sorted(Counter(run.status for run in recent_runs).items()))
+        recent_failures = [run for run in recent_run_rows if run.status == "failed"][:recent_run_limit]
+        recent_retries = [run for run in recent_run_rows if run.status == "retry"][:recent_run_limit]
         conversation_counts = self._count_recent_conversations(after=conversations_after)
         recent_conversations = self.list_ai_conversations(limit=conversation_limit).conversations
         recent_memories = self.list_memories(workspace_id=self._workspace_id, limit=recent_memory_limit).records
         tool_latency = self._summarize_memory_tool_latency(window_minutes=log_window_minutes)
+        provider_policy = self._summarize_provider_policy(window_minutes=log_window_minutes)
 
         alerts: list[str] = []
         if not health.runtime_active:
@@ -205,8 +213,14 @@ class ManagementService:
             alerts.append("dead_execution_subprocesses")
         if log_summary.by_level.get("ERROR", 0) > 0:
             alerts.append("recent_error_logs")
+        if recent_failures:
+            alerts.append("recent_task_failures")
+        if recent_retries:
+            alerts.append("recent_task_retries")
         if conversation_counts.get("error", 0) > 0:
             alerts.append("recent_ai_errors")
+        if any(stat.value > 0 for stat in provider_policy.stats[:3]):
+            alerts.append("provider_policy_churn")
 
         return OperatorHealthSnapshotPayload(
             generated_at=generated_at,
@@ -221,9 +235,18 @@ class ManagementService:
                 by_level=log_summary.by_level,
                 recent_errors=recent_errors,
             ),
+            warnings=OperatorWarningDigestPayload(
+                window_minutes=max(log_window_minutes, 0),
+                total=log_summary.by_level.get("WARNING", 0),
+                recent=recent_warnings,
+            ),
             tasks=OperatorTaskDigestPayload(
                 recent_status_counts=recent_run_status_counts,
                 recent=recent_runs,
+                recent_failure_count=len(recent_failures),
+                recent_retry_count=len(recent_retries),
+                recent_failures=recent_failures,
+                recent_retries=recent_retries,
             ),
             conversations=OperatorConversationDigestPayload(
                 window_hours=max(conversation_window_hours, 0),
@@ -238,6 +261,7 @@ class ManagementService:
                 recent=recent_memories,
             ),
             tool_latency=tool_latency,
+            provider_policy=provider_policy,
         )
 
     def get_overview(
@@ -801,6 +825,31 @@ class ManagementService:
             if updated_at >= cutoff:
                 updated_count += 1
         return updated_count
+
+    def _summarize_provider_policy(self, *, window_minutes: int):
+        effective_window_minutes = max(window_minutes, 1)
+        cutoff = time.time() - (effective_window_minutes * 60)
+        return build_provider_policy_rollups(
+            provider_rows=list_provider_usage_rows_since(
+                self._db_manager,
+                cutoff=cutoff,
+                workspace_id=self._workspace_id,
+            ),
+            provider_policy_event_rows=list_provider_policy_event_rows_since(
+                self._db_manager,
+                cutoff=cutoff,
+                workspace_id=self._workspace_id,
+            ),
+            provider_policy_log_rows=list_runtime_log_rows_since(
+                self._db_manager,
+                cutoff=cutoff,
+                workspace_id=self._workspace_id,
+                logger_name="mcp_memory.core.provider_policy",
+                level="WARNING",
+            ),
+            provider_usage_repo=self._provider_usage,
+            workspace_id=self._workspace_id,
+        )
 
 
 

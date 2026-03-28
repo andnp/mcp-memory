@@ -843,6 +843,18 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
                 "{}",
             ),
         )
+        runtime_a.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime_a.workspace_id,
+                "daemon",
+                "mcp_memory.core.provider_policy",
+                "WARNING",
+                "Provider routing exhausted all configured routes",
+                time.time(),
+                '{"extra":{"task_name":"graph-linker"}}',
+            ),
+        )
         task = runtime_a.task_queue.enqueue(
             "graph-linker",
             task_id="cli-health-task",
@@ -851,6 +863,51 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
         )
         assert runtime_a.task_queue.claim_next(now=10.0) is not None
         runtime_a.task_queue.complete(task.id, completed_at=11.0, run_result={"updated": 1})
+        retry_task = runtime_a.task_queue.enqueue(
+            "graph-linker",
+            task_id="cli-health-retry-task",
+            workspace_id=runtime_a.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime_a.task_queue.claim_next(now=12.0) is not None
+        runtime_a.task_queue.fail(retry_task.id, "retry me", retry_delay_seconds=15.0, failed_at=13.0)
+        runtime_a.db_manager.get_connection().execute(
+            "INSERT INTO provider_policy_events (workspace_id, task_name, task_id, event_kind, warning_kind, provider_key, provider_name, model_name, route_key, candidate_routes_json, reason_category, reason_code, retry_delay_seconds, warning_suppressed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime_a.workspace_id,
+                "graph-linker",
+                task.id,
+                "route_exhausted",
+                "provider_routing_exhausted",
+                None,
+                None,
+                None,
+                None,
+                '["gemini-cheap","copilot-mini"]',
+                None,
+                None,
+                None,
+                0,
+                time.time(),
+            ),
+        )
+        runtime_a.db_manager.get_connection().execute(
+            "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime_a.workspace_id,
+                "graph-linker",
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                "skipped",
+                0.0,
+                time.time(),
+                "quota reset pending",
+                "upstream",
+                "provider_quota_exhausted",
+                90.0,
+            ),
+        )
         ProviderUsageRepository(runtime_a.db_manager, workspace_id=runtime_b.workspace_id).record_conversation(
             request_id="cli-health-conversation",
             attempt=1,
@@ -883,10 +940,103 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
     assert payload["scope"] == "global"
     assert payload["status"] == "warn"
     assert "recent_error_logs" in payload["alerts"]
+    assert "recent_task_retries" in payload["alerts"]
+    assert "provider_policy_churn" in payload["alerts"]
     assert payload["logs"]["by_level"]["ERROR"] == 1
+    assert payload["warnings"]["total"] == 1
+    assert payload["warnings"]["recent"][0]["logger_name"] == "mcp_memory.core.provider_policy"
     assert payload["conversations"]["by_status"]["error"] == 1
     assert payload["tasks"]["recent_status_counts"]["completed"] == 1
+    assert payload["tasks"]["recent_status_counts"]["retry"] == 1
+    assert payload["tasks"]["recent_retry_count"] == 1
+    assert payload["tasks"]["recent_retries"][0]["task_id"] == "cli-health-retry-task"
+    provider_policy_stats = {stat["key"]: stat["value"] for stat in payload["provider_policy"]["stats"]}
+    assert provider_policy_stats["provider_policy_route_exhaustion_count"] == 1.0
+    assert provider_policy_stats["provider_policy_admission_skip_count"] == 1.0
     assert any(item["title"] == "CLI health memory" for item in payload["memory_activity"]["recent"])
+
+
+def test_health_command_human_output_renders_warning_and_provider_policy_sections(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    try:
+        assert runtime.db_manager is not None
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime.workspace_id,
+                "daemon",
+                "mcp_memory.core.provider_policy",
+                "WARNING",
+                "Provider routing exhausted all configured routes",
+                time.time(),
+                '{"extra":{"task_name":"graph-linker"}}',
+            ),
+        )
+        task = runtime.task_queue.enqueue(
+            "graph-linker",
+            task_id="cli-health-human-retry",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=10.0) is not None
+        runtime.task_queue.fail(task.id, "retry me", retry_delay_seconds=30.0, failed_at=11.0)
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO provider_policy_events (workspace_id, task_name, task_id, event_kind, warning_kind, provider_key, provider_name, model_name, route_key, candidate_routes_json, reason_category, reason_code, retry_delay_seconds, warning_suppressed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime.workspace_id,
+                "graph-linker",
+                task.id,
+                "route_exhausted",
+                "provider_routing_exhausted",
+                None,
+                None,
+                None,
+                None,
+                '["gemini-cheap","copilot-mini"]',
+                None,
+                None,
+                None,
+                0,
+                time.time(),
+            ),
+        )
+        runtime.db_manager.get_connection().execute(
+            "INSERT INTO provider_usage (workspace_id, task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                runtime.workspace_id,
+                "graph-linker",
+                "gemini-cli",
+                "Gemini CLI",
+                "gemini-3-flash-preview",
+                "skipped",
+                0.0,
+                time.time(),
+                "quota reset pending",
+                "upstream",
+                "provider_quota_exhausted",
+                90.0,
+            ),
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    result = runner.invoke(main, ["health", "--workspace-root", str(workspace)])
+
+    assert result.exit_code == 0
+    assert "Recent Warnings" in result.output
+    assert "Provider Policy Churn" in result.output
+    assert "Recent retried task runs" in result.output
+    assert "Route exhaustion" in result.output
 
 
 def test_stats_command_top_reads_show_memory_status(monkeypatch, tmp_path: Path) -> None:

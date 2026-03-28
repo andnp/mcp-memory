@@ -1130,6 +1130,15 @@ def _render_operator_health_snapshot(payload) -> None:
     if payload.logs.recent_errors:
         _render_logs_table(type("_Payload", (), {"logs": payload.logs.recent_errors})())
 
+    warning_table = Table(title=f"Recent Warnings ({payload.warnings.window_minutes}m)")
+    warning_table.add_column("Metric")
+    warning_table.add_column("Value")
+    warning_table.add_row("Total", str(payload.warnings.total))
+    warning_table.add_row("Rows included", str(len(payload.warnings.recent)))
+    console.print(warning_table)
+    if payload.warnings.recent:
+        _render_logs_table(type("_Payload", (), {"logs": payload.warnings.recent})())
+
     task_table = Table(title="Recent Task Runs")
     task_table.add_column("Metric")
     task_table.add_column("Value")
@@ -1138,9 +1147,57 @@ def _render_operator_health_snapshot(payload) -> None:
         ", ".join(f"{status}={count}" for status, count in sorted(payload.tasks.recent_status_counts.items())) or "none",
     )
     task_table.add_row("Runs included", str(len(payload.tasks.recent)))
+    task_table.add_row("Recent failures", str(payload.tasks.recent_failure_count))
+    task_table.add_row("Recent retries", str(payload.tasks.recent_retry_count))
     console.print(task_table)
     if payload.tasks.recent:
         _render_recent_agent_runs_table(type("_Payload", (), {"runs": payload.tasks.recent})())
+    if payload.tasks.recent_failures:
+        console.print("[bold]Recent failed task runs[/]")
+        _render_recent_agent_runs_table(type("_Payload", (), {"runs": payload.tasks.recent_failures})())
+    if payload.tasks.recent_retries:
+        console.print("[bold]Recent retried task runs[/]")
+        _render_recent_agent_runs_table(type("_Payload", (), {"runs": payload.tasks.recent_retries})())
+
+    provider_policy_table = Table(title="Provider Policy Churn")
+    provider_policy_table.add_column("Metric")
+    provider_policy_table.add_column("Value")
+    provider_policy_stats = {stat.key: stat.value for stat in payload.provider_policy.stats}
+    provider_policy_table.add_row(
+        "Route exhaustion",
+        str(int(provider_policy_stats.get("provider_policy_route_exhaustion_count", 0.0))),
+    )
+    provider_policy_table.add_row(
+        "Legacy fallback denied",
+        str(int(provider_policy_stats.get("provider_policy_legacy_fallback_denied_count", 0.0))),
+    )
+    provider_policy_table.add_row(
+        "Admission skips",
+        str(int(provider_policy_stats.get("provider_policy_admission_skip_count", 0.0))),
+    )
+    provider_policy_table.add_row(
+        "Suppressed duplicates",
+        str(int(provider_policy_stats.get("provider_policy_warning_suppressed_count", 0.0))),
+    )
+    console.print(provider_policy_table)
+    if payload.provider_policy.by_task:
+        by_task_table = Table(title="Provider Policy by Task")
+        by_task_table.add_column("Task")
+        by_task_table.add_column("Route Exhaust", justify="right")
+        by_task_table.add_column("Fallback Denied", justify="right")
+        by_task_table.add_column("Admission Skips", justify="right")
+        by_task_table.add_column("Top Skip Provider")
+        by_task_table.add_column("Top Reason")
+        for row in payload.provider_policy.by_task:
+            by_task_table.add_row(
+                row.task_name,
+                str(row.route_exhaustion_count),
+                str(row.legacy_fallback_denied_count),
+                str(row.admission_skip_count),
+                row.top_skip_provider_key or "-",
+                row.top_skip_reason_code or "-",
+            )
+        console.print(by_task_table)
 
     conversation_table = Table(title=f"Recent Conversations ({payload.conversations.window_hours}h)")
     conversation_table.add_column("Metric")

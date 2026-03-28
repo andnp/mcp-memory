@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from dataclasses import dataclass
 from types import ModuleType
+from typing import cast
 
 from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.storage.session import ConnectionLease, DbConnectionLike, PoolLike, SessionManager
@@ -46,10 +47,6 @@ class PooledPostgresConnectionLease(ConnectionLease[DbConnectionLike]):
         return self.connection
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        if exc_type is not None:
-            self.connection.rollback()
-            self.close(reset_connection=False)
-            return False
         self.close()
         return False
 
@@ -57,16 +54,32 @@ class PooledPostgresConnectionLease(ConnectionLease[DbConnectionLike]):
         if self._closed:
             return
         self._closed = True
-        if reset_connection:
-            self._reset_connection()
+        discard_connection = self._should_discard_connection()
+        if reset_connection and not discard_connection:
+            discard_connection = not self._reset_connection()
+        if discard_connection:
+            self._discard_connection()
         self.pool.putconn(self.connection)
 
-    def _reset_connection(self) -> None:
+    def _reset_connection(self) -> bool:
         rollback = getattr(self.connection, "rollback", None)
         if rollback is None:
-            return
+            return not self._should_discard_connection()
         try:
             rollback()
+        except Exception:
+            return False
+        return not self._should_discard_connection()
+
+    def _should_discard_connection(self) -> bool:
+        return bool(getattr(self.connection, "broken", False) or getattr(self.connection, "closed", False))
+
+    def _discard_connection(self) -> None:
+        close = getattr(self.connection, "close", None)
+        if close is None:
+            return
+        try:
+            close()
         except Exception:
             return
 
@@ -98,12 +111,15 @@ class PostgresConnectionManager(SessionManager[DbConnectionLike]):
         if self._pool is not None:
             return self._pool
         _, psycopg_pool = load_postgres_driver_modules()
-        pool = psycopg_pool.ConnectionPool(
-            conninfo=self._config.dsn,
-            min_size=self._config.pool_min,
-            max_size=self._config.pool_max,
-            kwargs=build_postgres_connection_kwargs(self._config),
-            open=True,
+        pool = cast(
+            PoolLike[DbConnectionLike],
+            psycopg_pool.ConnectionPool(
+                conninfo=self._config.dsn,
+                min_size=self._config.pool_min,
+                max_size=self._config.pool_max,
+                kwargs=build_postgres_connection_kwargs(self._config),
+                open=True,
+            ),
         )
         self._pool = pool
         return pool

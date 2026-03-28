@@ -68,9 +68,19 @@ class OperatorLogDigestPayload(BaseModel):
     recent_errors: list["RuntimeLogPayload"] = Field(default_factory=list)
 
 
+class OperatorWarningDigestPayload(BaseModel):
+    window_minutes: int = 15
+    total: int = 0
+    recent: list["RuntimeLogPayload"] = Field(default_factory=list)
+
+
 class OperatorTaskDigestPayload(BaseModel):
     recent_status_counts: dict[str, int] = Field(default_factory=dict)
     recent: list["AgentRunHistoryPayload"] = Field(default_factory=list)
+    recent_failure_count: int = 0
+    recent_retry_count: int = 0
+    recent_failures: list["AgentRunHistoryPayload"] = Field(default_factory=list)
+    recent_retries: list["AgentRunHistoryPayload"] = Field(default_factory=list)
 
 
 class OperatorConversationDigestPayload(BaseModel):
@@ -110,10 +120,12 @@ class OperatorHealthSnapshotPayload(BaseModel):
     alerts: list[str] = Field(default_factory=list)
     health: HealthPayload
     logs: OperatorLogDigestPayload = Field(default_factory=OperatorLogDigestPayload)
+    warnings: OperatorWarningDigestPayload = Field(default_factory=OperatorWarningDigestPayload)
     tasks: OperatorTaskDigestPayload = Field(default_factory=OperatorTaskDigestPayload)
     conversations: OperatorConversationDigestPayload = Field(default_factory=OperatorConversationDigestPayload)
     memory_activity: OperatorMemoryActivityPayload = Field(default_factory=OperatorMemoryActivityPayload)
     tool_latency: MemoryToolLatencyPayload = Field(default_factory=MemoryToolLatencyPayload)
+    provider_policy: "NerdProviderPolicyPayload" = Field(default_factory=lambda: NerdProviderPolicyPayload())
 
 
 class OverviewCounts(BaseModel):
