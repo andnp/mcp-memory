@@ -16,6 +16,7 @@ from mcp_memory.relational.repository import (
     VALID_MEMORY_STATUSES,
     VALID_MEMORY_TYPES,
 )
+from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
 
@@ -25,6 +26,13 @@ _SUMMARY_UNSET = object()
 class PostgresRelationalMemoryRepository:
     def __init__(self, session_manager: SessionManager[DbConnectionLike]) -> None:
         self._sessions = session_manager
+        self._last_surfaced_writer = BufferedWriter[tuple[str, str]](
+            self._flush_last_surfaced_batch,
+            name="postgres-last-surfaced",
+            low_watermark=1,
+            high_watermark=128,
+            flush_interval_seconds=0.01,
+        )
 
     def create_memory(
         self,
@@ -377,20 +385,46 @@ class PostgresRelationalMemoryRepository:
         return [candidates_by_id[memory_id] for memory_id in normalized_ids if memory_id in candidates_by_id]
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
-        del best_effort
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return 0
 
+        if best_effort:
+            self._last_surfaced_writer.write_many(
+                [(memory_id, surfaced_at) for memory_id in normalized_ids]
+            )
+            return len(normalized_ids)
+
+        self._update_last_surfaced_ids(normalized_ids, surfaced_at)
+        return len(normalized_ids)
+
+    def close(self) -> None:
+        self._last_surfaced_writer.close()
+
+    def flush(self) -> None:
+        self._last_surfaced_writer.flush()
+
+    def _flush_last_surfaced_batch(self, batch: list[tuple[str, str]]) -> None:
+        latest_by_memory_id: dict[str, str] = {}
+        for memory_id, pending_surfaced_at in batch:
+            latest_by_memory_id[memory_id] = pending_surfaced_at
+
+        memory_ids_by_timestamp: dict[str, list[str]] = {}
+        for memory_id, pending_surfaced_at in latest_by_memory_id.items():
+            memory_ids_by_timestamp.setdefault(pending_surfaced_at, []).append(memory_id)
+
+        for pending_surfaced_at, pending_memory_ids in memory_ids_by_timestamp.items():
+            self._update_last_surfaced_ids(pending_memory_ids, pending_surfaced_at)
+
+    def _update_last_surfaced_ids(self, memory_ids: list[str], surfaced_at: str) -> None:
+
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                for memory_id in normalized_ids:
-                    cursor.execute(
-                        "UPDATE memories SET last_surfaced_at = %s WHERE id = %s",
-                        (surfaced_at, memory_id),
-                    )
+                cursor.execute(
+                    "UPDATE memories SET last_surfaced_at = %s WHERE id = ANY(%s::text[])",
+                    (surfaced_at, memory_ids),
+                )
             connection.commit()
-        return len(normalized_ids)
 
     def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
         normalized_workspace_ids = self._normalize_values(workspace_ids)

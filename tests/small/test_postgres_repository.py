@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypeAlias
@@ -166,6 +167,10 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[object, ...]]:
         return list(self._result)
 
+    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        for row in rows:
+            self.execute(query, row)
+
     def _insert_memory(self, arguments: SqlParams) -> None:
         memory_id = str(arguments[0])
         self._state.memories[memory_id] = {
@@ -234,6 +239,13 @@ class FakeCursor:
         self._result = rows
 
     def _update_memory(self, normalized: str, arguments: SqlParams) -> None:
+        if normalized == "UPDATE memories SET last_surfaced_at = %s WHERE id = ANY(%s::text[])":
+            surfaced_at = arguments[0]
+            memory_ids = self._as_str_sequence(arguments[1])
+            for memory_id in memory_ids:
+                self._state.memories[memory_id]["last_surfaced_at"] = surfaced_at
+            self._result = []
+            return
         assignments, _where_clause = normalized.split(" WHERE id = %s", 1)
         memory_id = str(arguments[-1])
         memory = self._state.memories[memory_id]
@@ -456,9 +468,13 @@ class FakeSessionManager:
 
 
 @pytest.fixture
-def postgres_repository() -> tuple[PostgresRelationalMemoryRepository, FakeSessionManager]:
+def postgres_repository() -> Iterator[tuple[PostgresRelationalMemoryRepository, FakeSessionManager]]:
     session_manager = FakeSessionManager(FakePostgresState())
-    return PostgresRelationalMemoryRepository(session_manager), session_manager
+    repository = PostgresRelationalMemoryRepository(session_manager)
+    try:
+        yield repository, session_manager
+    finally:
+        repository.close()
 
 
 def test_postgres_repository_create_read_update_and_list_memory(
@@ -847,10 +863,32 @@ def test_postgres_search_service_updates_last_surfaced_timestamps(
     results = service.search_memories("search pipeline", workspace_id="workspace-alpha", limit=5)
 
     assert [result.memory_id for result in results] == [active.id, stale.id]
+    repository.flush()
     refreshed_active = repository.get_memory(active.id)
     refreshed_stale = repository.get_memory(stale.id)
     assert refreshed_active is not None and refreshed_active.last_surfaced_at is not None
     assert refreshed_stale is not None and refreshed_stale.last_surfaced_at is not None
+
+
+def test_postgres_repository_best_effort_last_surfaced_flushes_on_close(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+    record = repository.create_memory(
+        title="Buffered surfaced write",
+        content="Checks close flush behavior.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    assert record is not None
+
+    repository.touch_last_surfaced([record.id], "2026-03-29T00:00:00+00:00", best_effort=True)
+    repository.close()
+
+    refreshed = repository.get_memory(record.id)
+
+    assert refreshed is not None
+    assert refreshed.last_surfaced_at == "2026-03-29T00:00:00+00:00"
 
 
 class _PostgresSearchFakeEmbedder:
