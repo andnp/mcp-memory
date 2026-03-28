@@ -180,6 +180,53 @@ def test_management_service_uses_postgres_runtime_log_repository_for_postgres_ba
     }
 
 
+def test_operator_health_snapshot_includes_memory_tool_latency_summary(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    memory = repository.create_memory(
+        title="Latency summary seed",
+        content="Seed memory for read telemetry rows.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        tags=["telemetry"],
+        memory_id="memory-1",
+    )
+    assert memory is not None
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    now = time.time()
+    db_manager.get_connection().executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, duration_ms, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("search-1", "workspace-a", "external", "search", None, "alpha", None, 2, 120.0, now - 5),
+            ("search-1", "workspace-a", "external", "search", "memory-1", "alpha", 1, 2, 120.0, now - 5),
+            ("search-2", "workspace-a", "external", "search", None, "beta", None, 0, 2400.0, now - 4),
+            ("read-1", "workspace-a", "external", "read", "memory-1", None, None, None, 35.0, now - 3),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    snapshot = service.get_operator_health_snapshot(log_window_minutes=15)
+
+    metrics = {metric.event_kind: metric for metric in snapshot.tool_latency.by_event_kind}
+    assert snapshot.tool_latency.window_minutes == 15
+    assert metrics["search"].count == 2
+    assert metrics["search"].slow_count == 1
+    assert metrics["search"].max_duration_ms == 2400.0
+    assert metrics["read"].count == 1
+    assert metrics["read"].avg_duration_ms == 35.0
+
+
 def test_management_service_overview_respects_workspace_and_global_scopes(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

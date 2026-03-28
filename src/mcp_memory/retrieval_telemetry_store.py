@@ -23,6 +23,7 @@ class RetrievalTelemetryRepository:
         caller_kind: str,
         query: str,
         surfaced_memory_ids: list[str],
+        duration_ms: float | None = None,
         created_at: float | None = None,
     ) -> None:
         if self._db_manager is None:
@@ -30,7 +31,7 @@ class RetrievalTelemetryRepository:
 
         event_time = time.time() if created_at is None else created_at
         result_count = len(surfaced_memory_ids)
-        rows: list[tuple[str, str | None, str, str, str | None, str | None, int | None, int | None, float]] = []
+        rows: list[tuple[str, str | None, str, str, str | None, str | None, int | None, int | None, float, float | None]] = []
         if surfaced_memory_ids:
             rows.extend(
                 (
@@ -43,6 +44,7 @@ class RetrievalTelemetryRepository:
                     index,
                     result_count,
                     event_time,
+                    duration_ms,
                 )
                 for index, memory_id in enumerate(surfaced_memory_ids, start=1)
             )
@@ -58,12 +60,13 @@ class RetrievalTelemetryRepository:
                     None,
                     0,
                     event_time,
+                    duration_ms,
                 )
             )
 
         self._best_effort_write(
             lambda conn: conn.executemany(
-                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
         )
@@ -74,6 +77,7 @@ class RetrievalTelemetryRepository:
         invocation_id: str,
         caller_kind: str,
         memory_id: str,
+        duration_ms: float | None = None,
         created_at: float | None = None,
     ) -> None:
         if self._db_manager is None:
@@ -82,7 +86,7 @@ class RetrievalTelemetryRepository:
         event_time = time.time() if created_at is None else created_at
         self._best_effort_write(
             lambda conn: conn.execute(
-                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     invocation_id,
                     self._workspace_id,
@@ -93,12 +97,28 @@ class RetrievalTelemetryRepository:
                     None,
                     None,
                     event_time,
+                    duration_ms,
                 ),
             )
         )
 
     def _best_effort_write(self, operation) -> None:
         assert self._db_manager is not None
+        if hasattr(self._db_manager, "open_connection") and not hasattr(self._db_manager, "get_connection"):
+            try:
+                with self._db_manager.open_connection() as connection:
+                    cursor = connection.cursor()
+                    try:
+                        operation(_PostgresTelemetryExecutor(cursor))
+                    finally:
+                        close = getattr(cursor, "close", None)
+                        if callable(close):
+                            close()
+                    connection.commit()
+            except Exception as exc:  # pragma: no cover - best-effort Postgres telemetry path
+                logger.debug("Skipping retrieval telemetry write due to noncritical Postgres failure: %s", exc)
+            return
+
         conn = self._db_manager.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
         try:
             with conn:
@@ -109,3 +129,18 @@ class RetrievalTelemetryRepository:
             logger.debug("Skipping retrieval telemetry write due to SQLite lock contention")
         finally:
             conn.close()
+
+
+class _PostgresTelemetryExecutor:
+    def __init__(self, cursor) -> None:
+        self._cursor = cursor
+
+    def execute(self, query: str, params: tuple[object, ...]) -> None:
+        self._cursor.execute(_postgres_placeholder_query(query), params)
+
+    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        self._cursor.executemany(_postgres_placeholder_query(query), rows)
+
+
+def _postgres_placeholder_query(query: str) -> str:
+    return query.replace("?", "%s")

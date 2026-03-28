@@ -883,6 +883,8 @@ class PostgresTaskQueue:
         task_names: list[str],
         workspace_id: str | None = None,
     ) -> list[TaskRunSummary]:
+        if self._sessions is None:
+            return []
         if not task_names:
             return []
         summaries = {name: TaskRunSummary(task_name=name) for name in task_names}

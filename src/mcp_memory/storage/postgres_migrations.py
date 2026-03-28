@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 5
+POSTGRES_SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -349,6 +349,99 @@ POSTGRES_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_ready ON embedding_repair_queue(status, available_at, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_workspace_ready ON embedding_repair_queue(workspace_id, status, available_at, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_lease_owner ON embedding_repair_queue(lease_owner, status, lease_expires_at)",
+        ),
+    ),
+    PostgresMigration(
+        version=6,
+        name="add_hook_conversations_and_memory_tool_events",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS hook_conversations (
+                conversation_id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                started_at DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                last_ping_at DOUBLE PRECISION,
+                last_reminder_at DOUBLE PRECISION,
+                last_tool_name TEXT,
+                last_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                ended_at DOUBLE PRECISION
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_hook_conversations_workspace_id ON hook_conversations(workspace_id)",
+            """
+            CREATE TABLE IF NOT EXISTS memory_tool_events (
+                id BIGSERIAL PRIMARY KEY,
+                invocation_id TEXT NOT NULL,
+                workspace_id TEXT,
+                caller_kind TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                memory_id TEXT,
+                query_text TEXT,
+                result_rank INTEGER,
+                result_count INTEGER,
+                duration_ms DOUBLE PRECISION,
+                created_at DOUBLE PRECISION NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_memory_tool_events_workspace_kind_created ON memory_tool_events(workspace_id, event_kind, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_tool_events_memory_kind_created ON memory_tool_events(memory_id, event_kind, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_tool_events_invocation_kind ON memory_tool_events(invocation_id, event_kind)",
+        ),
+    ),
+    PostgresMigration(
+        version=7,
+        name="add_memory_tool_event_latency",
+        statements=(
+            "ALTER TABLE memory_tool_events ADD COLUMN IF NOT EXISTS duration_ms DOUBLE PRECISION",
+        ),
+    ),
+    PostgresMigration(
+        version=8,
+        name="add_memory_search_projection",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS memory_search_documents (
+                memory_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                tags_text TEXT NOT NULL DEFAULT '',
+                search_document TSVECTOR NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_memory_search_documents_search_document ON memory_search_documents USING GIN(search_document)",
+            """
+            INSERT INTO memory_search_documents (memory_id, title, summary, content, tags_text, search_document)
+            SELECT
+                memories.id,
+                COALESCE(memories.title, ''),
+                COALESCE(memories.summary, ''),
+                COALESCE(memories.content, ''),
+                COALESCE(tag_agg.tags_text, ''),
+                (
+                    setweight(to_tsvector('simple', COALESCE(memories.title, '')), 'A')
+                    || setweight(to_tsvector('simple', COALESCE(memories.summary, '')), 'A')
+                    || setweight(to_tsvector('simple', COALESCE(tag_agg.tags_text, '')), 'B')
+                    || setweight(to_tsvector('simple', COALESCE(memories.content, '')), 'C')
+                )
+            FROM memories
+            LEFT JOIN (
+                SELECT memory_tags.memory_id, STRING_AGG(tags.name, ' ' ORDER BY tags.name) AS tags_text
+                FROM memory_tags
+                JOIN tags ON tags.id = memory_tags.tag_id
+                GROUP BY memory_tags.memory_id
+            ) AS tag_agg ON tag_agg.memory_id = memories.id
+            ON CONFLICT (memory_id)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                content = EXCLUDED.content,
+                tags_text = EXCLUDED.tags_text,
+                search_document = EXCLUDED.search_document
+            """,
         ),
     ),
 )

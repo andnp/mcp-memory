@@ -32,7 +32,7 @@ def build_memory_counts(db_manager, workspace_id: str | None) -> tuple[dict[str,
     by_status: dict[str, int] = {}
     total = 0
     for row in rows:
-        count = int(row["count"])
+        count = row_int(row, "count")
         total += count
         by_type[str(row["type"])] = by_type.get(str(row["type"]), 0) + count
         by_status[str(row["status"])] = by_status.get(str(row["status"]), 0) + count
@@ -41,7 +41,7 @@ def build_memory_counts(db_manager, workspace_id: str | None) -> tuple[dict[str,
 
 def build_task_counts(db_manager, workspace_id: str | None) -> dict[str, int]:
     rows = fetch_task_count_rows(db_manager, workspace_id)
-    return {str(row["status"]): int(row["count"]) for row in rows}
+    return {str(row["status"]): row_int(row, "count") for row in rows}
 
 
 def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> MemoryMetricsPayload:

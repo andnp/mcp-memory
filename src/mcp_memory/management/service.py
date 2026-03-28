@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+import logging
 import os
 from pathlib import Path
+from statistics import mean
 import time
+from time import perf_counter
 from typing import cast
+from uuid import uuid4
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core import MemoryPipeline
@@ -21,6 +25,8 @@ from mcp_memory.management.models import (
     AIConversationListPayload,
     AIConversationPayload,
     HealthPayload,
+    MemoryToolLatencyMetricPayload,
+    MemoryToolLatencyPayload,
     MemoryListPayload,
     MemoryDetailPayload,
     MemorySearchResultPayload,
@@ -38,11 +44,13 @@ from mcp_memory.management.models import (
     TaskDetailPayload,
     TaskListPayload,
 )
+from mcp_memory.management.reporting_queries import list_memory_tool_event_rows_since
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
 from mcp_memory.runtime_log_store import RuntimeLogRepository, _AllWorkspacesSentinel
+from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
@@ -55,6 +63,33 @@ from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepo
 
 
 _USE_SERVICE_WORKSPACE = object()
+_SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
+
+
+logger = logging.getLogger(__name__)
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    bounded_percentile = min(max(percentile, 0.0), 1.0)
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * bounded_percentile))))
+    return float(ordered[index])
+
+
+def _coerce_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
 def _build_default_provider_usage(ctx: ApplicationContext):
@@ -157,6 +192,7 @@ class ManagementService:
         conversation_counts = self._count_recent_conversations(after=conversations_after)
         recent_conversations = self.list_ai_conversations(limit=conversation_limit).conversations
         recent_memories = self.list_memories(workspace_id=self._workspace_id, limit=recent_memory_limit).records
+        tool_latency = self._summarize_memory_tool_latency(window_minutes=log_window_minutes)
 
         alerts: list[str] = []
         if not health.runtime_active:
@@ -201,6 +237,7 @@ class ManagementService:
                 updated_last_day=self._count_recent_memory_updates(minutes=24 * 60),
                 recent=recent_memories,
             ),
+            tool_latency=tool_latency,
         )
 
     def get_overview(
@@ -541,19 +578,93 @@ class ManagementService:
     ) -> MemorySearchPayload:
         if self._relational_search is None:
             return MemorySearchPayload()
+        started_at = perf_counter()
+        results = self._relational_search.search_memories(
+            query,
+            workspace_id=workspace_id,
+            limit=limit,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            debug=debug,
+        )
+        duration_ms = (perf_counter() - started_at) * 1000.0
+        RetrievalTelemetryRepository(self._db_manager, workspace_id=self._workspace_id).record_search(
+            invocation_id=str(uuid4()),
+            caller_kind="operator",
+            query=query,
+            surfaced_memory_ids=[result.memory_id for result in results],
+            duration_ms=duration_ms,
+        )
+        self._log_slow_memory_tool_operation(
+            tool_name="management.search_memories",
+            duration_ms=duration_ms,
+            data={
+                "query": query,
+                "result_count": len(results),
+                "storage_backend": self._storage_backend,
+                "workspace_id": workspace_id,
+            },
+        )
         return MemorySearchPayload(
             results=[
                 MemorySearchResultPayload(**search_result_payload(result))
-                for result in self._relational_search.search_memories(
-                    query,
-                    workspace_id=workspace_id,
-                    limit=limit,
-                    memory_type=memory_type,
-                    status=status,
-                    include_superseded=include_superseded,
-                    debug=debug,
-                )
+                for result in results
             ]
+        )
+
+    def _summarize_memory_tool_latency(self, *, window_minutes: int) -> MemoryToolLatencyPayload:
+        effective_window_minutes = max(window_minutes, 1)
+        cutoff = time.time() - (effective_window_minutes * 60)
+        rows = list_memory_tool_event_rows_since(
+            self._db_manager,
+            cutoff=cutoff,
+            workspace_id=self._workspace_id,
+        )
+        durations_by_kind: dict[str, dict[str, float]] = {}
+        for row in rows:
+            duration_ms = _coerce_optional_float(row.get("duration_ms"))
+            if duration_ms is None:
+                continue
+            event_kind = str(row.get("event_kind") or "unknown")
+            invocation_id = str(row.get("invocation_id") or f"{event_kind}:{len(durations_by_kind.get(event_kind, {}))}")
+            durations_by_kind.setdefault(event_kind, {})[invocation_id] = max(
+                duration_ms,
+                durations_by_kind.setdefault(event_kind, {}).get(invocation_id, duration_ms),
+            )
+
+        return MemoryToolLatencyPayload(
+            window_minutes=effective_window_minutes,
+            slow_threshold_ms=_SLOW_MEMORY_TOOL_WARNING_MS,
+            by_event_kind=[
+                MemoryToolLatencyMetricPayload(
+                    event_kind=event_kind,
+                    count=len(duration_map),
+                    avg_duration_ms=round(mean(duration_map.values()), 3),
+                    p95_duration_ms=round(_percentile(list(duration_map.values()), 0.95), 3),
+                    max_duration_ms=round(max(duration_map.values()), 3),
+                    slow_count=sum(1 for duration in duration_map.values() if duration >= _SLOW_MEMORY_TOOL_WARNING_MS),
+                )
+                for event_kind, duration_map in sorted(durations_by_kind.items())
+            ],
+        )
+
+    def _log_slow_memory_tool_operation(
+        self,
+        *,
+        tool_name: str,
+        duration_ms: float,
+        data: dict[str, object],
+    ) -> None:
+        if duration_ms < _SLOW_MEMORY_TOOL_WARNING_MS:
+            return
+        self._runtime_logs.write_log(
+            source="memory-tool",
+            logger_name=__name__,
+            level="WARNING",
+            message=f"Slow {tool_name} operation",
+            created_at=time.time(),
+            data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)} | data,
         )
 
     def list_logs(

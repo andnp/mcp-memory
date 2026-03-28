@@ -84,6 +84,40 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        record = runtime.repository.create_memory(
+            title="Timing debug note",
+            content="Search timing should be visible in debug mode.",
+            summary="Timing summary.",
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
+            memory_type="fact",
+            tags=["timing"],
+        )
+        assert record is not None
+
+        payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {"query": "timing debug", "limit": 5, "debug": True},
+                )
+            )[0].text
+        )
+
+        assert payload["status"] == "ok"
+        assert payload["timing_ms"]["total"] >= 0.0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_search_memory_tool_hides_archived_by_default_but_can_request_them(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

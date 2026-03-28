@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
+import time
 from types import SimpleNamespace
+from typing import Any, cast
 
+from fastapi.testclient import TestClient
 import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.task_worker import RuntimeTaskWorker
+from mcp_memory.daemon import create_daemon_app
+from mcp_memory.daemon_transport import request_daemon_json
+from mcp_memory.hook_reminders import REMINDER_MESSAGE
 from mcp_memory.management.service import ManagementService
+from mcp_memory.mcp.handlers import call_memory_tool
+from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
+from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
@@ -25,8 +36,51 @@ from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
 pytestmark = pytest.mark.medium
 
 
+def _write_postgres_test_config(tmp_path: Path, *, dsn: str) -> Path:
+    home = tmp_path / "home"
+    config_dir = home / ".config" / "mcp-memory"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text(
+        "[ai]\n"
+        'provider = "none"\n'
+        '\n'
+        "[storage]\n"
+        'backend = "postgres"\n'
+        '\n'
+        "[storage.postgres]\n"
+        f'dsn = "{dsn}"\n'
+        "pool_min = 1\n"
+        "pool_max = 4\n"
+        "statement_timeout_ms = 30000\n"
+        "lock_timeout_ms = 5000\n"
+        'application_name = "mcp-memory-test"\n',
+        encoding="utf-8",
+    )
+    return home
+
+
+def _configure_postgres_runtime_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, dsn: str) -> Path:
+    home = _write_postgres_test_config(tmp_path, dsn=dsn)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return tmp_path / "workspace"
+
+
 def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives(postgres_storage_config) -> None:
     state = ensure_postgres_schema(postgres_storage_config)
+    entry = None
+    pending: list[Any] = []
+    created = False
+    work_item = None
+    claimed_items: list[Any] = []
+    completed_item = None
+    repair_created = False
+    repair_item = None
+    claimed_repairs: list[Any] = []
+    completed_repair = None
+    ranked: list[tuple[str, float]] = []
 
     assert state.schema_metadata_present is True
     assert state.schema_version == POSTGRES_SCHEMA_VERSION
@@ -96,6 +150,11 @@ def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives
             limit=2,
         )
 
+    assert entry is not None
+    assert work_item is not None
+    assert completed_item is not None
+    assert repair_item is not None
+    assert completed_repair is not None
     assert entry.content == "hello from postgres"
     assert [item.content for item in pending] == ["hello from postgres"]
     assert created is True
@@ -105,6 +164,424 @@ def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives
     assert [item.id for item in claimed_repairs] == [repair_item.id]
     assert completed_repair.status == "completed"
     assert [memory_id for memory_id, _score in ranked] == ["memory-1", "memory-2"]
+
+
+def test_postgres_search_projection_updates_with_memory_changes(postgres_storage_config) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+    row: tuple[object, ...] | None = None
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        repository = PostgresRelationalMemoryRepository(manager)
+        created = repository.create_memory(
+            title="Projection alpha",
+            content="Projection content for lexical search.",
+            summary="Projection summary.",
+            workspace_ids=["workspace-a"],
+            memory_type="fact",
+            tags=["alpha", "beta"],
+            memory_id="projection-memory",
+        )
+        assert created is not None
+
+        repository.update_memory(
+            "projection-memory",
+            title="Projection gamma",
+            content="Updated content for gamma search.",
+            summary="Updated gamma summary.",
+            tags=["gamma"],
+        )
+
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT title, summary, content, tags_text,
+                           search_document @@ plainto_tsquery('simple', %s) AS matches_gamma,
+                           search_document @@ plainto_tsquery('simple', %s) AS matches_beta
+                    FROM memory_search_documents
+                    WHERE memory_id = %s
+                    """,
+                    ("gamma", "beta", "projection-memory"),
+                )
+                row = cursor.fetchone()
+
+    assert row is not None
+    assert row[0] == "Projection gamma"
+    assert row[1] == "Updated gamma summary."
+    assert row[2] == "Updated content for gamma search."
+    assert row[3] == "gamma"
+    assert row[4] is True
+    assert row[5] is False
+
+
+def test_postgres_schema_upgrade_backfills_search_projection(postgres_storage_config) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+    row: tuple[object, ...] | None = None
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO memories (id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                    (
+                        "backfill-memory",
+                        "Backfill title",
+                        "Backfill content",
+                        "Backfill summary",
+                        "fact",
+                        "active",
+                        "2026-03-28T00:00:00+00:00",
+                        "2026-03-28T00:00:00+00:00",
+                        0,
+                        0.0,
+                        "{}",
+                    ),
+                )
+                cursor.execute(
+                    "INSERT INTO memory_workspaces (memory_id, workspace_id) VALUES (%s, %s)",
+                    ("backfill-memory", "workspace-a"),
+                )
+                cursor.execute("INSERT INTO tags (name) VALUES (%s)", ("backfill",))
+                cursor.execute("SELECT id FROM tags WHERE name = %s", ("backfill",))
+                tag_row = cursor.fetchone()
+                assert tag_row is not None
+                cursor.execute(
+                    "INSERT INTO memory_tags (memory_id, tag_id) VALUES (%s, %s)",
+                    ("backfill-memory", tag_row[0]),
+                )
+                cursor.execute("DROP TABLE IF EXISTS memory_search_documents")
+                cursor.execute(
+                    "UPDATE schema_metadata SET value = %s WHERE key = %s",
+                    ("7", "schema_version"),
+                )
+            connection.commit()
+
+    state = ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT tags_text, search_document @@ plainto_tsquery('simple', %s)
+                    FROM memory_search_documents
+                    WHERE memory_id = %s
+                    """,
+                    ("backfill", "backfill-memory"),
+                )
+                row = cursor.fetchone()
+
+    assert state.schema_version == POSTGRES_SCHEMA_VERSION
+    assert row is not None
+    assert row[0] == "backfill"
+    assert row[1] is True
+
+
+def test_postgres_integration_create_runtime_uses_default_postgres_config(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.storage_backend == "postgres"
+        assert isinstance(runtime.db_manager, PostgresConnectionManager)
+        assert isinstance(runtime.task_queue, PostgresTaskQueue)
+        assert isinstance(runtime.provider_usage, PostgresProviderUsageRepository)
+        assert runtime.repository is not None
+
+        created = runtime.repository.create_memory(
+            title="Postgres runtime fact",
+            content="The runtime booted through the default config path.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["postgres", "boot"],
+        )
+
+        assert created is not None
+        assert runtime.repository.get_memory(created.id) is not None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_public_memory_tools_work_through_real_runtime(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        record_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "record_thought",
+                    {"content": "Postgres MCP smoke memory"},
+                )
+            )[0].text
+        )
+
+        assert runtime.repository is not None
+        memory_record = runtime.repository.create_memory(
+            title="Postgres searchable memory",
+            content="This memory should be searchable through the public MCP tools.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["postgres", "mcp"],
+        )
+        assert memory_record is not None
+
+        search_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {"query": "searchable public MCP tools", "limit": 5},
+                )
+            )[0].text
+        )
+
+        memory_id = memory_record.id
+        read_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "read_memory_record",
+                    {"memory_id": memory_id},
+                )
+            )[0].text
+        )
+
+        assert record_payload["status"] == "recorded"
+        assert record_payload["entry"]["content"] == "Postgres MCP smoke memory"
+        assert search_payload["status"] == "ok"
+        assert any(result["memory_id"] == memory_id for result in search_payload["results"])
+        assert read_payload["status"] == "ok"
+        assert read_payload["record"]["id"] == memory_id
+        assert read_payload["record"]["content"] == "This memory should be searchable through the public MCP tools."
+
+        assert runtime.db_manager is not None
+        with runtime.db_manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT event_kind, memory_id, query_text FROM memory_tool_events ORDER BY id ASC"
+                )
+                telemetry_rows = cursor.fetchall()
+
+        assert [row[0] for row in telemetry_rows] == ["search", "read"]
+        assert telemetry_rows[0][2] == "searchable public MCP tools"
+        assert telemetry_rows[1][1] == memory_id
+    finally:
+        runtime.close()
+
+
+def test_postgres_integration_daemon_app_health_overview_and_search_use_real_runtime_config(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    seed_runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        current_time = time.time()
+        assert seed_runtime.repository is not None
+        assert seed_runtime.runtime_logs is not None
+        assert seed_runtime.provider_usage is not None
+        assert seed_runtime.task_queue is not None
+        seed_runtime.repository.create_memory(
+            title="Postgres daemon search fact",
+            content="Management search should find this through the daemon app.",
+            workspace_ids=[seed_runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["postgres", "daemon"],
+        )
+        seeded_task = seed_runtime.task_queue.enqueue(
+            "memory-curator",
+            workspace_id=seed_runtime.workspace_id,
+            available_at=time.time() + 60.0,
+            task_id="postgres-daemon-task",
+        )
+        seed_runtime.runtime_logs.write_log(
+            source="daemon",
+            logger_name="mcp_memory.server",
+            level="INFO",
+            message="postgres daemon smoke log",
+            created_at=current_time,
+            data={"backend": "postgres"},
+        )
+        seed_runtime.provider_usage.record_call(
+            task_name="memory-curator",
+            task_id=seeded_task.id,
+            request_id="postgres-daemon-conversation",
+            subprocess_pid=1234,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            status="success",
+            duration_seconds=1.0,
+            created_at=current_time,
+            error_text=None,
+        )
+        seed_runtime.provider_usage.record_conversation(
+            request_id="postgres-daemon-conversation",
+            attempt=1,
+            task_name="memory-curator",
+            task_id=seeded_task.id,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=1234,
+            prompt_text="prompt",
+            response_text="response",
+            parsed={"ok": True},
+            status="success",
+            error_text=None,
+            started_at=current_time - 1.0,
+            completed_at=current_time,
+        )
+    finally:
+        seed_runtime.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        health = client.get("/api/health")
+        overview = client.get("/api/overview")
+        search = client.post(
+            "/api/memories/search",
+            json={"query": "daemon search fact", "limit": 5},
+        )
+        tasks = client.get("/api/tasks")
+        logs = client.post("/api/logs", json={"source": "daemon", "limit": 10})
+        conversations = client.post("/api/ai-conversations", json={"limit": 10})
+
+    assert health.status_code == 200
+    assert health.json()["storage_backend"] == "postgres"
+    assert health.json()["status"] == "ready"
+    assert health.json()["search"]["semantic_enabled"] is False
+
+    assert overview.status_code == 200
+    assert overview.json()["memories"]["total"] == 1
+    assert overview.json()["search"]["semantic_enabled"] is False
+    assert overview.json()["recent_logs"][0]["message"] == "postgres daemon smoke log"
+    assert overview.json()["provider_usage"][0]["provider_key"] == "gemini-cli"
+
+    assert search.status_code == 200
+    assert {item["title"] for item in search.json()["results"]} == {"Postgres daemon search fact"}
+    assert tasks.status_code == 200
+    assert "postgres-daemon-task" in {item["id"] for item in tasks.json()["tasks"]}
+    assert logs.status_code == 200
+    assert {item["message"] for item in logs.json()["logs"]} == {"postgres daemon smoke log"}
+    assert conversations.status_code == 200
+    assert {item["request_id"] for item in conversations.json()["conversations"]} == {"postgres-daemon-conversation"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_daemon_hooks_persist_conversation_state_and_reminders(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    row: tuple[object, ...] | None = None
+    async with app.router.lifespan_context(app):
+        metadata = app.state.metadata
+        start = await asyncio.to_thread(
+            request_daemon_json,
+            metadata,
+            "/api/hooks/session-start",
+            {"sessionId": "conversation-1", "timestamp": 100.0},
+        )
+        noop = await asyncio.to_thread(
+            request_daemon_json,
+            metadata,
+            "/api/hooks/post-tool-use",
+            {"sessionId": "conversation-1", "tool_name": "read_file", "timestamp": 200.0},
+        )
+        reminder = await asyncio.to_thread(
+            request_daemon_json,
+            metadata,
+            "/api/hooks/post-tool-use",
+            {"sessionId": "conversation-1", "tool_name": "apply_patch", "timestamp": 401.0},
+        )
+        end = await asyncio.to_thread(
+            request_daemon_json,
+            metadata,
+            "/api/hooks/session-end",
+            {"sessionId": "conversation-1", "timestamp": 450.0},
+        )
+
+    assert start["status"] == "ok"
+    assert noop == {}
+    assert reminder["systemMessage"] == REMINDER_MESSAGE
+    assert end["status"] == "ok"
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        with manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT conversation_id, workspace_id, last_tool_name, last_reminder_at, ended_at
+                    FROM hook_conversations
+                    WHERE conversation_id = %s
+                    """,
+                    ("conversation-1",),
+                )
+                row = cursor.fetchone()
+
+    assert row is not None
+    assert row[0] == "conversation-1"
+    assert isinstance(row[1], str)
+    assert row[2] == "apply_patch"
+    assert row[3] == pytest.approx(401.0)
+    assert row[4] == pytest.approx(450.0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_backup_loop_skips_sqlite_snapshot_work(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from mcp_memory.config import Config
+    from mcp_memory.daemon_app import _run_periodic_backup_loop
+
+    called: list[bool] = []
+    monkeypatch.setattr(
+        "mcp_memory.daemon_app.create_and_prune_sqlite_backup",
+        lambda *args, **kwargs: called.append(True),
+    )
+
+    config = Config()
+    config.backups.enabled = True
+    config.backups.create_startup_snapshot = True
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        runtime = SimpleNamespace(
+            config=config,
+            db_manager=manager,
+            memory_path=tmp_path / "memories",
+            storage_backend="postgres",
+        )
+
+        await asyncio.wait_for(_run_periodic_backup_loop(runtime), timeout=1.0)
+
+    assert called == []
 
 
 def test_postgres_integration_task_queue_lifecycle_and_task_runs(postgres_storage_config) -> None:
@@ -440,7 +917,7 @@ async def test_postgres_integration_runtime_worker_releases_leaked_work_items_an
             handlers={"memory-curator": lambda context, queued_task: None},
         )
 
-        worker._reconcile_terminal_task_state(completed_task)  # noqa: SLF001
+        worker._reconcile_terminal_task_state(cast(Any, completed_task))  # noqa: SLF001
 
         released_work_item = work_items.get_item(work_item.id)
         released_repair = repair_queue.get_item(repair_item.id)
@@ -554,7 +1031,7 @@ async def test_postgres_integration_runtime_worker_recurring_follow_up_applies_j
 
         completed_task = queue.complete(task.id, completed_at=140.0, run_result={"mutations": 1}, execution_epoch=claimed.execution_epoch)
 
-        await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+        await worker._schedule_follow_up(cast(Any, claimed), cast(Any, completed_task))  # noqa: SLF001
 
         follow_up = queue.find_open_task(CURATOR_TASK_NAME, None)
 

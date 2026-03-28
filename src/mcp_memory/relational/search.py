@@ -7,10 +7,10 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from mcp_memory.config import Config
-from mcp_memory.embeddings import Embedder, SQLiteVectorStore
+from mcp_memory.embeddings import Embedder
 from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
@@ -405,7 +405,7 @@ class RelationalMemorySearchService:
         config: Config,
         *,
         embedder: Embedder | None = None,
-        vector_store: SQLiteVectorStore | None = None,
+        vector_store: Any | None = None,
         db_manager: DatabaseManager | None = None,
         task_queue = None,
         work_items = None,
@@ -856,14 +856,30 @@ class RelationalMemorySearchService:
         assert self._embedder is not None
         assert self._vector_store is not None
 
+        get_updated_at_map = getattr(self._vector_store, "get_updated_at_map", None)
+        updated_at_by_id: dict[str, float] | None = None
+        if callable(get_updated_at_map):
+            updated_at_by_id = cast(dict[str, float], get_updated_at_map(
+                source_kind="memory",
+                model_name=self._embedder.model_name,
+                source_ids=[candidate.id for candidate in candidates],
+            ))
+
         stale_or_missing: list[RelationalMemoryRecord] = []
         for candidate in candidates:
-            existing = self._vector_store.get(
-                source_kind="memory",
-                source_id=candidate.id,
-                model_name=self._embedder.model_name,
+            existing_updated_at = (
+                updated_at_by_id.get(candidate.id)
+                if updated_at_by_id is not None
+                else None
             )
-            if existing is None or _embedding_is_stale(existing.updated_at, candidate.updated_at):
+            if updated_at_by_id is None:
+                existing = self._vector_store.get(
+                    source_kind="memory",
+                    source_id=candidate.id,
+                    model_name=self._embedder.model_name,
+                )
+                existing_updated_at = None if existing is None else cast(Any, existing).updated_at
+            if existing_updated_at is None or _embedding_is_stale(existing_updated_at, candidate.updated_at):
                 stale_or_missing.append(candidate)
 
         return stale_or_missing

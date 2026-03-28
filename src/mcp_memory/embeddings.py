@@ -186,6 +186,30 @@ class SQLiteVectorStore:
             updated_at=float(row["updated_at"]),
         )
 
+    def get_updated_at_map(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        source_ids: list[str],
+    ) -> dict[str, float]:
+        normalized_source_ids = [source_id for source_id in source_ids if isinstance(source_id, str) and source_id]
+        if not normalized_source_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_source_ids)
+        rows = self._db.get_connection().execute(
+            f"""
+            SELECT source_id, updated_at
+            FROM embeddings
+            WHERE source_kind = ? AND model_name = ? AND source_id IN ({placeholders})
+            """,
+            [source_kind, model_name, *normalized_source_ids],
+        ).fetchall()
+        return {
+            str(row["source_id"]): float(row["updated_at"])
+            for row in rows
+        }
+
     def search(
         self,
         *,

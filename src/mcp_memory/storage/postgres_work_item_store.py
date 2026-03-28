@@ -37,6 +37,15 @@ def _coerce_float(value: object) -> float:
     raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
+def _decode_payload_object(value: object) -> dict[str, object]:
+    if isinstance(value, str):
+        decoded = json.loads(value)
+        return decoded if isinstance(decoded, dict) else {}
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return {}
+
+
 class PostgresWorkItemRepository:
     def __init__(self, session_manager: SessionManager[DbConnectionLike] | None) -> None:
         self._sessions = session_manager
@@ -409,17 +418,12 @@ class PostgresWorkItemRepository:
         return None if row is None else self._row_to_record(row)
 
     def _row_to_record(self, row: tuple[object, ...]) -> WorkItemRecord:
-        payload_raw = row[4]
-        if isinstance(payload_raw, str):
-            payload = dict(json.loads(payload_raw))
-        else:
-            payload = dict(payload_raw)
         return WorkItemRecord(
             id=str(row[0]),
             family_key=str(row[1]),
             execution_lane=str(row[2]),
             workspace_id=None if row[3] is None else str(row[3]),
-            payload=payload,
+            payload=_decode_payload_object(row[4]),
             status=str(row[5]),
             priority=_coerce_int(row[6]),
             attempt_count=_coerce_int(row[7]),

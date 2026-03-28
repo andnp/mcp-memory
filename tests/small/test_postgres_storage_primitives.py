@@ -715,5 +715,5 @@ def test_postgres_vector_store_round_trips_and_ranks_embeddings() -> None:
     assert record is not None
     assert record.embedding == [1.0, 0.0]
     assert [memory_id for memory_id, _score in ranked] == ["memory-a", "memory-b"]
-    assert json.loads(session_manager.state.embeddings[0]["embedding_json"]) == [1.0, 0.0]
+    assert json.loads(str(session_manager.state.embeddings[0]["embedding_json"])) == [1.0, 0.0]
     assert deleted == 1

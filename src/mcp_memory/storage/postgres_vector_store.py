@@ -81,8 +81,10 @@ class PostgresVectorStore:
         embedding_raw = row[4]
         if isinstance(embedding_raw, str):
             embedding = list(json.loads(embedding_raw))
-        else:
+        elif isinstance(embedding_raw, list | tuple):
             embedding = list(embedding_raw)
+        else:
+            raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
         return EmbeddingRecord(
             source_kind=str(row[0]),
             source_id=str(row[1]),
@@ -91,6 +93,34 @@ class PostgresVectorStore:
             embedding=[float(value) for value in embedding],
             updated_at=_coerce_float(row[5]),
         )
+
+    def get_updated_at_map(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        source_ids: list[str],
+    ) -> dict[str, float]:
+        if self._sessions is None:
+            return {}
+        normalized_source_ids = [source_id for source_id in source_ids if isinstance(source_id, str) and source_id]
+        if not normalized_source_ids:
+            return {}
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT source_id, updated_at
+                    FROM embeddings
+                    WHERE source_kind = %s AND model_name = %s AND source_id = ANY(%s::text[])
+                    """,
+                    (source_kind, model_name, normalized_source_ids),
+                )
+                rows = cursor.fetchall()
+        return {
+            str(row[0]): _coerce_float(row[1])
+            for row in rows
+        }
 
     def search(
         self,
@@ -117,8 +147,10 @@ class PostgresVectorStore:
             embedding_raw = row[1]
             if isinstance(embedding_raw, str):
                 embedding = list(json.loads(embedding_raw))
-            else:
+            elif isinstance(embedding_raw, list | tuple):
                 embedding = list(embedding_raw)
+            else:
+                raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
             score = cosine_similarity(query_embedding, [float(value) for value in embedding])
             scored.append((str(row[0]), score))
         scored.sort(key=lambda item: item[1], reverse=True)

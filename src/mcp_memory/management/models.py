@@ -87,6 +87,21 @@ class OperatorMemoryActivityPayload(BaseModel):
     recent: list["CompactMemoryRecord"] = Field(default_factory=list)
 
 
+class MemoryToolLatencyMetricPayload(BaseModel):
+    event_kind: str
+    count: int = 0
+    avg_duration_ms: float = 0.0
+    p95_duration_ms: float = 0.0
+    max_duration_ms: float = 0.0
+    slow_count: int = 0
+
+
+class MemoryToolLatencyPayload(BaseModel):
+    window_minutes: int = 15
+    slow_threshold_ms: float = 0.0
+    by_event_kind: list[MemoryToolLatencyMetricPayload] = Field(default_factory=list)
+
+
 class OperatorHealthSnapshotPayload(BaseModel):
     generated_at: float
     scope: str
@@ -98,6 +113,7 @@ class OperatorHealthSnapshotPayload(BaseModel):
     tasks: OperatorTaskDigestPayload = Field(default_factory=OperatorTaskDigestPayload)
     conversations: OperatorConversationDigestPayload = Field(default_factory=OperatorConversationDigestPayload)
     memory_activity: OperatorMemoryActivityPayload = Field(default_factory=OperatorMemoryActivityPayload)
+    tool_latency: MemoryToolLatencyPayload = Field(default_factory=MemoryToolLatencyPayload)
 
 
 class OverviewCounts(BaseModel):

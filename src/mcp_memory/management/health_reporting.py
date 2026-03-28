@@ -8,6 +8,32 @@ from mcp_memory.management.models import EmbeddingStatusPayload, ExecutionAttemp
 from mcp_memory.management.reporting_queries import fetch_running_task_attempt_rows
 
 
+def _coerce_float(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
+
+
+def _coerce_int(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
+
+
 def build_embedding_status(embedder) -> EmbeddingStatusPayload:
     status = describe_embedder(embedder)
     if status is None:
@@ -78,10 +104,10 @@ def build_execution_attempt_health(
 
         running_attempt_count += 1
         recent_activity_at = max(
-            float(row["updated_at"] or 0.0),
-            float(row["started_at"] or row["updated_at"] or 0.0),
-            float(row["claimed_at"] or row["updated_at"] or 0.0),
-            float(last_heartbeat_at or attempt_started_at),
+            _coerce_float(row["updated_at"]),
+            _coerce_float(row["started_at"] or row["updated_at"]),
+            _coerce_float(row["claimed_at"] or row["updated_at"]),
+            _coerce_float(last_heartbeat_at or attempt_started_at),
         )
         age_seconds = max(current_time - recent_activity_at, 0.0)
         if age_seconds >= stale_after_seconds:
@@ -91,7 +117,7 @@ def build_execution_attempt_health(
 
         if subprocess_pid is None:
             continue
-        if task_queue_module._is_process_alive(int(subprocess_pid)):
+        if task_queue_module._is_process_alive(_coerce_int(subprocess_pid)):
             live_subprocess_count += 1
         else:
             dead_subprocess_count += 1

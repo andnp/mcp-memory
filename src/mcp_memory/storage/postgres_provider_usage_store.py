@@ -37,6 +37,24 @@ def _coerce_float(value: object) -> float:
     raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
+def _bucket_int(bucket: dict[str, object], key: str) -> int:
+    return _coerce_int(bucket.get(key))
+
+
+def _bucket_list(bucket: dict[str, object], key: str) -> list[float]:
+    value = bucket.get(key)
+    if isinstance(value, list):
+        return value
+    raise TypeError(f"Expected list bucket value for {key!r}, got {type(value)!r}")
+
+
+def _bucket_reason_map(bucket: dict[str, object], key: str) -> dict[str, int]:
+    value = bucket.get(key)
+    if isinstance(value, dict):
+        return {str(reason): _coerce_int(count) for reason, count in value.items()}
+    raise TypeError(f"Expected dict bucket value for {key!r}, got {type(value)!r}")
+
+
 class PostgresProviderUsageRepository:
     def __init__(self, session_manager: SessionManager[DbConnectionLike] | None, *, workspace_id: str | None):
         self._sessions = session_manager
@@ -414,55 +432,47 @@ class PostgresProviderUsageRepository:
             executed = status != "skipped"
             if executed:
                 if in_last_day:
-                    bucket["calls_last_day"] = int(bucket["calls_last_day"]) + 1
-                    cast_list = bucket["duration_last_day"]
-                    assert isinstance(cast_list, list)
-                    cast_list.append(_coerce_float(row[5]))
+                    bucket["calls_last_day"] = _bucket_int(bucket, "calls_last_day") + 1
+                    _bucket_list(bucket, "duration_last_day").append(_coerce_float(row[5]))
                 if in_last_hour:
-                    bucket["calls_last_hour"] = int(bucket["calls_last_hour"]) + 1
-                    cast_list = bucket["duration_last_hour"]
-                    assert isinstance(cast_list, list)
-                    cast_list.append(_coerce_float(row[5]))
+                    bucket["calls_last_hour"] = _bucket_int(bucket, "calls_last_hour") + 1
+                    _bucket_list(bucket, "duration_last_hour").append(_coerce_float(row[5]))
                 if status != "success" and in_last_day:
-                    bucket["failures_last_day"] = int(bucket["failures_last_day"]) + 1
+                    bucket["failures_last_day"] = _bucket_int(bucket, "failures_last_day") + 1
                     failure_key = reason_code or "unclassified_error"
-                    failure_reasons = bucket["failure_reasons"]
-                    assert isinstance(failure_reasons, dict)
-                    failure_reasons[failure_key] = int(failure_reasons.get(failure_key, 0)) + 1
+                    failure_reasons = _bucket_reason_map(bucket, "failure_reasons")
+                    failure_reasons[failure_key] = _coerce_int(failure_reasons.get(failure_key, 0)) + 1
+                    bucket["failure_reasons"] = failure_reasons
                     if in_last_hour:
-                        bucket["failures_last_hour"] = int(bucket["failures_last_hour"]) + 1
+                        bucket["failures_last_hour"] = _bucket_int(bucket, "failures_last_hour") + 1
             else:
                 if in_last_day:
-                    bucket["skips_last_day"] = int(bucket["skips_last_day"]) + 1
+                    bucket["skips_last_day"] = _bucket_int(bucket, "skips_last_day") + 1
                     skip_key = reason_code or "unclassified_skip"
-                    skip_reasons = bucket["skip_reasons"]
-                    assert isinstance(skip_reasons, dict)
-                    skip_reasons[skip_key] = int(skip_reasons.get(skip_key, 0)) + 1
+                    skip_reasons = _bucket_reason_map(bucket, "skip_reasons")
+                    skip_reasons[skip_key] = _coerce_int(skip_reasons.get(skip_key, 0)) + 1
+                    bucket["skip_reasons"] = skip_reasons
                 if in_last_hour:
-                    bucket["skips_last_hour"] = int(bucket["skips_last_hour"]) + 1
+                    bucket["skips_last_hour"] = _bucket_int(bucket, "skips_last_hour") + 1
         summaries: list[ProviderUsageSummary] = []
         for (task_name, provider_key, provider_name, model_name), bucket in aggregate.items():
             active_state = active_states.get((provider_key, model_name))
-            duration_last_hour = bucket["duration_last_hour"]
-            duration_last_day = bucket["duration_last_day"]
-            failure_reasons = bucket["failure_reasons"]
-            skip_reasons = bucket["skip_reasons"]
-            assert isinstance(duration_last_hour, list)
-            assert isinstance(duration_last_day, list)
-            assert isinstance(failure_reasons, dict)
-            assert isinstance(skip_reasons, dict)
+            duration_last_hour = _bucket_list(bucket, "duration_last_hour")
+            duration_last_day = _bucket_list(bucket, "duration_last_day")
+            failure_reasons = _bucket_reason_map(bucket, "failure_reasons")
+            skip_reasons = _bucket_reason_map(bucket, "skip_reasons")
             summaries.append(
                 ProviderUsageSummary(
                     task_name=task_name,
                     provider_key=provider_key,
                     provider_name=provider_name,
                     model_name=model_name,
-                    calls_last_hour=int(bucket["calls_last_hour"]),
-                    calls_last_day=int(bucket["calls_last_day"]),
-                    failures_last_hour=int(bucket["failures_last_hour"]),
-                    failures_last_day=int(bucket["failures_last_day"]),
-                    skips_last_hour=int(bucket["skips_last_hour"]),
-                    skips_last_day=int(bucket["skips_last_day"]),
+                    calls_last_hour=_bucket_int(bucket, "calls_last_hour"),
+                    calls_last_day=_bucket_int(bucket, "calls_last_day"),
+                    failures_last_hour=_bucket_int(bucket, "failures_last_hour"),
+                    failures_last_day=_bucket_int(bucket, "failures_last_day"),
+                    skips_last_hour=_bucket_int(bucket, "skips_last_hour"),
+                    skips_last_day=_bucket_int(bucket, "skips_last_day"),
                     avg_duration_last_hour=_mean(duration_last_hour),
                     avg_duration_last_day=_mean(duration_last_day),
                     top_failure_reason_last_day=_top_reason(failure_reasons),

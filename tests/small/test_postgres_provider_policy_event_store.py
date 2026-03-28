@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -113,7 +114,7 @@ class FakeSessionManager:
 
 def test_postgres_provider_policy_event_repository_records_structured_events() -> None:
     session_manager = FakeSessionManager()
-    repository = PostgresProviderPolicyEventRepository(session_manager, workspace_id="workspace-a")
+    repository = PostgresProviderPolicyEventRepository(cast(Any, session_manager), workspace_id="workspace-a")
 
     repository.record_event(
         task_name="graph-linker",

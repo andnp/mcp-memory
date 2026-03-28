@@ -138,6 +138,7 @@ async def _run_periodic_backup_loop(runtime) -> None:
     config = getattr(runtime, "config", None)
     db_manager = getattr(runtime, "db_manager", None)
     memory_path = getattr(runtime, "memory_path", None)
+    storage_backend = getattr(runtime, "storage_backend", None) or "sqlite"
     if config is None or db_manager is None or memory_path is None:
         return
 
@@ -145,6 +146,10 @@ async def _run_periodic_backup_loop(runtime) -> None:
     app_data_dir = Path(memory_path).parent
     if backup_config.warn_on_shared_storage:
         log_shared_storage_risks(app_data_dir)
+
+    if storage_backend != "sqlite":
+        logger.info("Skipping periodic SQLite backup loop for storage backend %s", storage_backend)
+        return
 
     if not backup_config.enabled:
         return

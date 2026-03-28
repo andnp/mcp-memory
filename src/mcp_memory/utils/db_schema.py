@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -234,6 +234,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             query_text TEXT,
             result_rank INTEGER,
             result_count INTEGER,
+            duration_ms REAL,
             created_at REAL NOT NULL,
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
         );
@@ -433,11 +434,13 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
             query_text TEXT,
             result_rank INTEGER,
             result_count INTEGER,
+            duration_ms REAL,
             created_at REAL NOT NULL,
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
         )
         """
     )
+    ensure_column(conn, "memory_tool_events", "duration_ms", "REAL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_policy_events (

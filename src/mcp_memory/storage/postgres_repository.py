@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 from mcp_memory.core.summaries import build_deterministic_summary
@@ -88,6 +89,14 @@ class PostgresRelationalMemoryRepository:
                 )
                 self._replace_workspace_mappings(cursor, record_id, normalized_workspace_ids)
                 self._replace_tag_mappings(cursor, record_id, normalized_tags)
+                self._upsert_search_document(
+                    cursor,
+                    memory_id=record_id,
+                    title=normalized_title,
+                    summary=summary_text,
+                    content=normalized_content,
+                    tags=normalized_tags,
+                )
             connection.commit()
 
         return self.get_memory(record_id)
@@ -184,6 +193,15 @@ class PostgresRelationalMemoryRepository:
                         memory_id,
                         self._normalize_values(tags),
                     )
+                effective_tags = existing.tags if tags is None else self._normalize_values(tags)
+                self._upsert_search_document(
+                    cursor,
+                    memory_id=memory_id,
+                    title=normalized_title or existing.title,
+                    summary=cast(str | None, existing.summary if resolved_summary is _SUMMARY_UNSET else resolved_summary),
+                    content=normalized_content or existing.content,
+                    tags=effective_tags,
+                )
             connection.commit()
 
         return self.get_memory(memory_id)
@@ -246,7 +264,7 @@ class PostgresRelationalMemoryRepository:
             EXISTS (
                 SELECT 1
                 FROM unnest(%s::text[]) AS token
-                WHERE search_documents.search_document @@ plainto_tsquery('simple', token)
+                WHERE memory_search_documents.search_document @@ plainto_tsquery('simple', token)
             )
             """
         ]
@@ -270,32 +288,15 @@ class PostgresRelationalMemoryRepository:
         params.append(limit)
         query_sql = (
             """
-            WITH tag_agg AS (
-                SELECT memory_tags.memory_id, STRING_AGG(tags.name, ' ' ORDER BY tags.name) AS tags_text
-                FROM memory_tags
-                JOIN tags ON tags.id = memory_tags.tag_id
-                GROUP BY memory_tags.memory_id
-            ),
-            search_documents AS (
-                SELECT
-                    memories.id,
-                    (
-                        setweight(to_tsvector('simple', COALESCE(memories.title, '')), 'A')
-                        || setweight(to_tsvector('simple', COALESCE(memories.summary, '')), 'A')
-                        || setweight(to_tsvector('simple', COALESCE(tag_agg.tags_text, '')), 'B')
-                        || setweight(to_tsvector('simple', COALESCE(memories.content, '')), 'C')
-                    ) AS search_document
-                FROM memories
-                LEFT JOIN tag_agg ON tag_agg.memory_id = memories.id
-            )
             SELECT DISTINCT memories.id,
+                memories.updated_at,
                 (
-                    SELECT COALESCE(SUM(ts_rank_cd(search_documents.search_document, plainto_tsquery('simple', token))), 0.0)
+                    SELECT COALESCE(SUM(ts_rank_cd(memory_search_documents.search_document, plainto_tsquery('simple', token))), 0.0)
                     FROM unnest(%s::text[]) AS token
-                    WHERE search_documents.search_document @@ plainto_tsquery('simple', token)
+                    WHERE memory_search_documents.search_document @@ plainto_tsquery('simple', token)
                 ) AS rank
-            FROM search_documents
-            JOIN memories ON memories.id = search_documents.id
+            FROM memory_search_documents
+            JOIN memories ON memories.id = memory_search_documents.memory_id
             """
             + (" ".join(joins) + " " if joins else "")
             + "WHERE "
@@ -493,6 +494,7 @@ class PostgresRelationalMemoryRepository:
                     "DELETE FROM links WHERE source_id = %s OR target_id = %s",
                     (memory_id, memory_id),
                 )
+                cursor.execute("DELETE FROM memory_search_documents WHERE memory_id = %s", (memory_id,))
                 cursor.execute("DELETE FROM memories WHERE id = %s", (memory_id,))
             connection.commit()
         return existing
@@ -618,6 +620,61 @@ class PostgresRelationalMemoryRepository:
                 "INSERT INTO memory_tags (memory_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                 (memory_id, tag_row[0]),
             )
+
+    def _upsert_search_document(
+        self,
+        cursor: CursorLike,
+        *,
+        memory_id: str,
+        title: str,
+        summary: str | None,
+        content: str,
+        tags: list[str],
+    ) -> None:
+        tags_text = " ".join(tags)
+        cursor.execute(
+            """
+            INSERT INTO memory_search_documents (
+                memory_id,
+                title,
+                summary,
+                content,
+                tags_text,
+                search_document
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                (
+                    setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')
+                    || setweight(to_tsvector('simple', COALESCE(%s, '')), 'A')
+                    || setweight(to_tsvector('simple', COALESCE(%s, '')), 'B')
+                    || setweight(to_tsvector('simple', COALESCE(%s, '')), 'C')
+                )
+            )
+            ON CONFLICT (memory_id)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                summary = EXCLUDED.summary,
+                content = EXCLUDED.content,
+                tags_text = EXCLUDED.tags_text,
+                search_document = EXCLUDED.search_document
+            """,
+            (
+                memory_id,
+                title,
+                summary or "",
+                content,
+                tags_text,
+                title,
+                summary or "",
+                tags_text,
+                content,
+            ),
+        )
 
     def _normalize_values(self, values: list[str]) -> list[str]:
         normalized_values: list[str] = []

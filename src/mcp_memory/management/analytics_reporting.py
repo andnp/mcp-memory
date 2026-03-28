@@ -185,6 +185,32 @@ _QUALITY_REMEDIATION_DEFS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _coerce_float(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
+
+
+def _coerce_int(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
+
+
 @dataclass
 class _MaintenanceSummaryAccumulator:
     task_names: set[str] = field(default_factory=set)
@@ -358,7 +384,7 @@ def build_nerd_metrics(
 
     task_buckets: dict[float, _TaskBucketAccumulator] = {}
     for row in task_rows:
-        bucket_start = float(int(float(row["completed_at"]) // bucket_seconds) * bucket_seconds)
+        bucket_start = float(int(_coerce_float(row["completed_at"]) // bucket_seconds) * bucket_seconds)
         bucket = task_buckets.setdefault(bucket_start, _TaskBucketAccumulator())
         bucket.total_runs += 1
         status = str(row["status"])
@@ -368,7 +394,7 @@ def build_nerd_metrics(
             bucket.failed_runs += 1
         elif status == "retry":
             bucket.retry_runs += 1
-        bucket.durations.append(float(row["duration_seconds"] or 0.0))
+        bucket.durations.append(_coerce_float(row["duration_seconds"]))
 
     agent_throughput = [
         AgentThroughputBucketPayload(
@@ -404,7 +430,7 @@ def build_nerd_metrics(
         if status == "skipped":
             provider_skips += 1
             continue
-        bucket_start = float(int(float(row["created_at"]) // bucket_seconds) * bucket_seconds)
+        bucket_start = float(int(_coerce_float(row["created_at"]) // bucket_seconds) * bucket_seconds)
         key = (
             bucket_start,
             str(row["provider_key"]),
@@ -412,7 +438,7 @@ def build_nerd_metrics(
             str(row["model_name"]),
         )
         bucket = provider_buckets.setdefault(key, _ProviderBucketAccumulator())
-        duration = float(row["duration_seconds"] or 0.0)
+        duration = _coerce_float(row["duration_seconds"])
         bucket.call_count += 1
         bucket.durations.append(duration)
         all_provider_durations.append(duration)
@@ -875,7 +901,7 @@ def build_memory_lifecycle(db_manager, workspace_id: str | None, *, memory_rows=
         by_status[status] = by_status.get(status, 0) + 1
         by_type[memory_type] = by_type.get(memory_type, 0) + 1
 
-        content_size = int(row["content_bytes"] or 0)
+        content_size = _coerce_int(row["content_bytes"])
         content_sizes.append(content_size)
         if row["last_accessed_at"] is None:
             cold_memory_count += 1

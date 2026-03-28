@@ -1341,3 +1341,46 @@ def test_rebuild_semantic_index_recreates_embeddings_for_current_model(db_manage
     assert stored is not None
     assert health.rebuild_count == 1
     assert health.available is True
+
+
+def test_stale_embedding_detection_uses_bulk_updated_at_lookup_when_available(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    record = repository.create_memory(
+        title="Bulk embedding lookup",
+        content="Use one query instead of N+1 embedding lookups.",
+        summary="Bulk lookup summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["search"],
+        updated_at="2026-03-28T00:00:00+00:00",
+    )
+    assert record is not None
+    vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id=None,
+        model_name=_FakeEmbedder.model_name,
+        embedding=[0.1, 0.2],
+    )
+
+    get_called = False
+
+    def _fail_if_called(**_kwargs):
+        nonlocal get_called
+        get_called = True
+        raise AssertionError("per-record get should not be used when bulk lookup exists")
+
+    monkeypatch.setattr(vector_store, "get", _fail_if_called)
+
+    stale = service._stale_or_missing_embedding_candidates([record])
+
+    assert stale == []
+    assert get_called is False

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 import time
 from typing import Any, cast
 
@@ -81,16 +82,7 @@ def build_recent_agent_runs(
     *,
     detail_level: str = "compact",
 ) -> list[AgentRunHistoryPayload]:
-    rows = [] if db_manager is None else db_manager.get_connection().execute(
-        f"SELECT * FROM task_runs WHERE task_name IN ({','.join('?' for _ in TRIGGERABLE_BACKGROUND_TASK_NAMES)})"
-        + (" AND workspace_id = ?" if workspace_id is not None else "")
-        + " ORDER BY completed_at DESC, started_at DESC LIMIT ?",
-        [
-            *TRIGGERABLE_BACKGROUND_TASK_NAMES,
-            *([workspace_id] if workspace_id is not None else []),
-            limit,
-        ],
-    ).fetchall()
+    rows = [] if db_manager is None else _fetch_recent_agent_run_rows(db_manager, workspace_id=workspace_id, limit=limit)
     payloads: list[AgentRunHistoryPayload] = []
     for row in rows:
         result = decode_run_result(row["result_json"])
@@ -99,15 +91,66 @@ def build_recent_agent_runs(
                 task_id=str(row["task_id"]),
                 task_name=str(row["task_name"]),
                 status=str(row["status"]),
-                started_at=float(row["started_at"]),
-                completed_at=float(row["completed_at"]),
-                duration_seconds=float(row["duration_seconds"] or 0.0),
-                error_text=row["error_text"],
+                started_at=_coerce_float(row["started_at"]),
+                completed_at=_coerce_float(row["completed_at"]),
+                duration_seconds=_coerce_float(row["duration_seconds"]),
+                error_text=None if row["error_text"] is None else str(row["error_text"]),
                 result=result,
                 detail_level=detail_level,
             )
         )
     return payloads
+
+
+def _fetch_recent_agent_run_rows(db_manager, *, workspace_id: str | None, limit: int) -> list[dict[str, object]]:
+    placeholders = ",".join("?" for _ in TRIGGERABLE_BACKGROUND_TASK_NAMES)
+    query = (
+        f"SELECT * FROM task_runs WHERE task_name IN ({placeholders})"
+        + (" AND workspace_id = ?" if workspace_id is not None else "")
+        + " ORDER BY completed_at DESC, started_at DESC LIMIT ?"
+    )
+    params: list[object] = [
+        *TRIGGERABLE_BACKGROUND_TASK_NAMES,
+        *([workspace_id] if workspace_id is not None else []),
+        limit,
+    ]
+    if hasattr(db_manager, "get_connection"):
+        rows = db_manager.get_connection().execute(query, params).fetchall()
+        return [_row_to_mapping(row) for row in rows]
+
+    adapted_query = query.replace("?", "%s")
+    with db_manager.open_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(adapted_query, tuple(params))
+            rows = cursor.fetchall()
+            columns = [column.name for column in cursor.description] if cursor.description is not None else []
+            return [_row_to_mapping(row, columns) for row in rows]
+
+
+def _row_to_mapping(row: object, columns: list[str] | None = None) -> dict[str, object]:
+    if isinstance(row, dict):
+        return row
+    if isinstance(row, Mapping):
+        return {str(key): value for key, value in row.items()}
+    row_keys = getattr(row, "keys", None)
+    if callable(row_keys):
+        row_like = cast(Any, row)
+        return {str(key): row_like[key] for key in cast(Any, row_keys)()}
+    if isinstance(row, tuple) and columns is not None:
+        return dict(zip(columns, cast(tuple[object, ...], row), strict=False))
+    raise TypeError(f"Unsupported row type: {type(row)!r}")
+
+
+def _coerce_float(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
 def build_agent_run_history_payload(
