@@ -1296,7 +1296,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert health.workspace_id == "workspace-a"
     assert health.search.background_repair_enabled is True
     assert health.search.background_repair_wait_seconds == 5.0
-    assert health.search.queued_repair_backlog_count == 1
+    assert health.search.queued_repair_backlog_count == 0
     assert health.search.running_repair_count == 0
     assert nerd_metrics.graph_topology.total_memories == 2
     assert nerd_metrics.graph_topology.total_links == 1

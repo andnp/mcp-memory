@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.task_worker import RuntimeTaskWorker
+from mcp_memory.management.service import ManagementService
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.storage.postgres import ensure_postgres_schema
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
@@ -610,3 +612,24 @@ async def test_postgres_integration_runtime_worker_requests_shutdown_cancellatio
         assert task_after_stop.status == "cancelled"
         assert task_after_stop.cancellation_reason == "daemon_shutdown"
         assert task_after_stop.cancelled_by == "daemon"
+
+
+def test_postgres_management_service_uses_backend_safe_noop_provider_usage_fallback_when_storage_backend_hint_is_missing(
+    postgres_storage_config,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        service = ManagementService(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                workspace_id="workspace-a",
+            ),
+            SimpleNamespace(has_runtime=True, client_count=1),
+        )
+
+        conversations = service.list_ai_conversations(limit=10)
+
+        assert conversations.conversations == []

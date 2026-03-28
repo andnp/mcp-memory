@@ -30,12 +30,12 @@ class RuntimeInfoFacade:
         controller: Any | None = None,
     ) -> RuntimeInfoFacade:
         config: Config | None = ctx.config
-        db_manager: DatabaseManager | None = ctx.db_manager
+        db_manager: DatabaseManager | Any | None = ctx.db_manager
         return cls(
             workspace_id=ctx.workspace_id,
             workspace_root=ctx.workspace_root,
             memory_path=ctx.memory_path,
-            db_path=db_manager.db_path if db_manager is not None else None,
+            db_path=getattr(db_manager, "db_path", None) if db_manager is not None else None,
             ai_provider_name=config.ai.provider if config is not None else None,
             ai_model_name=config.ai.model if config is not None else None,
             runtime_active=bool(getattr(controller, "has_runtime", False)),

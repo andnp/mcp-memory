@@ -60,6 +60,8 @@ _USE_SERVICE_WORKSPACE = object()
 def _build_default_provider_usage(ctx: ApplicationContext):
     if (ctx.storage_backend or "sqlite") == "postgres":
         return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
+    if not hasattr(ctx.db_manager, "get_connection"):
+        return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
     return ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
 
 
