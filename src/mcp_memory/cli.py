@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 import json
+from pathlib import Path
 import sys
 import time
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
+from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
@@ -32,6 +34,7 @@ from mcp_memory.relational.importer import (
 )
 from mcp_memory.runtime_logging import configure_cli_logging, configure_workspace_logging
 from mcp_memory.server import MCPServer
+from mcp_memory.storage.sqlite_to_postgres_migration import migrate_sqlite_to_postgres
 
 console = Console()
 workspace_root_option = click.option("--workspace-root", help="Override the active workspace root")
@@ -367,6 +370,51 @@ def _import_markdown_files(
         console.print(f"[green]Imported total:[/] {len(imported_records)}")
 
     _with_runtime(workspace_root, _run)
+
+
+def _resolve_default_sqlite_db_path() -> Path:
+    config = load_config()
+    return resolve_memory_path(config) / "indices" / "memory.db"
+
+
+def _migrate_sqlite_to_postgres_command(
+    sqlite_path: Path | None,
+    postgres_dsn: str | None,
+    dry_run: bool,
+    allow_non_empty_target: bool,
+    json_output: bool,
+) -> None:
+    config = load_config()
+    resolved_sqlite_path = (sqlite_path or _resolve_default_sqlite_db_path()).expanduser().resolve()
+    resolved_postgres_dsn = postgres_dsn.strip() if isinstance(postgres_dsn, str) and postgres_dsn.strip() else config.storage.postgres.dsn.strip()
+    if not resolved_postgres_dsn:
+        raise click.UsageError("Provide --postgres-dsn or set storage.postgres.dsn in config.toml.")
+
+    summary = migrate_sqlite_to_postgres(
+        resolved_sqlite_path,
+        replace(config.storage.postgres, dsn=resolved_postgres_dsn),
+        dry_run=dry_run,
+        allow_non_empty_target=allow_non_empty_target,
+    )
+    if json_output:
+        click.echo(json.dumps(summary.to_dict(), sort_keys=True))
+        return
+
+    mode_label = "Dry run" if dry_run else "Migration complete"
+    console.print(f"[green]{mode_label}:[/] SQLite → Postgres")
+    console.print(f"sqlite_path={summary.sqlite_path}")
+    console.print(f"target_existing_memories={summary.target_existing_memories}")
+    console.print(
+        "counts "
+        f"memories={summary.memories} "
+        f"workspace_mappings={summary.workspace_mappings} "
+        f"tag_names={summary.tag_names} "
+        f"tag_mappings={summary.tag_mappings} "
+        f"links={summary.links} "
+        f"skipped_links={summary.skipped_links}"
+    )
+    if allow_non_empty_target:
+        console.print("[yellow]Non-empty target mode enabled[/]")
 
 
 def _render_logs_table(payload) -> None:
@@ -1095,6 +1143,26 @@ def _render_operator_health_snapshot(payload) -> None:
             recent_memories.add_row(record.updated_at, record.type, record.status, record.title)
         console.print(recent_memories)
 
+    latency_table = Table(title=f"Memory Tool Latency ({payload.tool_latency.window_minutes}m)")
+    latency_table.add_column("Tool")
+    latency_table.add_column("Count", justify="right")
+    latency_table.add_column("Avg", justify="right")
+    latency_table.add_column("P95", justify="right")
+    latency_table.add_column("Max", justify="right")
+    latency_table.add_column("Slow", justify="right")
+    if not payload.tool_latency.by_event_kind:
+        latency_table.add_row("-", "0", "-", "-", "-", "0")
+    for metric in payload.tool_latency.by_event_kind:
+        latency_table.add_row(
+            metric.event_kind,
+            str(metric.count),
+            f"{metric.avg_duration_ms:.1f}ms",
+            f"{metric.p95_duration_ms:.1f}ms",
+            f"{metric.max_duration_ms:.1f}ms",
+            str(metric.slow_count),
+        )
+    console.print(latency_table)
+
 
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
@@ -1666,6 +1734,42 @@ def import_markdown(
 ) -> None:
     """Import one or more markdown memory files into the relational store or thought buffer."""
     _run_or_exit(lambda: _import_markdown_files(file_paths, workspace_root, workspace_ids, thought))
+
+
+@main.command(name="migrate-sqlite-to-postgres")
+@click.option(
+    "--sqlite-path",
+    type=click.Path(path_type=Path, dir_okay=False, resolve_path=True),
+    help="Source SQLite database path (defaults to the current local memory.db path).",
+)
+@click.option(
+    "--postgres-dsn",
+    help="Target Postgres DSN (defaults to storage.postgres.dsn from config).",
+)
+@click.option("--dry-run", is_flag=True, help="Read and summarize the source without importing rows.")
+@click.option(
+    "--allow-non-empty-target",
+    is_flag=True,
+    help="Allow importing into a non-empty Postgres target for controlled reruns.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def migrate_sqlite_to_postgres_cli(
+    sqlite_path: Path | None,
+    postgres_dsn: str | None,
+    dry_run: bool,
+    allow_non_empty_target: bool,
+    json_output: bool,
+) -> None:
+    """Import the current SQLite memory graph into a Postgres backend."""
+    _run_or_exit(
+        lambda: _migrate_sqlite_to_postgres_command(
+            sqlite_path,
+            postgres_dsn,
+            dry_run,
+            allow_non_empty_target,
+            json_output,
+        )
+    )
 
 
 def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:

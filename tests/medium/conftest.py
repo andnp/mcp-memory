@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Generator
+import os
 import re
 import socket
 import time
@@ -12,8 +14,8 @@ from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.storage.postgres_connection import load_postgres_driver_modules
 
 
-POSTGRES_IMAGE = "timescale/timescaledb"
-POSTGRES_TAG = "latest-pg17"
+POSTGRES_IMAGE = os.getenv("MCP_MEMORY_TEST_POSTGRES_IMAGE", "postgres")
+POSTGRES_TAG = os.getenv("MCP_MEMORY_TEST_POSTGRES_TAG", "17")
 POSTGRES_USER = "postgres"
 POSTGRES_PASSWORD = "password"
 
@@ -77,7 +79,7 @@ class PostgresContainerInfo:
 
 
 @pytest.fixture(scope="session")
-def postgres_container() -> PostgresContainerInfo:
+def postgres_container() -> Generator[PostgresContainerInfo, None, None]:
     docker = pytest.importorskip("docker")
     try:
         client = docker.from_env()
@@ -126,7 +128,10 @@ def postgres_test_db_name(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture
-def postgres_storage_config(postgres_container: PostgresContainerInfo, postgres_test_db_name: str) -> PostgresStorageConfig:
+def postgres_storage_config(
+    postgres_container: PostgresContainerInfo,
+    postgres_test_db_name: str,
+) -> Generator[PostgresStorageConfig, None, None]:
     psycopg, _ = load_postgres_driver_modules()
     admin_dsn = postgres_container.admin_dsn
     test_dsn = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{postgres_container.host}:{postgres_container.port}/{postgres_test_db_name}"

@@ -10,7 +10,10 @@ A standalone Model Context Protocol (MCP) server for persistent AI memory manage
 
 ## 🚀 Overview
 
-The MCP Memory Server provides a persistent memory bank for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. The current runtime is relational, ZMQ-backed, and centered on one shared global SQLite store.
+The MCP Memory Server provides a persistent memory bank for AI assistants, enabling them to store, retrieve, and organize knowledge across sessions. The current runtime is relational, ZMQ-backed, and supports two storage modes:
+
+- **SQLite** as the default local, zero-config backend
+- **Postgres** as the explicit shared-mode backend for multi-machine or cloud-hosted use
 
 ## 🚧 Current status
 
@@ -57,6 +60,7 @@ That product goal shapes the maintenance architecture:
 - **Python 3.13+**
 - **MCP (Model Context Protocol)**: Standard interface for AI tool integration.
 - **SQLite (FTS5)**: Robust keyword search and relational storage.
+- **Postgres**: Shared-mode relational storage for multi-machine deployments.
 - **Sentence Transformers (optional)**: Local embeddings for semantic retrieval and thought clustering.
 - **ZeroMQ (`pyzmq`)**: Local daemon/proxy IPC transport over Unix domain sockets.
 - **FastAPI**: In-process compatibility and test harness for management routes.
@@ -98,7 +102,7 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 - `uv run mcp-memory dashboard`: ensure the daemon is running and print the active transport endpoint.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
-- `uv run mcp-memory stats`: print background task and memory statistics from SQLite.
+- `uv run mcp-memory stats`: print background task and memory statistics from the active backend.
 - `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
@@ -136,6 +140,19 @@ The runtime stores relational state in a shared global directory, typically:
 If `XDG_DATA_HOME` is set, that location is used instead of `~/.local/share`.
 
 The active workspace ID is derived from the current git root when available, with a stable path-based fallback outside git repos.
+
+### Shared Postgres mode
+
+If you want one shared memory store across multiple machines, use Postgres instead of syncing a live SQLite database.
+
+- local SQLite remains the default
+- Postgres is the shared-mode backend
+- shared mode must not silently fall back to SQLite
+
+For local Postgres startup and operator guidance, see:
+
+- `compose.postgres.yml`
+- `docs/postgres-shared-mode-runbook.md`
 
 ### Example `config.toml`
 
@@ -236,6 +253,38 @@ Those two behaviors are intentionally still code-owned while we keep dogfooding 
 4. **Authenticate your AI provider**:
   If you set `ai.provider = "gemini-cli"`, make sure the Gemini CLI is installed and authenticated before relying on AI-assisted background tasks.
 
+### Local shared-mode quick start
+
+Bring up a local Postgres instance:
+
+```bash
+docker compose -f compose.postgres.yml up -d
+```
+
+Set `~/.config/mcp-memory/config.toml` to use Postgres:
+
+```toml
+[storage]
+backend = "postgres"
+
+[storage.postgres]
+dsn = "postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory"
+```
+
+If you already have SQLite data, dry-run the migration first:
+
+```bash
+uv run mcp-memory migrate-sqlite-to-postgres --dry-run --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+```
+
+Then perform the import:
+
+```bash
+uv run mcp-memory migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+```
+
+For the full operator path, backup notes, and smoke checklist, see `docs/postgres-shared-mode-runbook.md`.
+
 5. **Run the MCP proxy**:
    ```bash
    uv run mcp-memory run
@@ -306,20 +355,23 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 13. **Smoke test the system**:
    - confirm the daemon command prints a stable `ipc://...` endpoint
-   - confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
+   - if using SQLite, confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
+   - if using Postgres, confirm `uv run mcp-memory health --json` reports the Postgres backend
    - record a thought through your MCP client
    - verify that the thought becomes searchable and readable through the MCP client
    - run `uv run mcp-memory stats` and confirm the task/memory metrics look sane
 
 ## Backup
 
-Because the runtime now uses one shared memory store, back up the directory periodically:
+In SQLite mode, back up the local data directory periodically:
 
 ```bash
 cp -R ~/.local/share/mcp-memory ~/.local/share/mcp-memory.backup
 ```
 
-The daemon now also supports periodic SQLite snapshots into `~/.local/share/mcp-memory/backups/` through the `[backups]` config block. This is especially useful if the store lives inside Syncthing or any other shared-storage setup that can create conflict files around a live SQLite database.
+The daemon now also supports periodic SQLite snapshots into `~/.local/share/mcp-memory/backups/` through the `[backups]` config block. This is useful for local SQLite mode.
+
+In Postgres shared mode, use normal Postgres backup/restore procedures instead. See `docs/postgres-shared-mode-runbook.md`.
 
 ## 📄 License
 
