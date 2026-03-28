@@ -7,6 +7,7 @@ from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbedding
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
+from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -98,12 +99,11 @@ def build_postgres_runtime_components(
     embedder: Any,
     enable_background_repair_queue: bool,
 ) -> StorageBackendResources:
-    del enable_background_repair_queue
     bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres)
     connection_manager = PostgresConnectionManager(spec.config.storage.postgres)
     repository = PostgresRelationalMemoryRepository(connection_manager)
     journal = PostgresSystem1Journal(connection_manager)
-    unsupported_task_queue = UnsupportedPostgresRuntimeComponent("task queue")
+    task_queue = PostgresTaskQueue(connection_manager)
     provider_policy_events = PostgresProviderPolicyEventRepository(connection_manager, workspace_id=spec.workspace_id)
     provider_usage = PostgresProviderUsageRepository(connection_manager, workspace_id=spec.workspace_id)
     runtime_logs = PostgresRuntimeLogRepository(
@@ -120,7 +120,7 @@ def build_postgres_runtime_components(
         spec.config,
         embedder=embedder,
         vector_store=vector_store,
-        task_queue=None,
+        task_queue=task_queue if enable_background_repair_queue else None,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
     )
@@ -134,7 +134,7 @@ def build_postgres_runtime_components(
         journal=journal,
         repository=repository,
         relational_search=relational_search,
-        task_queue=unsupported_task_queue,
+        task_queue=task_queue,
         provider_usage=provider_usage,
         runtime_logs=runtime_logs,
         provider_policy_events=provider_policy_events,

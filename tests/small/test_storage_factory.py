@@ -12,6 +12,7 @@ from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
+from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.types import StorageBackendResources
 
 
@@ -54,10 +55,9 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
     assert storage.backend == "postgres"
     assert storage.repository is not None
     assert isinstance(storage.relational_search, RelationalMemorySearchService)
+    assert isinstance(storage.task_queue, PostgresTaskQueue)
     assert isinstance(storage.task_execution_attempts, PostgresTaskExecutionAttemptRepository)
     assert storage.relational_search.get_health().available is False
-    with pytest.raises(NotImplementedError, match="task queue"):
-        storage.task_queue.enqueue_unique("test-task", data={}, workspace_id=None)
 
 
 def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pytest.MonkeyPatch) -> None:
