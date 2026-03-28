@@ -319,7 +319,7 @@ def _show_operator_health_snapshot(workspace_root: str | None, scope: str, json_
     _with_management_service(
         workspace_root,
         _run,
-        workspace_id=None if scope == "global" else ..., 
+        workspace_id=None if scope == "global" else ...,
     )
 
 
