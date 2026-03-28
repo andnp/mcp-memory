@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import time
@@ -11,8 +12,17 @@ from fastapi.testclient import TestClient
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.agent_runtime import (
+    FACT_CHECKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
+    SWEEPER_TASK_NAME,
+    handle_fact_checker_task,
+    handle_project_manager_task,
+    handle_sweeper_task,
+)
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.task_worker import RuntimeTaskWorker
+from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.daemon import create_daemon_app
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.hook_reminders import REMINDER_MESSAGE
@@ -66,6 +76,26 @@ def _configure_postgres_runtime_env(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     return tmp_path / "workspace"
+
+
+def _running_task(task_name: str, *, workspace_id: str | None, data: dict[str, object]) -> TaskRecord:
+    return TaskRecord(
+        id=f"{task_name}-test",
+        task_name=task_name,
+        data=data,
+        workspace_id=workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
 
 
 def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives(postgres_storage_config) -> None:
@@ -626,6 +656,270 @@ def test_postgres_integration_task_queue_lifecycle_and_task_runs(postgres_storag
         assert summaries[0].completed_runs == 1
         assert summaries[0].retry_runs == 1
         assert summaries[0].total_lines_compressed == 3
+
+
+def test_postgres_integration_maintenance_housekeeping_handlers_update_state(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.db_manager is not None
+
+    try:
+        stale_timestamp = (datetime.now(UTC) - timedelta(days=90)).isoformat()
+        stale_plan = runtime.repository.create_memory(
+            title="Old plan",
+            content="This plan is stale.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="plan",
+            created_at=stale_timestamp,
+            updated_at=stale_timestamp,
+        )
+        healthy_memory = runtime.repository.create_memory(
+            title="Healthy ext link",
+            content="Tracks a valid file.",
+            workspace_ids=[runtime.workspace_id or "global"],
+        )
+        broken_memory = runtime.repository.create_memory(
+            title="Broken ext link",
+            content="Tracks a missing file.",
+            workspace_ids=[runtime.workspace_id or "global"],
+        )
+        assert stale_plan is not None
+        assert healthy_memory is not None
+        assert broken_memory is not None
+
+        valid_file = workspace / "README.md"
+        valid_file.write_text("ok", encoding="utf-8")
+        runtime.repository.add_link(healthy_memory.id, f"ext:{valid_file.name}", "REFERENCES")
+        runtime.repository.add_link(broken_memory.id, "ext:missing.txt", "REFERENCES")
+
+        cutoff_timestamp = (datetime.now(UTC) - timedelta(days=8)).timestamp()
+        with runtime.db_manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO tasks (id, task_name, workspace_id, data, status, priority, retries_count, max_retries, created_at, updated_at, available_at, completed_at, last_error) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        "old-completed-task",
+                        "sweeper",
+                        runtime.workspace_id,
+                        "{}",
+                        "completed",
+                        100,
+                        0,
+                        3,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        None,
+                    ),
+                )
+                cursor.execute(
+                    "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (%s, %s, %s, %s)",
+                    ("processed note", runtime.workspace_id, cutoff_timestamp, "processed"),
+                )
+            connection.commit()
+
+        project_result = handle_project_manager_task(
+            runtime,
+            _running_task(
+                PROJECT_MANAGER_TASK_NAME,
+                workspace_id=runtime.workspace_id,
+                data={"workspace_id": runtime.workspace_id},
+            ),
+        )
+        fact_result = handle_fact_checker_task(
+            runtime,
+            _running_task(
+                FACT_CHECKER_TASK_NAME,
+                workspace_id=runtime.workspace_id,
+                data={
+                    "workspace_id": runtime.workspace_id,
+                    "workspace_root": str(workspace),
+                },
+            ),
+        )
+        sweep_result = handle_sweeper_task(
+            runtime,
+            _running_task(
+                SWEEPER_TASK_NAME,
+                workspace_id=runtime.workspace_id,
+                data={"workspace_id": runtime.workspace_id},
+            ),
+        )
+
+        stale_plan_record = runtime.repository.get_memory(stale_plan.id)
+        healthy_memory_record = runtime.repository.get_memory(healthy_memory.id)
+        broken_memory_record = runtime.repository.get_memory(broken_memory.id)
+
+        with runtime.db_manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM tasks WHERE id = %s", ("old-completed-task",))
+                remaining_tasks = cursor.fetchone()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM system1_journal WHERE status IN ('processed', 'archived')"
+                )
+                remaining_journal = cursor.fetchone()
+
+        assert project_result == {"updated": 1}
+        assert fact_result == {"degraded": 1, "restored": 0}
+        assert sweep_result == {"deleted_tasks": 1, "deleted_journal_entries": 1}
+        assert stale_plan_record is not None
+        assert healthy_memory_record is not None
+        assert broken_memory_record is not None
+        assert stale_plan_record.status == "stale"
+        assert healthy_memory_record.status == "active"
+        assert broken_memory_record.status == "degraded"
+        assert remaining_tasks == (0,)
+        assert remaining_journal == (0,)
+    finally:
+        runtime.close()
+
+
+def test_postgres_integration_sweeper_preserves_unexpired_recoverable_entries_and_is_idempotent(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.db_manager is not None
+
+    class _VectorStoreSpy:
+        def __init__(self) -> None:
+            self.deleted: list[tuple[str, str, str | None]] = []
+
+        def delete(self, *, source_kind: str, source_id: str, model_name: str | None) -> None:
+            self.deleted.append((source_kind, source_id, model_name))
+
+    runtime.vector_store = _VectorStoreSpy()
+    runtime.embedder = None
+
+    try:
+        cutoff_timestamp = (datetime.now(UTC) - timedelta(days=8)).timestamp()
+        future_recoverable_until = (datetime.now(UTC) + timedelta(days=1)).timestamp()
+        with runtime.db_manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO tasks (id, task_name, workspace_id, data, status, priority, retries_count, max_retries, created_at, updated_at, available_at, completed_at, last_error) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        "old-sweeper-completed-task",
+                        "sweeper",
+                        runtime.workspace_id,
+                        "{}",
+                        "completed",
+                        100,
+                        0,
+                        3,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        cutoff_timestamp,
+                        None,
+                    ),
+                )
+                cursor.execute(
+                    "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (%s, %s, %s, %s)",
+                    ("processed note", runtime.workspace_id, cutoff_timestamp, "processed"),
+                )
+                cursor.execute(
+                    "INSERT INTO system1_journal (content, workspace_id, timestamp, status, recoverable_until) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    ("expired recoverable note", runtime.workspace_id, cutoff_timestamp, "recoverable", cutoff_timestamp),
+                )
+                expired_row = cursor.fetchone()
+                cursor.execute(
+                    "INSERT INTO system1_journal (content, workspace_id, timestamp, status, recoverable_until) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (
+                        "still recoverable note",
+                        runtime.workspace_id,
+                        cutoff_timestamp,
+                        "recoverable",
+                        future_recoverable_until,
+                    ),
+                )
+                preserved_row = cursor.fetchone()
+            connection.commit()
+
+        assert expired_row is not None
+        assert preserved_row is not None
+        task = _running_task(
+            SWEEPER_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+        )
+
+        first = handle_sweeper_task(runtime, task)
+        second = handle_sweeper_task(runtime, task)
+
+        with runtime.db_manager.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM system1_journal WHERE status = 'recoverable' ORDER BY id ASC"
+                )
+                remaining_recoverable = cursor.fetchall()
+
+        assert first == {"deleted_tasks": 1, "deleted_journal_entries": 2}
+        assert second == {"deleted_tasks": 0, "deleted_journal_entries": 0}
+        assert remaining_recoverable == [(preserved_row[0],)]
+        assert runtime.vector_store.deleted == [("thought", str(expired_row[0]), None)]
+    finally:
+        runtime.close()
+
+
+def test_postgres_integration_fact_checker_restores_degraded_links_when_file_reappears(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _configure_postgres_runtime_env(monkeypatch, tmp_path, dsn=postgres_storage_config.dsn)
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
+
+    runtime = create_runtime(workspace_root_override=str(workspace), cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        memory = runtime.repository.create_memory(
+            title="Repairable ext link",
+            content="Tracks a file that will return.",
+            workspace_ids=[runtime.workspace_id or "global"],
+        )
+        assert memory is not None
+        runtime.repository.add_link(memory.id, "ext:docs/plan.md", "REFERENCES")
+
+        task = _running_task(
+            FACT_CHECKER_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={
+                "workspace_id": runtime.workspace_id,
+                "workspace_root": str(workspace),
+            },
+        )
+        first = handle_fact_checker_task(runtime, task)
+
+        repaired_file = workspace / "docs" / "plan.md"
+        repaired_file.parent.mkdir(parents=True, exist_ok=True)
+        repaired_file.write_text("restored", encoding="utf-8")
+
+        second = handle_fact_checker_task(runtime, task)
+        refreshed_memory = runtime.repository.get_memory(memory.id)
+
+        assert first == {"degraded": 1, "restored": 0}
+        assert second == {"degraded": 0, "restored": 1}
+        assert refreshed_memory is not None
+        assert refreshed_memory.status == "active"
+    finally:
+        runtime.close()
 
 
 @pytest.mark.asyncio

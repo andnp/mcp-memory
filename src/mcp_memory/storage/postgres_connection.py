@@ -48,14 +48,27 @@ class PooledPostgresConnectionLease(ConnectionLease[DbConnectionLike]):
     def __exit__(self, exc_type, exc, tb) -> bool:
         if exc_type is not None:
             self.connection.rollback()
+            self.close(reset_connection=False)
+            return False
         self.close()
         return False
 
-    def close(self) -> None:
+    def close(self, *, reset_connection: bool = True) -> None:
         if self._closed:
             return
         self._closed = True
+        if reset_connection:
+            self._reset_connection()
         self.pool.putconn(self.connection)
+
+    def _reset_connection(self) -> None:
+        rollback = getattr(self.connection, "rollback", None)
+        if rollback is None:
+            return
+        try:
+            rollback()
+        except Exception:
+            return
 
 
 class PostgresConnectionManager(SessionManager[DbConnectionLike]):
