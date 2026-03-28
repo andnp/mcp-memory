@@ -574,13 +574,16 @@ class RelationalMemorySearchService:
             else limit
         )
         query_tokens = _query_tokens(query)
+        keyword_started = time.perf_counter()
         keyword_ids = self._repository.search_keyword_memory_ids(
             query,
             status=status,
             include_superseded=include_superseded,
             limit=max(50, candidate_limit),
         )
+        diagnostics.timing_ms["keyword_lookup"] = round((time.perf_counter() - keyword_started) * 1000.0, 3)
         diagnostics.keyword_candidate_count = len(keyword_ids)
+        semantic_started = time.perf_counter()
         semantic_ids, semantic_scores = self._semantic_candidate_ids(
             query,
             workspace_id=workspace_id,
@@ -592,21 +595,26 @@ class RelationalMemorySearchService:
             limit=max(50, candidate_limit),
             diagnostics=diagnostics if debug else None,
         )
+        diagnostics.timing_ms["semantic_selection"] = round((time.perf_counter() - semantic_started) * 1000.0, 3)
         diagnostics.semantic_candidate_count = len(semantic_ids)
         engine = RankingEngine(self._repository, self._config)
         rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
         if not rrf_scores:
             diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
             return [], diagnostics
+        graph_started = time.perf_counter()
         graph_expansion = self._expand_graph_candidate_scores(rrf_scores)
+        diagnostics.timing_ms["graph_expansion"] = round((time.perf_counter() - graph_started) * 1000.0, 3)
         for memory_id, expansion in graph_expansion.items():
             rrf_scores[memory_id] = max(rrf_scores.get(memory_id, 0.0), expansion.rrf_score)
 
+        candidate_hydration_started = time.perf_counter()
         candidates = self._repository.get_ranking_candidates(
             list(rrf_scores.keys()),
             status=status,
             include_superseded=include_superseded,
         )
+        diagnostics.timing_ms["candidate_hydration"] = round((time.perf_counter() - candidate_hydration_started) * 1000.0, 3)
         if status is None:
             candidates = [
                 candidate
@@ -632,6 +640,7 @@ class RelationalMemorySearchService:
             )
             for memory_id in rrf_scores
         }
+        ranking_started = time.perf_counter()
         ranked = [
             RelationalSearchResult(
                 memory_id=record.id,
@@ -679,6 +688,7 @@ class RelationalMemorySearchService:
             ),
             reverse=True,
         )
+        diagnostics.timing_ms["ranking"] = round((time.perf_counter() - ranking_started) * 1000.0, 3)
         result_limit = self._resolved_result_limit(
             ranked,
             requested_limit=limit,
