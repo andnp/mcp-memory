@@ -321,29 +321,60 @@ class PostgresRelationalMemoryRepository:
         if not normalized_ids:
             return []
 
-        ranked_candidates: list[RankedMemoryCandidate] = []
-        for memory_id in normalized_ids:
-            record = self.get_memory(memory_id)
-            if record is None:
-                continue
-            if status is not None and record.status != status:
-                continue
-            incoming_links = self.get_links(memory_id, direction="incoming")
-            incoming_link_type_counts: dict[str, int] = {}
-            for link in incoming_links:
-                incoming_link_type_counts[link.link_type] = incoming_link_type_counts.get(link.link_type, 0) + 1
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                params: list[object] = [normalized_ids]
+                query = (
+                    "SELECT id, title, content, summary, type, status, created_at, updated_at, "
+                    "read_count, access_score, last_accessed_at, last_surfaced_at, metadata "
+                    "FROM memories WHERE id = ANY(%s::text[])"
+                )
+                if status is not None:
+                    query += " AND status = %s"
+                    params.append(status)
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                if not rows:
+                    return []
+
+                found_ids = [str(row[0]) for row in rows]
+                workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, found_ids)
+                tags_by_memory_id = self._tags_by_memory_id(cursor, found_ids)
+                link_counts_by_memory_id = self._incoming_link_counts_by_memory_id(cursor, found_ids)
+
+        candidates_by_id: dict[str, RankedMemoryCandidate] = {}
+        for row in rows:
+            memory_id = str(row[0])
+            incoming_links_count, incoming_link_type_counts = link_counts_by_memory_id.get(
+                memory_id,
+                (0, {"DEPENDS_ON": 0, "AMENDS": 0, "CONTRADICTS": 0, "SUPERSEDES": 0}),
+            )
             has_incoming_supersedes = incoming_link_type_counts.get("SUPERSEDES", 0) > 0
             if has_incoming_supersedes and not include_superseded:
                 continue
-            ranked_candidates.append(
-                RankedMemoryCandidate(
-                    record=record,
-                    incoming_links_count=len(incoming_links),
-                    has_incoming_supersedes=has_incoming_supersedes,
-                    incoming_link_type_counts=incoming_link_type_counts,
-                )
+            candidates_by_id[memory_id] = RankedMemoryCandidate(
+                record=RelationalMemoryRecord(
+                    id=memory_id,
+                    title=str(row[1]),
+                    content=str(row[2]),
+                    summary=None if row[3] is None else str(row[3]),
+                    type=str(row[4]),
+                    status=str(row[5]),
+                    created_at=str(row[6]),
+                    updated_at=str(row[7]),
+                    read_count=self._coerce_int(row[8]),
+                    access_score=self._coerce_float(row[9]),
+                    last_accessed_at=None if row[10] is None else str(row[10]),
+                    last_surfaced_at=None if row[11] is None else str(row[11]),
+                    metadata=self._load_metadata(row[12]),
+                    workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
+                    tags=tags_by_memory_id.get(memory_id, []),
+                ),
+                incoming_links_count=incoming_links_count,
+                has_incoming_supersedes=has_incoming_supersedes,
+                incoming_link_type_counts=incoming_link_type_counts,
             )
-        return ranked_candidates
+        return [candidates_by_id[memory_id] for memory_id in normalized_ids if memory_id in candidates_by_id]
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
         del best_effort
@@ -560,6 +591,80 @@ class PostgresRelationalMemoryRepository:
             (memory_id,),
         )
         return cursor.fetchone()
+
+    def _workspace_ids_by_memory_id(
+        self,
+        cursor: CursorLike,
+        memory_ids: list[str],
+    ) -> dict[str, list[str]]:
+        cursor.execute(
+            """
+            SELECT memory_id, workspace_id
+            FROM memory_workspaces
+            WHERE memory_id = ANY(%s::text[])
+            ORDER BY memory_id ASC, workspace_id ASC
+            """,
+            (memory_ids,),
+        )
+        workspace_ids_by_memory_id: dict[str, list[str]] = {}
+        for row in cursor.fetchall():
+            memory_id = str(row[0])
+            workspace_ids_by_memory_id.setdefault(memory_id, []).append(str(row[1]))
+        return workspace_ids_by_memory_id
+
+    def _tags_by_memory_id(
+        self,
+        cursor: CursorLike,
+        memory_ids: list[str],
+    ) -> dict[str, list[str]]:
+        cursor.execute(
+            """
+            SELECT memory_tags.memory_id, tags.name
+            FROM memory_tags
+            JOIN tags ON tags.id = memory_tags.tag_id
+            WHERE memory_tags.memory_id = ANY(%s::text[])
+            ORDER BY memory_tags.memory_id ASC, tags.name ASC
+            """,
+            (memory_ids,),
+        )
+        tags_by_memory_id: dict[str, list[str]] = {}
+        for row in cursor.fetchall():
+            memory_id = str(row[0])
+            tags_by_memory_id.setdefault(memory_id, []).append(str(row[1]))
+        return tags_by_memory_id
+
+    def _incoming_link_counts_by_memory_id(
+        self,
+        cursor: CursorLike,
+        memory_ids: list[str],
+    ) -> dict[str, tuple[int, dict[str, int]]]:
+        cursor.execute(
+            """
+            SELECT
+                target_id AS memory_id,
+                COUNT(*) AS incoming_links_count,
+                SUM(CASE WHEN type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count,
+                SUM(CASE WHEN type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count,
+                SUM(CASE WHEN type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count,
+                SUM(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count
+            FROM links
+            WHERE target_id = ANY(%s::text[])
+            GROUP BY target_id
+            """,
+            (memory_ids,),
+        )
+        link_counts_by_memory_id: dict[str, tuple[int, dict[str, int]]] = {}
+        for row in cursor.fetchall():
+            link_counts_by_memory_id[str(row[0])] = (
+                self._coerce_int(row[1]),
+                {
+                    "DEPENDS_ON": self._coerce_int(row[2]),
+                    "AMENDS": self._coerce_int(row[3]),
+                    "CONTRADICTS": self._coerce_int(row[4]),
+                    "SUPERSEDES": self._coerce_int(row[5]),
+                },
+            )
+        return link_counts_by_memory_id
 
     def _hydrate_record(self, cursor: CursorLike, row: tuple[object, ...]) -> RelationalMemoryRecord:
         memory_id = str(row[0])

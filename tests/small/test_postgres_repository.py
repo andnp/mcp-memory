@@ -30,6 +30,7 @@ class FakePostgresState:
     memory_tags: dict[str, set[int]] = field(default_factory=dict)
     links: dict[tuple[str, str, str], str] = field(default_factory=dict)
     memory_search_documents: set[str] = field(default_factory=set)
+    query_log: list[str] = field(default_factory=list)
     next_tag_id: int = 1
 
 
@@ -47,9 +48,14 @@ class FakeCursor:
     def execute(self, query: str, params: tuple[object, ...] | None = None) -> None:
         normalized = " ".join(query.split())
         arguments: SqlParams = tuple(() if params is None else params)
+        self._state.query_log.append(normalized)
 
         if normalized.startswith("INSERT INTO memories ("):
             self._insert_memory(arguments)
+        elif normalized.startswith(
+            "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY("
+        ):
+            self._select_memories_by_ids(arguments)
         elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memory(arguments)
         elif normalized.startswith("UPDATE memories SET"):
@@ -83,6 +89,13 @@ class FakeCursor:
         elif normalized == "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC":
             workspaces = sorted(self._state.memory_workspaces.get(str(arguments[0]), set()))
             self._result = [(workspace_id,) for workspace_id in workspaces]
+        elif normalized == "SELECT memory_id, workspace_id FROM memory_workspaces WHERE memory_id = ANY(%s::text[]) ORDER BY memory_id ASC, workspace_id ASC":
+            memory_ids = self._as_str_sequence(arguments[0])
+            rows: list[tuple[object, ...]] = []
+            for memory_id in sorted(memory_ids):
+                for workspace_id in sorted(self._state.memory_workspaces.get(memory_id, set())):
+                    rows.append((memory_id, workspace_id))
+            self._result = rows
         elif normalized.startswith("SELECT tags.name FROM tags JOIN memory_tags ON memory_tags.tag_id = tags.id"):
             memory_id = str(arguments[0])
             tag_names = sorted(
@@ -91,10 +104,25 @@ class FakeCursor:
                 if tag_id in self._state.tags
             )
             self._result = [(tag_name,) for tag_name in tag_names]
+        elif normalized == "SELECT memory_tags.memory_id, tags.name FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id WHERE memory_tags.memory_id = ANY(%s::text[]) ORDER BY memory_tags.memory_id ASC, tags.name ASC":
+            memory_ids = self._as_str_sequence(arguments[0])
+            rows = []
+            for memory_id in sorted(memory_ids):
+                tag_names = sorted(
+                    self._state.tags[tag_id]
+                    for tag_id in self._state.memory_tags.get(memory_id, set())
+                    if tag_id in self._state.tags
+                )
+                rows.extend((memory_id, tag_name) for tag_name in tag_names)
+            self._result = rows
         elif normalized.startswith("SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memories(normalized, arguments)
         elif normalized.startswith("SELECT DISTINCT memories.id,"):
             self._search_keyword_memory_ids(normalized, arguments)
+        elif normalized.startswith(
+            "SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count, SUM(CASE WHEN type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count, SUM(CASE WHEN type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count, SUM(CASE WHEN type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count, SUM(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count FROM links WHERE target_id = ANY("
+        ):
+            self._select_incoming_link_counts(arguments)
         elif normalized.startswith("INSERT INTO memory_search_documents ("):
             self._state.memory_search_documents.add(str(arguments[0]))
             self._result = []
@@ -163,6 +191,19 @@ class FakeCursor:
             self._result = []
             return
         self._result = [self._memory_row(memory)]
+
+    def _select_memories_by_ids(self, arguments: SqlParams) -> None:
+        memory_ids = self._as_str_sequence(arguments[0])
+        status = str(arguments[1]) if len(arguments) > 1 else None
+        rows = []
+        for memory_id in memory_ids:
+            memory = self._state.memories.get(memory_id)
+            if memory is None:
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
+            rows.append(self._memory_row(memory))
+        self._result = rows
 
     def _select_memories(self, normalized: str, arguments: SqlParams) -> None:
         params = list(arguments)
@@ -265,6 +306,36 @@ class FakeCursor:
             rows.append((source_id, target_id, stored_link_type, self._state.links[(source_id, target_id, stored_link_type)]))
         self._result = rows
 
+    def _select_incoming_link_counts(self, arguments: SqlParams) -> None:
+        memory_ids = set(self._as_str_sequence(arguments[0]))
+        rows: list[tuple[object, ...]] = []
+        for memory_id in sorted(memory_ids):
+            counts = {
+                "DEPENDS_ON": 0,
+                "AMENDS": 0,
+                "CONTRADICTS": 0,
+                "SUPERSEDES": 0,
+            }
+            total = 0
+            for _source_id, target_id, link_type in self._state.links:
+                if target_id != memory_id:
+                    continue
+                total += 1
+                counts[link_type] = counts.get(link_type, 0) + 1
+            if total <= 0:
+                continue
+            rows.append(
+                (
+                    memory_id,
+                    total,
+                    counts["DEPENDS_ON"],
+                    counts["AMENDS"],
+                    counts["CONTRADICTS"],
+                    counts["SUPERSEDES"],
+                )
+            )
+        self._result = rows
+
     def _memory_row(self, memory: dict[str, object]) -> tuple[object, ...]:
         return (
             memory["id"],
@@ -325,6 +396,11 @@ class FakeCursor:
         if isinstance(value, str):
             return float(value)
         raise TypeError("expected float-compatible value")
+
+    def _as_str_sequence(self, value: object) -> list[str]:
+        if isinstance(value, list | tuple):
+            return [str(item) for item in value]
+        raise TypeError("expected string sequence")
 
 
 class FakeConnection:
@@ -610,6 +686,89 @@ def test_postgres_repository_keyword_candidates_use_postgres_fts_shape_and_hide_
     )
 
     assert ids == [current_plan.id]
+
+
+def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_filters(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+
+    preferred = repository.create_memory(
+        title="Preferred auth rollout",
+        content="Preferred active auth rollout plan.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth", "rollout"],
+    )
+    peer = repository.create_memory(
+        title="Peer auth rollout",
+        content="Second visible active auth rollout plan.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-beta"],
+        tags=["auth"],
+    )
+    superseded = repository.create_memory(
+        title="Superseded auth rollout",
+        content="Older auth rollout plan.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    stale = repository.create_memory(
+        title="Stale auth rollout",
+        content="Stale auth rollout plan.",
+        memory_type="plan",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    supporter = repository.create_memory(
+        title="Support fact",
+        content="Supports the preferred rollout.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+    )
+    superseder = repository.create_memory(
+        title="Replacement rollout",
+        content="Replaces the old rollout.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert preferred is not None and peer is not None and superseded is not None and stale is not None
+    assert supporter is not None and superseder is not None
+
+    repository.add_link(supporter.id, preferred.id, "DEPENDS_ON")
+    repository.add_link(superseder.id, superseded.id, "SUPERSEDES")
+
+    state = session_manager.connections[0]._state
+    query_start = len(state.query_log)
+
+    candidates = repository.get_ranking_candidates(
+        [preferred.id, superseded.id, stale.id, peer.id],
+        status="active",
+        include_superseded=False,
+    )
+
+    queries = state.query_log[query_start:]
+    assert len(queries) == 4
+    assert sum(query.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(") for query in queries) == 1
+    assert "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" not in queries
+    assert not any(query.startswith("SELECT source_id, target_id, type, context FROM links WHERE") for query in queries)
+
+    assert [candidate.record.id for candidate in candidates] == [preferred.id, peer.id]
+    assert candidates[0].incoming_links_count == 1
+    assert candidates[0].incoming_link_type_counts == {
+        "DEPENDS_ON": 1,
+        "AMENDS": 0,
+        "CONTRADICTS": 0,
+        "SUPERSEDES": 0,
+    }
+    assert candidates[1].incoming_links_count == 0
 
 
 def test_postgres_search_service_prioritizes_workspace_and_hides_superseded(
