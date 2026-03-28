@@ -86,16 +86,22 @@ def search_memory_records_service(
     query = require_string(arguments, "query")
     operation = SearchMemoryRecordsOperation(ctx.relational_search)
     started_at = perf_counter()
-    results = operation.execute(
-        query=query,
-        workspace_id=ctx.workspace_id,
-        limit=optional_positive_int(arguments, "limit", 5),
-        adaptive_limit="limit" not in arguments,
-        memory_type=optional_string(arguments, "memory_type"),
-        status=optional_string(arguments, "status"),
-        include_superseded=optional_bool(arguments, "include_superseded", False),
-        debug=optional_bool(arguments, "debug", False),
-    )
+    debug_enabled = optional_bool(arguments, "debug", False)
+    execution_arguments = {
+        "query": query,
+        "workspace_id": ctx.workspace_id,
+        "limit": optional_positive_int(arguments, "limit", 5),
+        "adaptive_limit": "limit" not in arguments,
+        "memory_type": optional_string(arguments, "memory_type"),
+        "status": optional_string(arguments, "status"),
+        "include_superseded": optional_bool(arguments, "include_superseded", False),
+        "debug": debug_enabled,
+    }
+    diagnostics = None
+    if debug_enabled:
+        results, diagnostics = operation.execute_with_diagnostics(**execution_arguments)
+    else:
+        results = operation.execute(**execution_arguments)
     duration_ms = (perf_counter() - started_at) * 1000.0
     _retrieval_telemetry_repository(ctx).record_search(
         invocation_id=str(uuid4()),
@@ -115,7 +121,6 @@ def search_memory_records_service(
             "storage_backend": ctx.storage_backend or "sqlite",
         },
     )
-    debug_enabled = optional_bool(arguments, "debug", False)
     payload = {
         "status": "ok",
         "recommended_follow_up_tool": "read_memory_record",
@@ -127,7 +132,15 @@ def search_memory_records_service(
         "guidance": SEARCH_READ_GUIDANCE,
     }
     if debug_enabled:
-        payload["timing_ms"] = {"total": round(duration_ms, 3)}
+        timing_ms = {"total": round(duration_ms, 3)}
+        if diagnostics is not None:
+            timing_ms |= {
+                key: value
+                for key, value in diagnostics.timing_ms.items()
+                if key != "total"
+            }
+            payload["search_diagnostics"] = diagnostics.to_payload()
+        payload["timing_ms"] = timing_ms
     return payload
 
 

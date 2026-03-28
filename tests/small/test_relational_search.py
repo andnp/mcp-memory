@@ -10,9 +10,13 @@ from mcp_memory.relational.search import (
     INLINE_EMBEDDING_REPAIR_LIMIT,
     RankingEngine,
     RelationalMemorySearchService,
+    RelationalSearchResult,
+    SearchExecutionDiagnostics,
     ScoringWeights,
     _rank_semantic_candidate_ids,
 )
+from mcp_memory.mcp.services import search_memory_records_service
+from mcp_memory.context import ApplicationContext
 
 
 pytestmark = pytest.mark.small
@@ -755,6 +759,52 @@ def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db
 
     assert results
     assert results[0].memory_id == auth_record.id
+
+
+def test_search_memory_records_service_debug_payload_includes_search_diagnostics() -> None:
+    class FakeSearchService:
+        def search_memories(self, **_kwargs):
+            raise AssertionError("debug path should use diagnostics-aware execution")
+
+        def search_memories_with_diagnostics(self, **_kwargs):
+            return (
+                [
+                    RelationalSearchResult(
+                        memory_id="memory-1",
+                        title="Memory one",
+                        summary="Summary",
+                        memory_type="fact",
+                        status="active",
+                        score=0.9,
+                    )
+                ],
+                SearchExecutionDiagnostics(
+                    timing_ms={"total": 12.0},
+                    keyword_candidate_count=5,
+                    semantic_candidate_count=3,
+                    semantic_candidate_strategy="speculative-bounded",
+                    vector_search={
+                        "backend": "postgres",
+                        "row_count": 42,
+                        "raw_type_counts": {"str": 42},
+                        "fetch_ms": 1.0,
+                        "decode_ms": 2.0,
+                        "score_ms": 3.0,
+                        "sort_ms": 4.0,
+                    },
+                ),
+            )
+
+    payload = search_memory_records_service(
+        ApplicationContext(relational_search=FakeSearchService()),
+        {"query": "memory one", "debug": True},
+    )
+
+    assert payload["status"] == "ok"
+    assert float(payload["timing_ms"]["total"]) >= 0.0
+    assert payload["search_diagnostics"]["timing_ms"] == {"total": 12.0}
+    assert payload["search_diagnostics"]["semantic_candidate_strategy"] == "speculative-bounded"
+    assert payload["search_diagnostics"]["vector_search"]["raw_type_counts"] == {"str": 42}
 
 
 def test_search_memories_uses_speculative_bounded_semantic_scores_for_dense_keyword_neighborhoods(db_manager, monkeypatch) -> None:

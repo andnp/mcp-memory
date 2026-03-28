@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import inspect
 import sqlite3
 import time
 from collections.abc import Sequence
@@ -107,6 +108,24 @@ class RelationalReadResult:
 
 
 @dataclass(slots=True)
+class SearchExecutionDiagnostics:
+    timing_ms: dict[str, float] = field(default_factory=dict)
+    keyword_candidate_count: int = 0
+    semantic_candidate_count: int = 0
+    semantic_candidate_strategy: str = "global"
+    vector_search: dict[str, object] | None = None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "timing_ms": dict(self.timing_ms),
+            "keyword_candidate_count": self.keyword_candidate_count,
+            "semantic_candidate_count": self.semantic_candidate_count,
+            "semantic_candidate_strategy": self.semantic_candidate_strategy,
+            "vector_search": None if self.vector_search is None else dict(self.vector_search),
+        }
+
+
+@dataclass(slots=True)
 class SearchHealthStatus:
     semantic_enabled: bool
     available: bool
@@ -143,6 +162,7 @@ class SemanticCandidatePool:
     candidates: list[RelationalMemoryRecord]
     candidate_ids: list[str] | None = None
     speculative: bool = False
+    strategy: str = "global"
 
 
 @dataclass(slots=True)
@@ -519,8 +539,34 @@ class RelationalMemorySearchService:
         include_superseded: bool = False,
         debug: bool = False,
     ):
+        return self.search_memories_with_diagnostics(
+            query,
+            workspace_id=workspace_id,
+            limit=limit,
+            adaptive_limit=adaptive_limit,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            debug=debug,
+        )[0]
+
+    def search_memories_with_diagnostics(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 5,
+        *,
+        adaptive_limit: bool = False,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        debug: bool = False,
+    ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
+        diagnostics = SearchExecutionDiagnostics()
+        started_at = time.perf_counter()
         if not query.strip():
-            return []
+            diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
+            return [], diagnostics
 
         candidate_limit = (
             max(limit, self._config.search_ranking.adaptive_result_max)
@@ -534,6 +580,7 @@ class RelationalMemorySearchService:
             include_superseded=include_superseded,
             limit=max(50, candidate_limit),
         )
+        diagnostics.keyword_candidate_count = len(keyword_ids)
         semantic_ids, semantic_scores = self._semantic_candidate_ids(
             query,
             workspace_id=workspace_id,
@@ -543,11 +590,14 @@ class RelationalMemorySearchService:
             query_tokens=query_tokens,
             requested_limit=candidate_limit,
             limit=max(50, candidate_limit),
+            diagnostics=diagnostics if debug else None,
         )
+        diagnostics.semantic_candidate_count = len(semantic_ids)
         engine = RankingEngine(self._repository, self._config)
         rrf_scores = engine.fuse_reciprocal_rank(semantic_ids, keyword_ids)
         if not rrf_scores:
-            return []
+            diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
+            return [], diagnostics
         graph_expansion = self._expand_graph_candidate_scores(rrf_scores)
         for memory_id, expansion in graph_expansion.items():
             rrf_scores[memory_id] = max(rrf_scores.get(memory_id, 0.0), expansion.rrf_score)
@@ -639,12 +689,14 @@ class RelationalMemorySearchService:
         if not keyword_ids and ranked:
             top_semantic_score = semantic_scores.get(ranked[0].memory_id, 0.0)
             if top_semantic_score < self._config.search_ranking.semantic_only_abstain_threshold:
-                return []
+                diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
+                return [], diagnostics
 
         surfaced_ids = [result.memory_id for result in ranked]
         if surfaced_ids:
             self._repository.touch_last_surfaced(surfaced_ids, _utc_now(), best_effort=True)
-        return ranked
+        diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
+        return ranked, diagnostics
 
     def _resolved_result_limit(
         self,
@@ -715,6 +767,7 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         candidate_ids: Sequence[str] | None = None,
+        vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> dict[str, float]:
         if self._embedder is None or self._vector_store is None or not candidates:
@@ -725,6 +778,7 @@ class RelationalMemorySearchService:
                 candidates,
                 workspace_id,
                 candidate_ids=candidate_ids,
+                vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
         except (OSError, sqlite3.Error, ValueError) as exc:
@@ -735,6 +789,7 @@ class RelationalMemorySearchService:
                     candidates,
                     workspace_id,
                     candidate_ids=candidate_ids,
+                    vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,
                 ),
             )
@@ -756,6 +811,42 @@ class RelationalMemorySearchService:
             if score > 0
         }
 
+    def _semantic_scores_with_optional_diagnostics(
+        self,
+        query: str,
+        candidates: list[RelationalMemoryRecord],
+        workspace_id: str | None,
+        *,
+        candidate_ids: Sequence[str] | None = None,
+        vector_search_diagnostics: dict[str, object] | None = None,
+        limit: int,
+    ) -> dict[str, float]:
+        signature = inspect.signature(self._semantic_scores)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        optional_kwargs = {
+            "candidate_ids": candidate_ids,
+            "vector_search_diagnostics": vector_search_diagnostics,
+            "limit": limit,
+        }
+        filtered_kwargs = (
+            optional_kwargs
+            if accepts_var_kwargs
+            else {
+                key: value
+                for key, value in optional_kwargs.items()
+                if key in signature.parameters
+            }
+        )
+        return self._semantic_scores(
+            query,
+            candidates,
+            workspace_id,
+            **filtered_kwargs,
+        )
+
     def _compute_semantic_matches(
         self,
         query: str,
@@ -763,6 +854,7 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         candidate_ids: Sequence[str] | None = None,
+        vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> list[tuple[str, float]]:
         assert self._embedder is not None
@@ -777,6 +869,8 @@ class RelationalMemorySearchService:
         }
         if candidate_ids and getattr(self._vector_store, "supports_candidate_filtering", False):
             search_kwargs["candidate_ids"] = list(candidate_ids)
+        if vector_search_diagnostics is not None:
+            search_kwargs["diagnostics"] = vector_search_diagnostics
         return self._vector_store.search(
             **search_kwargs,
         )
@@ -834,6 +928,7 @@ class RelationalMemorySearchService:
         keyword_ids: Sequence[str],
         query_tokens: Sequence[str],
         requested_limit: int,
+        diagnostics: SearchExecutionDiagnostics | None,
         limit: int,
     ) -> tuple[list[str], dict[str, float]]:
         candidate_pool = self._semantic_candidate_pool(
@@ -843,16 +938,22 @@ class RelationalMemorySearchService:
             include_superseded=include_superseded,
             requested_limit=requested_limit,
         )
+        if diagnostics is not None:
+            diagnostics.semantic_candidate_strategy = candidate_pool.strategy
         candidates = candidate_pool.candidates
         bounded_candidate_ids = candidate_pool.candidate_ids
         if bounded_candidate_ids is not None:
-            semantic_scores = self._semantic_scores(
+            vector_search_diagnostics = {} if diagnostics is not None else None
+            semantic_scores = self._semantic_scores_with_optional_diagnostics(
                 query,
                 candidates,
                 None,
                 candidate_ids=bounded_candidate_ids,
+                vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
+            if diagnostics is not None:
+                diagnostics.vector_search = vector_search_diagnostics
             if candidate_pool.speculative and self._should_broaden_semantic_search(
                 candidates,
                 semantic_scores,
@@ -860,19 +961,28 @@ class RelationalMemorySearchService:
                 requested_limit=requested_limit,
             ):
                 candidates = self._repository.list_memories(status=status, limit=500)
-                semantic_scores = self._semantic_scores(
+                vector_search_diagnostics = {} if diagnostics is not None else None
+                semantic_scores = self._semantic_scores_with_optional_diagnostics(
                     query,
                     candidates,
                     None,
+                    vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,
                 )
+                if diagnostics is not None:
+                    diagnostics.semantic_candidate_strategy = "global-fallback"
+                    diagnostics.vector_search = vector_search_diagnostics
         else:
-            semantic_scores = self._semantic_scores(
+            vector_search_diagnostics = {} if diagnostics is not None else None
+            semantic_scores = self._semantic_scores_with_optional_diagnostics(
                 query,
                 candidates,
                 None,
+                vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
+            if diagnostics is not None:
+                diagnostics.vector_search = vector_search_diagnostics
         return (
             _rank_semantic_candidate_ids(
                 candidates,
@@ -905,6 +1015,7 @@ class RelationalMemorySearchService:
                 candidates=bounded_candidates,
                 candidate_ids=[candidate.id for candidate in bounded_candidates],
                 speculative=speculative,
+                strategy="speculative-bounded" if speculative else "bounded",
             )
         return SemanticCandidatePool(candidates=self._repository.list_memories(status=status, limit=500))
 

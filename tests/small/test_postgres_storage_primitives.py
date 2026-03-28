@@ -755,3 +755,32 @@ def test_postgres_vector_store_can_bound_search_to_candidate_ids() -> None:
     )
 
     assert ranked == [("memory-b", pytest.approx(0.24253562503633294))]
+
+
+def test_postgres_vector_store_reports_search_diagnostics() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+    diagnostics: dict[str, object] = {}
+
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=diagnostics,
+        limit=5,
+    )
+
+    assert ranked == [("memory-a", pytest.approx(1.0))]
+    assert diagnostics["backend"] == "postgres"
+    assert diagnostics["row_count"] == 1
+    assert diagnostics["raw_type_counts"] == {"str": 1}
+    assert diagnostics["candidate_filter_count"] == 0
+    assert set(diagnostics) >= {"fetch_ms", "decode_ms", "score_ms", "sort_ms"}

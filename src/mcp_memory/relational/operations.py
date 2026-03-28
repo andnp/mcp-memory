@@ -30,6 +30,29 @@ class SearchMemoryRecordsOperation:
             debug=debug,
         )
 
+    def execute_with_diagnostics(
+        self,
+        *,
+        query: str,
+        workspace_id: str | None,
+        limit: int,
+        adaptive_limit: bool,
+        memory_type: str | None,
+        status: str | None,
+        include_superseded: bool,
+        debug: bool = False,
+    ):
+        return self._search_service.search_memories_with_diagnostics(
+            query=query,
+            workspace_id=workspace_id,
+            limit=limit,
+            adaptive_limit=adaptive_limit,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            debug=debug,
+        )
+
 
 class ReadMemoryRecordOperation:
     def __init__(self, search_service: RelationalMemorySearchService) -> None:

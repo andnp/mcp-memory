@@ -216,6 +216,7 @@ class SQLiteVectorStore:
         source_kind: str,
         model_name: str,
         query_embedding: list[float],
+        diagnostics: dict[str, object] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
@@ -227,13 +228,40 @@ class SQLiteVectorStore:
         if workspace_id is not None:
             query += " AND workspace_id = ?"
             params.append(workspace_id)
+        fetch_started = time.perf_counter()
         rows = self._db.get_connection().execute(query, params).fetchall()
-        scored: list[tuple[str, float]] = []
+        fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
+        raw_type_counts: dict[str, int] = {}
+        decode_started = time.perf_counter()
+        decoded_rows: list[tuple[str, list[float]]] = []
         for row in rows:
-            embedding = list(json.loads(row["embedding_json"]))
+            embedding_raw = row["embedding_json"]
+            raw_type_name = type(embedding_raw).__name__
+            raw_type_counts[raw_type_name] = raw_type_counts.get(raw_type_name, 0) + 1
+            embedding = list(json.loads(embedding_raw))
+            decoded_rows.append((str(row["source_id"]), embedding))
+        decode_ms = (time.perf_counter() - decode_started) * 1000.0
+        scored: list[tuple[str, float]] = []
+        score_started = time.perf_counter()
+        for source_id, embedding in decoded_rows:
             score = cosine_similarity(query_embedding, embedding)
-            scored.append((str(row["source_id"]), score))
+            scored.append((source_id, score))
+        score_ms = (time.perf_counter() - score_started) * 1000.0
+        sort_started = time.perf_counter()
         scored.sort(key=lambda item: item[1], reverse=True)
+        sort_ms = (time.perf_counter() - sort_started) * 1000.0
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "backend": "sqlite",
+                    "row_count": len(rows),
+                    "raw_type_counts": raw_type_counts,
+                    "fetch_ms": round(fetch_ms, 3),
+                    "decode_ms": round(decode_ms, 3),
+                    "score_ms": round(score_ms, 3),
+                    "sort_ms": round(sort_ms, 3),
+                }
+            )
         return scored[:limit]
 
     def delete(

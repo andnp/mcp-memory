@@ -131,6 +131,7 @@ class PostgresVectorStore:
         model_name: str,
         query_embedding: list[float],
         candidate_ids: list[str] | None = None,
+        diagnostics: dict[str, object] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
@@ -147,22 +148,49 @@ class PostgresVectorStore:
         if normalized_candidate_ids:
             query += " AND source_id = ANY(%s::text[])"
             params.append(normalized_candidate_ids)
+        fetch_started = time.perf_counter()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
-        scored: list[tuple[str, float]] = []
+        fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
+        raw_type_counts: dict[str, int] = {}
+        decode_started = time.perf_counter()
+        decoded_rows: list[tuple[str, list[float]]] = []
         for row in rows:
             embedding_raw = row[1]
+            raw_type_name = type(embedding_raw).__name__
+            raw_type_counts[raw_type_name] = raw_type_counts.get(raw_type_name, 0) + 1
             if isinstance(embedding_raw, str):
                 embedding = list(json.loads(embedding_raw))
             elif isinstance(embedding_raw, list | tuple):
                 embedding = list(embedding_raw)
             else:
                 raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
-            score = cosine_similarity(query_embedding, [float(value) for value in embedding])
-            scored.append((str(row[0]), score))
+            decoded_rows.append((str(row[0]), [float(value) for value in embedding]))
+        decode_ms = (time.perf_counter() - decode_started) * 1000.0
+        scored: list[tuple[str, float]] = []
+        score_started = time.perf_counter()
+        for source_id, embedding in decoded_rows:
+            score = cosine_similarity(query_embedding, embedding)
+            scored.append((source_id, score))
+        score_ms = (time.perf_counter() - score_started) * 1000.0
+        sort_started = time.perf_counter()
         scored.sort(key=lambda item: item[1], reverse=True)
+        sort_ms = (time.perf_counter() - sort_started) * 1000.0
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "backend": "postgres",
+                    "row_count": len(rows),
+                    "candidate_filter_count": len(normalized_candidate_ids),
+                    "raw_type_counts": raw_type_counts,
+                    "fetch_ms": round(fetch_ms, 3),
+                    "decode_ms": round(decode_ms, 3),
+                    "score_ms": round(score_ms, 3),
+                    "sort_ms": round(sort_ms, 3),
+                }
+            )
         return scored[:limit]
 
     def delete(
