@@ -45,7 +45,12 @@ class RuntimeTaskWorker:
         self._runner: asyncio.Task[None] | None = None
         self._reconciliation_runner: asyncio.Task[None] | None = None
         injected_provider_usage = getattr(ctx, "provider_usage", None)
-        self._provider_usage = injected_provider_usage or ProviderUsageRepository(ctx.db_manager, workspace_id=None)
+        if injected_provider_usage is not None:
+            self._provider_usage = injected_provider_usage
+        elif hasattr(ctx.db_manager, "get_connection"):
+            self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
+        else:
+            self._provider_usage = ProviderUsageRepository(None, workspace_id=None)
         self._next_abandoned_recovery_at = 0.0
         self._reconciliation_lock = asyncio.Lock()
         self._last_reconciliation_snapshot: tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]] | None = None

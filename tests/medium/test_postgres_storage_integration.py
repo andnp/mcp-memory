@@ -12,6 +12,7 @@ from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
+from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
@@ -193,3 +194,181 @@ async def test_postgres_integration_runtime_worker_completes_real_queue_task(pos
         assert completed.status == "completed"
         assert seen == [{"memory_id": "123"}]
         assert [run.status for run in task_runs] == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_reconciles_running_conversation_for_recovered_dead_subprocess_task(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        provider_usage = PostgresProviderUsageRepository(manager, workspace_id="workspace-a")
+        task = queue.enqueue(
+            "ingest-system1",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-orphaned-provider-task",
+        )
+        assert queue.claim_next(now=1.0, workspace_id="workspace-a") is not None
+        queue.set_running_process(task.id, subprocess_pid=9999, request_id="req-orphaned", updated_at=2.0)
+        provider_usage.record_conversation(
+            request_id="req-orphaned",
+            attempt=1,
+            task_name="ingest-system1",
+            task_id=task.id,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=9999,
+            prompt_text="ingest pending thoughts",
+            response_text="",
+            parsed=None,
+            status="running",
+            error_text=None,
+            started_at=1.0,
+            completed_at=1.0,
+        )
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                provider_usage=provider_usage,
+                workspace_id="workspace-a",
+            ),
+            handlers={"ingest-system1": lambda context, queued_task: None},
+            poll_interval_seconds=0.01,
+            abandoned_task_stale_after_seconds=300.0,
+        )
+
+        monkeypatch.setattr("mcp_memory.storage.postgres_task_queue._is_process_alive", lambda pid: False)
+
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+
+        failed = queue.get_task(task.id)
+        conversation = provider_usage.get_conversation("req-orphaned")[0]
+
+        assert failed.status == "failed"
+        assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert conversation.status == "error"
+        assert conversation.task_id == task.id
+        assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+        assert conversation.reason_category is None
+        assert conversation.reason_code is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_uses_attempt_heartbeat_to_keep_running_task_alive(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        attempt_repository = PostgresTaskExecutionAttemptRepository(manager, workspace_id="workspace-a")
+        task = queue.enqueue(
+            "heartbeat-task",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-attempt-heartbeat-task",
+        )
+        claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+        assert claimed is not None
+
+        attempt_repository.start_attempt(
+            task_id=task.id,
+            execution_epoch=claimed.execution_epoch,
+            task_name=task.task_name,
+            request_id="req-attempt-heartbeat",
+            subprocess_pid=9999,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            started_at=1.0,
+        )
+        attempt_repository.heartbeat_attempt(
+            task_id=task.id,
+            execution_epoch=claimed.execution_epoch,
+            heartbeat_at=950.0,
+            subprocess_pid=9999,
+        )
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                task_execution_attempts=attempt_repository,
+                workspace_id="workspace-a",
+            ),
+            handlers={"heartbeat-task": lambda context, queued_task: None},
+        )
+
+        monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+
+        running = queue.get_task(task.id)
+        attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
+
+        assert running.status == "running"
+        assert attempt.status == "running"
+        assert attempt.last_heartbeat_at == pytest.approx(950.0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_reconciles_attempt_for_recovered_dead_process(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        attempt_repository = PostgresTaskExecutionAttemptRepository(manager, workspace_id="workspace-a")
+        task = queue.enqueue(
+            "orphaned-attempt-task",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-orphaned-attempt-task",
+        )
+        claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+        assert claimed is not None
+
+        attempt_repository.start_attempt(
+            task_id=task.id,
+            execution_epoch=claimed.execution_epoch,
+            task_name=task.task_name,
+            request_id="req-orphaned-attempt",
+            subprocess_pid=9999,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            started_at=1.0,
+        )
+
+        worker = RuntimeTaskWorker(
+            ApplicationContext(
+                db_manager=manager,
+                task_queue=queue,
+                task_execution_attempts=attempt_repository,
+                workspace_id="workspace-a",
+            ),
+            handlers={"orphaned-attempt-task": lambda context, queued_task: None},
+        )
+
+        monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+        await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
+
+        failed = queue.get_task(task.id)
+        attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
+
+        assert failed.status == "failed"
+        assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert attempt.status == "error"
+        assert attempt.completed_at == pytest.approx(1000.0)
+        assert attempt.termination_reason == "task_failed"
