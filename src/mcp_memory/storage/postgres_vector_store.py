@@ -18,6 +18,8 @@ def _coerce_float(value: object) -> float:
 
 
 class PostgresVectorStore:
+    supports_candidate_filtering = True
+
     def __init__(self, session_manager: SessionManager[DbConnectionLike] | None) -> None:
         self._sessions = session_manager
 
@@ -128,16 +130,23 @@ class PostgresVectorStore:
         source_kind: str,
         model_name: str,
         query_embedding: list[float],
+        candidate_ids: list[str] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
         if self._sessions is None:
+            return []
+        normalized_candidate_ids = [candidate_id for candidate_id in (candidate_ids or []) if candidate_id]
+        if candidate_ids is not None and not normalized_candidate_ids:
             return []
         query = "SELECT source_id, embedding_json FROM embeddings WHERE source_kind = %s AND model_name = %s"
         params: list[object] = [source_kind, model_name]
         if workspace_id is not None:
             query += " AND workspace_id = %s"
             params.append(workspace_id)
+        if normalized_candidate_ids:
+            query += " AND source_id = ANY(%s::text[])"
+            params.append(normalized_candidate_ids)
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))

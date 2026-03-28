@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 
 from mcp_memory.config import Config
+from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
 
@@ -691,3 +692,168 @@ def test_postgres_search_service_updates_last_surfaced_timestamps(
     refreshed_stale = repository.get_memory(stale.id)
     assert refreshed_active is not None and refreshed_active.last_surfaced_at is not None
     assert refreshed_stale is not None and refreshed_stale.last_surfaced_at is not None
+
+
+class _PostgresSearchFakeEmbedder:
+    model_name = "fake-postgres-mini"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            lowered = text.lower()
+            if any(token in lowered for token in ["ripgrep", "scan", "scanning", "repository"]):
+                vectors.append([0.0, 1.0])
+            elif any(token in lowered for token in ["permission", "permissions", "identity", "authentication", "token"]):
+                vectors.append([1.0, 0.0])
+            else:
+                vectors.append([0.2, 0.2])
+        return vectors
+
+
+class _RecordingCandidateAwareVectorStore:
+    supports_candidate_filtering = True
+
+    def __init__(self) -> None:
+        self._records: dict[tuple[str, str, str], EmbeddingRecord] = {}
+        self.last_candidate_ids: list[str] | None = None
+
+    def upsert(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        workspace_id: str | None,
+        model_name: str,
+        embedding: list[float],
+    ) -> None:
+        self._records[(source_kind, source_id, model_name)] = EmbeddingRecord(
+            source_kind=source_kind,
+            source_id=source_id,
+            workspace_id=workspace_id,
+            model_name=model_name,
+            embedding=list(embedding),
+            updated_at=1.0,
+        )
+
+    def get(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        model_name: str,
+    ) -> EmbeddingRecord | None:
+        return self._records.get((source_kind, source_id, model_name))
+
+    def get_updated_at_map(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        source_ids: list[str],
+    ) -> dict[str, float]:
+        return {
+            source_id: self._records[(source_kind, source_id, model_name)].updated_at
+            for source_id in source_ids
+            if (source_kind, source_id, model_name) in self._records
+        }
+
+    def search(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        query_embedding: list[float],
+        candidate_ids: list[str] | None = None,
+        workspace_id: str | None = None,
+        limit: int = 20,
+    ) -> list[tuple[str, float]]:
+        del workspace_id
+        self.last_candidate_ids = None if candidate_ids is None else list(candidate_ids)
+        candidate_id_filter = None if candidate_ids is None else set(candidate_ids)
+        scored = [
+            (
+                record.source_id,
+                cosine_similarity(query_embedding, record.embedding),
+            )
+            for (stored_source_kind, _source_id, stored_model_name), record in self._records.items()
+            if stored_source_kind == source_kind
+            and stored_model_name == model_name
+            and (candidate_id_filter is None or record.source_id in candidate_id_filter)
+        ]
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:limit]
+
+
+def test_postgres_search_service_bounds_semantic_scoring_when_lexical_hits_are_strong(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+    vector_store = _RecordingCandidateAwareVectorStore()
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_PostgresSearchFakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    exact = repository.create_memory(
+        title="Ripgrep ban",
+        content="Avoid broad ripgrep scans in large repositories.",
+        summary="Ripgrep ban summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["grep"],
+    )
+    distractor = repository.create_memory(
+        title="Repository scanning guidance",
+        content="Use targeted repository scanning alternatives for large codebases.",
+        summary="Repository scanning summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+        tags=["search"],
+    )
+    assert exact is not None and distractor is not None
+
+    results = service.search_memories("ripgrep ban", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert results[0].memory_id == exact.id
+    assert distractor.id not in {result.memory_id for result in results}
+    assert vector_store.last_candidate_ids == [exact.id]
+
+
+def test_postgres_search_service_keeps_global_semantic_fallback_when_lexical_hits_are_weak(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+    vector_store = _RecordingCandidateAwareVectorStore()
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_PostgresSearchFakeEmbedder(),
+        vector_store=vector_store,
+    )
+
+    weak_lexical = repository.create_memory(
+        title="Zebra checklist",
+        content="Zebra checklist for unrelated operational work.",
+        summary="Zebra summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["operations"],
+    )
+    semantic_match = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert weak_lexical is not None and semantic_match is not None
+
+    results = service.search_memories("permissions zebra", workspace_id="workspace-alpha", limit=5)
+
+    assert results
+    assert semantic_match.id in {result.memory_id for result in results}
+    assert vector_store.last_candidate_ids is None

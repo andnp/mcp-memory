@@ -21,6 +21,7 @@ DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
 GRAPH_EXPANSION_MAX_SEEDS = 3
 GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED = 10
+LEXICAL_STRENGTH_EVAL_LIMIT = 5
 GRAPH_EXPANSION_DISCOUNTS = {
     "DEPENDS_ON": 0.7,
     "AMENDS": 0.6,
@@ -530,6 +531,9 @@ class RelationalMemorySearchService:
             query,
             workspace_id=workspace_id,
             status=status,
+            include_superseded=include_superseded,
+            keyword_ids=keyword_ids,
+            query_tokens=query_tokens,
             limit=max(50, candidate_limit),
         )
         engine = RankingEngine(self._repository, self._config)
@@ -702,16 +706,29 @@ class RelationalMemorySearchService:
         candidates: list[RelationalMemoryRecord],
         workspace_id: str | None,
         *,
+        candidate_ids: Sequence[str] | None = None,
         limit: int,
     ) -> dict[str, float]:
         if self._embedder is None or self._vector_store is None or not candidates:
             return {}
         try:
-            matches = self._compute_semantic_matches(query, candidates, workspace_id, limit=limit)
+            matches = self._compute_semantic_matches(
+                query,
+                candidates,
+                workspace_id,
+                candidate_ids=candidate_ids,
+                limit=limit,
+            )
         except (OSError, sqlite3.Error, ValueError) as exc:
             recovered_matches = self._retry_after_reopen(
                 "semantic search",
-                lambda: self._compute_semantic_matches(query, candidates, workspace_id, limit=limit),
+                lambda: self._compute_semantic_matches(
+                    query,
+                    candidates,
+                    workspace_id,
+                    candidate_ids=candidate_ids,
+                    limit=limit,
+                ),
             )
             if recovered_matches is not None:
                 return {
@@ -737,17 +754,23 @@ class RelationalMemorySearchService:
         candidates: list[RelationalMemoryRecord],
         workspace_id: str | None,
         *,
+        candidate_ids: Sequence[str] | None = None,
         limit: int,
     ) -> list[tuple[str, float]]:
         assert self._embedder is not None
         assert self._vector_store is not None
         self._ensure_searchable_memory_embeddings(candidates)
         query_embedding = self._embedder.embed([query])[0]
+        search_kwargs: dict[str, object] = {
+            "source_kind": "memory",
+            "model_name": self._embedder.model_name,
+            "query_embedding": query_embedding,
+            "limit": limit,
+        }
+        if candidate_ids and getattr(self._vector_store, "supports_candidate_filtering", False):
+            search_kwargs["candidate_ids"] = list(candidate_ids)
         return self._vector_store.search(
-            source_kind="memory",
-            model_name=self._embedder.model_name,
-            query_embedding=query_embedding,
-            limit=limit,
+            **search_kwargs,
         )
 
     def _run_integrity_check_once(self) -> None:
@@ -799,10 +822,32 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         status: str | None,
+        include_superseded: bool,
+        keyword_ids: Sequence[str],
+        query_tokens: Sequence[str],
         limit: int,
     ) -> tuple[list[str], dict[str, float]]:
-        candidates = self._repository.list_memories(status=status, limit=500)
-        semantic_scores = self._semantic_scores(query, candidates, None, limit=limit)
+        candidates, bounded_candidate_ids = self._semantic_candidate_pool(
+            keyword_ids,
+            query_tokens,
+            status=status,
+            include_superseded=include_superseded,
+        )
+        if bounded_candidate_ids is not None:
+            semantic_scores = self._semantic_scores(
+                query,
+                candidates,
+                None,
+                candidate_ids=bounded_candidate_ids,
+                limit=limit,
+            )
+        else:
+            semantic_scores = self._semantic_scores(
+                query,
+                candidates,
+                None,
+                limit=limit,
+            )
         return (
             _rank_semantic_candidate_ids(
                 candidates,
@@ -813,6 +858,55 @@ class RelationalMemorySearchService:
             ),
             semantic_scores,
         )
+
+    def _semantic_candidate_pool(
+        self,
+        keyword_ids: Sequence[str],
+        query_tokens: Sequence[str],
+        *,
+        status: str | None,
+        include_superseded: bool,
+    ) -> tuple[list[RelationalMemoryRecord], list[str] | None]:
+        bounded_candidates = self._bounded_semantic_candidates(
+            keyword_ids,
+            query_tokens,
+            status=status,
+            include_superseded=include_superseded,
+        )
+        if bounded_candidates is not None:
+            return bounded_candidates, [candidate.id for candidate in bounded_candidates]
+        return self._repository.list_memories(status=status, limit=500), None
+
+    def _bounded_semantic_candidates(
+        self,
+        keyword_ids: Sequence[str],
+        query_tokens: Sequence[str],
+        *,
+        status: str | None,
+        include_superseded: bool,
+    ) -> list[RelationalMemoryRecord] | None:
+        if not keyword_ids or not getattr(self._vector_store, "supports_candidate_filtering", False):
+            return None
+
+        keyword_candidates = self._repository.get_ranking_candidates(
+            list(keyword_ids),
+            status=status,
+            include_superseded=include_superseded,
+        )
+        if not keyword_candidates:
+            return None
+
+        strongest_keyword_coverage = max(
+            (
+                _keyword_token_coverage(query_tokens, keyword_candidate.record)
+                for keyword_candidate in keyword_candidates[:LEXICAL_STRENGTH_EVAL_LIMIT]
+            ),
+            default=0.0,
+        )
+        if strongest_keyword_coverage < self._config.search_ranking.keyword_coverage_floor:
+            return None
+
+        return [keyword_candidate.record for keyword_candidate in keyword_candidates]
 
     def _expand_graph_candidate_scores(
         self,

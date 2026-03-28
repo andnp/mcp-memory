@@ -381,8 +381,16 @@ class FakePrimitiveCursor:
                 row for row in self._state.embeddings
                 if str(row["source_kind"]) == str(arguments[0]) and str(row["model_name"]) == str(arguments[1])
             ]
-            if len(arguments) > 2:
-                rows = [row for row in rows if row["workspace_id"] == arguments[2]]
+            next_argument_index = 2
+            if "workspace_id = %s" in normalized:
+                rows = [row for row in rows if row["workspace_id"] == arguments[next_argument_index]]
+                next_argument_index += 1
+            if "source_id = ANY(%s::text[])" in normalized:
+                candidate_ids_raw = arguments[next_argument_index]
+                if not isinstance(candidate_ids_raw, list | tuple):
+                    raise TypeError("expected candidate id sequence")
+                candidate_ids = {str(candidate_id) for candidate_id in candidate_ids_raw}
+                rows = [row for row in rows if str(row["source_id"]) in candidate_ids]
             self._result = [(row["source_id"], row["embedding_json"]) for row in rows]
             return
         if normalized.startswith("DELETE FROM embeddings WHERE source_kind = %s AND source_id = %s"):
@@ -717,3 +725,33 @@ def test_postgres_vector_store_round_trips_and_ranks_embeddings() -> None:
     assert [memory_id for memory_id, _score in ranked] == ["memory-a", "memory-b"]
     assert json.loads(str(session_manager.state.embeddings[0]["embedding_json"])) == [1.0, 0.0]
     assert deleted == 1
+
+
+def test_postgres_vector_store_can_bound_search_to_candidate_ids() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-b",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[0.0, 1.0],
+    )
+
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[0.8, 0.2],
+        candidate_ids=["memory-b"],
+        limit=5,
+    )
+
+    assert ranked == [("memory-b", pytest.approx(0.24253562503633294))]
