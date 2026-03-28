@@ -627,6 +627,7 @@ class RelationalMemorySearchService:
         }
         keyword_id_set = set(keyword_ids)
         semantic_id_set = set(semantic_ids)
+        signal_preparation_started = time.perf_counter()
         ranking_signals = {
             memory_id: RankingSignals(
                 matched_by_keyword=memory_id in keyword_id_set,
@@ -640,6 +641,7 @@ class RelationalMemorySearchService:
             )
             for memory_id in rrf_scores
         }
+        diagnostics.timing_ms["signal_preparation"] = round((time.perf_counter() - signal_preparation_started) * 1000.0, 3)
         ranking_started = time.perf_counter()
         ranked = [
             RelationalSearchResult(
@@ -704,7 +706,9 @@ class RelationalMemorySearchService:
 
         surfaced_ids = [result.memory_id for result in ranked]
         if surfaced_ids:
+            surfaced_writeback_started = time.perf_counter()
             self._repository.touch_last_surfaced(surfaced_ids, _utc_now(), best_effort=True)
+            diagnostics.timing_ms["surfaced_writeback"] = round((time.perf_counter() - surfaced_writeback_started) * 1000.0, 3)
         diagnostics.timing_ms["total"] = round((time.perf_counter() - started_at) * 1000.0, 3)
         return ranked, diagnostics
 
