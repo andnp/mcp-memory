@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 2
+POSTGRES_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -121,6 +121,108 @@ POSTGRES_MIGRATIONS = (
             """,
             "CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_workspace_started ON task_execution_attempts(workspace_id, started_at DESC, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_task_execution_attempts_status_started ON task_execution_attempts(status, started_at DESC, id DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=3,
+        name="add_provider_usage_and_ai_conversations",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS provider_usage (
+                id BIGSERIAL PRIMARY KEY,
+                workspace_id TEXT,
+                task_name TEXT,
+                task_id TEXT,
+                request_id TEXT,
+                subprocess_pid INTEGER,
+                provider_key TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                duration_seconds DOUBLE PRECISION NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                error_text TEXT,
+                reason_category TEXT,
+                reason_code TEXT,
+                retry_delay_seconds DOUBLE PRECISION
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_provider_usage_workspace_created ON provider_usage(workspace_id, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_created ON provider_usage(provider_key, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_provider_usage_model_created ON provider_usage(model_name, created_at DESC, id DESC)",
+            """
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id BIGSERIAL PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                workspace_id TEXT,
+                task_name TEXT,
+                task_id TEXT,
+                provider_key TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                subprocess_pid INTEGER,
+                prompt_text TEXT NOT NULL,
+                response_text TEXT NOT NULL,
+                parsed_json JSONB,
+                status TEXT NOT NULL,
+                error_text TEXT,
+                reason_category TEXT,
+                reason_code TEXT,
+                retry_delay_seconds DOUBLE PRECISION,
+                started_at DOUBLE PRECISION NOT NULL,
+                completed_at DOUBLE PRECISION NOT NULL,
+                duration_seconds DOUBLE PRECISION NOT NULL,
+                UNIQUE (request_id, attempt)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversations_workspace_completed ON ai_conversations(workspace_id, completed_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversations_task_completed ON ai_conversations(task_name, completed_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_conversations_status_completed ON ai_conversations(status, completed_at DESC, id DESC)",
+            """
+            CREATE TABLE IF NOT EXISTS provider_admission_state (
+                provider_key TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                reason_category TEXT NOT NULL,
+                reason_code TEXT NOT NULL,
+                error_text TEXT,
+                retry_delay_seconds DOUBLE PRECISION,
+                active_until DOUBLE PRECISION NOT NULL,
+                updated_at DOUBLE PRECISION NOT NULL,
+                PRIMARY KEY (provider_key, model_name)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_provider_admission_state_active_until ON provider_admission_state(active_until DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=4,
+        name="add_provider_policy_events",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS provider_policy_events (
+                id BIGSERIAL PRIMARY KEY,
+                workspace_id TEXT,
+                task_name TEXT NOT NULL,
+                task_id TEXT,
+                event_kind TEXT NOT NULL,
+                warning_kind TEXT,
+                provider_key TEXT,
+                provider_name TEXT,
+                model_name TEXT,
+                route_key TEXT,
+                candidate_routes_json JSONB NOT NULL,
+                reason_category TEXT,
+                reason_code TEXT,
+                retry_delay_seconds DOUBLE PRECISION,
+                warning_suppressed BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at DOUBLE PRECISION NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_task_created ON provider_policy_events(task_name, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_task_id_created ON provider_policy_events(task_id, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_workspace_created ON provider_policy_events(workspace_id, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_provider_policy_events_event_kind_created ON provider_policy_events(event_kind, created_at DESC, id DESC)",
         ),
     ),
 )

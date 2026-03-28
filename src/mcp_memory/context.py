@@ -23,6 +23,8 @@ class ApplicationContext:
     ai_agent_provider: Any = None
     ai_provider: Any = None
     ai_provider_registry: dict[str, Any] | None = None
+    provider_usage: Any = None
+    runtime_logs: Any = None
     provider_policy_events: Any = None
     task_execution_attempts: Any = None
     work_items: Any = None

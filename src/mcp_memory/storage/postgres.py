@@ -3,12 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.config import PostgresStorageConfig
+from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
+from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres_connection import (
     PostgresConnectionManager,
 )
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
+from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.session import CursorLike
@@ -98,7 +101,13 @@ def build_postgres_runtime_components(
     repository = PostgresRelationalMemoryRepository(connection_manager)
     unsupported_journal = UnsupportedPostgresRuntimeComponent("system1 journal")
     unsupported_task_queue = UnsupportedPostgresRuntimeComponent("task queue")
-    unsupported_provider_policy_events = UnsupportedPostgresRuntimeComponent("provider policy events")
+    provider_policy_events = PostgresProviderPolicyEventRepository(connection_manager, workspace_id=spec.workspace_id)
+    provider_usage = PostgresProviderUsageRepository(connection_manager, workspace_id=spec.workspace_id)
+    runtime_logs = PostgresRuntimeLogRepository(
+        connection_manager,
+        workspace_id=spec.workspace_id,
+        config=spec.config.logging,
+    )
     task_execution_attempts = PostgresTaskExecutionAttemptRepository(connection_manager, workspace_id=spec.workspace_id)
     unsupported_work_items = UnsupportedPostgresRuntimeComponent("work items")
     unsupported_embedding_repairs = UnsupportedPostgresRuntimeComponent("embedding repair queue")
@@ -115,7 +124,9 @@ def build_postgres_runtime_components(
         repository=repository,
         relational_search=relational_search,
         task_queue=unsupported_task_queue,
-        provider_policy_events=unsupported_provider_policy_events,
+        provider_usage=provider_usage,
+        runtime_logs=runtime_logs,
+        provider_policy_events=provider_policy_events,
         task_execution_attempts=task_execution_attempts,
         work_items=unsupported_work_items,
         embedding_repair_queue=unsupported_embedding_repairs,

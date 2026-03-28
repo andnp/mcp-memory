@@ -20,8 +20,6 @@ from mcp_memory.embeddings import build_embedder
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
-from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.core.storage import ensure_memory_dirs
 from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
 
@@ -85,6 +83,8 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         ai_agent_provider=ai_agent_provider,
         ai_provider=ai_json_provider,
         ai_provider_registry=provider_registry,
+        provider_usage=storage.provider_usage,
+        runtime_logs=storage.runtime_logs,
         provider_policy_events=storage.provider_policy_events,
         task_execution_attempts=storage.task_execution_attempts,
         work_items=storage.work_items,
@@ -112,12 +112,11 @@ def _default_profile_key(config: Config) -> str | None:
 def _build_provider_registry(*, spec: RuntimeSpec, storage: StorageBackendResources) -> dict[str, dict[str, object]]:
     if _runtime_providers_disabled_for_tests():
         return {}
-    if storage.backend != "sqlite":
-        return {}
 
     registry: dict[str, dict[str, object]] = {}
-    usage_repository = ProviderUsageRepository(storage.db_manager, workspace_id=spec.workspace_id)
-    task_execution_attempts = TaskExecutionAttemptRepository(storage.db_manager, workspace_id=spec.workspace_id)
+    usage_repository = storage.provider_usage
+    task_execution_attempts = storage.task_execution_attempts
+    provider_task_queue = _provider_task_queue_capability(storage.task_queue)
 
     def add_profile(profile_key: str, ai_config) -> None:
         budget_limit = spec.config.provider_routing.profile_daily_call_limits.get(profile_key)
@@ -131,7 +130,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, storage: StorageBackendResour
                 provider_name=getattr(json_provider, "provider_name", profile_key),
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
-                task_queue=storage.task_queue,
+                task_queue=provider_task_queue,
                 task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
@@ -147,7 +146,7 @@ def _build_provider_registry(*, spec: RuntimeSpec, storage: StorageBackendResour
                 provider_name=getattr(agentic_provider, "provider_name", f"{profile_key}:agentic"),
                 model_name=ai_config.model,
                 workspace_id=spec.workspace_id,
-                task_queue=storage.task_queue,
+                task_queue=provider_task_queue,
                 task_execution_attempts=task_execution_attempts,
                 budget_key=profile_key,
                 daily_call_limit=budget_limit,
@@ -176,6 +175,18 @@ def _provider_command_available(provider: object) -> bool:
         return True
     candidate = Path(command).expanduser()
     return candidate.exists()
+
+
+def _provider_task_queue_capability(task_queue: object) -> object | None:
+    if task_queue is None:
+        return None
+    try:
+        touch_running_task = getattr(task_queue, "touch_running_task", None)
+    except NotImplementedError:
+        return None
+    if not callable(touch_running_task):
+        return None
+    return task_queue
 
 
 def _runtime_providers_disabled_for_tests() -> bool:

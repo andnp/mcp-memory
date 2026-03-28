@@ -6,9 +6,11 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
+from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.storage.types import RuntimeSpecLike, StorageBackendResources
 from mcp_memory.utils.db import DatabaseManager
@@ -26,6 +28,12 @@ def build_sqlite_runtime_components(
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id)
+    runtime_logs = RuntimeLogRepository(
+        db_manager,
+        workspace_id=spec.workspace_id,
+        config=spec.config.logging,
+    )
     task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
     work_items = SQLiteWorkItemRepository(db_manager)
     embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
@@ -48,6 +56,8 @@ def build_sqlite_runtime_components(
         repository=repository,
         relational_search=relational_search,
         task_queue=task_queue,
+        provider_usage=provider_usage,
+        runtime_logs=runtime_logs,
         provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
         task_execution_attempts=task_execution_attempts,
         work_items=work_items,

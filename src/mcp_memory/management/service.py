@@ -50,9 +50,32 @@ from mcp_memory.serialization import (
     search_result_payload,
     task_payload,
 )
+from mcp_memory.storage.noop import NoopProviderUsageRepository
+from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 
 
 _USE_SERVICE_WORKSPACE = object()
+
+
+def _build_default_provider_usage(ctx: ApplicationContext):
+    if (ctx.storage_backend or "sqlite") == "postgres":
+        return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
+    return ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+
+
+def _build_default_runtime_logs(ctx: ApplicationContext):
+    config = None if ctx.config is None else ctx.config.logging
+    if (ctx.storage_backend or "sqlite") == "postgres":
+        return PostgresRuntimeLogRepository(
+            ctx.db_manager,
+            workspace_id=ctx.workspace_id,
+            config=config,
+        )
+    return RuntimeLogRepository(
+        ctx.db_manager,
+        workspace_id=ctx.workspace_id,
+        config=config,
+    )
 
 
 def _resolve_log_workspace_id(
@@ -69,18 +92,15 @@ class ManagementService:
         pipeline = MemoryPipeline.from_context(ctx, controller)
         self._controller = controller
         self._db_manager = ctx.db_manager
+        self._storage_backend = ctx.storage_backend or "sqlite"
         self._workspace_id = ctx.workspace_id
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
-        self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=self._workspace_id)
-        self._runtime_logs = RuntimeLogRepository(
-            ctx.db_manager,
-            workspace_id=self._workspace_id,
-            config=None if ctx.config is None else ctx.config.logging,
-        )
+        self._provider_usage = ctx.provider_usage or _build_default_provider_usage(ctx)
+        self._runtime_logs = ctx.runtime_logs or _build_default_runtime_logs(ctx)
         self._embedder = ctx.embedder
         self._relational_search = ctx.relational_search
         self._config = ctx.config
@@ -100,6 +120,7 @@ class ManagementService:
         embedder_status = build_embedding_status(self._embedder)
         return HealthPayload(
             status="ok",
+            storage_backend=self._storage_backend,
             workspace_id=self._runtime_info.workspace_id,
             workspace_root=str(self._runtime_info.workspace_root) if self._runtime_info.workspace_root is not None else None,
             memory_path=str(self._runtime_info.memory_path) if self._runtime_info.memory_path is not None else None,
@@ -448,10 +469,7 @@ class ManagementService:
             db_manager=self._db_manager,
             workspace_id=effective_workspace_id,
             task_queue=self._task_queue,
-            provider_usage_repo=ProviderUsageRepository(
-                self._db_manager,
-                workspace_id=effective_workspace_id,
-            ),
+            provider_usage_repo=self._provider_usage,
             config=self._config,
             ai_json_provider=self._ai_json_provider,
             ai_agent_provider=self._ai_agent_provider,
@@ -642,43 +660,34 @@ class ManagementService:
         return candidate
 
     def _count_recent_conversations(self, *, after: float) -> dict[str, int]:
-        if self._db_manager is None:
-            return {}
-        query = (
-            "SELECT status, COUNT(*) AS count FROM ai_conversations "
-            "WHERE completed_at >= ?"
+        records = self._provider_usage.list_conversations(
+            workspace_id=self._workspace_id,
+            limit=10_000,
         )
-        params: list[object] = [after]
-        if self._workspace_id is not None:
-            query += " AND workspace_id = ?"
-            params.append(self._workspace_id)
-        query += " GROUP BY status ORDER BY status ASC"
-        rows = self._db_manager.get_connection().execute(query, params).fetchall()
-        return {str(row["status"]): int(row["count"] or 0) for row in rows}
+        counts: dict[str, int] = {}
+        for record in records:
+            if record.completed_at < after:
+                continue
+            counts[record.status] = counts.get(record.status, 0) + 1
+        return counts
 
     def _count_recent_memory_updates(self, *, minutes: int) -> int:
-        if self._db_manager is None:
+        if self._repository is None:
             return 0
         cutoff = datetime.now(UTC) - timedelta(minutes=max(minutes, 0))
-        cutoff_iso = cutoff.isoformat()
-        params: list[object] = [cutoff_iso]
-        if self._workspace_id is None:
-            row = self._db_manager.get_connection().execute(
-                "SELECT COUNT(*) AS count FROM memories WHERE julianday(updated_at) >= julianday(?)",
-                params,
-            ).fetchone()
-        else:
-            row = self._db_manager.get_connection().execute(
-                (
-                    "SELECT COUNT(DISTINCT memories.id) AS count "
-                    "FROM memories "
-                    "JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id "
-                    "WHERE julianday(memories.updated_at) >= julianday(?) "
-                    "AND memory_workspaces.workspace_id = ?"
-                ),
-                [*params, self._workspace_id],
-            ).fetchone()
-        return 0 if row is None else int(row["count"] or 0)
+        records = self._repository.list_memories(
+            workspace_id=self._workspace_id,
+            limit=1_000_000,
+        )
+        updated_count = 0
+        for record in records:
+            try:
+                updated_at = datetime.fromisoformat(record.updated_at)
+            except ValueError:
+                continue
+            if updated_at >= cutoff:
+                updated_count += 1
+        return updated_count
 
 
 

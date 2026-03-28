@@ -19,6 +19,8 @@ class StorageBackendResources:
     repository: Any
     relational_search: Any
     task_queue: Any
+    provider_usage: Any
+    runtime_logs: Any
     provider_policy_events: Any
     task_execution_attempts: Any
     work_items: Any

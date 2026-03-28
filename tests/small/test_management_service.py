@@ -8,6 +8,7 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
+from mcp_memory.management.models import ExecutionAttemptHealthPayload
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
@@ -104,6 +105,79 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.maintenance_summary.family_delta_series == []
     assert nerd_metrics.agent_throughput == []
     assert nerd_metrics.provider_latency == []
+
+
+def test_management_service_health_reports_storage_backend(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = ManagementService(
+        ApplicationContext(
+            workspace_id="workspace-a",
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+            storage_backend="sqlite",
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+
+    assert health.storage_backend == "sqlite"
+
+
+def test_management_service_uses_postgres_runtime_log_repository_for_postgres_backend(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeRuntimeLogs:
+        @property
+        def retention_policy(self):
+            return __import__("mcp_memory.config", fromlist=["LoggingConfig"]).LoggingConfig()
+
+        def list_logs(self, **kwargs):
+            captured["list_logs_kwargs"] = kwargs
+            return []
+
+        def summarize_logs(self, **kwargs):
+            captured["summarize_logs_kwargs"] = kwargs
+            return __import__("mcp_memory.runtime_log_store", fromlist=["RuntimeLogSummary"]).RuntimeLogSummary(total=0)
+
+        def prune_logs(self, **kwargs):
+            captured["prune_logs_kwargs"] = kwargs
+            return 0
+
+    monkeypatch.setattr(
+        "mcp_memory.management.service.build_execution_attempt_health",
+        lambda db_manager, workspace_id: ExecutionAttemptHealthPayload(),
+    )
+
+    db_manager = SimpleNamespace(db_path=None)
+    service = ManagementService(
+        ApplicationContext(
+            workspace_id="workspace-a",
+            db_manager=db_manager,
+            storage_backend="postgres",
+            runtime_logs=FakeRuntimeLogs(),
+            provider_usage=SimpleNamespace(list_conversations=lambda **kwargs: []),
+        ),
+        SimpleNamespace(has_runtime=False, client_count=0),
+    )
+
+    assert service.get_health().storage_backend == "postgres"
+    assert service.list_logs().logs == []
+    assert service.summarize_logs().total == 0
+    assert service.prune_logs().deleted == 0
+    assert captured["list_logs_kwargs"] == {
+        "workspace_id": "workspace-a",
+        "level": None,
+        "logger_name": None,
+        "source": None,
+        "query": None,
+        "after": None,
+        "before": None,
+        "limit": 50,
+    }
 
 
 def test_management_service_overview_respects_workspace_and_global_scopes(db_manager) -> None:
