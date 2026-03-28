@@ -8,6 +8,7 @@ from rich.logging import RichHandler
 
 from mcp_memory.mcp.runtime import resolve_runtime_spec
 from mcp_memory.runtime_log_store import RuntimeLogRepository
+from mcp_memory.storage.postgres_runtime_log_store import PostgresStructuredLogHandler
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -77,13 +78,22 @@ def configure_workspace_logging(
     handlers: list[logging.Handler] = []
     if console_output:
         handlers.append(RichHandler(rich_tracebacks=True, console=_LOG_CONSOLE))
-    handlers.append(
-        SQLiteStructuredLogHandler(
-            db_path=spec.memory_path / "indices" / "memory.db",
-            workspace_id=spec.workspace_id,
-            source=source,
+    if spec.config.storage.backend == "postgres":
+        handlers.append(
+            PostgresStructuredLogHandler(
+                config=spec.config.storage.postgres,
+                workspace_id=spec.workspace_id,
+                source=source,
+            )
         )
-    )
+    else:
+        handlers.append(
+            SQLiteStructuredLogHandler(
+                db_path=spec.memory_path / "indices" / "memory.db",
+                workspace_id=spec.workspace_id,
+                source=source,
+            )
+        )
     _configure_root_logging(debug, handlers=handlers)
 
 

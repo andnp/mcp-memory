@@ -10,6 +10,7 @@ from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
+from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.types import StorageBackendResources
 
 
@@ -39,7 +40,7 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
         return StorageBootstrapState(
             backend="postgres",
             schema_metadata_present=True,
-            schema_version=1,
+            schema_version=2,
         )
 
     monkeypatch.setattr(
@@ -52,6 +53,7 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
     assert storage.backend == "postgres"
     assert storage.repository is not None
     assert isinstance(storage.relational_search, RelationalMemorySearchService)
+    assert isinstance(storage.task_execution_attempts, PostgresTaskExecutionAttemptRepository)
     assert storage.relational_search.get_health().available is False
     with pytest.raises(NotImplementedError, match="task queue"):
         storage.task_queue.enqueue_unique("test-task", data={}, workspace_id=None)
@@ -153,9 +155,10 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
                 self._result = None if self.schema_version is None else (self.schema_version,)
                 return
             if normalized.startswith("INSERT INTO schema_metadata"):
-                assert params == ("schema_version", "1")
+                assert params in {("schema_version", "1"), ("schema_version", "2")}
                 self.schema_metadata_present = True
-                self.schema_version = "1"
+                assert params is not None
+                self.schema_version = str(params[1])
                 self._result = None
                 return
             self._result = None
@@ -217,7 +220,7 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
     assert state == StorageBootstrapState(
         backend="postgres",
         schema_metadata_present=True,
-        schema_version=1,
+        schema_version=2,
     )
 
 
