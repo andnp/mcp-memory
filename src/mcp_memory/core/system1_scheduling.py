@@ -30,20 +30,21 @@ def schedule_system1_ingest(
     from mcp_memory.core.task_handlers.constants import (
         SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
         SYSTEM1_INGEST_DEBOUNCE_SECONDS,
-        SYSTEM1_INGEST_PRIORITY,
         SYSTEM1_INGEST_TASK_NAME,
         SYSTEM1_INGEST_THRESHOLD,
     )
 
     scheduled_at = time.time() if now is None else now
-    journal_workspace_id = resolve_pending_workspace_id(journal, None)
-    pending_count = journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
-    if pending_count <= 0:
+    scheduling_context = _build_ingest_scheduling_context(
+        journal,
+        scheduled_at=scheduled_at,
+        workspace_id=workspace_id,
+    )
+    if scheduling_context is None:
         return None
 
-    oldest_pending_timestamp = journal.get_oldest_pending_timestamp(workspace_id=journal_workspace_id)
-    if oldest_pending_timestamp is None:
-        return None
+    pending_count = scheduling_context.pending_count
+    oldest_pending_timestamp = scheduling_context.oldest_pending_timestamp
 
     trigger = "system1_threshold"
     available_at = scheduled_at
@@ -64,6 +65,103 @@ def schedule_system1_ingest(
     if suppressed_until is not None and available_at < suppressed_until:
         available_at = max(available_at, suppressed_until)
         trigger = f"{trigger}_suppressed"
+
+    return _enqueue_system1_ingest_task(
+        task_queue,
+        workspace_id=workspace_id,
+        journal_workspace_id=scheduling_context.journal_workspace_id,
+        pending_count=pending_count,
+        oldest_pending_timestamp=oldest_pending_timestamp,
+        trigger=trigger,
+        available_at=available_at,
+        rate_limited_until=rate_limited_until,
+        suppressed_until=suppressed_until,
+    )
+
+
+def schedule_system1_ingest_continuation(
+    task_queue: SQLiteTaskQueue,
+    journal: System1Journal,
+    workspace_id: str | None,
+    *,
+    now: float | None = None,
+    suppression_config=None,
+):
+    scheduled_at = time.time() if now is None else now
+    scheduling_context = _build_ingest_scheduling_context(
+        journal,
+        scheduled_at=scheduled_at,
+        workspace_id=workspace_id,
+    )
+    if scheduling_context is None:
+        return None
+
+    trigger = "system1_backlog_continuation"
+    available_at = scheduled_at
+    suppressed_until = _resolve_ingest_suppression_until(scheduled_at, suppression_config)
+    if suppressed_until is not None and available_at < suppressed_until:
+        available_at = suppressed_until
+        trigger = f"{trigger}_suppressed"
+
+    return _enqueue_system1_ingest_task(
+        task_queue,
+        workspace_id=workspace_id,
+        journal_workspace_id=scheduling_context.journal_workspace_id,
+        pending_count=scheduling_context.pending_count,
+        oldest_pending_timestamp=scheduling_context.oldest_pending_timestamp,
+        trigger=trigger,
+        available_at=available_at,
+        suppressed_until=suppressed_until,
+    )
+
+
+@dataclass(slots=True)
+class _System1IngestSchedulingContext:
+    journal_workspace_id: object
+    pending_count: int
+    oldest_pending_timestamp: float
+
+
+def _build_ingest_scheduling_context(
+    journal: System1Journal,
+    *,
+    scheduled_at: float,
+    workspace_id: str | None,
+) -> _System1IngestSchedulingContext | None:
+    del scheduled_at
+    journal_workspace_id = resolve_pending_workspace_id(journal, None)
+    pending_count = journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0)
+    if pending_count <= 0:
+        return None
+
+    oldest_pending_timestamp = journal.get_oldest_pending_timestamp(workspace_id=journal_workspace_id)
+    if oldest_pending_timestamp is None:
+        return None
+
+    del workspace_id
+    return _System1IngestSchedulingContext(
+        journal_workspace_id=journal_workspace_id,
+        pending_count=pending_count,
+        oldest_pending_timestamp=oldest_pending_timestamp,
+    )
+
+
+def _enqueue_system1_ingest_task(
+    task_queue: SQLiteTaskQueue,
+    *,
+    workspace_id: str | None,
+    journal_workspace_id: object,
+    pending_count: int,
+    oldest_pending_timestamp: float,
+    trigger: str,
+    available_at: float,
+    rate_limited_until: float | None = None,
+    suppressed_until: float | None = None,
+):
+    from mcp_memory.core.task_handlers.constants import (
+        SYSTEM1_INGEST_PRIORITY,
+        SYSTEM1_INGEST_TASK_NAME,
+    )
 
     task_data = {
         "workspace_id": workspace_id,

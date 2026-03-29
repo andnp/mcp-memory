@@ -222,6 +222,8 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | No
     task_workspace = task.data.get("workspace_id")
     if isinstance(task_workspace, str) and task_workspace.strip():
         return task_workspace.strip()
+    if isinstance(task.workspace_id, str) and task.workspace_id.strip():
+        return task.workspace_id.strip()
     return None
 
 

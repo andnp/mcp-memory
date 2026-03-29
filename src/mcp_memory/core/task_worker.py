@@ -14,7 +14,7 @@ from mcp_memory.core.maintenance_idle import (
     should_pause_autonomous_recurring_maintenance,
 )
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
-from mcp_memory.core.system1_scheduling import schedule_system1_ingest
+from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
 from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -451,7 +451,7 @@ class RuntimeTaskWorker:
                 execution_epoch=task.execution_epoch,
             )
             await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
-            await self._schedule_follow_up(task, cancelled_task)
+            await self._schedule_follow_up(task, cancelled_task, normalized_result)
             return
         completed_task = await asyncio.to_thread(
             task_queue.complete,
@@ -461,7 +461,7 @@ class RuntimeTaskWorker:
             task.execution_epoch,
         )
         await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
-        await self._schedule_follow_up(task, completed_task)
+        await self._schedule_follow_up(task, completed_task, normalized_result)
 
     def _recover_running_tasks(self, current_time: float) -> list[TaskRecord]:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -696,7 +696,12 @@ class RuntimeTaskWorker:
                 },
             )
 
-    async def _schedule_follow_up(self, task: TaskRecord, terminal_task: TaskRecord) -> None:
+    async def _schedule_follow_up(
+        self,
+        task: TaskRecord,
+        terminal_task: TaskRecord,
+        run_result: dict[str, Any] | None = None,
+    ) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
             return
@@ -704,8 +709,11 @@ class RuntimeTaskWorker:
         if task.task_name == SYSTEM1_INGEST_TASK_NAME and terminal_task.status == "completed":
             journal = getattr(self._ctx, "journal", None)
             if journal is not None:
+                schedule_ingest = schedule_system1_ingest
+                if _should_schedule_ingest_continuation(run_result):
+                    schedule_ingest = schedule_system1_ingest_continuation
                 await asyncio.to_thread(
-                    schedule_system1_ingest,
+                    schedule_ingest,
                     task_queue,
                     journal,
                     task.workspace_id,
@@ -751,3 +759,18 @@ class RuntimeTaskWorker:
             },
         )
         return self._handlers.get(task_name)
+
+
+def _should_schedule_ingest_continuation(run_result: dict[str, Any] | None) -> bool:
+    if not isinstance(run_result, dict):
+        return False
+    pending_remaining = run_result.get("pending_remaining")
+    meaningful_actions = run_result.get("meaningful_actions")
+    return (
+        isinstance(pending_remaining, int)
+        and not isinstance(pending_remaining, bool)
+        and pending_remaining > 0
+        and isinstance(meaningful_actions, int)
+        and not isinstance(meaningful_actions, bool)
+        and meaningful_actions > 0
+    )

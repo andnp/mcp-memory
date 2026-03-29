@@ -93,6 +93,7 @@ async def handle_ingest_system1_task(
                 task,
                 cast(Any, run_agent),
                 workspace_id=workspace_id,
+                journal_workspace_id=journal_workspace_id,
                 batch_size=int(task.data.get("batch_size", DEFAULT_INGEST_BATCH_SIZE)),
                 grouping_strategy=grouping_strategy_used,
                 max_batches_per_run=max_batches_per_run,

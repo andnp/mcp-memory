@@ -23,6 +23,7 @@ async def run_agentic_ingest_pass(
     run_agent: Callable[[str], Awaitable[Any]],
     *,
     workspace_id: str,
+    journal_workspace_id,
     batch_size: int,
     grouping_strategy: str,
     max_batches_per_run: int,
@@ -85,6 +86,9 @@ async def run_agentic_ingest_pass(
         "provider_reported_cluster_outcomes": normalized["cluster_outcomes"],
         "provider_reported_touched_memory_ids": normalized["touched_memory_ids"],
         "provider_reported_matched_memory_ids": normalized["matched_memory_ids"],
+        "pending_remaining": 0
+        if ctx.journal is None
+        else ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0),
     }
 
 

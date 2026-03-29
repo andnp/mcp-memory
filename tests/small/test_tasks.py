@@ -26,6 +26,7 @@ from mcp_memory.core.task_handlers import (
 from mcp_memory.core import tasks as tasks_module
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
@@ -68,6 +69,50 @@ def test_sqlite_task_queue_enqueue_and_claim_order(db_manager) -> None:
     assert untouched.status == "pending"
     assert untouched.execution_epoch == 0
     assert untouched.available_at == 20.0
+
+
+def test_maintenance_task_workspace_resolution_falls_back_to_task_record_field() -> None:
+    task = TaskRecord(
+        id="scoped-task",
+        task_name="memory-curator",
+        data={},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=1.0,
+        updated_at=1.0,
+        available_at=1.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    assert _resolve_workspace_id(ApplicationContext(), task) == "workspace-a"
+
+
+def test_maintenance_task_workspace_resolution_prefers_task_data_override() -> None:
+    task = TaskRecord(
+        id="scoped-task-override",
+        task_name="memory-curator",
+        data={"workspace_id": "workspace-b"},
+        workspace_id="workspace-a",
+        status="pending",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=1.0,
+        updated_at=1.0,
+        available_at=1.0,
+        claimed_at=None,
+        started_at=None,
+        completed_at=None,
+        last_error=None,
+    )
+
+    assert _resolve_workspace_id(ApplicationContext(), task) == "workspace-b"
 
 
 def test_sqlite_task_queue_claim_next_increments_execution_epoch_per_attempt(db_manager) -> None:
@@ -734,6 +779,45 @@ def test_schedule_system1_ingest_respects_active_suppression_window(
     assert scheduled.task.available_at == pytest.approx(datetime(2026, 3, 18, 6, 0).astimezone().timestamp())
 
 
+def test_schedule_system1_ingest_continuation_bypasses_slow_auto_gates_and_reuses_global_task(
+    db_manager,
+    monkeypatch,
+) -> None:
+    from mcp_memory.core.system1_scheduling import schedule_system1_ingest_continuation
+
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+
+    recent_task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="recent-completed-ingest-for-continuation",
+    )
+    assert queue.claim_next(now=90.0) is not None
+    queue.complete(recent_task.id, completed_at=100.0)
+
+    now = 1000.0
+    monkeypatch.setattr("mcp_memory.core.journal.time.time", lambda: now)
+    journal.record("note 0", workspace_id="workspace-a")
+
+    scheduled = schedule_system1_ingest(queue, journal, "workspace-a", now=now)
+
+    assert scheduled is not None
+    assert scheduled.trigger == "system1_debounce"
+    assert scheduled.task.available_at == 4600.0
+
+    continued = schedule_system1_ingest_continuation(queue, journal, "workspace-a", now=now + 5.0)
+
+    assert continued is not None
+    assert continued.created is False
+    assert continued.task.id == scheduled.task.id
+    assert continued.task.available_at == pytest.approx(now + 5.0)
+    assert continued.task.data["trigger"] == "system1_backlog_continuation"
+    assert queue.count_by_status() == {"completed": 1, "pending": 1}
+
+
 @pytest.mark.asyncio
 async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
@@ -956,6 +1040,96 @@ async def test_runtime_task_worker_recurring_follow_up_applies_jitter(db_manager
     assert follow_up.available_at == pytest.approx(140.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] + 18.0)
     assert follow_up.data["trigger"] == "recurring_follow_up"
     assert follow_up.data["jitter_seconds"] == pytest.approx(18.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_uses_backlog_continuation_for_completed_ingest_runs(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, journal=journal)
+
+    claimed_entry = journal.record("backlog remains after partial drain", workspace_id="workspace-a")
+    task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        data={"workspace_id": "workspace-a"},
+        available_at=0.0,
+        task_id="ingest-backlog-follow-up",
+    )
+    claimed = queue.claim_next(now=10.0)
+    assert claimed is not None
+    completed = queue.complete(task.id, completed_at=20.0, run_result={"meaningful_actions": 1, "pending_remaining": 1})
+
+    backlog_calls: list[tuple[str | None, float]] = []
+
+    def fake_continuation(task_queue, task_journal, workspace_id, *, now=None, suppression_config=None):
+        del task_queue, suppression_config
+        assert task_journal is journal
+        backlog_calls.append((workspace_id, 0.0 if now is None else now))
+        return None
+
+    def fail_normal_schedule(*args, **kwargs):
+        raise AssertionError("normal ingest scheduling should not run for backlog continuation")
+
+    monkeypatch.setattr("mcp_memory.core.task_worker.schedule_system1_ingest_continuation", fake_continuation)
+    monkeypatch.setattr("mcp_memory.core.task_worker.schedule_system1_ingest", fail_normal_schedule)
+
+    worker = RuntimeTaskWorker(ctx, handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None}, poll_interval_seconds=0.01)
+
+    await worker._schedule_follow_up(  # noqa: SLF001
+        claimed,
+        completed,
+        {"meaningful_actions": 1, "pending_remaining": 1},
+    )
+
+    assert claimed_entry.id > 0
+    assert backlog_calls == [("workspace-a", 20.0)]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_keeps_normal_ingest_scheduling_outside_backlog_continuation_path(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    journal = System1Journal(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, journal=journal)
+
+    journal.record("normal follow-up still uses the default scheduler", workspace_id="workspace-a")
+    task = queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id="workspace-a",
+        data={"workspace_id": "workspace-a"},
+        available_at=0.0,
+        task_id="ingest-normal-follow-up",
+    )
+    claimed = queue.claim_next(now=10.0)
+    assert claimed is not None
+    completed = queue.complete(task.id, completed_at=20.0, run_result={"meaningful_actions": 1, "pending_remaining": 0})
+
+    normal_calls: list[tuple[str | None, float]] = []
+
+    def fake_normal_schedule(task_queue, task_journal, workspace_id, *, now=None, suppression_config=None):
+        del task_queue, suppression_config
+        assert task_journal is journal
+        normal_calls.append((workspace_id, 0.0 if now is None else now))
+        return None
+
+    def fail_continuation(*args, **kwargs):
+        raise AssertionError("backlog continuation should not run without remaining backlog")
+
+    monkeypatch.setattr("mcp_memory.core.task_worker.schedule_system1_ingest", fake_normal_schedule)
+    monkeypatch.setattr("mcp_memory.core.task_worker.schedule_system1_ingest_continuation", fail_continuation)
+
+    worker = RuntimeTaskWorker(ctx, handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None}, poll_interval_seconds=0.01)
+
+    await worker._schedule_follow_up(  # noqa: SLF001
+        claimed,
+        completed,
+        {"meaningful_actions": 1, "pending_remaining": 0},
+    )
+
+    assert normal_calls == [("workspace-a", 20.0)]
 
 
 @pytest.mark.asyncio
