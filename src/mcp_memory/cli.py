@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
+from mcp_memory.cli_memory import build_memory_group
 from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
@@ -1349,6 +1350,14 @@ def main(ctx: click.Context, debug: bool) -> None:
     configure_cli_logging(debug)
 
 
+def _memory_stash_command_action(workspace_root: str | None, text: tuple[str, ...]) -> None:
+    _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
+
+
+memory_group = build_memory_group(workspace_root_option, _memory_stash_command_action)
+main.add_command(memory_group)
+
+
 @main.command()
 @workspace_root_option
 @click.pass_context
@@ -1446,11 +1455,6 @@ def daemon_restart_alias(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
-@main.group(name="memory")
-def memory_group() -> None:
-    """Canonical memory commands."""
-
-
 @main.group(name="admin")
 def admin_group() -> None:
     """Canonical operator commands."""
@@ -1479,14 +1483,6 @@ def admin_search_group() -> None:
 @admin_group.group(name="task")
 def admin_task_group() -> None:
     """Canonical background task operator commands."""
-
-
-@memory_group.command(name="stash")
-@workspace_root_option
-@click.argument("text", nargs=-1)
-def memory_stash_command(workspace_root: str | None, text: tuple[str, ...]) -> None:
-    """Record one raw thought into the System 1 journal."""
-    _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
 
 
 @admin_log_group.command(name="list")
