@@ -32,6 +32,7 @@ from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_
 
 logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
+_HTTP_ACTIVITY_GRACE_SECONDS = 60.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _GLOBAL_DEFAULT_API_PATHS = {
     "overview",
@@ -84,6 +85,11 @@ async def _cancel_idle_shutdown_task(app: FastAPI) -> None:
     app.state.idle_shutdown_task = None
 
 
+async def _record_http_activity(app: FastAPI) -> None:
+    app.state.last_http_activity_at = time.monotonic()
+    await _cancel_idle_shutdown_task(app)
+
+
 def _count_running_background_tasks(app: FastAPI) -> int:
     routes = getattr(app.state, "routes", None)
     if routes is None:
@@ -107,6 +113,15 @@ async def _shutdown_daemon_when_idle(app: FastAPI) -> None:
             if running_tasks > 0:
                 logger.debug("Deferring idle daemon shutdown; %s background task(s) still running", running_tasks)
                 continue
+            last_http_activity_at = getattr(app.state, "last_http_activity_at", None)
+            if isinstance(last_http_activity_at, (int, float)):
+                recent_http_age_seconds = max(time.monotonic() - float(last_http_activity_at), 0.0)
+                if recent_http_age_seconds < _HTTP_ACTIVITY_GRACE_SECONDS:
+                    logger.debug(
+                        "Deferring idle daemon shutdown; recent HTTP activity %.2fs ago",
+                        recent_http_age_seconds,
+                    )
+                    continue
             logger.info("Stopping daemon after last MCP client exited")
             os.kill(os.getpid(), signal.SIGTERM)
             return
@@ -242,6 +257,7 @@ def create_daemon_app(
         app.state.idle_shutdown_task = None
         app.state.backup_task = backup_task
         app.state.enable_idle_shutdown = enable_idle_shutdown
+        app.state.last_http_activity_at = time.monotonic()
         app.state.metadata = DaemonMetadata(
             host=daemon_host,
             port=daemon_port,
@@ -277,10 +293,12 @@ def create_daemon_app(
     @app.get("/dashboard", response_class=HTMLResponse)
     @app.get("/dashboard/{dashboard_path:path}", response_class=HTMLResponse)
     async def dashboard_html(dashboard_path: str = "") -> HTMLResponse:
+        await _record_http_activity(app)
         return HTMLResponse(app.state.routes.service.load_dashboard_html())
 
     @app.get("/assets/{asset_path:path}")
     async def dashboard_asset(asset_path: str):
+        await _record_http_activity(app)
         resolved = app.state.routes.service.resolve_dashboard_asset_path(asset_path)
         if resolved is None:
             raise HTTPException(status_code=404, detail="dashboard_asset_not_found")
@@ -288,6 +306,7 @@ def create_daemon_app(
 
     @app.api_route("/api/{api_path:path}", methods=["GET", "POST"])
     async def dashboard_api(api_path: str, request: Request):
+        await _record_http_activity(app)
         payload = await _payload_from_http_request(request)
         if api_path in _GLOBAL_DEFAULT_API_PATHS and "scope" not in payload and "workspace_id" not in payload:
             payload["scope"] = "global"
