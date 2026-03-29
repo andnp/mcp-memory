@@ -117,6 +117,18 @@ export interface OverviewResponse {
   top_read_memories_active: TopReadMemory[];
 }
 
+export interface HealthResponse {
+  status: string;
+  storage_backend: string | null;
+  workspace_id: string | null;
+  workspace_root: string | null;
+  memory_path: string | null;
+  db_path: string | null;
+  runtime_active: boolean;
+  client_count: number;
+  task_queue_enabled: boolean;
+}
+
 export interface MemorySearchResult {
   memory_id: string;
   title: string;
@@ -642,6 +654,10 @@ function withQueryParams(path: string, params: Record<string, string | number | 
 
 export function fetchOverview(): Promise<OverviewResponse> {
   return requestJson<OverviewResponse>('/api/overview');
+}
+
+export function fetchHealth(): Promise<HealthResponse> {
+  return requestJson<HealthResponse>('/api/health');
 }
 
 export function searchMemories(params: {

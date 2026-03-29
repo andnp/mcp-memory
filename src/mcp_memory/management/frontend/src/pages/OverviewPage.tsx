@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 
 import { CommandBar } from '../components/CommandBar';
 import { PulseOverview } from '../components/PulseOverview';
-import { fetchOverview } from '../lib/api';
+import { fetchHealth, fetchOverview } from '../lib/api';
 
 function formatTimestamp(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString();
@@ -63,24 +63,38 @@ function providerReasonSummary(usage: {
 
 export function OverviewPage() {
   const [commandResult, setCommandResult] = useState<string | null>(null);
+  const healthQuery = useQuery({
+    queryKey: ['health'],
+    queryFn: fetchHealth,
+    refetchInterval: 5000,
+  });
   const overviewQuery = useQuery({
     queryKey: ['overview'],
     queryFn: fetchOverview,
-    refetchInterval: 5000,
+    refetchInterval: 30000,
   });
 
-  if (overviewQuery.isError) {
-    return (
-      <section className="panel p-6 text-danger">
-        Failed to load the daemon overview. This page expects the management API to be reachable at <code>/api</code>.
-      </section>
-    );
-  }
+  const pulseTone = healthQuery.isError
+    ? 'text-danger'
+    : healthQuery.data?.runtime_active
+      ? 'text-success'
+      : 'text-amber';
+  const pulseStatus = healthQuery.isLoading
+    ? 'Loading pulse…'
+    : healthQuery.isError
+      ? 'Pulse unavailable'
+      : healthQuery.data?.runtime_active
+        ? 'Pulse online'
+        : 'Pulse degraded';
+  const pulseDetails = healthQuery.data
+    ? `${healthQuery.data.client_count} client${healthQuery.data.client_count === 1 ? '' : 's'} · ${healthQuery.data.storage_backend ?? 'unknown'} storage`
+    : null;
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-border bg-panel/80 px-3 py-2 text-xs text-muted shadow-panel">
-        Status: {overviewQuery.isLoading ? 'Loading pulse…' : 'Pulse online'}
+      <div className={`rounded-xl border border-border bg-panel/80 px-3 py-2 text-xs shadow-panel ${pulseTone}`}>
+        Status: {pulseStatus}
+        {pulseDetails ? <span className="text-muted"> · {pulseDetails}</span> : null}
       </div>
 
       <CommandBar onResult={setCommandResult} />
@@ -92,7 +106,11 @@ export function OverviewPage() {
         </section>
       ) : null}
 
-      {overviewQuery.data ? (
+      {overviewQuery.isError ? (
+        <section className="panel p-6 text-danger">
+          Failed to load the daemon overview. This page expects the management API to be reachable at <code>/api</code>.
+        </section>
+      ) : overviewQuery.data ? (
         <>
           <PulseOverview overview={overviewQuery.data} />
 
