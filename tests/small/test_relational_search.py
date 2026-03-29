@@ -13,6 +13,8 @@ from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
     ScoringWeights,
+    _keyword_token_coverage,
+    _query_tokens,
     _rank_semantic_candidate_ids,
 )
 from mcp_memory.mcp.services import search_memory_records_service
@@ -176,6 +178,40 @@ def test_repository_keyword_candidates_normalize_punctuation_heavy_queries(db_ma
     ids = repository.search_keyword_memory_ids('auth, rollout!!! "phase-1"', limit=10)
 
     assert ids[0] == record.id
+
+
+def test_repository_searchable_memories_preserve_lexical_inputs_for_bounded_semantic_eval(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    primary = repository.create_memory(
+        title="Postgres backend rollout",
+        content="Postgres backend guidance for shared deployments and storage latency.",
+        summary="Postgres backend summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres", "latency"],
+    )
+    superseded = repository.create_memory(
+        title="Postgres backend rollout legacy",
+        content="Legacy Postgres backend note.",
+        summary="Legacy backend summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres"],
+    )
+    assert primary is not None and superseded is not None
+
+    repository.add_link(primary.id, superseded.id, "SUPERSEDES")
+
+    query_tokens = _query_tokens("postgres backend storage latency")
+    searchable = repository.get_searchable_memories([primary.id, superseded.id])
+    ranking = repository.get_ranking_candidates([primary.id, superseded.id])
+
+    assert [record.id for record in searchable] == [primary.id]
+    assert [candidate.record.id for candidate in ranking] == [primary.id]
+    assert _keyword_token_coverage(query_tokens, searchable[0]) == pytest.approx(
+        _keyword_token_coverage(query_tokens, ranking[0].record)
+    )
 
 
 def test_search_memories_prioritizes_workspace_and_hides_superseded(db_manager) -> None:
@@ -761,6 +797,46 @@ def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db
     assert results[0].memory_id == auth_record.id
 
 
+def test_search_memories_debug_diagnostics_include_semantic_selection_subtimings(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=SQLiteVectorStore(db_manager),
+    )
+
+    record = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert record is not None
+
+    _, diagnostics = service.search_memories_with_diagnostics(
+        "permissions security",
+        workspace_id="workspace-alpha",
+        limit=5,
+        debug=True,
+    )
+
+    assert diagnostics.timing_ms["semantic_selection"] >= 0.0
+    assert diagnostics.timing_ms["semantic_candidate_pool"] >= 0.0
+    assert diagnostics.timing_ms["semantic_embedding_stale_check"] >= 0.0
+    assert diagnostics.timing_ms["semantic_embedding_refresh"] >= 0.0
+    assert diagnostics.timing_ms["semantic_query_embedding"] >= 0.0
+    assert diagnostics.timing_ms["semantic_vector_search"] >= 0.0
+    assert diagnostics.timing_ms["semantic_ranking"] >= 0.0
+    assert diagnostics.timing_ms["candidate_hydration"] >= 0.0
+    assert diagnostics.timing_ms["candidate_hydration_query_execution"] >= 0.0
+    assert diagnostics.timing_ms["candidate_hydration_row_fetch"] >= 0.0
+    assert diagnostics.timing_ms["candidate_hydration_candidate_build"] >= 0.0
+    assert "semantic_speculative_fallback" not in diagnostics.timing_ms
+
+
 def test_search_memory_records_service_debug_payload_includes_search_diagnostics() -> None:
     class FakeSearchService:
         def search_memories(self, **_kwargs):
@@ -779,7 +855,13 @@ def test_search_memory_records_service_debug_payload_includes_search_diagnostics
                     )
                 ],
                 SearchExecutionDiagnostics(
-                    timing_ms={"total": 12.0},
+                    timing_ms={
+                        "total": 12.0,
+                        "candidate_hydration": 4.0,
+                        "candidate_hydration_query_execution": 1.0,
+                        "candidate_hydration_row_fetch": 1.5,
+                        "candidate_hydration_candidate_build": 1.5,
+                    },
                     keyword_candidate_count=5,
                     semantic_candidate_count=3,
                     semantic_candidate_strategy="speculative-bounded",
@@ -802,7 +884,13 @@ def test_search_memory_records_service_debug_payload_includes_search_diagnostics
 
     assert payload["status"] == "ok"
     assert float(payload["timing_ms"]["total"]) >= 0.0
-    assert payload["search_diagnostics"]["timing_ms"] == {"total": 12.0}
+    assert payload["search_diagnostics"]["timing_ms"] == {
+        "total": 12.0,
+        "candidate_hydration": 4.0,
+        "candidate_hydration_query_execution": 1.0,
+        "candidate_hydration_row_fetch": 1.5,
+        "candidate_hydration_candidate_build": 1.5,
+    }
     assert payload["search_diagnostics"]["semantic_candidate_strategy"] == "speculative-bounded"
     assert payload["search_diagnostics"]["vector_search"]["raw_type_counts"] == {"str": 42}
 
@@ -854,6 +942,91 @@ def test_search_memories_uses_speculative_bounded_semantic_scores_for_dense_keyw
     assert call_modes == ["bounded"]
     assert len(results) == 3
     assert {result.memory_id for result in results}.issubset({record.id for record in records})
+
+
+def test_search_memories_caps_strong_keyword_bounded_candidate_ids_conservatively(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    for index in range(30):
+        record = repository.create_memory(
+            title=f"Postgres backend storage latency note {index:02d}",
+            content="Postgres backend storage latency guidance for shared deployments.",
+            summary=f"Postgres backend storage latency summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["postgres", "backend", "storage", "latency"],
+        )
+        assert record is not None
+
+    query = "postgres backend storage latency"
+    keyword_ids = repository.search_keyword_memory_ids(query, limit=50)
+    assert len(keyword_ids) >= 20
+
+    observed_candidate_ids: list[str] = []
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        assert candidate_ids is not None
+        observed_candidate_ids.extend(candidate_ids)
+        return {
+            memory_id: 1.0 - (rank * 0.01)
+            for rank, memory_id in enumerate(candidate_ids)
+        }
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results = service.search_memories(
+        query,
+        workspace_id="workspace-alpha",
+        limit=5,
+    )
+
+    assert observed_candidate_ids == keyword_ids[:20]
+    assert len(observed_candidate_ids) == 20
+    assert [result.memory_id for result in results] == keyword_ids[:5]
+
+
+def test_bounded_semantic_candidates_use_lightweight_searchable_memory_projection(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    record = repository.create_memory(
+        title="Postgres backend note",
+        content="Postgres backend guidance for shared deployments.",
+        summary="Postgres backend summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres"],
+    )
+    assert record is not None
+
+    def _fail_if_ranking_candidates_used(*_args, **_kwargs):
+        raise AssertionError("bounded semantic setup should not require ranking candidate hydration")
+
+    monkeypatch.setattr(repository, "get_ranking_candidates", _fail_if_ranking_candidates_used)
+
+    bounded, speculative = service._bounded_semantic_candidates(
+        [record.id],
+        _query_tokens("postgres backend guidance"),
+        status=None,
+        include_superseded=False,
+        requested_limit=1,
+    )
+
+    assert bounded is not None
+    assert [candidate.id for candidate in bounded] == [record.id]
+    assert speculative is False
 
 
 def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bounded_scores_are_sparse(db_manager, monkeypatch) -> None:
@@ -908,14 +1081,17 @@ def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bou
 
     monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
 
-    results = service.search_memories(
+    results, diagnostics = service.search_memories_with_diagnostics(
         "postgres backend storage latency",
         workspace_id="workspace-alpha",
         limit=3,
+        debug=True,
     )
 
     assert call_modes == ["bounded", "global"]
     assert semantic_only.id in {result.memory_id for result in results}
+    assert diagnostics.semantic_candidate_strategy == "global-fallback"
+    assert diagnostics.timing_ms["semantic_speculative_fallback"] >= 0.0
 
 
 def test_workspace_scoped_search_keeps_global_semantic_candidates(db_manager) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import cast
@@ -13,6 +14,7 @@ from mcp_memory.relational.repository import (
     MemoryLink,
     RankedMemoryCandidate,
     RelationalMemoryRecord,
+    build_read_cache_validation_token,
     VALID_MEMORY_STATUSES,
     VALID_MEMORY_TYPES,
 )
@@ -33,6 +35,111 @@ class PostgresRelationalMemoryRepository:
             high_watermark=128,
             flush_interval_seconds=0.01,
         )
+
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        tokens: dict[str, str] = {}
+        for memory_id in self._normalize_values(memory_ids):
+            record = self.get_memory(memory_id)
+            if record is None:
+                continue
+            outgoing = self.get_links(memory_id, direction="outgoing")
+            incoming = self.get_links(memory_id, direction="incoming")
+            superseded_targets = [
+                target
+                for link in outgoing
+                if link.link_type == "SUPERSEDES"
+                for target in [self.get_memory(link.target_id)]
+                if target is not None
+            ]
+            tokens[memory_id] = build_read_cache_validation_token(
+                record=record,
+                outgoing_links=outgoing,
+                incoming_links=incoming,
+                superseded_records=superseded_targets,
+            )
+        return tokens
+
+    def get_searchable_memories(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return []
+
+        clauses = ["memories.id = ANY(%s::text[])"]
+        params: list[object] = [normalized_ids]
+        if status is not None:
+            clauses.append("memories.status = %s")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        memories.id,
+                        memories.title,
+                        memories.content,
+                        memories.summary,
+                        memories.type,
+                        memories.status,
+                        memories.created_at,
+                        memories.updated_at,
+                        memories.read_count,
+                        memories.access_score,
+                        memories.last_accessed_at,
+                        memories.last_surfaced_at,
+                        memories.metadata,
+                        COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
+                        COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
+                    FROM memories
+                    LEFT JOIN (
+                        SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids
+                        FROM memory_workspaces
+                        GROUP BY memory_id
+                    ) workspace_agg ON workspace_agg.memory_id = memories.id
+                    LEFT JOIN (
+                        SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags
+                        FROM memory_tags
+                        JOIN tags ON tags.id = memory_tags.tag_id
+                        GROUP BY memory_tags.memory_id
+                    ) tag_agg ON tag_agg.memory_id = memories.id
+                    WHERE
+                    """
+                    + " AND ".join(clauses),
+                    tuple(params),
+                )
+                rows = cursor.fetchall()
+
+        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        for row in rows:
+            memory_id = str(row[0])
+            records_by_id[memory_id] = RelationalMemoryRecord(
+                id=memory_id,
+                title=str(row[1]),
+                content=str(row[2]),
+                summary=None if row[3] is None else str(row[3]),
+                type=str(row[4]),
+                status=str(row[5]),
+                created_at=str(row[6]),
+                updated_at=str(row[7]),
+                read_count=self._coerce_int(row[8]),
+                access_score=self._coerce_float(row[9]),
+                last_accessed_at=None if row[10] is None else str(row[10]),
+                last_surfaced_at=None if row[11] is None else str(row[11]),
+                metadata=self._load_metadata(row[12]),
+                workspace_ids=self._load_text_values(row[13]),
+                tags=self._load_text_values(row[14]),
+            )
+        return [records_by_id[memory_id] for memory_id in normalized_ids if memory_id in records_by_id]
 
     def create_memory(
         self,
@@ -324,6 +431,7 @@ class PostgresRelationalMemoryRepository:
         *,
         status: str | None = None,
         include_superseded: bool = False,
+        timing_ms: dict[str, float] | None = None,
     ) -> list[RankedMemoryCandidate]:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
@@ -331,58 +439,125 @@ class PostgresRelationalMemoryRepository:
 
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
+                clauses: list[str] = []
                 params: list[object] = [normalized_ids]
-                query = (
-                    "SELECT id, title, content, summary, type, status, created_at, updated_at, "
-                    "read_count, access_score, last_accessed_at, last_surfaced_at, metadata "
-                    "FROM memories WHERE id = ANY(%s::text[])"
-                )
                 if status is not None:
-                    query += " AND status = %s"
+                    clauses.append("memories.status = %s")
                     params.append(status)
-                cursor.execute(query, tuple(params))
+                if not include_superseded:
+                    clauses.append("COALESCE(link_counts.has_incoming_supersedes, 0) = 0")
+
+                query_started = time.perf_counter()
+                cursor.execute(
+                    """
+                    WITH input_ids AS (
+                        SELECT memory_id, ordinality
+                        FROM unnest(%s::text[]) WITH ORDINALITY AS requested(memory_id, ordinality)
+                    ),
+                    workspace_agg AS (
+                        SELECT
+                            memory_workspaces.memory_id,
+                            array_agg(DISTINCT memory_workspaces.workspace_id ORDER BY memory_workspaces.workspace_id) AS workspace_ids
+                        FROM memory_workspaces
+                        JOIN input_ids ON input_ids.memory_id = memory_workspaces.memory_id
+                        GROUP BY memory_workspaces.memory_id
+                    ),
+                    tag_agg AS (
+                        SELECT
+                            memory_tags.memory_id,
+                            array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags
+                        FROM memory_tags
+                        JOIN tags ON tags.id = memory_tags.tag_id
+                        JOIN input_ids ON input_ids.memory_id = memory_tags.memory_id
+                        GROUP BY memory_tags.memory_id
+                    ),
+                    link_counts AS (
+                        SELECT
+                            links.target_id AS memory_id,
+                            COUNT(*) AS incoming_links_count,
+                            MAX(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes,
+                            SUM(CASE WHEN links.type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count,
+                            SUM(CASE WHEN links.type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count,
+                            SUM(CASE WHEN links.type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count,
+                            SUM(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count
+                        FROM links
+                        JOIN input_ids ON input_ids.memory_id = links.target_id
+                        GROUP BY links.target_id
+                    )
+                    SELECT
+                        memories.id,
+                        memories.title,
+                        memories.content,
+                        memories.summary,
+                        memories.type,
+                        memories.status,
+                        memories.created_at,
+                        memories.updated_at,
+                        memories.read_count,
+                        memories.access_score,
+                        memories.last_accessed_at,
+                        memories.last_surfaced_at,
+                        memories.metadata,
+                        COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
+                        COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags,
+                        COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
+                        COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes,
+                        COALESCE(link_counts.incoming_depends_on_count, 0) AS incoming_depends_on_count,
+                        COALESCE(link_counts.incoming_amends_count, 0) AS incoming_amends_count,
+                        COALESCE(link_counts.incoming_contradicts_count, 0) AS incoming_contradicts_count,
+                        COALESCE(link_counts.incoming_supersedes_count, 0) AS incoming_supersedes_count
+                    FROM input_ids
+                    JOIN memories ON memories.id = input_ids.memory_id
+                    LEFT JOIN workspace_agg ON workspace_agg.memory_id = memories.id
+                    LEFT JOIN tag_agg ON tag_agg.memory_id = memories.id
+                    LEFT JOIN link_counts ON link_counts.memory_id = memories.id
+                    """
+                    + ("WHERE " + " AND ".join(clauses) + " " if clauses else "")
+                    + "ORDER BY input_ids.ordinality ASC",
+                    tuple(params),
+                )
+                self._record_timing_ms(timing_ms, "candidate_hydration_query_execution", query_started)
+                fetch_started = time.perf_counter()
                 rows = cursor.fetchall()
+                self._record_timing_ms(timing_ms, "candidate_hydration_row_fetch", fetch_started)
                 if not rows:
                     return []
 
-                found_ids = [str(row[0]) for row in rows]
-                workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, found_ids)
-                tags_by_memory_id = self._tags_by_memory_id(cursor, found_ids)
-                link_counts_by_memory_id = self._incoming_link_counts_by_memory_id(cursor, found_ids)
-
-        candidates_by_id: dict[str, RankedMemoryCandidate] = {}
+        candidate_build_started = time.perf_counter()
+        candidates: list[RankedMemoryCandidate] = []
         for row in rows:
-            memory_id = str(row[0])
-            incoming_links_count, incoming_link_type_counts = link_counts_by_memory_id.get(
-                memory_id,
-                (0, {"DEPENDS_ON": 0, "AMENDS": 0, "CONTRADICTS": 0, "SUPERSEDES": 0}),
+            has_incoming_supersedes = self._coerce_int(row[16]) > 0
+            candidates.append(
+                RankedMemoryCandidate(
+                    record=RelationalMemoryRecord(
+                        id=str(row[0]),
+                        title=str(row[1]),
+                        content=str(row[2]),
+                        summary=None if row[3] is None else str(row[3]),
+                        type=str(row[4]),
+                        status=str(row[5]),
+                        created_at=str(row[6]),
+                        updated_at=str(row[7]),
+                        read_count=self._coerce_int(row[8]),
+                        access_score=self._coerce_float(row[9]),
+                        last_accessed_at=None if row[10] is None else str(row[10]),
+                        last_surfaced_at=None if row[11] is None else str(row[11]),
+                        metadata=self._load_metadata(row[12]),
+                        workspace_ids=self._load_text_values(row[13]),
+                        tags=self._load_text_values(row[14]),
+                    ),
+                    incoming_links_count=self._coerce_int(row[15]),
+                    has_incoming_supersedes=has_incoming_supersedes,
+                    incoming_link_type_counts={
+                        "DEPENDS_ON": self._coerce_int(row[17]),
+                        "AMENDS": self._coerce_int(row[18]),
+                        "CONTRADICTS": self._coerce_int(row[19]),
+                        "SUPERSEDES": self._coerce_int(row[20]),
+                    },
+                )
             )
-            has_incoming_supersedes = incoming_link_type_counts.get("SUPERSEDES", 0) > 0
-            if has_incoming_supersedes and not include_superseded:
-                continue
-            candidates_by_id[memory_id] = RankedMemoryCandidate(
-                record=RelationalMemoryRecord(
-                    id=memory_id,
-                    title=str(row[1]),
-                    content=str(row[2]),
-                    summary=None if row[3] is None else str(row[3]),
-                    type=str(row[4]),
-                    status=str(row[5]),
-                    created_at=str(row[6]),
-                    updated_at=str(row[7]),
-                    read_count=self._coerce_int(row[8]),
-                    access_score=self._coerce_float(row[9]),
-                    last_accessed_at=None if row[10] is None else str(row[10]),
-                    last_surfaced_at=None if row[11] is None else str(row[11]),
-                    metadata=self._load_metadata(row[12]),
-                    workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
-                    tags=tags_by_memory_id.get(memory_id, []),
-                ),
-                incoming_links_count=incoming_links_count,
-                has_incoming_supersedes=has_incoming_supersedes,
-                incoming_link_type_counts=incoming_link_type_counts,
-            )
-        return [candidates_by_id[memory_id] for memory_id in normalized_ids if memory_id in candidates_by_id]
+        self._record_timing_ms(timing_ms, "candidate_hydration_candidate_build", candidate_build_started)
+        return candidates
 
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
         normalized_ids = self._normalize_values(memory_ids)
@@ -873,6 +1048,15 @@ class PostgresRelationalMemoryRepository:
                 return {str(key): value for key, value in loaded.items()}
         raise TypeError("memory metadata must be a JSON object")
 
+    def _load_text_values(self, raw_value: object) -> list[str]:
+        if raw_value is None:
+            return []
+        if isinstance(raw_value, str):
+            return [raw_value] if raw_value else []
+        if isinstance(raw_value, list | tuple):
+            return [str(value) for value in raw_value]
+        raise TypeError("expected text array-compatible value")
+
     def _coerce_int(self, value: object) -> int:
         if isinstance(value, bool):
             return int(value)
@@ -890,3 +1074,9 @@ class PostgresRelationalMemoryRepository:
         if isinstance(value, str):
             return float(value)
         raise TypeError("expected float-compatible value")
+
+    def _record_timing_ms(self, timing_ms: dict[str, float] | None, key: str, started_at: float) -> None:
+        if timing_ms is None:
+            return
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
+        timing_ms[key] = round(timing_ms.get(key, 0.0) + elapsed_ms, 3)

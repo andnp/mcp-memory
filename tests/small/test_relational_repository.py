@@ -256,3 +256,79 @@ def test_relational_repository_normalizes_link_types_and_collapses_semantic_dupl
     assert repository.has_incoming_link(target.id, "depends-on") is True
     assert repository.remove_link(source.id, target.id, "depends on") is True
     assert repository.get_links(source.id, direction="outgoing") == []
+
+
+def test_relational_repository_read_cache_validation_tokens_are_stable_for_unchanged_data(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    current = repository.create_memory(
+        title="Current fact",
+        content="Current canonical fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    superseded = repository.create_memory(
+        title="Legacy fact",
+        content="Legacy fact content.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    incoming = repository.create_memory(
+        title="Supporting fact",
+        content="Supports the current fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+
+    assert current is not None and superseded is not None and incoming is not None
+
+    repository.add_link(current.id, superseded.id, "SUPERSEDES", "replacement")
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "supporting evidence")
+
+    first = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
+    second = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
+
+    assert list(first) == [current.id]
+    assert second == first
+
+
+def test_relational_repository_read_cache_validation_tokens_invalidate_for_link_and_superseded_changes(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    current = repository.create_memory(
+        title="Current fact",
+        content="Current canonical fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    superseded = repository.create_memory(
+        title="Legacy fact",
+        content="Legacy fact content.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    incoming = repository.create_memory(
+        title="Supporting fact",
+        content="Supports the current fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+
+    assert current is not None and superseded is not None and incoming is not None
+
+    repository.add_link(current.id, superseded.id, "SUPERSEDES", "replacement")
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "supporting evidence")
+
+    initial_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "updated supporting evidence")
+    link_updated_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    repository.update_memory(
+        superseded.id,
+        content="Legacy fact content, revised.",
+    )
+    superseded_updated_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    assert link_updated_token != initial_token
+    assert superseded_updated_token != link_updated_token

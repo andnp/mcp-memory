@@ -91,13 +91,19 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
     runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
     try:
         assert runtime.repository is not None
+        assert runtime.db_manager is not None
+        runtime.embedder = _RuntimeFusionFakeEmbedder()
+        runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+        assert runtime.relational_search is not None
+        runtime.relational_search._embedder = runtime.embedder
+        runtime.relational_search._vector_store = runtime.vector_store
         record = runtime.repository.create_memory(
             title="Timing debug note",
-            content="Search timing should be visible in debug mode.",
+            content="Credential security search timing should be visible in debug mode.",
             summary="Timing summary.",
             workspace_ids=[runtime.workspace_id or "workspace-local"],
             memory_type="fact",
-            tags=["timing"],
+            tags=["timing", "security"],
         )
         assert record is not None
 
@@ -106,13 +112,21 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
                 await call_memory_tool(
                     runtime,
                     "search_memory_records",
-                    {"query": "timing debug", "limit": 5, "debug": True},
+                    {"query": "credential security", "limit": 5, "debug": True},
                 )
             )[0].text
         )
 
         assert payload["status"] == "ok"
         assert payload["timing_ms"]["total"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["semantic_selection"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["semantic_candidate_pool"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_query_execution"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_row_fetch"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_candidate_build"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["semantic_query_embedding"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"]["semantic_vector_search"] >= 0.0
     finally:
         runtime.close()
 

@@ -23,6 +23,8 @@ WORKSPACE_BOOST = 1.2
 GRAPH_EXPANSION_MAX_SEEDS = 3
 GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED = 10
 LEXICAL_STRENGTH_EVAL_LIMIT = 5
+STRONG_KEYWORD_BOUNDED_CANDIDATE_MULTIPLIER = 4
+MIN_STRONG_KEYWORD_BOUNDED_CANDIDATES = 20
 GRAPH_EXPANSION_DISCOUNTS = {
     "DEPENDS_ON": 0.7,
     "AMENDS": 0.6,
@@ -38,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 
 class SearchRepositoryLike(Protocol):
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]: ...
+
     def search_keyword_memory_ids(
         self,
         query: str,
@@ -56,6 +60,14 @@ class SearchRepositoryLike(Protocol):
         status: str | None = None,
         include_superseded: bool = False,
     ) -> list[RankedMemoryCandidate]: ...
+
+    def get_searchable_memories(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]: ...
 
     def get_links(
         self,
@@ -609,10 +621,15 @@ class RelationalMemorySearchService:
             rrf_scores[memory_id] = max(rrf_scores.get(memory_id, 0.0), expansion.rrf_score)
 
         candidate_hydration_started = time.perf_counter()
-        candidates = self._repository.get_ranking_candidates(
+        if debug:
+            diagnostics.timing_ms.setdefault("candidate_hydration_query_execution", 0.0)
+            diagnostics.timing_ms.setdefault("candidate_hydration_row_fetch", 0.0)
+            diagnostics.timing_ms.setdefault("candidate_hydration_candidate_build", 0.0)
+        candidates = self._get_ranking_candidates_with_optional_diagnostics(
             list(rrf_scores.keys()),
             status=status,
             include_superseded=include_superseded,
+            timing_ms=diagnostics.timing_ms if debug else None,
         )
         diagnostics.timing_ms["candidate_hydration"] = round((time.perf_counter() - candidate_hydration_started) * 1000.0, 3)
         if status is None:
@@ -774,6 +791,9 @@ class RelationalMemorySearchService:
             superseded=superseded,
         )
 
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        return self._repository.get_read_cache_validation_tokens(memory_ids)
+
     def _semantic_scores(
         self,
         query: str,
@@ -781,6 +801,7 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         candidate_ids: Sequence[str] | None = None,
+        semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> dict[str, float]:
@@ -792,6 +813,7 @@ class RelationalMemorySearchService:
                 candidates,
                 workspace_id,
                 candidate_ids=candidate_ids,
+                semantic_timing_ms=semantic_timing_ms,
                 vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
@@ -803,6 +825,7 @@ class RelationalMemorySearchService:
                     candidates,
                     workspace_id,
                     candidate_ids=candidate_ids,
+                    semantic_timing_ms=semantic_timing_ms,
                     vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,
                 ),
@@ -832,6 +855,7 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         candidate_ids: Sequence[str] | None = None,
+        semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> dict[str, float]:
@@ -842,6 +866,7 @@ class RelationalMemorySearchService:
         )
         optional_kwargs = {
             "candidate_ids": candidate_ids,
+            "semantic_timing_ms": semantic_timing_ms,
             "vector_search_diagnostics": vector_search_diagnostics,
             "limit": limit,
         }
@@ -868,13 +893,16 @@ class RelationalMemorySearchService:
         workspace_id: str | None,
         *,
         candidate_ids: Sequence[str] | None = None,
+        semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> list[tuple[str, float]]:
         assert self._embedder is not None
         assert self._vector_store is not None
-        self._ensure_searchable_memory_embeddings(candidates)
+        self._ensure_searchable_memory_embeddings(candidates, semantic_timing_ms=semantic_timing_ms)
+        query_embedding_started = time.perf_counter()
         query_embedding = self._embedder.embed([query])[0]
+        _record_timing_ms(semantic_timing_ms, "semantic_query_embedding", query_embedding_started)
         search_kwargs: dict[str, object] = {
             "source_kind": "memory",
             "model_name": self._embedder.model_name,
@@ -885,9 +913,12 @@ class RelationalMemorySearchService:
             search_kwargs["candidate_ids"] = list(candidate_ids)
         if vector_search_diagnostics is not None:
             search_kwargs["diagnostics"] = vector_search_diagnostics
-        return self._vector_store.search(
+        vector_search_started = time.perf_counter()
+        matches = self._vector_store.search(
             **search_kwargs,
         )
+        _record_timing_ms(semantic_timing_ms, "semantic_vector_search", vector_search_started)
+        return matches
 
     def _run_integrity_check_once(self) -> None:
         if self._db_manager is None or self._embedder is None or self._vector_store is None:
@@ -945,6 +976,14 @@ class RelationalMemorySearchService:
         diagnostics: SearchExecutionDiagnostics | None,
         limit: int,
     ) -> tuple[list[str], dict[str, float]]:
+        if diagnostics is not None:
+            diagnostics.timing_ms.setdefault("semantic_candidate_pool", 0.0)
+            diagnostics.timing_ms.setdefault("semantic_embedding_stale_check", 0.0)
+            diagnostics.timing_ms.setdefault("semantic_embedding_refresh", 0.0)
+            diagnostics.timing_ms.setdefault("semantic_query_embedding", 0.0)
+            diagnostics.timing_ms.setdefault("semantic_vector_search", 0.0)
+            diagnostics.timing_ms.setdefault("semantic_ranking", 0.0)
+        pool_started = time.perf_counter()
         candidate_pool = self._semantic_candidate_pool(
             keyword_ids,
             query_tokens,
@@ -953,9 +992,11 @@ class RelationalMemorySearchService:
             requested_limit=requested_limit,
         )
         if diagnostics is not None:
+            _record_timing_ms(diagnostics.timing_ms, "semantic_candidate_pool", pool_started)
             diagnostics.semantic_candidate_strategy = candidate_pool.strategy
         candidates = candidate_pool.candidates
         bounded_candidate_ids = candidate_pool.candidate_ids
+        semantic_timing_ms = diagnostics.timing_ms if diagnostics is not None else None
         if bounded_candidate_ids is not None:
             vector_search_diagnostics = {} if diagnostics is not None else None
             semantic_scores = self._semantic_scores_with_optional_diagnostics(
@@ -963,6 +1004,7 @@ class RelationalMemorySearchService:
                 candidates,
                 None,
                 candidate_ids=bounded_candidate_ids,
+                semantic_timing_ms=semantic_timing_ms,
                 vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
@@ -974,39 +1016,44 @@ class RelationalMemorySearchService:
                 workspace_id=workspace_id,
                 requested_limit=requested_limit,
             ):
+                fallback_started = time.perf_counter()
                 candidates = self._repository.list_memories(status=status, limit=500)
                 vector_search_diagnostics = {} if diagnostics is not None else None
                 semantic_scores = self._semantic_scores_with_optional_diagnostics(
                     query,
                     candidates,
                     None,
+                    semantic_timing_ms=semantic_timing_ms,
                     vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,
                 )
                 if diagnostics is not None:
                     diagnostics.semantic_candidate_strategy = "global-fallback"
                     diagnostics.vector_search = vector_search_diagnostics
+                    _record_timing_ms(diagnostics.timing_ms, "semantic_speculative_fallback", fallback_started)
         else:
             vector_search_diagnostics = {} if diagnostics is not None else None
             semantic_scores = self._semantic_scores_with_optional_diagnostics(
                 query,
                 candidates,
                 None,
+                semantic_timing_ms=semantic_timing_ms,
                 vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
             )
             if diagnostics is not None:
                 diagnostics.vector_search = vector_search_diagnostics
-        return (
-            _rank_semantic_candidate_ids(
-                candidates,
-                semantic_scores,
-                workspace_id=workspace_id,
-                limit=limit,
-                workspace_multiplier=self._config.search_ranking.workspace_multiplier,
-            ),
+        ranking_started = time.perf_counter()
+        ranked_ids = _rank_semantic_candidate_ids(
+            candidates,
             semantic_scores,
+            workspace_id=workspace_id,
+            limit=limit,
+            workspace_multiplier=self._config.search_ranking.workspace_multiplier,
         )
+        if diagnostics is not None:
+            _record_timing_ms(diagnostics.timing_ms, "semantic_ranking", ranking_started)
+        return (ranked_ids, semantic_scores)
 
     def _semantic_candidate_pool(
         self,
@@ -1033,6 +1080,36 @@ class RelationalMemorySearchService:
             )
         return SemanticCandidatePool(candidates=self._repository.list_memories(status=status, limit=500))
 
+    def _get_ranking_candidates_with_optional_diagnostics(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None,
+        include_superseded: bool,
+        timing_ms: dict[str, float] | None,
+    ) -> list[RankedMemoryCandidate]:
+        signature = inspect.signature(self._repository.get_ranking_candidates)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        optional_kwargs = {"timing_ms": timing_ms}
+        filtered_kwargs = (
+            optional_kwargs
+            if accepts_var_kwargs
+            else {
+                key: value
+                for key, value in optional_kwargs.items()
+                if key in signature.parameters
+            }
+        )
+        return self._repository.get_ranking_candidates(
+            memory_ids,
+            status=status,
+            include_superseded=include_superseded,
+            **filtered_kwargs,
+        )
+
     def _bounded_semantic_candidates(
         self,
         keyword_ids: Sequence[str],
@@ -1045,7 +1122,7 @@ class RelationalMemorySearchService:
         if not keyword_ids or not getattr(self._vector_store, "supports_candidate_filtering", False):
             return None, False
 
-        keyword_candidates = self._repository.get_ranking_candidates(
+        keyword_candidates = self._repository.get_searchable_memories(
             list(keyword_ids),
             status=status,
             include_superseded=include_superseded,
@@ -1055,7 +1132,7 @@ class RelationalMemorySearchService:
 
         evaluated_candidates = keyword_candidates[:LEXICAL_STRENGTH_EVAL_LIMIT]
         strongest_keyword_coverage = max(
-            (_keyword_token_coverage(query_tokens, keyword_candidate.record) for keyword_candidate in evaluated_candidates),
+            (_keyword_token_coverage(query_tokens, keyword_candidate) for keyword_candidate in evaluated_candidates),
             default=0.0,
         )
         if strongest_keyword_coverage < self._config.search_ranking.keyword_coverage_floor:
@@ -1068,9 +1145,10 @@ class RelationalMemorySearchService:
                 or len(keyword_candidates) < max(requested_limit, 1)
             ):
                 return None, False
-            return [keyword_candidate.record for keyword_candidate in keyword_candidates], True
+            return keyword_candidates, True
 
-        return [keyword_candidate.record for keyword_candidate in keyword_candidates], False
+        candidate_cap = _strong_keyword_bounded_candidate_cap(requested_limit)
+        return keyword_candidates[:candidate_cap], False
 
     def _should_broaden_semantic_search(
         self,
@@ -1127,17 +1205,28 @@ class RelationalMemorySearchService:
                     )
         return expanded
 
-    def _ensure_searchable_memory_embeddings(self, candidates: list[RelationalMemoryRecord]) -> None:
+    def _ensure_searchable_memory_embeddings(
+        self,
+        candidates: list[RelationalMemoryRecord],
+        *,
+        semantic_timing_ms: dict[str, float] | None = None,
+    ) -> None:
+        stale_check_started = time.perf_counter()
         stale_or_missing = self._stale_or_missing_embedding_candidates(candidates)
+        _record_timing_ms(semantic_timing_ms, "semantic_embedding_stale_check", stale_check_started)
         if not stale_or_missing:
             return
 
         if self._background_repair_wait_seconds > 0 and self._task_queue is not None and (self._embedding_repair_queue is not None or self._work_items is not None):
+            refresh_started = time.perf_counter()
             self._queue_memory_embedding_repairs(stale_or_missing)
             self._wait_for_background_repairs(stale_or_missing)
+            _record_timing_ms(semantic_timing_ms, "semantic_embedding_refresh", refresh_started)
             return
 
+        refresh_started = time.perf_counter()
         self._ensure_memory_embeddings(stale_or_missing)
+        _record_timing_ms(semantic_timing_ms, "semantic_embedding_refresh", refresh_started)
 
     def _stale_or_missing_embedding_candidates(self, candidates: list[RelationalMemoryRecord]) -> list[RelationalMemoryRecord]:
         assert self._embedder is not None
@@ -1379,6 +1468,11 @@ def _token_presence_ratio(query_tokens: Sequence[str], text: str) -> float:
     return matched_tokens / len(query_tokens)
 
 
+def _strong_keyword_bounded_candidate_cap(requested_limit: int) -> int:
+    effective_limit = max(requested_limit, 1)
+    return max(effective_limit * STRONG_KEYWORD_BOUNDED_CANDIDATE_MULTIPLIER, MIN_STRONG_KEYWORD_BOUNDED_CANDIDATES)
+
+
 def _direct_match_rank(signals: RankingSignals | None) -> int:
     if signals is None:
         return 0
@@ -1489,3 +1583,10 @@ def _iso_timestamp_to_sortable_float(value: str | None) -> float:
 
 def _weighted_incoming_link_count(counts: dict[str, int]) -> float:
     return float(counts.get("DEPENDS_ON", 0) + counts.get("AMENDS", 0)) + (0.5 * float(counts.get("CONTRADICTS", 0)))
+
+
+def _record_timing_ms(timing_ms: dict[str, float] | None, key: str, started_at: float) -> None:
+    if timing_ms is None:
+        return
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
+    timing_ms[key] = round(timing_ms.get(key, 0.0) + elapsed_ms, 3)

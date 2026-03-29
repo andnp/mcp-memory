@@ -54,6 +54,10 @@ class FakeCursor:
         if normalized.startswith("INSERT INTO memories ("):
             self._insert_memory(arguments)
         elif normalized.startswith(
+            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags FROM memories LEFT JOIN ( SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids FROM memory_workspaces GROUP BY memory_id ) workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id ) tag_agg ON tag_agg.memory_id = memories.id WHERE"
+        ):
+            self._select_searchable_memories(normalized, arguments)
+        elif normalized.startswith(
             "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY("
         ):
             self._select_memories_by_ids(arguments)
@@ -121,9 +125,9 @@ class FakeCursor:
         elif normalized.startswith("SELECT DISTINCT memories.id,"):
             self._search_keyword_memory_ids(normalized, arguments)
         elif normalized.startswith(
-            "SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count, SUM(CASE WHEN type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count, SUM(CASE WHEN type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count, SUM(CASE WHEN type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count, SUM(CASE WHEN type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count FROM links WHERE target_id = ANY("
+            "WITH input_ids AS ( SELECT memory_id, ordinality FROM unnest(%s::text[]) WITH ORDINALITY AS requested(memory_id, ordinality) ), workspace_agg AS ( SELECT memory_workspaces.memory_id, array_agg(DISTINCT memory_workspaces.workspace_id ORDER BY memory_workspaces.workspace_id) AS workspace_ids FROM memory_workspaces JOIN input_ids ON input_ids.memory_id = memory_workspaces.memory_id GROUP BY memory_workspaces.memory_id ), tag_agg AS ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id JOIN input_ids ON input_ids.memory_id = memory_tags.memory_id GROUP BY memory_tags.memory_id ), link_counts AS ( SELECT links.target_id AS memory_id, COUNT(*) AS incoming_links_count, MAX(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes, SUM(CASE WHEN links.type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count, SUM(CASE WHEN links.type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count, SUM(CASE WHEN links.type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count, SUM(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count FROM links JOIN input_ids ON input_ids.memory_id = links.target_id GROUP BY links.target_id ) SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags, COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count, COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes, COALESCE(link_counts.incoming_depends_on_count, 0) AS incoming_depends_on_count, COALESCE(link_counts.incoming_amends_count, 0) AS incoming_amends_count, COALESCE(link_counts.incoming_contradicts_count, 0) AS incoming_contradicts_count, COALESCE(link_counts.incoming_supersedes_count, 0) AS incoming_supersedes_count FROM input_ids JOIN memories ON memories.id = input_ids.memory_id LEFT JOIN workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN tag_agg ON tag_agg.memory_id = memories.id LEFT JOIN link_counts ON link_counts.memory_id = memories.id"
         ):
-            self._select_incoming_link_counts(arguments)
+            self._select_ranking_candidates(normalized, arguments)
         elif normalized.startswith("INSERT INTO memory_search_documents ("):
             self._state.memory_search_documents.add(str(arguments[0]))
             self._result = []
@@ -208,6 +212,31 @@ class FakeCursor:
             if status is not None and str(memory["status"]) != status:
                 continue
             rows.append(self._memory_row(memory))
+        self._result = rows
+
+    def _select_searchable_memories(self, normalized: str, arguments: SqlParams) -> None:
+        memory_ids = self._as_str_sequence(arguments[0])
+        status = str(arguments[1]) if "memories.status = %s" in normalized else None
+        include_superseded = "NOT EXISTS (SELECT 1 FROM links supersedes" not in normalized
+        rows: list[tuple[object, ...]] = []
+        for memory_id in memory_ids:
+            memory = self._state.memories.get(memory_id)
+            if memory is None:
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
+            if not include_superseded and any(
+                target_id == memory_id and link_type == "SUPERSEDES"
+                for _source_id, target_id, link_type in self._state.links
+            ):
+                continue
+            workspace_ids = sorted(self._state.memory_workspaces.get(memory_id, set()))
+            tags = sorted(
+                self._state.tags[tag_id]
+                for tag_id in self._state.memory_tags.get(memory_id, set())
+                if tag_id in self._state.tags
+            )
+            rows.append((*self._memory_row(memory), workspace_ids, tags))
         self._result = rows
 
     def _select_memories(self, normalized: str, arguments: SqlParams) -> None:
@@ -318,10 +347,22 @@ class FakeCursor:
             rows.append((source_id, target_id, stored_link_type, self._state.links[(source_id, target_id, stored_link_type)]))
         self._result = rows
 
-    def _select_incoming_link_counts(self, arguments: SqlParams) -> None:
-        memory_ids = set(self._as_str_sequence(arguments[0]))
+    def _select_ranking_candidates(self, normalized: str, arguments: SqlParams) -> None:
+        memory_ids = self._as_str_sequence(arguments[0])
+        argument_index = 1
+        status = None
+        if "WHERE memories.status = %s" in normalized or "AND memories.status = %s" in normalized:
+            status = str(arguments[argument_index])
+            argument_index += 1
+        include_superseded = "COALESCE(link_counts.has_incoming_supersedes, 0) = 0" not in normalized
+
         rows: list[tuple[object, ...]] = []
-        for memory_id in sorted(memory_ids):
+        for memory_id in memory_ids:
+            memory = self._state.memories.get(memory_id)
+            if memory is None:
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
             counts = {
                 "DEPENDS_ON": 0,
                 "AMENDS": 0,
@@ -334,12 +375,19 @@ class FakeCursor:
                     continue
                 total += 1
                 counts[link_type] = counts.get(link_type, 0) + 1
-            if total <= 0:
+            has_incoming_supersedes = counts["SUPERSEDES"] > 0
+            if has_incoming_supersedes and not include_superseded:
                 continue
+            workspace_ids = sorted(self._state.memory_workspaces.get(memory_id, set()))
+            tag_names = sorted(
+                self._state.tags[tag_id]
+                for tag_id in self._state.memory_tags.get(memory_id, set())
+                if tag_id in self._state.tags
+            )
             rows.append(
-                (
-                    memory_id,
+                (*self._memory_row(memory), workspace_ids, tag_names,
                     total,
+                    int(has_incoming_supersedes),
                     counts["DEPENDS_ON"],
                     counts["AMENDS"],
                     counts["CONTRADICTS"],
@@ -763,16 +811,18 @@ def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_f
 
     state = session_manager.connections[0]._state
     query_start = len(state.query_log)
+    timing_ms: dict[str, float] = {}
 
     candidates = repository.get_ranking_candidates(
         [preferred.id, superseded.id, stale.id, peer.id],
         status="active",
         include_superseded=False,
+        timing_ms=timing_ms,
     )
 
     queries = state.query_log[query_start:]
-    assert len(queries) == 4
-    assert sum(query.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(") for query in queries) == 1
+    assert len(queries) == 1
+    assert queries[0].startswith("WITH input_ids AS ( SELECT memory_id, ordinality FROM unnest(%s::text[]) WITH ORDINALITY AS requested(memory_id, ordinality) )")
     assert "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" not in queries
     assert not any(query.startswith("SELECT source_id, target_id, type, context FROM links WHERE") for query in queries)
 
@@ -785,6 +835,154 @@ def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_f
         "SUPERSEDES": 0,
     }
     assert candidates[1].incoming_links_count == 0
+    assert timing_ms["candidate_hydration_query_execution"] >= 0.0
+    assert timing_ms["candidate_hydration_row_fetch"] >= 0.0
+    assert timing_ms["candidate_hydration_candidate_build"] >= 0.0
+
+
+def test_postgres_repository_ranking_candidates_aggregate_without_join_fanout_inflation(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    primary = repository.create_memory(
+        title="Primary authority",
+        content="Canonical authority with multiple workspaces, tags, and link types.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-beta", "workspace-alpha"],
+        tags=["alpha", "beta"],
+    )
+    secondary = repository.create_memory(
+        title="Secondary note",
+        content="Secondary active note.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-zeta"],
+        tags=["gamma"],
+    )
+    depends = repository.create_memory(
+        title="Depends supporter",
+        content="Depends on primary.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+    )
+    amends = repository.create_memory(
+        title="Amends supporter",
+        content="Amends primary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+    )
+    contradicts = repository.create_memory(
+        title="Contradiction",
+        content="Contradicts primary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+    )
+
+    assert primary is not None and secondary is not None
+    assert depends is not None and amends is not None and contradicts is not None
+
+    repository.add_link(depends.id, primary.id, "DEPENDS_ON")
+    repository.add_link(amends.id, primary.id, "AMENDS")
+    repository.add_link(contradicts.id, primary.id, "CONTRADICTS")
+
+    candidates = repository.get_ranking_candidates([secondary.id, primary.id], status="active")
+
+    assert [candidate.record.id for candidate in candidates] == [secondary.id, primary.id]
+    assert candidates[0].record.workspace_ids == ["workspace-zeta"]
+    assert candidates[0].record.tags == ["gamma"]
+
+    primary_candidate = candidates[1]
+    assert primary_candidate.record.workspace_ids == ["workspace-alpha", "workspace-beta"]
+    assert primary_candidate.record.tags == ["alpha", "beta"]
+    assert primary_candidate.incoming_links_count == 3
+    assert primary_candidate.incoming_link_type_counts == {
+        "DEPENDS_ON": 1,
+        "AMENDS": 1,
+        "CONTRADICTS": 1,
+        "SUPERSEDES": 0,
+    }
+    assert primary_candidate.has_incoming_supersedes is False
+
+
+def test_postgres_repository_get_searchable_memories_matches_sqlite_semantics(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    primary = repository.create_memory(
+        title="Primary Postgres backend note",
+        content="Primary Postgres backend guidance for bounded semantic candidates.",
+        summary="Primary backend summary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-zeta", "workspace-alpha"],
+        tags=["backend", "postgres"],
+        metadata={"priority": "high", "source": "test"},
+    )
+    secondary = repository.create_memory(
+        title="Secondary Postgres backend note",
+        content="Secondary active note.",
+        summary="Secondary backend summary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-beta"],
+        tags=["search"],
+    )
+    stale = repository.create_memory(
+        title="Stale Postgres backend note",
+        content="Stale note.",
+        summary="Stale backend summary.",
+        memory_type="fact",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres"],
+    )
+    superseded = repository.create_memory(
+        title="Legacy Postgres backend note",
+        content="Legacy note hidden by default.",
+        summary="Legacy backend summary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-gamma"],
+        tags=["legacy"],
+        metadata={"priority": "low"},
+    )
+    superseder = repository.create_memory(
+        title="Replacement Postgres backend note",
+        content="Replacement note.",
+        summary="Replacement backend summary.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-gamma"],
+    )
+
+    assert primary is not None and secondary is not None and stale is not None
+    assert superseded is not None and superseder is not None
+
+    repository.add_link(superseder.id, superseded.id, "SUPERSEDES")
+
+    default_visible = repository.get_searchable_memories(
+        [secondary.id, superseded.id, primary.id, stale.id],
+        status="active",
+    )
+    include_superseded = repository.get_searchable_memories(
+        [secondary.id, superseded.id, primary.id, stale.id],
+        status="active",
+        include_superseded=True,
+    )
+
+    assert [record.id for record in default_visible] == [secondary.id, primary.id]
+    assert [record.id for record in include_superseded] == [secondary.id, superseded.id, primary.id]
+
+    hydrated_primary = next(record for record in default_visible if record.id == primary.id)
+    assert hydrated_primary.metadata == {"priority": "high", "source": "test"}
+    assert set(hydrated_primary.workspace_ids) == {"workspace-alpha", "workspace-zeta"}
+    assert set(hydrated_primary.tags) == {"backend", "postgres"}
 
 
 def test_postgres_search_service_prioritizes_workspace_and_hides_superseded(
@@ -889,6 +1087,86 @@ def test_postgres_repository_best_effort_last_surfaced_flushes_on_close(
 
     assert refreshed is not None
     assert refreshed.last_surfaced_at == "2026-03-29T00:00:00+00:00"
+
+
+def test_postgres_repository_read_cache_validation_tokens_are_stable_for_unchanged_data(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    current = repository.create_memory(
+        title="Current fact",
+        content="Current canonical fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    superseded = repository.create_memory(
+        title="Legacy fact",
+        content="Legacy fact content.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    incoming = repository.create_memory(
+        title="Supporting fact",
+        content="Supports the current fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+
+    assert current is not None and superseded is not None and incoming is not None
+
+    repository.add_link(current.id, superseded.id, "SUPERSEDES", "replacement")
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "supporting evidence")
+
+    first = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
+    second = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
+
+    assert list(first) == [current.id]
+    assert second == first
+
+
+def test_postgres_repository_read_cache_validation_tokens_invalidate_for_link_and_superseded_changes(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    current = repository.create_memory(
+        title="Current fact",
+        content="Current canonical fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    superseded = repository.create_memory(
+        title="Legacy fact",
+        content="Legacy fact content.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    incoming = repository.create_memory(
+        title="Supporting fact",
+        content="Supports the current fact.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+
+    assert current is not None and superseded is not None and incoming is not None
+
+    repository.add_link(current.id, superseded.id, "SUPERSEDES", "replacement")
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "supporting evidence")
+
+    initial_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    repository.add_link(incoming.id, current.id, "DEPENDS_ON", "updated supporting evidence")
+    link_updated_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    repository.update_memory(
+        superseded.id,
+        content="Legacy fact content, revised.",
+    )
+    superseded_updated_token = repository.get_read_cache_validation_tokens([current.id])[current.id]
+
+    assert link_updated_token != initial_token
+    assert superseded_updated_token != link_updated_token
 
 
 class _PostgresSearchFakeEmbedder:

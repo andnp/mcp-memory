@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -59,6 +60,98 @@ class RankedMemoryCandidate:
 class RelationalMemoryRepository:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
+
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        tokens: dict[str, str] = {}
+        for memory_id in self._normalize_values(memory_ids):
+            record = self.get_memory(memory_id)
+            if record is None:
+                continue
+            outgoing = self.get_links(memory_id, direction="outgoing")
+            incoming = self.get_links(memory_id, direction="incoming")
+            superseded_targets = [
+                target
+                for link in outgoing
+                if link.link_type == "SUPERSEDES"
+                for target in [self.get_memory(link.target_id)]
+                if target is not None
+            ]
+            tokens[memory_id] = build_read_cache_validation_token(
+                record=record,
+                outgoing_links=outgoing,
+                incoming_links=incoming,
+                superseded_records=superseded_targets,
+            )
+        return tokens
+
+    def get_searchable_memories(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return []
+
+        conn = self._db.get_connection()
+        placeholders = ",".join("?" for _ in normalized_ids)
+        clauses = [f"memories.id IN ({placeholders})"]
+        params: list[object] = [*normalized_ids]
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        rows = conn.execute(
+            """
+            SELECT
+                memories.*,
+                COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv,
+                COALESCE(tag_agg.tags, '') AS tags_csv
+            FROM memories
+            LEFT JOIN (
+                SELECT memory_id, GROUP_CONCAT(DISTINCT workspace_id) AS workspace_ids
+                FROM memory_workspaces
+                GROUP BY memory_id
+            ) workspace_agg ON workspace_agg.memory_id = memories.id
+            LEFT JOIN (
+                SELECT memory_tags.memory_id, GROUP_CONCAT(DISTINCT tags.name) AS tags
+                FROM memory_tags
+                JOIN tags ON tags.id = memory_tags.tag_id
+                GROUP BY memory_tags.memory_id
+            ) tag_agg ON tag_agg.memory_id = memories.id
+            WHERE
+            """
+            + " AND ".join(clauses),
+            params,
+        ).fetchall()
+
+        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        for row in rows:
+            metadata = json.loads(row["metadata"] or "{}")
+            records_by_id[str(row["id"])] = RelationalMemoryRecord(
+                id=row["id"],
+                title=row["title"],
+                content=row["content"],
+                summary=row["summary"],
+                type=row["type"],
+                status=row["status"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                read_count=int(row["read_count"] or 0),
+                access_score=row["access_score"],
+                last_accessed_at=row["last_accessed_at"],
+                last_surfaced_at=row["last_surfaced_at"],
+                metadata=metadata,
+                workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
+                tags=_split_csv_values(row["tags_csv"]),
+            )
+        return [records_by_id[memory_id] for memory_id in normalized_ids if memory_id in records_by_id]
 
     def create_memory(
         self,
@@ -745,3 +838,43 @@ def _split_csv_values(value: str | None) -> list[str]:
     if not value:
         return []
     return [item for item in value.split(",") if item]
+
+
+def build_read_cache_validation_token(
+    *,
+    record: RelationalMemoryRecord,
+    outgoing_links: list[MemoryLink],
+    incoming_links: list[MemoryLink],
+    superseded_records: list[RelationalMemoryRecord],
+) -> str:
+    payload = {
+        "memory_id": record.id,
+        "record": {
+            "status": record.status,
+            "updated_at": record.updated_at,
+        },
+        "relationships": {
+            "incoming": _serialized_link_tuples(incoming_links),
+            "outgoing": _serialized_link_tuples(outgoing_links),
+        },
+        "superseded": [
+            {
+                "memory_id": superseded_record.id,
+                "status": superseded_record.status,
+                "updated_at": superseded_record.updated_at,
+            }
+            for superseded_record in sorted(
+                superseded_records,
+                key=lambda item: (item.id, item.updated_at, item.status),
+            )
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"v1:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _serialized_link_tuples(links: list[MemoryLink]) -> list[tuple[str, str, str, str]]:
+    return sorted(
+        (link.source_id, link.target_id, link.link_type, link.context)
+        for link in links
+    )
