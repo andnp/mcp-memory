@@ -311,7 +311,8 @@ def create_daemon_app(
         if api_path in _GLOBAL_DEFAULT_API_PATHS and "scope" not in payload and "workspace_id" not in payload:
             payload["scope"] = "global"
         try:
-            result = dispatch_management_request(
+            result = await asyncio.to_thread(
+                dispatch_management_request,
                 app.state.routes,
                 app.state.metadata,
                 f"/api/{api_path}",

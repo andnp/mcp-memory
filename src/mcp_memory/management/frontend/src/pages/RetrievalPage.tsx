@@ -56,7 +56,8 @@ export function RetrievalPage() {
   const workspaceOptionsQuery = useQuery({
     queryKey: ['retrieval-metrics', 'workspace-options', selectedWindow],
     queryFn: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global' }),
-    refetchInterval: 5000,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     retry: false,
   });
 

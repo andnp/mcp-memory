@@ -309,7 +309,8 @@ export function NerdPage() {
   const workspaceOptionsQuery = useQuery({
     queryKey: ['nerd-metrics', 'workspace-options', selectedWindow],
     queryFn: () => fetchNerdMetrics({ ...selectedWindowConfig, scope: 'global' }),
-    refetchInterval: 5000,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     retry: false,
   });
 
