@@ -397,6 +397,8 @@ def _result_list_count(result: dict[str, Any], key: str) -> int:
 
 
 def decode_run_result(raw_result: object) -> dict[str, object]:
+    if isinstance(raw_result, Mapping):
+        return {str(key): value for key, value in raw_result.items()}
     if not isinstance(raw_result, str) or not raw_result.strip():
         return {}
     try:
