@@ -257,6 +257,20 @@ def _show_task(task_id: str, workspace_root: str | None, json_output: bool) -> N
     _render_task_detail(payload)
 
 
+def _list_tasks(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
+    def _run(service: ManagementService) -> None:
+        payload = service.list_tasks(
+            status=status,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_task_table(payload)
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
 def _show_search_health(workspace_root: str | None, json_output: bool) -> None:
     def _run(service: ManagementService) -> None:
         payload = service.get_health()
@@ -1452,6 +1466,21 @@ def memory_group() -> None:
     """Canonical memory commands."""
 
 
+@main.group(name="admin")
+def admin_group() -> None:
+    """Canonical operator commands."""
+
+
+@admin_group.group(name="log")
+def admin_log_group() -> None:
+    """Canonical structured runtime log commands."""
+
+
+@admin_group.group(name="task")
+def admin_task_group() -> None:
+    """Canonical background task operator commands."""
+
+
 @memory_group.command(name="stash")
 @workspace_root_option
 @click.argument("text", nargs=-1)
@@ -1494,6 +1523,35 @@ def logs(
     _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
 
 
+@admin_log_group.command(name="list")
+@workspace_root_option
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def admin_logs(
+    workspace_root: str | None,
+    limit: int,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    """Print recent structured runtime logs from SQLite."""
+    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
+
+
 @log_group.command(name="summary")
 @workspace_root_option
 @click.option(
@@ -1521,12 +1579,54 @@ def log_summary(
     _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
 
 
+@admin_log_group.command(name="summary")
+@workspace_root_option
+@click.option(
+    "--level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    help="Filter by log level.",
+)
+@click.option("--logger", "logger_name", help="Filter by logger name")
+@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
+@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
+@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
+@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
+def admin_log_summary(
+    workspace_root: str | None,
+    level: str | None,
+    logger_name: str | None,
+    source: str | None,
+    query: str | None,
+    after: float | None,
+    before: float | None,
+    json_output: bool,
+) -> None:
+    """Print aggregated runtime log counts."""
+    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
+
+
 @log_group.command(name="prune")
 @workspace_root_option
 @click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
 @click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def log_prune(
+    workspace_root: str | None,
+    max_runtime_logs: int | None,
+    max_log_age_days: int | None,
+    json_output: bool,
+) -> None:
+    """Prune runtime logs using explicit or configured retention limits."""
+    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
+
+
+@admin_log_group.command(name="prune")
+@workspace_root_option
+@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
+@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def admin_log_prune(
     workspace_root: str | None,
     max_runtime_logs: int | None,
     max_log_age_days: int | None,
@@ -1688,17 +1788,17 @@ def task_group() -> None:
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
     """List queued or running tasks."""
-    def _run(service: ManagementService) -> None:
-        payload = service.list_tasks(
-            status=status,
-            limit=limit,
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_task_table(payload)
+    _list_tasks(workspace_root, status, limit, json_output)
 
-    _with_management_service(workspace_root, _run, workspace_id=None)
+
+@admin_task_group.command(name="list")
+@workspace_root_option
+@click.option("--status", help="Filter by task status")
+@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of task rows to print")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
+def admin_list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
+    """List queued or running tasks."""
+    _list_tasks(workspace_root, status, limit, json_output)
 
 
 @task_group.command(name="recent-runs")
@@ -1747,11 +1847,30 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
     _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
 
 
+@admin_task_group.command(name="cancel")
+@workspace_root_option
+@click.argument("task_id")
+@click.option("--reason", default="cancelled_by_user", show_default=True, help="Cancellation reason")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def admin_cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
+    """Cancel a pending or running task."""
+    _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
+
+
 @task_group.command(name="show")
 @workspace_root_option
 @click.argument("task_id")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
+    """Show one task and its persisted run result details."""
+    _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
+
+
+@admin_task_group.command(name="show")
+@workspace_root_option
+@click.argument("task_id")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def admin_show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
     """Show one task and its persisted run result details."""
     _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
 
@@ -1866,11 +1985,6 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
 def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
     """Print background task and memory statistics."""
     _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
-
-
-@main.group(name="admin")
-def admin_group() -> None:
-    """Canonical operator commands."""
 
 
 @admin_group.command(name="overview")

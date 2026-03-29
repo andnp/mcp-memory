@@ -97,3 +97,236 @@ def test_admin_overview_forwards_to_existing_stats_helper(monkeypatch) -> None:
         "interval": 1.5,
         "verbose": True,
     }
+
+
+def test_admin_task_list_forwards_to_existing_task_list_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_list_tasks(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["status"] = status
+        captured["limit"] = limit
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._list_tasks", fake_list_tasks)
+
+    result = runner.invoke(
+        main,
+        ["admin", "task", "list", "--workspace-root", "/tmp/demo", "--status", "running", "--limit", "7", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "status": "running",
+        "limit": 7,
+        "json_output": True,
+    }
+
+
+def test_admin_task_show_forwards_to_existing_task_show_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_show_task(task_id: str, workspace_root: str | None, json_output: bool) -> None:
+        captured["task_id"] = task_id
+        captured["workspace_root"] = workspace_root
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._show_task", fake_show_task)
+
+    result = runner.invoke(main, ["admin", "task", "show", "--workspace-root", "/tmp/demo", "task-123", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "task_id": "task-123",
+        "workspace_root": "/tmp/demo",
+        "json_output": True,
+    }
+
+
+def test_admin_task_cancel_forwards_to_existing_task_cancel_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_cancel_task(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
+        captured["task_id"] = task_id
+        captured["workspace_root"] = workspace_root
+        captured["reason"] = reason
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._cancel_task", fake_cancel_task)
+
+    result = runner.invoke(
+        main,
+        ["admin", "task", "cancel", "--workspace-root", "/tmp/demo", "task-123", "--reason", "cleanup", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "task_id": "task-123",
+        "workspace_root": "/tmp/demo",
+        "reason": "cleanup",
+        "json_output": True,
+    }
+
+
+def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_show_logs(
+        workspace_root: str | None,
+        limit: int,
+        level: str | None,
+        logger_name: str | None,
+        source: str | None,
+        query: str | None,
+        after: float | None,
+        before: float | None,
+        json_output: bool,
+    ) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["limit"] = limit
+        captured["level"] = level
+        captured["logger_name"] = logger_name
+        captured["source"] = source
+        captured["query"] = query
+        captured["after"] = after
+        captured["before"] = before
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._show_logs", fake_show_logs)
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "log",
+            "list",
+            "--workspace-root",
+            "/tmp/demo",
+            "--limit",
+            "5",
+            "--level",
+            "warning",
+            "--logger",
+            "demo.logger",
+            "--source",
+            "daemon",
+            "--query",
+            "oops",
+            "--after",
+            "1",
+            "--before",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "limit": 5,
+        "level": "WARNING",
+        "logger_name": "demo.logger",
+        "source": "daemon",
+        "query": "oops",
+        "after": 1.0,
+        "before": 2.0,
+        "json_output": True,
+    }
+
+
+def test_admin_log_summary_forwards_to_existing_log_summary_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_summarize_logs(
+        workspace_root: str | None,
+        level: str | None,
+        logger_name: str | None,
+        source: str | None,
+        query: str | None,
+        after: float | None,
+        before: float | None,
+        json_output: bool,
+    ) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["level"] = level
+        captured["logger_name"] = logger_name
+        captured["source"] = source
+        captured["query"] = query
+        captured["after"] = after
+        captured["before"] = before
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._summarize_logs", fake_summarize_logs)
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "log",
+            "summary",
+            "--workspace-root",
+            "/tmp/demo",
+            "--level",
+            "error",
+            "--logger",
+            "demo.logger",
+            "--source",
+            "daemon",
+            "--query",
+            "oops",
+            "--after",
+            "3",
+            "--before",
+            "4",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "level": "ERROR",
+        "logger_name": "demo.logger",
+        "source": "daemon",
+        "query": "oops",
+        "after": 3.0,
+        "before": 4.0,
+        "json_output": True,
+    }
+
+
+def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_prune_logs(
+        workspace_root: str | None,
+        max_runtime_logs: int | None,
+        max_log_age_days: int | None,
+        json_output: bool,
+    ) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["max_runtime_logs"] = max_runtime_logs
+        captured["max_log_age_days"] = max_log_age_days
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._prune_logs", fake_prune_logs)
+
+    result = runner.invoke(
+        main,
+        ["admin", "log", "prune", "--workspace-root", "/tmp/demo", "--max-runtime-logs", "11", "--max-log-age-days", "12", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "max_runtime_logs": 11,
+        "max_log_age_days": 12,
+        "json_output": True,
+    }
