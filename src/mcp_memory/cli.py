@@ -1375,6 +1375,16 @@ def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port
     _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
 
 
+@daemon_group.command(name="start")
+@workspace_root_option
+@click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
+@click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
+@click.pass_context
+def daemon_start(ctx: click.Context, workspace_root: str | None, host: str, port: int | None) -> None:
+    """Start the global daemon."""
+    _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
+
+
 @daemon_group.command(name="status")
 @workspace_root_option
 def daemon_status(workspace_root: str | None) -> None:
@@ -1433,6 +1443,19 @@ def dashboard_alias(workspace_root: str | None, open_browser: bool) -> None:
 @workspace_root_option
 @click.argument("text", nargs=-1)
 def stash(workspace_root: str | None, text: tuple[str, ...]) -> None:
+    """Record one raw thought into the System 1 journal."""
+    _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
+
+
+@main.group(name="memory")
+def memory_group() -> None:
+    """Canonical memory commands."""
+
+
+@memory_group.command(name="stash")
+@workspace_root_option
+@click.argument("text", nargs=-1)
+def memory_stash_command(workspace_root: str | None, text: tuple[str, ...]) -> None:
     """Record one raw thought into the System 1 journal."""
     _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
 
@@ -1845,6 +1868,27 @@ def stats(workspace_root: str | None, watch: bool, interval: float, verbose: boo
     _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
 
 
+@main.group(name="admin")
+def admin_group() -> None:
+    """Canonical operator commands."""
+
+
+@admin_group.command(name="overview")
+@workspace_root_option
+@click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
+@click.option(
+    "--interval",
+    default=2.0,
+    show_default=True,
+    type=click.FloatRange(min=0.1),
+    help="Seconds between watch refreshes",
+)
+@click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
+def admin_overview_command(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
+    """Print background task and memory statistics."""
+    _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
+
+
 @main.command(name="health")
 @workspace_root_option
 @click.option(
@@ -1856,6 +1900,21 @@ def stats(workspace_root: str | None, watch: bool, interval: float, verbose: boo
 )
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
+    """Print an AI-friendly operator health snapshot."""
+    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
+
+
+@admin_group.command(name="health")
+@workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Inspect the whole shared runtime or only the active workspace context.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def admin_health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
     """Print an AI-friendly operator health snapshot."""
     _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
 
