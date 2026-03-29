@@ -24,6 +24,7 @@ from mcp_memory.mcp.tools import get_memory_tools
 
 DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
 EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 30.0
+_SOCKET_PROBE_TIMEOUT_SECONDS = 0.1
 _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
     "/api/admin/search/repair",
@@ -113,7 +114,8 @@ class DaemonZmqServer:
         self._inflight_tasks: set[asyncio.Task[object]] = set()
 
     async def start(self) -> None:
-        _remove_stale_socket(self._socket_path)
+        self._socket_path.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_socket_path_for_bind(self._socket_path)
         socket = self._context.socket(zmq.ROUTER)
         socket.linger = 0
         socket.bind(_socket_endpoint(str(self._socket_path)))
@@ -141,7 +143,7 @@ class DaemonZmqServer:
         if self._socket is not None:
             self._socket.close(0)
             self._socket = None
-        _remove_stale_socket(self._socket_path)
+        _cleanup_socket_path_after_stop(self._socket_path)
 
     async def _serve(self) -> None:
         socket = self._socket
@@ -271,3 +273,26 @@ def _remove_stale_socket(socket_path: Path) -> None:
         return
     except OSError:
         return
+
+
+def _prepare_socket_path_for_bind(socket_path: Path) -> None:
+    if not _socket_path_exists(socket_path):
+        return
+    if probe_daemon_socket(socket_path, timeout_seconds=_SOCKET_PROBE_TIMEOUT_SECONDS):
+        raise RuntimeError(f"daemon_socket_already_active:{socket_path}")
+    _remove_stale_socket(socket_path)
+
+
+def _cleanup_socket_path_after_stop(socket_path: Path) -> None:
+    if not _socket_path_exists(socket_path):
+        return
+    if probe_daemon_socket(socket_path, timeout_seconds=_SOCKET_PROBE_TIMEOUT_SECONDS):
+        return
+    _remove_stale_socket(socket_path)
+
+
+def _socket_path_exists(socket_path: Path) -> bool:
+    try:
+        return socket_path.exists() or socket_path.is_socket()
+    except OSError:
+        return socket_path.exists()

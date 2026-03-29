@@ -876,6 +876,50 @@ async def test_is_daemon_healthy_stays_true_while_request_pool_is_saturated(tmp_
         await server.stop()
 
 
+@pytest.mark.asyncio
+async def test_daemon_zmq_server_start_refuses_to_remove_live_socket(monkeypatch, tmp_path: Path) -> None:
+    removed: list[Path] = []
+    socket_path = tmp_path / "daemon.sock"
+    socket_path.write_text("occupied", encoding="utf-8")
+
+    monkeypatch.setattr("mcp_memory.daemon_transport.probe_daemon_socket", lambda path, timeout_seconds: True)
+    monkeypatch.setattr("mcp_memory.daemon_transport._remove_stale_socket", lambda path: removed.append(Path(path)))
+
+    server = DaemonZmqServer(
+        context_factory=lambda _payload: None,
+        hook_handlers={},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: DaemonMetadata(
+            host="127.0.0.1",
+            port=8131,
+            pid=4321,
+            started_at=1.0,
+            status="ready",
+            transport="zmq",
+            socket_path=str(socket_path),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="daemon_socket_already_active"):
+        await server.start()
+
+    assert removed == []
+    assert socket_path.exists()
+
+
+def test_daemon_zmq_server_stop_preserves_live_rebound_socket(monkeypatch, tmp_path: Path) -> None:
+    removed: list[Path] = []
+
+    monkeypatch.setattr("mcp_memory.daemon_transport._socket_path_exists", lambda socket_path: True)
+    monkeypatch.setattr("mcp_memory.daemon_transport.probe_daemon_socket", lambda socket_path, timeout_seconds: True)
+    monkeypatch.setattr("mcp_memory.daemon_transport._remove_stale_socket", lambda socket_path: removed.append(Path(socket_path)))
+
+    __import__("mcp_memory.daemon_transport").daemon_transport._cleanup_socket_path_after_stop(tmp_path / "daemon.sock")
+
+    assert removed == []
+
+
 def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     config = Config()
