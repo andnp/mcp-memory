@@ -1890,17 +1890,7 @@ def admin_show_task_command(task_id: str, workspace_root: str | None, json_outpu
     _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
 
 
-@main.group(name="conversation")
-def conversation_group() -> None:
-    """Inspect recorded AI provider conversations."""
-
-
-@main.group(name="search")
-def search_group() -> None:
-    """Inspect and repair semantic search health."""
-
-
-@conversation_group.command(name="list")
+@admin_conversation_group.command(name="list")
 @workspace_root_option
 @click.option("--task-name", help="Filter by task name")
 @click.option("--status", help="Filter by conversation status")
@@ -1928,7 +1918,7 @@ def list_conversations_command(
     _with_management_service(workspace_root, _run, workspace_id=None)
 
 
-@conversation_group.command(name="show")
+@admin_conversation_group.command(name="show")
 @workspace_root_option
 @click.argument("request_id")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
@@ -1953,7 +1943,7 @@ def show_conversation_command(request_id: str, workspace_root: str | None, json_
     _with_management_service(workspace_root, _run, workspace_id=None)
 
 
-@search_group.command(name="health")
+@admin_search_group.command(name="health")
 @workspace_root_option
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def search_health_command(workspace_root: str | None, json_output: bool) -> None:
@@ -1961,18 +1951,12 @@ def search_health_command(workspace_root: str | None, json_output: bool) -> None
     _show_search_health(workspace_root, json_output)
 
 
-@search_group.command(name="repair")
+@admin_search_group.command(name="repair")
 @workspace_root_option
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
     """Rebuild semantic search embeddings for the current model."""
     _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
-
-
-admin_conversation_group.add_command(list_conversations_command, name="list")
-admin_conversation_group.add_command(show_conversation_command, name="show")
-admin_search_group.add_command(search_health_command, name="health")
-admin_search_group.add_command(search_repair_command, name="repair")
 
 
 @agents.command(name="run")

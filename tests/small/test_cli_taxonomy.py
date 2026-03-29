@@ -283,6 +283,15 @@ def test_admin_conversation_show_forwards_to_existing_conversation_implementatio
     }
 
 
+def test_legacy_top_level_conversation_root_is_removed() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["conversation", "list"])
+
+    assert result.exit_code != 0
+    assert "No such command 'conversation'" in result.output
+
+
 def test_admin_search_health_forwards_to_existing_search_health_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
@@ -319,6 +328,15 @@ def test_admin_search_repair_forwards_to_existing_search_repair_helper(monkeypat
         "workspace_root": "/tmp/demo",
         "json_output": True,
     }
+
+
+def test_legacy_top_level_search_root_is_removed() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["search", "health"])
+
+    assert result.exit_code != 0
+    assert "No such command 'search'" in result.output
 
 
 def test_admin_agent_run_forwards_to_existing_single_agent_helper(monkeypatch) -> None:
