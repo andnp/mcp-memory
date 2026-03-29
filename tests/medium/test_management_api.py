@@ -714,20 +714,18 @@ async def test_daemon_idle_shutdown_defers_while_background_tasks_are_running(mo
 @pytest.mark.asyncio
 async def test_daemon_idle_shutdown_defers_while_recent_http_activity_exists(monkeypatch) -> None:
     monkeypatch.setattr("mcp_memory.daemon_app._IDLE_SHUTDOWN_DELAY_SECONDS", 0.01)
-    monkeypatch.setattr("mcp_memory.daemon_app._HTTP_ACTIVITY_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr("mcp_memory.daemon_app._HTTP_ACTIVITY_GRACE_SECONDS", 1.0)
 
     shutdown_calls: list[tuple[int, int]] = []
-    monotonic_values = iter([0.02, 0.04, 0.06])
 
     monkeypatch.setattr("mcp_memory.daemon_app._count_running_background_tasks", lambda _app: 0)
-    monkeypatch.setattr("mcp_memory.daemon_app.time.monotonic", lambda: next(monotonic_values, 0.06))
     monkeypatch.setattr("mcp_memory.daemon_app.os.getpid", lambda: 9753)
     monkeypatch.setattr("mcp_memory.daemon_app.os.kill", lambda pid, sig: shutdown_calls.append((pid, sig)))
 
     app = SimpleNamespace(
         state=SimpleNamespace(
             idle_shutdown_task=None,
-            last_http_activity_at=0.0,
+            last_http_activity_at=time.monotonic(),
             routes=SimpleNamespace(
                 hook_service=SimpleNamespace(get_active_client_count=lambda: 0),
             ),
@@ -736,6 +734,11 @@ async def test_daemon_idle_shutdown_defers_while_recent_http_activity_exists(mon
 
     shutdown_task = asyncio.create_task(daemon_app_module._shutdown_daemon_when_idle(cast(Any, app)))
     app.state.idle_shutdown_task = shutdown_task
+
+    await asyncio.sleep(0.05)
+    assert shutdown_calls == []
+
+    app.state.last_http_activity_at = 0.0
 
     await asyncio.wait_for(shutdown_task, timeout=0.2)
 
