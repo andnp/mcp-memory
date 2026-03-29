@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from datetime import UTC, datetime
 import json
@@ -18,9 +19,11 @@ import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
+from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
 pytestmark = pytest.mark.medium
@@ -483,6 +486,53 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
             assert "AI Provider Usage" in dashboard
             assert "Refresh Logs" in dashboard
             assert "Agent Controls" in dashboard
+
+
+@pytest.mark.asyncio
+async def test_management_api_health_and_overview_include_cache_metrics(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    async with app.router.lifespan_context(app):
+        service = app.state.routes.service
+        config = Config()
+        config.storage.cache.enabled = True
+        config.storage.cache.mode = "readonly"
+        cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+        cache.increment_metric("search_requests", amount=6)
+        cache.increment_metric("fresh_exact_search_hits", amount=3)
+        cache.increment_metric("projection_fallbacks", amount=1)
+        cache.increment_metric("read_requests", amount=4)
+        cache.increment_metric("validated_read_hits", amount=2)
+        cache.increment_metric("warmed_projection_rows", amount=9)
+
+        service._storage_backend = "postgres"
+        service._config = config
+        service._read_cache = cache
+
+        health = await _request_json(app.state.metadata, "/api/health")
+        overview = await _request_json(app.state.metadata, "/api/overview")
+
+    assert health["cache"]["state"] == "active"
+    assert health["cache"]["metrics"]["search_requests"] == 6
+    assert health["cache"]["metrics"]["fresh_exact_search_hits"] == 3
+    assert health["cache"]["metrics"]["projection_fallbacks"] == 1
+    assert health["cache"]["metrics"]["fresh_exact_search_hit_rate"] == 0.5
+    assert health["cache"]["metrics"]["warmed_projection_rows"] == 9
+    assert health["cache"]["metrics"]["recent"]["window_minutes"] == 15
+    assert health["cache"]["metrics"]["recent"]["search_requests"] == 6
+    assert health["cache"]["metrics"]["recent"]["projection_fallbacks"] == 1
+    assert health["cache"]["metrics"]["recent"]["fresh_exact_search_hit_rate"] == 0.5
+    assert health["cache"]["metrics"]["recent"]["warmed_projection_rows"] == 9
+    assert overview["cache"]["state"] == "active"
+    assert overview["cache"]["metrics"]["read_requests"] == 4
+    assert overview["cache"]["metrics"]["validated_read_hits"] == 2
+    assert overview["cache"]["metrics"]["recent"]["read_requests"] == 4
+    assert overview["cache"]["metrics"]["recent"]["validated_read_hits"] == 2
 
 
 @pytest.mark.asyncio
@@ -1042,6 +1092,80 @@ async def test_daemon_zmq_dispatch_processes_tool_requests_concurrently(monkeypa
         payload = json.loads(payload_text)
         assert payload == {"status": "ok", "query": f"query-{index}"}
         assert elapsed < 0.7
+
+
+@dataclass(frozen=True)
+class _HealthMetadata:
+    status: str
+    transport: str
+    socket_path: str
+
+
+@pytest.mark.asyncio
+async def test_daemon_zmq_health_fast_path_ignores_saturated_request_pool(tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+    blocking_request_started = asyncio.Event()
+    release_blocking_request = asyncio.Event()
+
+    async def _blocking_handler(_payload: dict[str, object]) -> dict:
+        blocking_request_started.set()
+        await release_blocking_request.wait()
+        return {"status": "ok"}
+
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/block": _blocking_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: _HealthMetadata(
+            status="ready",
+            transport="zmq",
+            socket_path=str(socket_path),
+        ),
+        max_concurrent_requests=1,
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        blocking_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/hooks/block",
+                {},
+                timeout_seconds=1.0,
+            )
+        )
+        await asyncio.wait_for(blocking_request_started.wait(), timeout=0.5)
+
+        health_started_at = time.monotonic()
+        health = await asyncio.wait_for(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/internal/health",
+                None,
+                timeout_seconds=0.2,
+            ),
+            timeout=0.5,
+        )
+        health_elapsed = time.monotonic() - health_started_at
+
+        assert blocking_request.done() is False
+        assert health == {
+            "status": "ready",
+            "transport": "zmq",
+            "socket_path": str(socket_path),
+        }
+        assert health_elapsed < 0.2
+
+        release_blocking_request.set()
+        assert await asyncio.wait_for(blocking_request, timeout=0.5) == {"status": "ok"}
+    finally:
+        release_blocking_request.set()
+        await server.stop()
 
 
 def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp_path: Path) -> None:

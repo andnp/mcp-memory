@@ -187,8 +187,11 @@ class DaemonZmqServer:
             await asyncio.gather(recv_task, return_exceptions=True)
 
     async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict]:
-        async with self._request_semaphore:
+        if _uses_unconstrained_health_route(payload_frame):
             response = await self._dispatch(payload_frame)
+        else:
+            async with self._request_semaphore:
+                response = await self._dispatch(payload_frame)
         return identity, response
 
     async def _dispatch(self, payload_frame: bytes) -> dict:
@@ -239,6 +242,25 @@ class DaemonZmqServer:
 
 def _socket_endpoint(socket_path: str) -> str:
     return f"ipc://{socket_path}"
+
+
+def _uses_unconstrained_health_route(payload_frame: bytes) -> bool:
+    try:
+        decoded = json.loads(payload_frame.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(decoded, dict):
+        return False
+
+    path = decoded.get("path")
+    payload = decoded.get("payload")
+    if not isinstance(path, str) or not path:
+        return False
+    if payload is not None and not isinstance(payload, dict):
+        return False
+
+    normalized_path, _request_payload = normalize_request(path, payload)
+    return normalized_path == "/internal/health"
 
 
 def _remove_stale_socket(socket_path: Path) -> None:

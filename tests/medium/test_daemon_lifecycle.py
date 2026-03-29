@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import signal
@@ -7,6 +8,7 @@ import signal
 from click.testing import CliRunner
 import pytest
 import mcp_memory.daemon as daemon_module
+from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
@@ -822,6 +824,56 @@ def test_is_daemon_healthy_requires_socket_path_for_zmq(monkeypatch) -> None:
     )
 
     assert is_daemon_healthy(metadata) is False
+
+
+@pytest.mark.asyncio
+async def test_is_daemon_healthy_stays_true_while_request_pool_is_saturated(tmp_path: Path) -> None:
+    blocking_started = asyncio.Event()
+    release_blocking_request = asyncio.Event()
+    blocking_request: asyncio.Task[dict] | None = None
+
+    async def _blocking_hook(_payload: dict[str, object]) -> dict[str, object]:
+        blocking_started.set()
+        await release_blocking_request.wait()
+        return {"status": "ok"}
+
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8130,
+        pid=4321,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon.sock"),
+    )
+    server = DaemonZmqServer(
+        context_factory=lambda _payload: None,
+        hook_handlers={"/api/block": _blocking_hook},
+        routes_provider=lambda: None,
+        socket_path=tmp_path / "daemon.sock",
+        metadata_provider=lambda: metadata,
+        max_concurrent_requests=1,
+    )
+
+    await server.start()
+    try:
+        blocking_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/block",
+                {},
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.wait_for(blocking_started.wait(), timeout=1.0)
+
+        assert await asyncio.to_thread(is_daemon_healthy, metadata) is True
+    finally:
+        release_blocking_request.set()
+        if blocking_request is not None:
+            await blocking_request
+        await server.stop()
 
 
 def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp_path: Path) -> None:
