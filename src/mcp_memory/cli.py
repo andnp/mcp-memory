@@ -1481,6 +1481,11 @@ def admin_conversation_group() -> None:
     """Canonical AI conversation operator commands."""
 
 
+@admin_group.group(name="agent")
+def admin_agent_group() -> None:
+    """Canonical background agent operator commands."""
+
+
 @admin_group.group(name="search")
 def admin_search_group() -> None:
     """Canonical semantic search operator commands."""
@@ -1987,6 +1992,28 @@ def run_all_agents(workspace_root: str | None, force: bool) -> None:
     _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
 
 
+@admin_agent_group.command(name="run")
+@workspace_root_option
+@click.argument("agent_name", required=False, type=click.Choice(TRIGGERABLE_BACKGROUND_TASK_NAMES))
+@click.option("--all", "run_all", is_flag=True, help="Trigger all background agents")
+@click.option("--force", is_flag=True, help="Enqueue new tasks even if matching tasks are already open")
+def admin_run_agent_command(
+    agent_name: str | None,
+    workspace_root: str | None,
+    run_all: bool,
+    force: bool,
+) -> None:
+    """Trigger one or all background agents for the active workspace."""
+    if run_all:
+        if agent_name is not None:
+            raise click.UsageError("Do not provide an agent name with --all.")
+        _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
+        return
+    if agent_name is None:
+        raise click.UsageError("Provide an agent name or pass --all.")
+    _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
+
+
 @main.command(name="stats")
 @workspace_root_option
 @click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
@@ -2061,6 +2088,32 @@ def admin_health_command(workspace_root: str | None, scope: str, json_output: bo
 def monitor(workspace_root: str | None, interval: float) -> None:
     """Open the live operations TUI."""
     _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
+
+
+@admin_group.command(name="monitor")
+@workspace_root_option
+@click.option(
+    "--interval",
+    default=2.0,
+    show_default=True,
+    type=click.FloatRange(min=0.1),
+    help="Seconds between automatic refreshes",
+)
+def admin_monitor_command(workspace_root: str | None, interval: float) -> None:
+    """Open the live operations TUI."""
+    _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
+
+
+@admin_group.group(name="dashboard")
+def admin_dashboard_group() -> None:
+    """Canonical operator dashboard commands."""
+
+
+@admin_dashboard_group.command(name="open")
+@workspace_root_option
+def admin_dashboard_open_command(workspace_root: str | None) -> None:
+    """Ensure the daemon is running and open the operator dashboard."""
+    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=True))
 
 
 @main.command(name="import-markdown")

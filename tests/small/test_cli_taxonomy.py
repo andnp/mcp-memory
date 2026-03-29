@@ -321,6 +321,84 @@ def test_admin_search_repair_forwards_to_existing_search_repair_helper(monkeypat
     }
 
 
+def test_admin_agent_run_forwards_to_existing_single_agent_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
+        captured["agent_name"] = agent_name
+        captured["workspace_root"] = workspace_root
+        captured["force"] = force
+
+    monkeypatch.setattr("mcp_memory.cli._enqueue_agent", fake_enqueue_agent)
+
+    result = runner.invoke(main, ["admin", "agent", "run", "memory-curator", "--workspace-root", "/tmp/demo", "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "agent_name": "memory-curator",
+        "workspace_root": "/tmp/demo",
+        "force": True,
+    }
+
+
+def test_admin_agent_run_all_forwards_to_existing_all_agents_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_enqueue_all_agents(workspace_root: str | None, force: bool) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["force"] = force
+
+    monkeypatch.setattr("mcp_memory.cli._enqueue_all_agents", fake_enqueue_all_agents)
+
+    result = runner.invoke(main, ["admin", "agent", "run", "--all", "--workspace-root", "/tmp/demo", "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "force": True,
+    }
+
+
+def test_admin_monitor_forwards_to_existing_monitor_tui(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_run_monitor_tui(workspace_root: str | None, interval: float) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["interval"] = interval
+
+    monkeypatch.setattr("mcp_memory.cli.run_monitor_tui", fake_run_monitor_tui)
+
+    result = runner.invoke(main, ["admin", "monitor", "--workspace-root", "/tmp/demo", "--interval", "1.5"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "interval": 1.5,
+    }
+
+
+def test_admin_dashboard_open_forwards_to_existing_dashboard_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_print_dashboard_url(workspace_root: str | None, *, open_browser: bool = False) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["open_browser"] = open_browser
+
+    monkeypatch.setattr("mcp_memory.cli._print_dashboard_url", fake_print_dashboard_url)
+
+    result = runner.invoke(main, ["admin", "dashboard", "open", "--workspace-root", "/tmp/demo"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "open_browser": True,
+    }
+
+
 def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
