@@ -197,6 +197,49 @@ def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: s
     return _fetchall_rows(db_manager, query, params)
 
 
+def count_recent_conversation_statuses(
+    provider_usage_repo,
+    *,
+    after: float,
+    workspace_id: str | None,
+    limit: int = 10_000,
+) -> dict[str, int]:
+    if provider_usage_repo is None:
+        return {}
+    counts: dict[str, int] = {}
+    for record in provider_usage_repo.list_conversations(
+        workspace_id=workspace_id,
+        limit=limit,
+    ):
+        if record.completed_at < after:
+            continue
+        counts[record.status] = counts.get(record.status, 0) + 1
+    return counts
+
+
+def count_recent_memory_updates(
+    repository,
+    *,
+    cutoff: datetime,
+    workspace_id: str | None,
+    limit: int = 1_000_000,
+) -> int:
+    if repository is None:
+        return 0
+    updated_count = 0
+    for record in repository.list_memories(
+        workspace_id=workspace_id,
+        limit=limit,
+    ):
+        try:
+            updated_at = datetime.fromisoformat(record.updated_at)
+        except ValueError:
+            continue
+        if updated_at >= cutoff:
+            updated_count += 1
+    return updated_count
+
+
 def list_ai_conversation_rows_since(db_manager, *, cutoff: float, upper_bound: float, workspace_id: str | None):
     if db_manager is None:
         return []

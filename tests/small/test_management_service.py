@@ -1786,6 +1786,114 @@ def test_management_service_operator_health_snapshot_aggregates_recent_signals(d
     assert snapshot.provider_policy.by_task[0].task_name == "graph-linker"
 
 
+def test_management_service_operator_health_snapshot_applies_conversation_and_memory_windows(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    now = time.time()
+
+    recent_memory = repository.create_memory(
+        title="Recent memory",
+        content="Updated within 15 minutes.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+    )
+    hour_memory = repository.create_memory(
+        title="Hour memory",
+        content="Updated within an hour.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=(datetime.now(UTC) - timedelta(minutes=45)).isoformat(),
+    )
+    day_memory = repository.create_memory(
+        title="Day memory",
+        content="Updated within a day.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=(datetime.now(UTC) - timedelta(hours=23)).isoformat(),
+    )
+    stale_memory = repository.create_memory(
+        title="Stale memory",
+        content="Outside the one-day window.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=(datetime.now(UTC) - timedelta(days=2)).isoformat(),
+    )
+    assert recent_memory is not None
+    assert hour_memory is not None
+    assert day_memory is not None
+    assert stale_memory is not None
+
+    provider_usage.record_conversation(
+        request_id="recent-success",
+        attempt=1,
+        task_name="graph-linker",
+        task_id="task-success",
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=111,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="success",
+        error_text=None,
+        started_at=now - 600.0,
+        completed_at=now - 540.0,
+    )
+    provider_usage.record_conversation(
+        request_id="recent-error",
+        attempt=1,
+        task_name="graph-linker",
+        task_id="task-error",
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=222,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="error",
+        error_text="timeout",
+        started_at=now - 900.0,
+        completed_at=now - 840.0,
+    )
+    provider_usage.record_conversation(
+        request_id="old-error",
+        attempt=1,
+        task_name="graph-linker",
+        task_id="task-old-error",
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=333,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="error",
+        error_text="stale timeout",
+        started_at=now - (26 * 3600),
+        completed_at=now - (25 * 3600),
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    snapshot = service.get_operator_health_snapshot(conversation_window_hours=24)
+
+    assert snapshot.conversations.by_status == {"error": 1, "success": 1}
+    assert snapshot.conversations.total == 2
+    assert snapshot.memory_activity.updated_last_15_minutes == 1
+    assert snapshot.memory_activity.updated_last_hour == 2
+    assert snapshot.memory_activity.updated_last_day == 3
+
+
 def test_management_service_can_record_thought_into_journal(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     journal = System1Journal(db_manager)
