@@ -172,6 +172,155 @@ def test_admin_task_cancel_forwards_to_existing_task_cancel_helper(monkeypatch) 
     }
 
 
+def test_admin_conversation_list_forwards_to_existing_conversation_implementation(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    class _FakePayload:
+        def __init__(self) -> None:
+            self.conversations: list[object] = []
+
+        def model_dump(self) -> dict[str, object]:
+            return {"conversations": []}
+
+    class _FakeService:
+        def list_ai_conversations(
+            self,
+            *,
+            task_name: str | None = None,
+            status: str | None = None,
+            limit: int,
+            request_id: str | None = None,
+        ) -> _FakePayload:
+            captured["task_name"] = task_name
+            captured["status"] = status
+            captured["limit"] = limit
+            captured["request_id"] = request_id
+            return _FakePayload()
+
+    def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["workspace_id"] = workspace_id
+        action(_FakeService())
+
+    monkeypatch.setattr("mcp_memory.cli._with_management_service", fake_with_management_service)
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "conversation",
+            "list",
+            "--workspace-root",
+            "/tmp/demo",
+            "--task-name",
+            "curator",
+            "--status",
+            "completed",
+            "--limit",
+            "7",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "workspace_id": None,
+        "task_name": "curator",
+        "status": "completed",
+        "limit": 7,
+        "request_id": None,
+    }
+
+
+def test_admin_conversation_show_forwards_to_existing_conversation_implementation(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    class _FakePayload:
+        def __init__(self) -> None:
+            self.conversations: list[object] = []
+
+        def model_dump(self) -> dict[str, object]:
+            return {"conversations": []}
+
+    class _FakeService:
+        def list_ai_conversations(
+            self,
+            *,
+            task_name: str | None = None,
+            status: str | None = None,
+            limit: int,
+            request_id: str | None = None,
+        ) -> _FakePayload:
+            captured["task_name"] = task_name
+            captured["status"] = status
+            captured["limit"] = limit
+            captured["request_id"] = request_id
+            return _FakePayload()
+
+    def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["workspace_id"] = workspace_id
+        action(_FakeService())
+
+    monkeypatch.setattr("mcp_memory.cli._with_management_service", fake_with_management_service)
+
+    result = runner.invoke(
+        main,
+        ["admin", "conversation", "show", "--workspace-root", "/tmp/demo", "request-123", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "workspace_id": None,
+        "task_name": None,
+        "status": None,
+        "limit": 200,
+        "request_id": "request-123",
+    }
+
+
+def test_admin_search_health_forwards_to_existing_search_health_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_show_search_health(workspace_root: str | None, json_output: bool) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._show_search_health", fake_show_search_health)
+
+    result = runner.invoke(main, ["admin", "search", "health", "--workspace-root", "/tmp/demo", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "json_output": True,
+    }
+
+
+def test_admin_search_repair_forwards_to_existing_search_repair_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_repair_search_index(workspace_root: str | None, json_output: bool) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._repair_search_index", fake_repair_search_index)
+
+    result = runner.invoke(main, ["admin", "search", "repair", "--workspace-root", "/tmp/demo", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "json_output": True,
+    }
+
+
 def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}

@@ -1476,6 +1476,16 @@ def admin_log_group() -> None:
     """Canonical structured runtime log commands."""
 
 
+@admin_group.group(name="conversation")
+def admin_conversation_group() -> None:
+    """Canonical AI conversation operator commands."""
+
+
+@admin_group.group(name="search")
+def admin_search_group() -> None:
+    """Canonical semantic search operator commands."""
+
+
 @admin_group.group(name="task")
 def admin_task_group() -> None:
     """Canonical background task operator commands."""
@@ -1952,6 +1962,12 @@ def search_health_command(workspace_root: str | None, json_output: bool) -> None
 def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
     """Rebuild semantic search embeddings for the current model."""
     _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
+
+
+admin_conversation_group.add_command(list_conversations_command, name="list")
+admin_conversation_group.add_command(show_conversation_command, name="show")
+admin_search_group.add_command(search_health_command, name="health")
+admin_search_group.add_command(search_repair_command, name="repair")
 
 
 @agents.command(name="run")
