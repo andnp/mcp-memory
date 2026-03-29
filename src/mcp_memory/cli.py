@@ -1446,21 +1446,6 @@ def daemon_restart_alias(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
-@main.command(name="dashboard", hidden=True)
-@workspace_root_option
-@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
-def dashboard_alias(workspace_root: str | None, open_browser: bool) -> None:
-    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=open_browser))
-
-
-@main.command(name="stash")
-@workspace_root_option
-@click.argument("text", nargs=-1)
-def stash(workspace_root: str | None, text: tuple[str, ...]) -> None:
-    """Record one raw thought into the System 1 journal."""
-    _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
-
-
 @main.group(name="memory")
 def memory_group() -> None:
     """Canonical memory commands."""
@@ -1504,40 +1489,6 @@ def memory_stash_command(workspace_root: str | None, text: tuple[str, ...]) -> N
     _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
 
 
-@main.group(name="log")
-def log_group() -> None:
-    """Inspect and manage structured runtime logs."""
-
-
-@log_group.command(name="show")
-@workspace_root_option
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
-)
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def logs(
-    workspace_root: str | None,
-    limit: int,
-    level: str | None,
-    logger_name: str | None,
-    source: str | None,
-    query: str | None,
-    after: float | None,
-    before: float | None,
-    json_output: bool,
-) -> None:
-    """Print recent structured runtime logs from SQLite."""
-    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
-
-
 @admin_log_group.command(name="list")
 @workspace_root_option
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
@@ -1567,33 +1518,6 @@ def admin_logs(
     _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
 
 
-@log_group.command(name="summary")
-@workspace_root_option
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
-)
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
-def log_summary(
-    workspace_root: str | None,
-    level: str | None,
-    logger_name: str | None,
-    source: str | None,
-    query: str | None,
-    after: float | None,
-    before: float | None,
-    json_output: bool,
-) -> None:
-    """Print aggregated runtime log counts."""
-    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
-
-
 @admin_log_group.command(name="summary")
 @workspace_root_option
 @click.option(
@@ -1621,21 +1545,6 @@ def admin_log_summary(
     _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
 
 
-@log_group.command(name="prune")
-@workspace_root_option
-@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
-@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def log_prune(
-    workspace_root: str | None,
-    max_runtime_logs: int | None,
-    max_log_age_days: int | None,
-    json_output: bool,
-) -> None:
-    """Prune runtime logs using explicit or configured retention limits."""
-    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
-
-
 @admin_log_group.command(name="prune")
 @workspace_root_option
 @click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
@@ -1648,74 +1557,6 @@ def admin_log_prune(
     json_output: bool,
 ) -> None:
     """Prune runtime logs using explicit or configured retention limits."""
-    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
-
-
-@main.command(name="logs", hidden=True)
-@workspace_root_option
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
-)
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def logs_alias(
-    workspace_root: str | None,
-    limit: int,
-    level: str | None,
-    logger_name: str | None,
-    source: str | None,
-    query: str | None,
-    after: float | None,
-    before: float | None,
-    json_output: bool,
-) -> None:
-    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
-
-
-@main.command(name="log-summary", hidden=True)
-@workspace_root_option
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
-)
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
-def log_summary_alias(
-    workspace_root: str | None,
-    level: str | None,
-    logger_name: str | None,
-    source: str | None,
-    query: str | None,
-    after: float | None,
-    before: float | None,
-    json_output: bool,
-) -> None:
-    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
-
-
-@main.command(name="log-prune", hidden=True)
-@workspace_root_option
-@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
-@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def log_prune_alias(
-    workspace_root: str | None,
-    max_runtime_logs: int | None,
-    max_log_age_days: int | None,
-    json_output: bool,
-) -> None:
     _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
 
 
@@ -1786,26 +1627,6 @@ def prefetch_model(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
 
 
-@main.group(name="agents")
-def agents() -> None:
-    """Trigger and inspect background agents."""
-
-
-@main.group(name="task")
-def task_group() -> None:
-    """Inspect and control queued background tasks."""
-
-
-@task_group.command(name="list")
-@workspace_root_option
-@click.option("--status", help="Filter by task status")
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of task rows to print")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
-    """List queued or running tasks."""
-    _list_tasks(workspace_root, status, limit, json_output)
-
-
 @admin_task_group.command(name="list")
 @workspace_root_option
 @click.option("--status", help="Filter by task status")
@@ -1816,11 +1637,11 @@ def admin_list_tasks_command(workspace_root: str | None, status: str | None, lim
     _list_tasks(workspace_root, status, limit, json_output)
 
 
-@task_group.command(name="recent-runs")
+@admin_task_group.command(name="recent-runs")
 @workspace_root_option
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of recent runs to print")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
+def admin_recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Show recent completed background task runs and their sampling metadata."""
     def _run(service: ManagementService) -> None:
         payload = service.list_recent_agent_runs(
@@ -1835,11 +1656,11 @@ def recent_task_runs_command(workspace_root: str | None, limit: int, json_output
     _with_management_service(workspace_root, _run, workspace_id=None)
 
 
-@task_group.command(name="sampling-summary")
+@admin_task_group.command(name="sampling-summary")
 @workspace_root_option
 @click.option("--limit", default=50, show_default=True, type=int, help="Maximum number of recent runs to summarize")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
-def task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
+def admin_task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Summarize recent selection and ingest grouping strategy usage."""
     def _run(service: ManagementService) -> None:
         payload = service.list_recent_agent_runs(limit=limit)
@@ -1852,16 +1673,6 @@ def task_sampling_summary_command(workspace_root: str | None, limit: int, json_o
     _with_management_service(workspace_root, _run, workspace_id=None)
 
 
-@task_group.command(name="cancel")
-@workspace_root_option
-@click.argument("task_id")
-@click.option("--reason", default="cancelled_by_user", show_default=True, help="Cancellation reason")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
-    """Cancel a pending or running task."""
-    _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
-
-
 @admin_task_group.command(name="cancel")
 @workspace_root_option
 @click.argument("task_id")
@@ -1870,15 +1681,6 @@ def cancel_task_command(task_id: str, workspace_root: str | None, reason: str, j
 def admin_cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
     """Cancel a pending or running task."""
     _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
-
-
-@task_group.command(name="show")
-@workspace_root_option
-@click.argument("task_id")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
-    """Show one task and its persisted run result details."""
-    _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
 
 
 @admin_task_group.command(name="show")
@@ -1959,23 +1761,6 @@ def search_repair_command(workspace_root: str | None, json_output: bool) -> None
     _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
 
 
-@agents.command(name="run")
-@click.argument("agent_name", type=click.Choice(TRIGGERABLE_BACKGROUND_TASK_NAMES))
-@workspace_root_option
-@click.option("--force", is_flag=True, help="Enqueue a new task even if one is already open")
-def run_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
-    """Trigger one background agent for the active workspace."""
-    _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
-
-
-@agents.command(name="run-all")
-@workspace_root_option
-@click.option("--force", is_flag=True, help="Enqueue new tasks even if matching tasks are already open")
-def run_all_agents(workspace_root: str | None, force: bool) -> None:
-    """Trigger all background agents for the active workspace."""
-    _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
-
-
 @admin_agent_group.command(name="run")
 @workspace_root_option
 @click.argument("agent_name", required=False, type=click.Choice(TRIGGERABLE_BACKGROUND_TASK_NAMES))
@@ -1998,22 +1783,6 @@ def admin_run_agent_command(
     _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
 
 
-@main.command(name="stats")
-@workspace_root_option
-@click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
-@click.option(
-    "--interval",
-    default=2.0,
-    show_default=True,
-    type=click.FloatRange(min=0.1),
-    help="Seconds between watch refreshes",
-)
-@click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
-def stats(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
-    """Print background task and memory statistics."""
-    _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
-
-
 @admin_group.command(name="overview")
 @workspace_root_option
 @click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
@@ -2030,21 +1799,6 @@ def admin_overview_command(workspace_root: str | None, watch: bool, interval: fl
     _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
 
 
-@main.command(name="health")
-@workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Inspect the whole shared runtime or only the active workspace context.",
-)
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
-    """Print an AI-friendly operator health snapshot."""
-    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
-
-
 @admin_group.command(name="health")
 @workspace_root_option
 @click.option(
@@ -2058,20 +1812,6 @@ def health_command(workspace_root: str | None, scope: str, json_output: bool) ->
 def admin_health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
     """Print an AI-friendly operator health snapshot."""
     _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
-
-
-@main.command(name="monitor")
-@workspace_root_option
-@click.option(
-    "--interval",
-    default=2.0,
-    show_default=True,
-    type=click.FloatRange(min=0.1),
-    help="Seconds between automatic refreshes",
-)
-def monitor(workspace_root: str | None, interval: float) -> None:
-    """Open the live operations TUI."""
-    _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
 
 
 @admin_group.command(name="monitor")

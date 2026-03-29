@@ -125,6 +125,82 @@ def test_admin_task_list_forwards_to_existing_task_list_helper(monkeypatch) -> N
     }
 
 
+def test_admin_task_recent_runs_forwards_to_existing_task_run_listing(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    class _FakePayload:
+        def __init__(self) -> None:
+            self.runs: list[object] = []
+
+        def model_dump(self) -> dict[str, object]:
+            return {"runs": []}
+
+    class _FakeService:
+        def list_recent_agent_runs(self, *, limit: int, detail_level: str = "summary") -> _FakePayload:
+            captured["limit"] = limit
+            captured["detail_level"] = detail_level
+            return _FakePayload()
+
+    def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["workspace_id"] = workspace_id
+        action(_FakeService())
+
+    monkeypatch.setattr("mcp_memory.cli._with_management_service", fake_with_management_service)
+
+    result = runner.invoke(
+        main,
+        ["admin", "task", "recent-runs", "--workspace-root", "/tmp/demo", "--limit", "7", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "workspace_id": None,
+        "limit": 7,
+        "detail_level": "full",
+    }
+
+
+def test_admin_task_sampling_summary_forwards_to_existing_sampling_summary_logic(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    class _FakePayload:
+        runs: list[object] = []
+
+    class _FakeService:
+        def list_recent_agent_runs(self, *, limit: int) -> _FakePayload:
+            captured["limit"] = limit
+            return _FakePayload()
+
+    def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["workspace_id"] = workspace_id
+        action(_FakeService())
+
+    def fake_build_sampling_summary(payload: _FakePayload) -> dict[str, list[dict[str, object]]]:
+        captured["payload_type"] = type(payload).__name__
+        return {"selection": [], "grouping": []}
+
+    monkeypatch.setattr("mcp_memory.cli._with_management_service", fake_with_management_service)
+    monkeypatch.setattr("mcp_memory.cli._build_sampling_summary", fake_build_sampling_summary)
+
+    result = runner.invoke(
+        main,
+        ["admin", "task", "sampling-summary", "--workspace-root", "/tmp/demo", "--limit", "9", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "workspace_id": None,
+        "limit": 9,
+        "payload_type": "_FakePayload",
+    }
+
+
 def test_admin_task_show_forwards_to_existing_task_show_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
@@ -575,3 +651,25 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
         "max_log_age_days": 12,
         "json_output": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("argv", "missing_command"),
+    [
+        (["stash"], "stash"),
+        (["task", "list"], "task"),
+        (["log", "list"], "log"),
+        (["agents", "run", "memory-curator"], "agents"),
+        (["monitor"], "monitor"),
+        (["dashboard"], "dashboard"),
+        (["health"], "health"),
+        (["stats"], "stats"),
+    ],
+)
+def test_removed_legacy_roots_fail_with_no_such_command(argv: list[str], missing_command: str) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, argv)
+
+    assert result.exit_code != 0
+    assert f"No such command '{missing_command}'" in result.output

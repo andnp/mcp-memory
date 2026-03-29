@@ -28,7 +28,7 @@ def test_stash_uses_git_root_for_workspace_id(monkeypatch, tmp_path: Path) -> No
     (repo_root / ".git").mkdir()
     monkeypatch.chdir(nested)
 
-    result = runner.invoke(main, ["stash", "remember", "the", "git", "root"])
+    result = runner.invoke(main, ["memory", "stash", "remember", "the", "git", "root"])
 
     assert result.exit_code == 0
     assert "Thought stashed successfully (ID:" in result.output
@@ -62,7 +62,7 @@ def test_stash_reads_multiline_content_from_stdin(monkeypatch, tmp_path: Path) -
 
     result = runner.invoke(
         main,
-        ["stash", "--workspace-root", str(workspace)],
+        ["memory", "stash", "--workspace-root", str(workspace)],
         input="first line\nsecond line\n",
     )
 
@@ -96,7 +96,7 @@ def test_stash_rejects_empty_input(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    result = runner.invoke(main, ["stash", "--workspace-root", str(workspace)], input="   ")
+    result = runner.invoke(main, ["memory", "stash", "--workspace-root", str(workspace)], input="   ")
 
     assert result.exit_code == 1
     assert "Provide stash text as arguments or via stdin." in result.output
