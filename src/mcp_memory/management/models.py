@@ -95,6 +95,19 @@ class CacheHealthPayload(BaseModel):
     metrics: CacheMetricsPayload = Field(default_factory=CacheMetricsPayload)
 
 
+class TransportDiagnosticsPayload(BaseModel):
+    current_in_flight_count: int = 0
+    current_constrained_in_flight_count: int = 0
+    max_concurrent_requests: int = 0
+    request_slots_available: int = 0
+    queued_waiter_count: int = 0
+    recent_completed_request_count: int = 0
+    recent_queue_wait_avg_ms: float = 0.0
+    recent_queue_wait_max_ms: float = 0.0
+    recent_execution_avg_ms: float = 0.0
+    recent_execution_max_ms: float = 0.0
+
+
 class HealthPayload(BaseModel):
     status: str
     storage_backend: str | None = None
@@ -108,6 +121,7 @@ class HealthPayload(BaseModel):
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
     cache: CacheHealthPayload = Field(default_factory=CacheHealthPayload)
+    transport_diagnostics: TransportDiagnosticsPayload = Field(default_factory=TransportDiagnosticsPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
 
 

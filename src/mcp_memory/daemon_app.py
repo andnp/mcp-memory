@@ -229,7 +229,10 @@ def create_daemon_app(
 
         routes = DaemonRoutes(
             ctx=runtime,
-            service=ManagementService(runtime, controller=DaemonControllerView(hook_service=hook_service)),
+            service=ManagementService(
+                runtime,
+                controller=DaemonControllerView(hook_service=hook_service, transport_server=zmq_server),
+            ),
             hook_service=hook_service,
             metadata_path=metadata_path,
         )

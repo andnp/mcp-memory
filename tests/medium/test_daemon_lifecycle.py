@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import signal
+from types import SimpleNamespace
+import threading
 
 from click.testing import CliRunner
 import pytest
@@ -873,6 +875,61 @@ async def test_is_daemon_healthy_stays_true_while_request_pool_is_saturated(tmp_
         release_blocking_request.set()
         if blocking_request is not None:
             await blocking_request
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_is_daemon_healthy_stays_true_while_sync_management_request_runs(tmp_path: Path) -> None:
+    overview_started = threading.Event()
+    release_overview = threading.Event()
+    overview_request: asyncio.Task[dict] | None = None
+
+    class _OverviewPayload:
+        def model_dump(self) -> dict[str, object]:
+            return {"status": "ok"}
+
+    class _RoutesService:
+        def get_overview(self, *, scope: str | None = None, workspace_id: str | None = None) -> _OverviewPayload:
+            overview_started.set()
+            release_overview.wait(timeout=5.0)
+            return _OverviewPayload()
+
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8131,
+        pid=8765,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon-overview.sock"),
+    )
+    server = DaemonZmqServer(
+        context_factory=lambda _payload: None,
+        hook_handlers={},
+        routes_provider=lambda: SimpleNamespace(service=_RoutesService()),
+        socket_path=tmp_path / "daemon-overview.sock",
+        metadata_provider=lambda: metadata,
+        max_concurrent_requests=1,
+    )
+
+    await server.start()
+    try:
+        overview_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/overview",
+                {},
+                timeout_seconds=5.0,
+            )
+        )
+        assert await asyncio.to_thread(overview_started.wait, 1.0) is True
+
+        assert await asyncio.to_thread(is_daemon_healthy, metadata) is True
+    finally:
+        release_overview.set()
+        if overview_request is not None:
+            await overview_request
         await server.stop()
 
 

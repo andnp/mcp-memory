@@ -18,9 +18,12 @@ import pytest
 import mcp_memory.daemon_app as daemon_app_module
 
 from mcp_memory.daemon import create_daemon_app
+from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
+from mcp_memory.hook_reminders import HookReminderService
+from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.storage.shared_read_cache import SharedReadCache
@@ -314,6 +317,9 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "embeddings" in health
         assert "backend" in health["embeddings"]
         assert health["search"]["semantic_enabled"] is True
+        assert "transport_diagnostics" in health
+        assert health["transport_diagnostics"]["max_concurrent_requests"] == 8
+        assert health["transport_diagnostics"]["recent_queue_wait_max_ms"] >= 0.0
         assert "execution_attempts" in health
         assert health["execution_attempts"]["running_task_count"] >= 0
         assert overview["memories"]["total"] == 2
@@ -1166,6 +1172,98 @@ async def test_daemon_zmq_health_fast_path_ignores_saturated_request_pool(tmp_pa
     finally:
         release_blocking_request.set()
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_management_health_reports_transport_queue_wait_and_pressure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    socket_path = tmp_path / "daemon.sock"
+    first_request_started = asyncio.Event()
+    release_first_request = asyncio.Event()
+
+    async def _blocking_handler(payload: dict[str, object]) -> dict:
+        if payload.get("request") == "first":
+            first_request_started.set()
+            await release_first_request.wait()
+        return {"status": "ok", "request": payload.get("request")}
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    hook_service = HookReminderService(runtime.db_manager, runtime.workspace_id)
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/block": _blocking_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: _HealthMetadata(
+            status="ready",
+            transport="zmq",
+            socket_path=str(socket_path),
+        ),
+        max_concurrent_requests=1,
+    )
+    service = ManagementService(
+        runtime,
+        controller=DaemonControllerView(hook_service=hook_service, transport_server=server),
+    )
+
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        first_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/hooks/block",
+                {"request": "first"},
+                timeout_seconds=1.0,
+            )
+        )
+        await asyncio.wait_for(first_request_started.wait(), timeout=0.5)
+
+        queued_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/hooks/block",
+                {"request": "second"},
+                timeout_seconds=1.0,
+            )
+        )
+
+        for _ in range(50):
+            transport_diagnostics = service.get_health().transport_diagnostics
+            if transport_diagnostics.queued_waiter_count == 1:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("expected one queued transport waiter during saturation")
+
+        assert transport_diagnostics.current_in_flight_count == 1
+        assert transport_diagnostics.current_constrained_in_flight_count == 1
+        assert transport_diagnostics.request_slots_available == 0
+        assert transport_diagnostics.max_concurrent_requests == 1
+
+        release_first_request.set()
+        assert await asyncio.wait_for(first_request, timeout=0.5) == {"status": "ok", "request": "first"}
+        assert await asyncio.wait_for(queued_request, timeout=0.5) == {"status": "ok", "request": "second"}
+
+        completed_diagnostics = service.get_health().transport_diagnostics
+        assert completed_diagnostics.current_in_flight_count == 0
+        assert completed_diagnostics.queued_waiter_count == 0
+        assert completed_diagnostics.recent_completed_request_count >= 2
+        assert completed_diagnostics.recent_queue_wait_avg_ms > 0.0
+        assert completed_diagnostics.recent_queue_wait_max_ms > 0.0
+        assert completed_diagnostics.recent_execution_max_ms > 0.0
+    finally:
+        release_first_request.set()
+        await server.stop()
+        runtime.close()
 
 
 def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ from mcp_memory.management.models import (
     MemoryDetailPayload,
     MemorySearchResultPayload,
     MemorySearchPayload,
+    MemoryToolLatencyPayload,
     NerdMetricsPayload,
     OperatorHealthSnapshotPayload,
     RuntimeLogListPayload,
@@ -44,6 +45,7 @@ from mcp_memory.management.models import (
     RuntimeLogSummaryPayload,
     TaskDetailPayload,
     TaskListPayload,
+    TransportDiagnosticsPayload,
 )
 from mcp_memory.management.reporting_queries import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -147,8 +149,19 @@ class ManagementService:
             embeddings=embedder_status,
             search=build_search_health(self._relational_search),
             cache=self._build_cache_health(),
+            transport_diagnostics=self._build_transport_diagnostics(),
             execution_attempts=build_execution_attempt_health(self._db_manager, self._workspace_id),
         )
+
+    def _build_transport_diagnostics(self) -> TransportDiagnosticsPayload:
+        snapshot = getattr(self._controller, "transport_diagnostics", None)
+        if snapshot is None:
+            return TransportDiagnosticsPayload()
+        if isinstance(snapshot, TransportDiagnosticsPayload):
+            return snapshot
+        if isinstance(snapshot, dict):
+            return TransportDiagnosticsPayload(**snapshot)
+        return TransportDiagnosticsPayload()
 
     def _build_cache_health(self) -> CacheHealthPayload:
         cache_config = None if self._config is None else self._config.storage.cache

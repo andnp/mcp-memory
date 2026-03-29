@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from time import perf_counter, time
 from typing import Awaitable, Callable, cast
 
 import zmq
@@ -32,6 +34,29 @@ _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/internal/tools",
     "/internal/maintenance/tools",
 )
+_RECENT_TRANSPORT_SAMPLE_LIMIT = 32
+
+
+@dataclass(frozen=True)
+class DaemonTransportRequestSample:
+    path: str
+    queue_wait_ms: float = 0.0
+    execution_ms: float = 0.0
+    completed_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class DaemonTransportDiagnosticsSnapshot:
+    current_in_flight_count: int = 0
+    current_constrained_in_flight_count: int = 0
+    max_concurrent_requests: int = 0
+    request_slots_available: int = 0
+    queued_waiter_count: int = 0
+    recent_completed_request_count: int = 0
+    recent_queue_wait_avg_ms: float = 0.0
+    recent_queue_wait_max_ms: float = 0.0
+    recent_execution_avg_ms: float = 0.0
+    recent_execution_max_ms: float = 0.0
 
 
 def request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds: float | None = None):
@@ -112,6 +137,27 @@ class DaemonZmqServer:
         self._max_concurrent_requests = max(int(max_concurrent_requests), 1)
         self._request_semaphore = asyncio.Semaphore(self._max_concurrent_requests)
         self._inflight_tasks: set[asyncio.Task[object]] = set()
+        self._active_request_count = 0
+        self._active_constrained_request_count = 0
+        self._queued_waiter_count = 0
+        self._recent_request_samples: deque[DaemonTransportRequestSample] = deque(maxlen=_RECENT_TRANSPORT_SAMPLE_LIMIT)
+
+    def get_diagnostics_snapshot(self) -> DaemonTransportDiagnosticsSnapshot:
+        samples = tuple(self._recent_request_samples)
+        queue_waits = [sample.queue_wait_ms for sample in samples]
+        execution_times = [sample.execution_ms for sample in samples]
+        return DaemonTransportDiagnosticsSnapshot(
+            current_in_flight_count=self._active_request_count,
+            current_constrained_in_flight_count=self._active_constrained_request_count,
+            max_concurrent_requests=self._max_concurrent_requests,
+            request_slots_available=max(self._max_concurrent_requests - self._active_constrained_request_count, 0),
+            queued_waiter_count=self._queued_waiter_count,
+            recent_completed_request_count=len(samples),
+            recent_queue_wait_avg_ms=_average_ms(queue_waits),
+            recent_queue_wait_max_ms=_max_ms(queue_waits),
+            recent_execution_avg_ms=_average_ms(execution_times),
+            recent_execution_max_ms=_max_ms(execution_times),
+        )
 
     async def start(self) -> None:
         self._socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,12 +235,47 @@ class DaemonZmqServer:
             await asyncio.gather(recv_task, return_exceptions=True)
 
     async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict]:
-        if _uses_unconstrained_health_route(payload_frame):
+        path = _normalized_transport_path(payload_frame) or "<invalid_transport_payload>"
+        uses_request_semaphore = path != "/internal/health"
+        queue_wait_started_at = perf_counter()
+        acquired_request_slot = False
+        queue_wait_ms = 0.0
+
+        if uses_request_semaphore:
+            self._queued_waiter_count += 1
+            try:
+                await self._request_semaphore.acquire()
+                acquired_request_slot = True
+                queue_wait_ms = (perf_counter() - queue_wait_started_at) * 1000.0
+            finally:
+                self._queued_waiter_count = max(self._queued_waiter_count - 1, 0)
+
+        self._active_request_count += 1
+        if uses_request_semaphore:
+            self._active_constrained_request_count += 1
+
+        execution_started_at = perf_counter()
+        try:
             response = await self._dispatch(payload_frame)
-        else:
-            async with self._request_semaphore:
-                response = await self._dispatch(payload_frame)
+        finally:
+            execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            self._active_request_count = max(self._active_request_count - 1, 0)
+            if uses_request_semaphore:
+                self._active_constrained_request_count = max(self._active_constrained_request_count - 1, 0)
+                if acquired_request_slot:
+                    self._request_semaphore.release()
+            self._record_request_sample(path, queue_wait_ms=queue_wait_ms, execution_ms=execution_ms)
         return identity, response
+
+    def _record_request_sample(self, path: str, *, queue_wait_ms: float, execution_ms: float) -> None:
+        self._recent_request_samples.append(
+            DaemonTransportRequestSample(
+                path=path,
+                queue_wait_ms=round(max(queue_wait_ms, 0.0), 3),
+                execution_ms=round(max(execution_ms, 0.0), 3),
+                completed_at=time(),
+            )
+        )
 
     async def _dispatch(self, payload_frame: bytes) -> dict:
         try:
@@ -238,8 +319,13 @@ class DaemonZmqServer:
     async def _dispatch_management_request(self, path: str, payload: dict[str, object]) -> dict:
         routes = self._routes_provider()
         metadata = self._metadata_provider()
-
-        return dispatch_management_request(routes, metadata, path, payload)
+        return await asyncio.to_thread(
+            dispatch_management_request,
+            routes,
+            metadata,
+            path,
+            payload,
+        )
 
 
 def _socket_endpoint(socket_path: str) -> str:
@@ -247,22 +333,39 @@ def _socket_endpoint(socket_path: str) -> str:
 
 
 def _uses_unconstrained_health_route(payload_frame: bytes) -> bool:
+    normalized_path = _normalized_transport_path(payload_frame)
+    return normalized_path == "/internal/health"
+
+
+def _normalized_transport_path(payload_frame: bytes) -> str | None:
     try:
         decoded = json.loads(payload_frame.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return False
+        return None
     if not isinstance(decoded, dict):
-        return False
+        return None
 
     path = decoded.get("path")
     payload = decoded.get("payload")
     if not isinstance(path, str) or not path:
-        return False
+        return None
     if payload is not None and not isinstance(payload, dict):
-        return False
+        return None
 
     normalized_path, _request_payload = normalize_request(path, payload)
-    return normalized_path == "/internal/health"
+    return normalized_path
+
+
+def _average_ms(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 3)
+
+
+def _max_ms(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(max(values), 3)
 
 
 def _remove_stale_socket(socket_path: Path) -> None:
