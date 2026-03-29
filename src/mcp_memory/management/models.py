@@ -46,6 +46,55 @@ class ExecutionAttemptHealthPayload(BaseModel):
     dead_subprocess_count: int = 0
 
 
+class CacheRecentMetricsPayload(BaseModel):
+    window_minutes: int = 15
+    search_requests: int = 0
+    fresh_exact_search_hits: int = 0
+    stale_exact_search_fallbacks: int = 0
+    projection_fallbacks: int = 0
+    read_requests: int = 0
+    validated_read_hits: int = 0
+    read_validation_mismatches: int = 0
+    read_validation_failures: int = 0
+    warmed_projection_rows: int = 0
+    fresh_exact_search_hit_rate: float = 0.0
+    stale_exact_search_fallback_rate: float = 0.0
+    projection_fallback_rate: float = 0.0
+    validated_read_hit_rate: float = 0.0
+    read_validation_mismatch_rate: float = 0.0
+    read_validation_failure_rate: float = 0.0
+
+
+class CacheMetricsPayload(BaseModel):
+    search_requests: int = 0
+    fresh_exact_search_hits: int = 0
+    stale_exact_search_fallbacks: int = 0
+    projection_fallbacks: int = 0
+    read_requests: int = 0
+    validated_read_hits: int = 0
+    read_validation_mismatches: int = 0
+    read_validation_failures: int = 0
+    warmed_projection_rows: int = 0
+    cached_search_result_count: int = 0
+    cached_read_record_count: int = 0
+    cached_projection_count: int = 0
+    fresh_exact_search_hit_rate: float = 0.0
+    stale_exact_search_fallback_rate: float = 0.0
+    projection_fallback_rate: float = 0.0
+    validated_read_hit_rate: float = 0.0
+    read_validation_mismatch_rate: float = 0.0
+    read_validation_failure_rate: float = 0.0
+    recent: CacheRecentMetricsPayload = Field(default_factory=CacheRecentMetricsPayload)
+
+
+class CacheHealthPayload(BaseModel):
+    enabled: bool = False
+    mode: str | None = None
+    state: str = "disabled"
+    path: str | None = None
+    metrics: CacheMetricsPayload = Field(default_factory=CacheMetricsPayload)
+
+
 class HealthPayload(BaseModel):
     status: str
     storage_backend: str | None = None
@@ -58,6 +107,7 @@ class HealthPayload(BaseModel):
     task_queue_enabled: bool
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
+    cache: CacheHealthPayload = Field(default_factory=CacheHealthPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
 
 
@@ -794,6 +844,7 @@ class OverviewPayload(BaseModel):
     memories: OverviewCounts
     embeddings: EmbeddingStatusPayload = Field(default_factory=EmbeddingStatusPayload)
     search: SearchHealthPayload = Field(default_factory=SearchHealthPayload)
+    cache: CacheHealthPayload = Field(default_factory=CacheHealthPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
     memory_metrics: MemoryMetricsPayload
     premium_usage: PremiumUsageSummaryPayload = Field(default_factory=PremiumUsageSummaryPayload)

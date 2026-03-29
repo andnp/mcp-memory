@@ -3,8 +3,10 @@ import json
 import logging
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 from click.testing import CliRunner
+from mcp_memory.management.models import CacheHealthPayload, CacheMetricsPayload, CacheRecentMetricsPayload, ExecutionAttemptHealthPayload, HealthPayload, OperatorHealthSnapshotPayload, SearchHealthPayload
 
 from mcp_memory.cli import main
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult
@@ -1037,6 +1039,70 @@ def test_health_command_human_output_renders_warning_and_provider_policy_section
     assert "Provider Policy Churn" in result.output
     assert "Recent retried task runs" in result.output
     assert "Route exhaustion" in result.output
+
+
+def test_health_command_human_output_renders_cache_section(monkeypatch) -> None:
+    runner = CliRunner()
+
+    snapshot = OperatorHealthSnapshotPayload(
+        generated_at=100.0,
+        scope="global",
+        health=HealthPayload(
+            status="ok",
+            storage_backend="postgres",
+            runtime_active=True,
+            client_count=1,
+            task_queue_enabled=True,
+            cache=CacheHealthPayload(
+                enabled=True,
+                mode="readonly",
+                state="active",
+                path="/tmp/shared_read_cache.sqlite3",
+                metrics=CacheMetricsPayload(
+                    search_requests=8,
+                    fresh_exact_search_hits=3,
+                    read_requests=4,
+                    validated_read_hits=2,
+                    warmed_projection_rows=5,
+                    fresh_exact_search_hit_rate=0.375,
+                    validated_read_hit_rate=0.5,
+                    recent=CacheRecentMetricsPayload(
+                        window_minutes=15,
+                        search_requests=4,
+                        fresh_exact_search_hits=2,
+                        read_requests=2,
+                        validated_read_hits=1,
+                        warmed_projection_rows=3,
+                        fresh_exact_search_hit_rate=0.5,
+                        validated_read_hit_rate=0.5,
+                    ),
+                ),
+            ),
+            search=SearchHealthPayload(),
+            execution_attempts=ExecutionAttemptHealthPayload(),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "mcp_memory.cli._with_management_service",
+        lambda workspace_root, action, workspace_id=...: action(
+            SimpleNamespace(get_operator_health_snapshot=lambda: snapshot)
+        ),
+    )
+
+    result = runner.invoke(main, ["health"])
+
+    assert result.exit_code == 0
+    assert "Cache" in result.output
+    assert "readonly" in result.output
+    assert "active" in result.output
+    assert "/tmp/shared_read_cache.sqlite3" in result.output
+    assert "Search requests" in result.output
+    assert "Fresh exact hits" in result.output
+    assert "Warmed projection rows" in result.output
+    assert "Recent window" in result.output
+    assert "Recent search requests" in result.output
+    assert "Recent validated read hits" in result.output
 
 
 def test_stats_command_top_reads_show_memory_status(monkeypatch, tmp_path: Path) -> None:

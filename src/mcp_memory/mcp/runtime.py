@@ -78,6 +78,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         journal=storage.journal,
         repository=storage.repository,
         relational_search=storage.relational_search,
+        read_cache=storage.read_cache,
         task_queue=storage.task_queue,
         ai_json_provider=ai_json_provider,
         ai_agent_provider=ai_agent_provider,

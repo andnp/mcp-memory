@@ -18,6 +18,7 @@ class ApplicationContext:
     journal: Any = None
     repository: Any = None
     relational_search: Any = None
+    read_cache: Any = None
     task_queue: Any = None
     ai_json_provider: Any = None
     ai_agent_provider: Any = None
@@ -35,7 +36,7 @@ class ApplicationContext:
     search_health: Any = None
 
     def close(self) -> None:
-        for resource in (self.retrieval_telemetry, self.runtime_logs, self.repository):
+        for resource in (self.read_cache, self.retrieval_telemetry, self.runtime_logs, self.repository):
             close_method = getattr(resource, "close", None)
             if callable(close_method):
                 close_method()

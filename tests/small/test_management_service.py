@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from mcp_memory.config import Config, StorageCacheMode
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
@@ -17,6 +18,7 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
 
 
@@ -125,6 +127,125 @@ def test_management_service_health_reports_storage_backend(db_manager) -> None:
     health = service.get_health()
 
     assert health.storage_backend == "sqlite"
+
+
+@pytest.mark.parametrize(
+    ("backend", "cache_enabled", "cache_mode", "read_cache_path", "expected_state", "expected_path_suffix"),
+    [
+        ("sqlite", False, "readonly", None, "disabled", None),
+        ("sqlite", True, "readonly", None, "unsupported_backend", None),
+        ("postgres", True, "writeback", None, "reserved_unimplemented", None),
+        ("postgres", True, "readonly", None, "inactive", "cache/shared_read_cache.sqlite3"),
+        ("postgres", True, "readonly", "active-cache.sqlite3", "active", "active-cache.sqlite3"),
+    ],
+)
+def test_management_service_health_reports_cache_state(
+    db_manager,
+    tmp_path,
+    backend: str,
+    cache_enabled: bool,
+    cache_mode: StorageCacheMode,
+    read_cache_path: str | None,
+    expected_state: str,
+    expected_path_suffix: str | None,
+) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    config = Config()
+    config.storage.cache.enabled = cache_enabled
+    config.storage.cache.mode = cache_mode
+    memory_path = tmp_path / "memories"
+    read_cache = None if read_cache_path is None else SimpleNamespace(_db_path=tmp_path / read_cache_path)
+
+    service = ManagementService(
+        ApplicationContext(
+            config=config,
+            workspace_id="workspace-a",
+            memory_path=memory_path,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+            storage_backend=backend,
+            read_cache=read_cache,
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+
+    assert health.cache.enabled is cache_enabled
+    assert health.cache.mode == (cache_mode if cache_enabled else None)
+    assert health.cache.state == expected_state
+    if expected_path_suffix is None:
+        assert health.cache.path is None
+    else:
+        assert health.cache.path is not None
+        assert health.cache.path.endswith(expected_path_suffix)
+
+
+def test_management_service_surfaces_cache_metrics_in_health_and_overview(db_manager, tmp_path) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    config = Config()
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "readonly"
+    memory_path = tmp_path / "memories"
+    read_cache = SharedReadCache(tmp_path / "cache" / "shared_read_cache.sqlite3")
+
+    read_cache.increment_metric("search_requests", amount=5)
+    read_cache.increment_metric("fresh_exact_search_hits", amount=2)
+    read_cache.increment_metric("stale_exact_search_fallbacks", amount=1)
+    read_cache.increment_metric("read_requests", amount=4)
+    read_cache.increment_metric("validated_read_hits", amount=3)
+    read_cache.increment_metric("warmed_projection_rows", amount=7)
+
+    service = ManagementService(
+        ApplicationContext(
+            config=config,
+            workspace_id="workspace-a",
+            memory_path=memory_path,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+            provider_usage=SimpleNamespace(
+                summarize_usage=lambda workspace_id=None: [],
+                list_conversations=lambda **kwargs: [],
+            ),
+            runtime_logs=SimpleNamespace(list_logs=lambda **kwargs: []),
+            storage_backend="postgres",
+            read_cache=read_cache,
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+    overview = service.get_overview()
+
+    assert health.cache.state == "active"
+    assert health.cache.metrics.search_requests == 5
+    assert health.cache.metrics.fresh_exact_search_hits == 2
+    assert health.cache.metrics.stale_exact_search_fallbacks == 1
+    assert health.cache.metrics.read_requests == 4
+    assert health.cache.metrics.validated_read_hits == 3
+    assert health.cache.metrics.warmed_projection_rows == 7
+    assert health.cache.metrics.fresh_exact_search_hit_rate == 0.4
+    assert health.cache.metrics.validated_read_hit_rate == 0.75
+    assert health.cache.metrics.recent.window_minutes == 15
+    assert health.cache.metrics.recent.search_requests == 5
+    assert health.cache.metrics.recent.stale_exact_search_fallbacks == 1
+    assert health.cache.metrics.recent.read_requests == 4
+    assert health.cache.metrics.recent.validated_read_hits == 3
+    assert health.cache.metrics.recent.warmed_projection_rows == 7
+    assert health.cache.metrics.recent.fresh_exact_search_hit_rate == 0.4
+    assert health.cache.metrics.recent.validated_read_hit_rate == 0.75
+
+    assert overview.cache.state == "active"
+    assert overview.cache.metrics.search_requests == 5
+    assert overview.cache.metrics.read_requests == 4
+    assert overview.cache.metrics.warmed_projection_rows == 7
+    assert overview.cache.metrics.recent.search_requests == 5
+    assert overview.cache.metrics.recent.read_requests == 4
+    assert overview.cache.metrics.recent.warmed_projection_rows == 7
 
 
 def test_management_service_uses_postgres_runtime_log_repository_for_postgres_backend(monkeypatch) -> None:

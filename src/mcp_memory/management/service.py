@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 import logging
@@ -24,6 +25,8 @@ from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     AIConversationListPayload,
     AIConversationPayload,
+    CacheHealthPayload,
+    CacheMetricsPayload,
     HealthPayload,
     MemoryToolLatencyMetricPayload,
     MemoryToolLatencyPayload,
@@ -140,6 +143,7 @@ class ManagementService:
         self._repository = ctx.repository
         self._provider_usage = ctx.provider_usage or _build_default_provider_usage(ctx)
         self._runtime_logs = ctx.runtime_logs or _build_default_runtime_logs(ctx)
+        self._read_cache = getattr(ctx, "read_cache", None)
         self._embedder = ctx.embedder
         self._relational_search = ctx.relational_search
         self._config = ctx.config
@@ -169,8 +173,58 @@ class ManagementService:
             task_queue_enabled=self._runtime_info.task_queue_enabled,
             embeddings=embedder_status,
             search=build_search_health(self._relational_search),
+            cache=self._build_cache_health(),
             execution_attempts=build_execution_attempt_health(self._db_manager, self._workspace_id),
         )
+
+    def _build_cache_health(self) -> CacheHealthPayload:
+        cache_config = None if self._config is None else self._config.storage.cache
+        cache_enabled = bool(getattr(cache_config, "enabled", False))
+        cache_mode = getattr(cache_config, "mode", None) if cache_enabled else None
+        metrics = self._build_cache_metrics_payload()
+        if not cache_enabled:
+            return CacheHealthPayload(enabled=False, mode=None, state="disabled", path=None, metrics=metrics)
+
+        if self._storage_backend != "postgres":
+            return CacheHealthPayload(enabled=True, mode=cache_mode, state="unsupported_backend", path=None, metrics=metrics)
+
+        if cache_mode != "readonly":
+            return CacheHealthPayload(enabled=True, mode=cache_mode, state="reserved_unimplemented", path=None, metrics=metrics)
+
+        configured_path = self._configured_cache_path()
+        if self._read_cache is None:
+            return CacheHealthPayload(
+                enabled=True,
+                mode=cache_mode,
+                state="inactive",
+                path=str(configured_path) if configured_path is not None else None,
+                metrics=metrics,
+            )
+
+        active_path = getattr(self._read_cache, "_db_path", None)
+        resolved_path = active_path if isinstance(active_path, Path) else configured_path
+        return CacheHealthPayload(
+            enabled=True,
+            mode=cache_mode,
+            state="active",
+            path=str(resolved_path) if resolved_path is not None else None,
+            metrics=metrics,
+        )
+
+    def _build_cache_metrics_payload(self) -> CacheMetricsPayload:
+        if self._read_cache is None:
+            return CacheMetricsPayload()
+        try:
+            snapshot = self._read_cache.get_metrics_snapshot()
+        except Exception:
+            logger.warning("Failed to read shared cache metrics snapshot", exc_info=True)
+            return CacheMetricsPayload()
+        return CacheMetricsPayload(**asdict(snapshot))
+
+    def _configured_cache_path(self) -> Path | None:
+        if self._runtime_info.memory_path is None:
+            return None
+        return self._runtime_info.memory_path / "cache" / "shared_read_cache.sqlite3"
 
     def get_operator_health_snapshot(
         self,
@@ -287,6 +341,7 @@ class ManagementService:
             runtime_logs_repo=self._runtime_logs,
             embedder=self._embedder,
             relational_search=self._relational_search,
+            cache=self._build_cache_health(),
             recent_limit=recent_limit,
             failed_limit=failed_limit,
         )

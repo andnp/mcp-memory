@@ -18,6 +18,7 @@ class StorageBackendResources:
     journal: Any
     repository: Any
     relational_search: Any
+    read_cache: Any
     task_queue: Any
     provider_usage: Any
     runtime_logs: Any

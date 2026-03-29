@@ -55,6 +55,7 @@ def build_sqlite_runtime_components(
         journal=journal,
         repository=repository,
         relational_search=relational_search,
+        read_cache=None,
         task_queue=task_queue,
         provider_usage=provider_usage,
         runtime_logs=runtime_logs,

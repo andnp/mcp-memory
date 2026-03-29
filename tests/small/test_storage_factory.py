@@ -12,6 +12,7 @@ from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres import ensure_postgres_schema, inspect_postgres_bootstrap_state
 from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.types import StorageBackendResources
@@ -59,6 +60,45 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
     assert isinstance(storage.task_queue, PostgresTaskQueue)
     assert isinstance(storage.task_execution_attempts, PostgresTaskExecutionAttemptRepository)
     assert storage.relational_search.get_health().available is False
+    assert storage.read_cache is None
+
+
+def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_readonly_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config(
+        storage=StorageConfig(
+            backend="postgres",
+            postgres=PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"),
+        )
+    )
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "readonly"
+    spec = RuntimeSpec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-123",
+        workspace_root=tmp_path,
+        lock_path=tmp_path / "daemon.lock",
+    )
+
+    def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+        assert config.dsn == "postgresql://memory@example.invalid/mcp_memory"
+        return StorageBootstrapState(
+            backend="postgres",
+            schema_metadata_present=True,
+            schema_version=5,
+        )
+
+    monkeypatch.setattr(
+        "mcp_memory.storage.postgres.ensure_postgres_schema",
+        fake_ensure_postgres_schema,
+    )
+
+    storage = build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
+
+    assert isinstance(storage.read_cache, SharedReadCache)
 
 
 def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,6 +307,7 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         journal=object(),
         repository=object(),
         relational_search=object(),
+        read_cache=None,
         task_queue=_UnsupportedTaskQueue(),
         provider_usage=object(),
         runtime_logs=object(),

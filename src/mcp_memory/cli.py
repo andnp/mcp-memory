@@ -630,6 +630,77 @@ def _render_execution_attempt_health_table(execution_attempts) -> None:
     console.print(table)
 
 
+def _render_cache_health_table(cache_health) -> None:
+    table = Table(title="Cache")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Enabled", str(cache_health.enabled))
+    table.add_row("Mode", cache_health.mode or "-")
+    table.add_row("State", cache_health.state)
+    table.add_row("Path", cache_health.path or "-")
+    metrics = cache_health.metrics
+    table.add_row("Cached search responses", str(metrics.cached_search_result_count))
+    table.add_row("Cached read records", str(metrics.cached_read_record_count))
+    table.add_row("Cached projections", str(metrics.cached_projection_count))
+    table.add_row("Search requests", str(metrics.search_requests))
+    table.add_row(
+        "Fresh exact hits",
+        f"{metrics.fresh_exact_search_hits} ({metrics.fresh_exact_search_hit_rate:.1%})",
+    )
+    table.add_row(
+        "Stale exact fallbacks",
+        f"{metrics.stale_exact_search_fallbacks} ({metrics.stale_exact_search_fallback_rate:.1%})",
+    )
+    table.add_row(
+        "Projection fallbacks",
+        f"{metrics.projection_fallbacks} ({metrics.projection_fallback_rate:.1%})",
+    )
+    table.add_row("Read requests", str(metrics.read_requests))
+    table.add_row(
+        "Validated read hits",
+        f"{metrics.validated_read_hits} ({metrics.validated_read_hit_rate:.1%})",
+    )
+    table.add_row(
+        "Validation mismatches",
+        f"{metrics.read_validation_mismatches} ({metrics.read_validation_mismatch_rate:.1%})",
+    )
+    table.add_row(
+        "Validation failures",
+        f"{metrics.read_validation_failures} ({metrics.read_validation_failure_rate:.1%})",
+    )
+    table.add_row("Warmed projection rows", str(metrics.warmed_projection_rows))
+    recent = metrics.recent
+    table.add_row("Recent window", f"{recent.window_minutes}m")
+    table.add_row("Recent search requests", str(recent.search_requests))
+    table.add_row(
+        "Recent fresh exact hits",
+        f"{recent.fresh_exact_search_hits} ({recent.fresh_exact_search_hit_rate:.1%})",
+    )
+    table.add_row(
+        "Recent stale exact fallbacks",
+        f"{recent.stale_exact_search_fallbacks} ({recent.stale_exact_search_fallback_rate:.1%})",
+    )
+    table.add_row(
+        "Recent projection fallbacks",
+        f"{recent.projection_fallbacks} ({recent.projection_fallback_rate:.1%})",
+    )
+    table.add_row("Recent read requests", str(recent.read_requests))
+    table.add_row(
+        "Recent validated read hits",
+        f"{recent.validated_read_hits} ({recent.validated_read_hit_rate:.1%})",
+    )
+    table.add_row(
+        "Recent validation mismatches",
+        f"{recent.read_validation_mismatches} ({recent.read_validation_mismatch_rate:.1%})",
+    )
+    table.add_row(
+        "Recent validation failures",
+        f"{recent.read_validation_failures} ({recent.read_validation_failure_rate:.1%})",
+    )
+    table.add_row("Recent warmed projection rows", str(recent.warmed_projection_rows))
+    console.print(table)
+
+
 def _render_agent_table(overview) -> None:
     agent_table = Table(title="Background Agents")
     agent_table.add_column("Agent", no_wrap=True)
@@ -996,6 +1067,7 @@ def _render_stats_snapshot(
 
     _render_search_health_table(health.search)
     _render_embedding_repair_table(health.search)
+    _render_cache_health_table(overview.cache)
     _render_execution_attempt_health_table(overview.execution_attempts)
     _render_memory_metrics_table(overview, journal_counts)
     _render_queue_diagnostics_table(overview)
@@ -1114,6 +1186,7 @@ def _render_operator_health_snapshot(payload) -> None:
     runtime_table.add_row("DB path", payload.health.db_path or "-")
     console.print(runtime_table)
 
+    _render_cache_health_table(payload.health.cache)
     _render_search_health_table(payload.health.search)
     _render_execution_attempt_health_table(payload.health.execution_attempts)
 

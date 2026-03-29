@@ -19,6 +19,7 @@ from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepos
 from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
 
@@ -124,6 +125,9 @@ def build_postgres_runtime_components(
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
     )
+    read_cache = None
+    if spec.config.storage.cache.enabled and spec.config.storage.cache.mode == "readonly":
+        read_cache = SharedReadCache(spec.memory_path / "cache" / "shared_read_cache.sqlite3")
     if not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None:
         raise PostgresBackendNotImplementedError(
             "storage backend 'postgres' schema bootstrap did not complete successfully"
@@ -134,6 +138,7 @@ def build_postgres_runtime_components(
         journal=journal,
         repository=repository,
         relational_search=relational_search,
+        read_cache=read_cache,
         task_queue=task_queue,
         provider_usage=provider_usage,
         runtime_logs=runtime_logs,
