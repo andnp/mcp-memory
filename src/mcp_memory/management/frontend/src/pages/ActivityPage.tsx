@@ -8,8 +8,18 @@ function formatTimestamp(timestamp: number): string {
 }
 
 export function ActivityPage() {
-  const overviewQuery = useQuery({ queryKey: ['overview'], queryFn: fetchOverview, refetchInterval: 5000 });
-  const conversationsQuery = useQuery({ queryKey: ['ai-conversations'], queryFn: () => fetchAIConversations(10), refetchInterval: 5000 });
+  const overviewQuery = useQuery({
+    queryKey: ['overview'],
+    queryFn: fetchOverview,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
+  });
+  const conversationsQuery = useQuery({
+    queryKey: ['ai-conversations'],
+    queryFn: () => fetchAIConversations(10),
+    refetchInterval: 15000,
+    refetchOnWindowFocus: false,
+  });
 
   const [taskFilter, setTaskFilter] = useState('');
   const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null);

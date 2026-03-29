@@ -12,8 +12,18 @@ export function LogsPage() {
   const [level, setLevel] = useState('');
   const [source, setSource] = useState('');
   const filters = useMemo(() => ({ q: query || undefined, level: level || undefined, source: source || undefined, limit: 20 }), [level, query, source]);
-  const logsQuery = useQuery({ queryKey: ['logs', filters], queryFn: () => fetchLogs(filters), refetchInterval: 5000 });
-  const summaryQuery = useQuery({ queryKey: ['log-summary', filters], queryFn: () => fetchLogSummary(filters), refetchInterval: 5000 });
+  const logsQuery = useQuery({
+    queryKey: ['logs', filters],
+    queryFn: () => fetchLogs(filters),
+    refetchInterval: 15000,
+    refetchOnWindowFocus: false,
+  });
+  const summaryQuery = useQuery({
+    queryKey: ['log-summary', filters],
+    queryFn: () => fetchLogSummary(filters),
+    refetchInterval: 15000,
+    refetchOnWindowFocus: false,
+  });
 
   return (
     <div className="space-y-6">
