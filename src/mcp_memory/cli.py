@@ -31,6 +31,7 @@ from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.service import ManagementService
+from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
 from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
@@ -172,6 +173,22 @@ def _print_dashboard_url(workspace_root: str | None, *, open_browser: bool = Fal
     if open_browser:
         opened = webbrowser.open(dashboard_url)
         console.print(f"browser_opened={opened}")
+
+
+def _build_dashboard_frontend() -> None:
+    result = ensure_dashboard_frontend_built(static_root=Path(__file__).with_name("management") / "static")
+    if result.status == "up_to_date":
+        console.print(f"[green]Dashboard frontend up to date:[/] {result.dist_index_path}")
+        return
+    if result.status == "built":
+        console.print(f"[green]Dashboard frontend built:[/] {result.dist_index_path}")
+        return
+    message = f" message={result.message}" if result.message else ""
+    returncode = f" returncode={result.returncode}" if result.returncode is not None else ""
+    console.print(
+        f"[red]Dashboard frontend build failed:[/] status={result.status}{returncode}{message}"
+    )
+    raise click.ClickException(f"dashboard_frontend_build_failed:{result.status}")
 
 
 def _resolve_stash_content(text_parts: tuple[str, ...]) -> str:
@@ -1447,14 +1464,6 @@ def daemon_restart(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
-@daemon_group.command(name="dashboard")
-@workspace_root_option
-@click.option("--open", "open_browser", is_flag=True, help="Open the dashboard URL in the default browser")
-def dashboard(workspace_root: str | None, open_browser: bool) -> None:
-    """Ensure the daemon is running and print the active transport endpoint."""
-    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=open_browser))
-
-
 @main.command(name="daemon-status", hidden=True)
 @workspace_root_option
 def daemon_status_alias(workspace_root: str | None) -> None:
@@ -1851,6 +1860,12 @@ def admin_dashboard_group() -> None:
 def admin_dashboard_open_command(workspace_root: str | None) -> None:
     """Ensure the daemon is running and open the operator dashboard."""
     _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=True))
+
+
+@admin_dashboard_group.command(name="build")
+def admin_dashboard_build_command() -> None:
+    """Build the operator dashboard frontend bundle."""
+    _run_or_exit(_build_dashboard_frontend)
 
 
 @main.command(name="import-markdown")

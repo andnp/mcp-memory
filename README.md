@@ -99,7 +99,7 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 
 ### Admin / Maintenance Commands
 - `uv run mcp-memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
-- `uv run mcp-memory dashboard`: ensure the daemon is running and print the active transport endpoint.
+- `uv run mcp-memory admin dashboard open`: ensure the daemon is running and open the operator dashboard.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
 - `uv run mcp-memory stats`: print background task and memory statistics from the active backend.
@@ -296,12 +296,12 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
    This command auto-starts the global daemon if it is not already running.
 
-6. **Inspect the active daemon transport**:
+6. **Open the operator dashboard**:
    ```bash
-   uv run mcp-memory dashboard
+   uv run mcp-memory admin dashboard open
    ```
 
-   This command ensures the daemon is running and prints the active `ipc://...` transport endpoint.
+   This command ensures the daemon is running, opens the dashboard in your browser, and prints the dashboard URL.
 
 7. **Run the daemon manually** (optional):
    ```bash

@@ -20,6 +20,11 @@ def _wait_for_process_exit(pid: int, *, timeout_seconds: float = 10.0, interval_
             os.kill(pid, 0)
         except ProcessLookupError:
             return
+        proc_stat_path = Path(f"/proc/{pid}/stat")
+        if proc_stat_path.exists():
+            proc_stat = proc_stat_path.read_text().split()
+            if len(proc_stat) >= 3 and proc_stat[2] == "Z":
+                return
         time.sleep(interval_seconds)
     raise AssertionError(f"timed out waiting for process {pid} to exit")
 
@@ -64,11 +69,14 @@ def test_cli_daemon_restart_replaces_live_process(monkeypatch, tmp_path: Path) -
     monkeypatch.setenv("HOME", str(home_path))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home_path))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: True)
 
     runner = CliRunner()
 
     try:
-        start_result = runner.invoke(main, ["daemon", "dashboard", "--workspace-root", str(workspace)])
+        start_result = runner.invoke(main, ["admin", "dashboard", "open", "--workspace-root", str(workspace)])
 
         assert start_result.exit_code == 0, start_result.output
         first_metadata = read_daemon_metadata(resolve_daemon_metadata_path())

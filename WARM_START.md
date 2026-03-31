@@ -8,7 +8,7 @@
 - global daemon owns runtime state and background workers
 - workspace context is metadata for ranking and analytics, not an execution boundary
 - `mcp-memory run` is a thin MCP stdio proxy that auto-starts the daemon
-- `mcp-memory dashboard` ensures the daemon is running and prints the dashboard URL
+- `mcp-memory admin dashboard open` ensures the daemon is running and opens the dashboard URL
 
 ## First Steps for a New Session
 

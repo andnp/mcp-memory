@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
+import mcp_memory.cli as cli
 from mcp_memory.cli import main
 from mcp_memory.management.models import TaskSamplingSummaryPayload
+from mcp_memory.management.frontend_build import DashboardFrontendBuildResult
 
 
 pytestmark = pytest.mark.small
@@ -32,6 +36,15 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
         "host": "0.0.0.0",
         "port": 1234,
     }
+
+
+def test_daemon_dashboard_route_is_removed() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["daemon", "dashboard"])
+
+    assert result.exit_code != 0
+    assert "No such command 'dashboard'" in result.output
 
 
 def test_memory_stash_forwards_to_existing_stash_behavior(monkeypatch) -> None:
@@ -488,6 +501,50 @@ def test_admin_dashboard_open_forwards_to_existing_dashboard_helper(monkeypatch)
         "workspace_root": "/tmp/demo",
         "open_browser": True,
     }
+
+
+@pytest.mark.parametrize("status", ["built", "up_to_date"])
+def test_admin_dashboard_build_uses_shared_frontend_builder(monkeypatch, status: str) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_ensure_dashboard_frontend_built(*, static_root: Path) -> DashboardFrontendBuildResult:
+        captured["static_root"] = static_root
+        return DashboardFrontendBuildResult(
+            status=status,
+            frontend_root=static_root.with_name("frontend"),
+            dist_index_path=static_root / "dist" / "index.html",
+            built=status == "built",
+        )
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_dashboard_frontend_built", fake_ensure_dashboard_frontend_built)
+
+    result = runner.invoke(main, ["admin", "dashboard", "build"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "static_root": Path(cli.__file__).with_name("management") / "static",
+    }
+
+
+def test_admin_dashboard_build_returns_nonzero_for_failed_build_status(monkeypatch) -> None:
+    runner = CliRunner()
+
+    def fake_ensure_dashboard_frontend_built(*, static_root: Path) -> DashboardFrontendBuildResult:
+        return DashboardFrontendBuildResult(
+            status="build_failed",
+            frontend_root=static_root.with_name("frontend"),
+            dist_index_path=static_root / "dist" / "index.html",
+            returncode=2,
+            message="npm exploded politely",
+        )
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_dashboard_frontend_built", fake_ensure_dashboard_frontend_built)
+
+    result = runner.invoke(main, ["admin", "dashboard", "build"])
+
+    assert result.exit_code == 1
+    assert "dashboard_frontend_build_failed:build_failed" in result.output
 
 
 def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> None:

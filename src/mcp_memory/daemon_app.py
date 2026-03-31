@@ -73,6 +73,11 @@ async def _warm_embedding_model(embedder: Any) -> bool:
     return bool(await asyncio.to_thread(cache_model))
 
 
+def _consume_embedding_warmup_result(task: asyncio.Task[bool]) -> None:
+    with suppress(asyncio.CancelledError):
+        task.result()
+
+
 async def _cancel_idle_shutdown_task(app: FastAPI) -> None:
     shutdown_task = getattr(app.state, "idle_shutdown_task", None)
     if shutdown_task is None:
@@ -224,6 +229,7 @@ def create_daemon_app(
         bootstrap_background_tasks(runtime)
         worker = build_runtime_task_worker(runtime)
         warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
+        warmup_task.add_done_callback(_consume_embedding_warmup_result)
         backup_task = asyncio.create_task(_run_periodic_backup_loop(runtime))
         if worker is not None:
             await worker.start()
@@ -253,7 +259,6 @@ def create_daemon_app(
             metadata_path=metadata_path,
         )
         await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
-        await warmup_task
         app.state.routes = routes
         app.state.idle_shutdown_task = None
         app.state.backup_task = backup_task
