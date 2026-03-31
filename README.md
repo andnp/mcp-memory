@@ -1,8 +1,8 @@
    Development helpers:
    ```bash
-   uv run mcp-memory daemon-status
-   uv run mcp-memory daemon-stop
-   uv run mcp-memory daemon-restart
+   uv run mcp-memory daemon status
+   uv run mcp-memory daemon stop
+   uv run mcp-memory daemon restart
    ```
 # MCP Memory Server
 
@@ -98,12 +98,12 @@ Everything else is intentionally kept out of the public MCP surface. Admin, migr
 For trusted maintenance agents, the repo also now includes a workspace-local internal MCP surface exposed through `uv run mcp-memory internal-run`. The bundled `.gemini/settings.json` enables that internal tool surface only inside this workspace.
 
 ### Admin / Maintenance Commands
-- `uv run mcp-memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
+- `uv run mcp-memory memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
 - `uv run mcp-memory admin install`: install local tool integrations.
 - `uv run mcp-memory admin dashboard open`: ensure the daemon is running and open the operator dashboard.
-- `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
-- `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
-- `uv run mcp-memory stats`: print background task and memory statistics from the active backend.
+- `uv run mcp-memory admin agent run memory-curator`: trigger one background agent for the active workspace.
+- `uv run mcp-memory admin agent run --all`: enqueue all background agents for the active workspace.
+- `uv run mcp-memory admin overview`: print background task and memory statistics from the active backend.
 - `uv run mcp-memory memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
@@ -122,7 +122,7 @@ Split maintenance now records richer lineage structure: split children share a `
 
 Agentic ingest also now normalizes legacy provider payloads that return `results` instead of `actions`, so append opportunities are no longer silently lost when the provider uses the older shape.
 
-Provider usage reporting in `uv run mcp-memory stats` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
+Provider usage reporting in `uv run mcp-memory admin overview` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
 
 Search debug output now exposes graph- and ranking-specific fields such as `authority_supporting_links`, `authority_contradicting_links`, `expanded_by_graph`, `graph_seed_id`, `graph_link_type`, and `graph_rrf_score`, making live search tuning and dogfooding much easier.
 
@@ -311,7 +311,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 8. **Stash one thought quickly** (optional admin flow):
    ```bash
-   uv run mcp-memory stash "I prefer snake_case JSON keys."
+   uv run mcp-memory memory stash "I prefer snake_case JSON keys."
    ```
 
 9. **Import legacy markdown** (optional admin flow):
@@ -321,9 +321,9 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 10. **Trigger or inspect background agents** (optional admin flow):
    ```bash
-   uv run mcp-memory agents run sweeper
-   uv run mcp-memory agents run-all
-   uv run mcp-memory stats
+   uv run mcp-memory admin agent run memory-curator
+   uv run mcp-memory admin agent run --all
+   uv run mcp-memory admin overview
    ```
 
 11. **Install local tool integrations** (optional admin flow):
@@ -357,10 +357,10 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 13. **Smoke test the system**:
    - confirm the daemon command prints a stable `ipc://...` endpoint
    - if using SQLite, confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
-   - if using Postgres, confirm `uv run mcp-memory health --json` reports the Postgres backend
+   - if using Postgres, confirm `uv run mcp-memory admin health --json` reports the Postgres backend
    - record a thought through your MCP client
    - verify that the thought becomes searchable and readable through the MCP client
-   - run `uv run mcp-memory stats` and confirm the task/memory metrics look sane
+   - run `uv run mcp-memory admin overview` and confirm the task/memory metrics look sane
 
 ## Backup
 

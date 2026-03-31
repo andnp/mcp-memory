@@ -1464,24 +1464,6 @@ def daemon_restart(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _restart_daemon_command(workspace_root))
 
 
-@main.command(name="daemon-status", hidden=True)
-@workspace_root_option
-def daemon_status_alias(workspace_root: str | None) -> None:
-    _print_daemon_status(workspace_root)
-
-
-@main.command(name="daemon-stop", hidden=True)
-@workspace_root_option
-def daemon_stop_alias(workspace_root: str | None) -> None:
-    _run_or_exit(lambda: _stop_daemon_command(workspace_root))
-
-
-@main.command(name="daemon-restart", hidden=True)
-@workspace_root_option
-def daemon_restart_alias(workspace_root: str | None) -> None:
-    _run_or_exit(lambda: _restart_daemon_command(workspace_root))
-
-
 @main.group(name="admin")
 def admin_group() -> None:
     """Canonical operator commands."""

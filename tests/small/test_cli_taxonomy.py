@@ -874,6 +874,9 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
 @pytest.mark.parametrize(
     ("argv", "missing_command"),
     [
+        (["daemon-status"], "daemon-status"),
+        (["daemon-stop"], "daemon-stop"),
+        (["daemon-restart"], "daemon-restart"),
         (["import-markdown", "demo.md"], "import-markdown"),
         (["stash"], "stash"),
         (["prefetch-model"], "prefetch-model"),

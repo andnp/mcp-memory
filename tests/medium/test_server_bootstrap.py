@@ -851,16 +851,19 @@ def test_cli_help_lists_grouped_public_commands() -> None:
 
     result = runner.invoke(main, ["--help"])
     help_lines = result.output.splitlines()
+    command_lines = [line.strip() for line in help_lines if line.startswith("  ")]
 
     assert result.exit_code == 0
     assert "run" in result.output
     assert "daemon" in result.output
-    assert "log" in result.output
-    assert "install" in result.output
-    assert "agents" in result.output
-    assert "stats" in result.output
-    assert "stash" in result.output
-    assert "import-markdown" in result.output
+    assert "memory" in result.output
+    assert "admin" in result.output
+    assert not any(line.startswith("log") for line in command_lines)
+    assert not any(line.startswith("install") for line in command_lines)
+    assert not any(line.startswith("agents") for line in command_lines)
+    assert not any(line.startswith("stats") for line in command_lines)
+    assert not any(line.startswith("stash") for line in command_lines)
+    assert not any(line.startswith("import-markdown") for line in command_lines)
     assert "daemon-status" not in result.output
     assert "daemon-stop" not in result.output
     assert "daemon-restart" not in result.output
@@ -879,15 +882,15 @@ def test_daemon_help_lists_nested_management_commands() -> None:
     assert "status" in result.output
     assert "stop" in result.output
     assert "restart" in result.output
-    assert "dashboard" in result.output
+    assert "dashboard" not in result.output
 
 
-def test_log_help_lists_nested_log_commands() -> None:
+def test_admin_log_help_lists_nested_log_commands() -> None:
     runner = CliRunner()
 
-    result = runner.invoke(main, ["log", "--help"])
+    result = runner.invoke(main, ["admin", "log", "--help"])
 
     assert result.exit_code == 0
-    assert "show" in result.output
+    assert "list" in result.output
     assert "summary" in result.output
     assert "prune" in result.output
