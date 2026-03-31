@@ -130,7 +130,6 @@ def _print_daemon_status(workspace_root: str | None) -> None:
 
 
 def _stop_daemon_command(workspace_root: str | None) -> None:
-    stop_result = None
     stop_result = stop_daemon(workspace_root, None)
     if stop_result is None:
         console.print("[yellow]No daemon metadata found.[/]")
@@ -150,8 +149,6 @@ def _stop_daemon_command(workspace_root: str | None) -> None:
 
 
 def _restart_daemon_command(workspace_root: str | None) -> None:
-    metadata = None
-    stop_result = None
     stop_result = stop_daemon(workspace_root, None)
     metadata = ensure_daemon_started(workspace_root, None)
     if metadata is None:
