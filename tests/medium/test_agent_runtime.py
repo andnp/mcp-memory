@@ -2641,7 +2641,10 @@ async def test_runtime_task_worker_recovers_work_items_owned_by_terminal_tasks_o
 
 
 @pytest.mark.asyncio
-async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_path: Path) -> None:
+async def test_graph_linker_still_links_but_no_provider_conflict_detector_skips_heuristic_contradictions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -2721,9 +2724,9 @@ async def test_graph_linker_and_conflict_detector_create_links(monkeypatch, tmp_
 
         assert graph_result["created"] >= 1
         assert any(link.target_id == authority_fact.id for link in outgoing_from_plan)
-        assert conflict_result["created"] == 2
-        assert any(link.link_type == "CONTRADICTS" for link in outgoing_from_fact)
-        assert any(link.link_type == "CONTRADICTS" for link in incoming_to_fact)
+        assert conflict_result["created"] == 0
+        assert all(link.link_type != "CONTRADICTS" for link in outgoing_from_fact)
+        assert all(link.link_type != "CONTRADICTS" for link in incoming_to_fact)
     finally:
         runtime.close()
 

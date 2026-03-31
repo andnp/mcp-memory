@@ -61,9 +61,8 @@ async def propose_conflicts(
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str]]:
-    fallback = _fallback_conflicts(candidates)
-    if provider is None or fallback or len(candidates) <= CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
-        return fallback
+    if provider is None or len(candidates) <= CONFLICT_DETECTOR_AI_MIN_CANDIDATES:
+        return []
 
     response = await run_internal_tool_loop(
         ctx,
@@ -90,7 +89,7 @@ async def propose_conflicts(
         if normalized:
             return normalized
 
-    return fallback
+    return []
 
 
 def _fallback_graph_links(candidates: list) -> list[tuple[str, str, str, str]]:
