@@ -99,6 +99,7 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 
 ### Admin / Maintenance Commands
 - `uv run mcp-memory stash "Remember to normalize workspace metadata."`: record one raw thought into the System 1 journal.
+- `uv run mcp-memory admin install`: install local tool integrations.
 - `uv run mcp-memory admin dashboard open`: ensure the daemon is running and open the operator dashboard.
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
@@ -327,10 +328,10 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 11. **Install local tool integrations** (optional admin flow):
    ```bash
-   uv run mcp-memory install
-   uv run mcp-memory install --tool copilot --component hooks
-   uv run mcp-memory install --tool claude --scope user --component hooks
-   uv run mcp-memory install --tool gemini --component mcp
+   uv run mcp-memory admin install
+   uv run mcp-memory admin install --tool copilot --component hooks
+   uv run mcp-memory admin install --tool claude --scope user --component hooks
+   uv run mcp-memory admin install --tool gemini --component mcp
    ```
 
    This installer can write:

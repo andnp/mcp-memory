@@ -563,6 +563,63 @@ def test_admin_prefetch_model_forwards_to_existing_prefetch_helper(monkeypatch) 
     }
 
 
+def test_admin_install_forwards_to_existing_install_helper(monkeypatch) -> None:
+    runner = CliRunner()
+
+    class _FakeAction:
+        def __init__(self, tool: str, component: str, status: str, path: str) -> None:
+            self.tool = tool
+            self.component = component
+            self.status = status
+            self.path = path
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            self.workspace_root = "/tmp/demo"
+            self.actions = [_FakeAction("copilot", "hooks", "written", "/tmp/demo/.github/hooks/mcp-memory.json")]
+
+    captured: dict[str, object] = {}
+
+    def fake_install_integrations(
+        *,
+        tools: tuple[str, ...],
+        components: tuple[str, ...],
+        scope: str,
+        workspace_root: str | None,
+    ) -> _FakeResult:
+        captured["tools"] = tools
+        captured["components"] = components
+        captured["scope"] = scope
+        captured["workspace_root"] = workspace_root
+        return _FakeResult()
+
+    monkeypatch.setattr("mcp_memory.cli.install_integrations", fake_install_integrations)
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "install",
+            "--tool",
+            "copilot",
+            "--component",
+            "hooks",
+            "--scope",
+            "user",
+            "--workspace-root",
+            "/tmp/demo",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "tools": ("copilot",),
+        "components": ("hooks",),
+        "scope": "user",
+        "workspace_root": "/tmp/demo",
+    }
+
+
 @pytest.mark.parametrize("status", ["built", "up_to_date"])
 def test_admin_dashboard_build_uses_shared_frontend_builder(monkeypatch, status: str) -> None:
     runner = CliRunner()
@@ -773,6 +830,7 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
         (["import-markdown", "demo.md"], "import-markdown"),
         (["stash"], "stash"),
         (["prefetch-model"], "prefetch-model"),
+        (["install"], "install"),
         (["task", "list"], "task"),
         (["log", "list"], "log"),
         (["agents", "run", "memory-curator"], "agents"),

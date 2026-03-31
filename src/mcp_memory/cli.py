@@ -1583,7 +1583,7 @@ def admin_log_prune(
     _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
 
 
-@main.command(name="install")
+@admin_group.command(name="install")
 @click.option(
     "--tool",
     "tools",
