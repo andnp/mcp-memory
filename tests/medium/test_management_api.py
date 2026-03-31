@@ -1168,6 +1168,135 @@ class _HealthMetadata:
 
 
 @pytest.mark.asyncio
+async def test_daemon_zmq_record_thought_tool_fast_path_ignores_saturated_request_pool(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    blocking_request_started = asyncio.Event()
+    release_blocking_request = asyncio.Event()
+
+    async def _blocking_post_tool_use(_ctx, _arguments: dict[str, object]) -> dict[str, object]:
+        blocking_request_started.set()
+        await release_blocking_request.wait()
+        return {"status": "ok"}
+
+    monkeypatch.setattr(daemon_app_module, "_handle_post_tool_use", _blocking_post_tool_use)
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    async with app.router.lifespan_context(app):
+        metadata = app.state.metadata
+        blocking_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/hooks/post-tool-use",
+                {"sessionId": "conversation-1", "tool_name": "apply_patch", "timestamp": 1.0},
+                timeout_seconds=1.0,
+            )
+        )
+        await asyncio.wait_for(blocking_request_started.wait(), timeout=0.5)
+
+        request_started_at = time.monotonic()
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/internal/tools/record_thought",
+                {"content": "fast-path thought", "__workspace_root": str(workspace)},
+                timeout_seconds=1.0,
+            ),
+            timeout=1.5,
+        )
+        request_elapsed = time.monotonic() - request_started_at
+
+        decoded = json.loads(response["contents"][0]["text"])
+        assert blocking_request.done() is False
+        assert decoded["status"] == "recorded"
+        assert decoded["entry"]["workspace_id"] == app.state.routes.ctx.workspace_id
+        assert request_elapsed < 1.0
+
+        pending_entries = app.state.routes.ctx.journal.get_pending(limit=10)
+        assert len(pending_entries) == 1
+        assert pending_entries[0].workspace_id == app.state.routes.ctx.workspace_id
+
+        release_blocking_request.set()
+        assert await asyncio.wait_for(blocking_request, timeout=0.5) == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_daemon_zmq_api_record_thought_fast_path_ignores_saturated_request_pool(tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+    blocking_request_started = asyncio.Event()
+    release_blocking_request = asyncio.Event()
+
+    async def _blocking_handler(_payload: dict[str, object]) -> dict[str, object]:
+        blocking_request_started.set()
+        await release_blocking_request.wait()
+        return {"status": "ok"}
+
+    routes = SimpleNamespace(
+        service=SimpleNamespace(
+            record_thought=lambda content: {"status": "recorded", "content": content},
+        )
+    )
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: None,
+        hook_handlers={"/api/hooks/block": _blocking_handler},
+        routes_provider=lambda: routes,
+        socket_path=socket_path,
+        metadata_provider=lambda: _HealthMetadata(
+            status="ready",
+            transport="zmq",
+            socket_path=str(socket_path),
+        ),
+        max_concurrent_requests=1,
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        blocking_request = asyncio.create_task(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/hooks/block",
+                {},
+                timeout_seconds=1.0,
+            )
+        )
+        await asyncio.wait_for(blocking_request_started.wait(), timeout=0.5)
+
+        request_started_at = time.monotonic()
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                request_daemon_json,
+                metadata,
+                "/api/record-thought",
+                {"content": "fast api thought"},
+                timeout_seconds=0.2,
+            ),
+            timeout=0.5,
+        )
+        request_elapsed = time.monotonic() - request_started_at
+
+        assert blocking_request.done() is False
+        assert response == {"status": "recorded", "content": "fast api thought"}
+        assert request_elapsed < 0.2
+
+        release_blocking_request.set()
+        assert await asyncio.wait_for(blocking_request, timeout=0.5) == {"status": "ok"}
+    finally:
+        release_blocking_request.set()
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_daemon_zmq_health_fast_path_ignores_saturated_request_pool(tmp_path: Path) -> None:
     socket_path = tmp_path / "daemon.sock"
     blocking_request_started = asyncio.Event()

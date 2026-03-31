@@ -44,6 +44,13 @@ _ACTIVE_TRANSPORT_REQUEST_SUMMARY_LIMIT = 8
 _SLOW_TRANSPORT_QUEUE_WAIT_WARNING_MS = 250.0
 _SLOW_TRANSPORT_EXECUTION_WARNING_MS = 1_000.0
 _SLOW_TRANSPORT_TOTAL_WARNING_MS = 4_000.0
+_UNCONSTRAINED_REQUEST_PATHS = frozenset(
+    {
+        "/internal/health",
+        "/internal/tools/record_thought",
+        "/api/record-thought",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -297,7 +304,7 @@ class DaemonZmqServer:
     async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict, int]:
         path = _normalized_transport_path(payload_frame) or "<invalid_transport_payload>"
         tracked_request = self._track_request(path)
-        uses_request_semaphore = path != "/internal/health"
+        uses_request_semaphore = path not in _UNCONSTRAINED_REQUEST_PATHS
         queue_wait_started_at = perf_counter()
         acquired_request_slot = False
 
@@ -505,11 +512,6 @@ class DaemonZmqServer:
 
 def _socket_endpoint(socket_path: str) -> str:
     return f"ipc://{socket_path}"
-
-
-def _uses_unconstrained_health_route(payload_frame: bytes) -> bool:
-    normalized_path = _normalized_transport_path(payload_frame)
-    return normalized_path == "/internal/health"
 
 
 def _normalized_transport_path(payload_frame: bytes) -> str | None:

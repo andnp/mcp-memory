@@ -41,7 +41,7 @@ class MCPServer:
     def _setup_handlers(self) -> None:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
-            payload = await asyncio.to_thread(self._request_json, self._tool_path_prefix, None)
+            payload = await asyncio.to_thread(self._request_json_with_recovery, self._tool_path_prefix, None)
             return [
                 Tool(
                     name=tool["name"],
@@ -54,7 +54,7 @@ class MCPServer:
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             payload = await asyncio.to_thread(
-                self._request_json,
+                self._request_json_with_recovery,
                 f"{self._tool_path_prefix}/{name}",
                 arguments,
             )
@@ -85,6 +85,13 @@ class MCPServer:
             if self._session_id is not None:
                 request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
         return request_daemon_json(self._daemon, path, request_payload)
+
+    def _request_json_with_recovery(self, path: str, payload: dict | None):
+        try:
+            return self._request_json(path, payload)
+        except (OSError, TimeoutError):
+            self._daemon = ensure_daemon_started(self.workspace_root, None)
+            return self._request_json(path, payload)
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:
