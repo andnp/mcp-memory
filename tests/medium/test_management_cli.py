@@ -614,7 +614,7 @@ def test_prefetch_model_command_caches_embedding_model(monkeypatch) -> None:
 
     monkeypatch.setattr("mcp_memory.cli.create_runtime", lambda workspace_root_override=None: FakeRuntime())
 
-    result = runner.invoke(main, ["prefetch-model"])
+    result = runner.invoke(main, ["admin", "prefetch-model"])
 
     assert result.exit_code == 0
     assert "Embedding model cached:" in result.output

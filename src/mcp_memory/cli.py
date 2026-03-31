@@ -1643,7 +1643,7 @@ def hook_runner(workspace_root: str | None) -> None:
     click.echo(json.dumps(response, sort_keys=True))
 
 
-@main.command(name="prefetch-model")
+@admin_group.command(name="prefetch-model")
 @workspace_root_option
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""

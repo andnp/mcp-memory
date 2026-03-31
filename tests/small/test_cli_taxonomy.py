@@ -546,6 +546,23 @@ def test_admin_dashboard_open_forwards_to_existing_dashboard_helper(monkeypatch)
     }
 
 
+def test_admin_prefetch_model_forwards_to_existing_prefetch_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_prefetch_embedding_model(workspace_root: str | None) -> None:
+        captured["workspace_root"] = workspace_root
+
+    monkeypatch.setattr("mcp_memory.cli._prefetch_embedding_model", fake_prefetch_embedding_model)
+
+    result = runner.invoke(main, ["admin", "prefetch-model", "--workspace-root", "/tmp/demo"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+    }
+
+
 @pytest.mark.parametrize("status", ["built", "up_to_date"])
 def test_admin_dashboard_build_uses_shared_frontend_builder(monkeypatch, status: str) -> None:
     runner = CliRunner()
@@ -755,6 +772,7 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
     [
         (["import-markdown", "demo.md"], "import-markdown"),
         (["stash"], "stash"),
+        (["prefetch-model"], "prefetch-model"),
         (["task", "list"], "task"),
         (["log", "list"], "log"),
         (["agents", "run", "memory-curator"], "agents"),
