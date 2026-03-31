@@ -62,13 +62,13 @@ Important invariants:
 Dry run first:
 
 ```bash
-uv run mcp-memory migrate-sqlite-to-postgres --dry-run --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+uv run mcp-memory admin migrate-sqlite-to-postgres --dry-run --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
 ```
 
 Then perform the import:
 
 ```bash
-uv run mcp-memory migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+uv run mcp-memory admin migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
 ```
 
 Current migration scope covers the core relational memory graph:

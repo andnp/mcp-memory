@@ -275,13 +275,13 @@ dsn = "postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory"
 If you already have SQLite data, dry-run the migration first:
 
 ```bash
-uv run mcp-memory migrate-sqlite-to-postgres --dry-run --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+uv run mcp-memory admin migrate-sqlite-to-postgres --dry-run --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
 ```
 
 Then perform the import:
 
 ```bash
-uv run mcp-memory migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+uv run mcp-memory admin migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
 ```
 
 For the full operator path, backup notes, and smoke checklist, see `docs/postgres-shared-mode-runbook.md`.

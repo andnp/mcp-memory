@@ -230,6 +230,7 @@ def test_sqlite_to_postgres_cli_dry_run_smoke(
     result = runner.invoke(
         main,
         [
+            "admin",
             "migrate-sqlite-to-postgres",
             "--sqlite-path",
             str(sqlite_path),

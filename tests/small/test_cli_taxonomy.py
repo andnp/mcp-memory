@@ -563,6 +563,53 @@ def test_admin_prefetch_model_forwards_to_existing_prefetch_helper(monkeypatch) 
     }
 
 
+def test_admin_migrate_sqlite_to_postgres_forwards_to_existing_migration_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_migrate_sqlite_to_postgres_command(
+        sqlite_path: Path | None,
+        postgres_dsn: str | None,
+        dry_run: bool,
+        allow_non_empty_target: bool,
+        json_output: bool,
+    ) -> None:
+        captured["sqlite_path"] = sqlite_path
+        captured["postgres_dsn"] = postgres_dsn
+        captured["dry_run"] = dry_run
+        captured["allow_non_empty_target"] = allow_non_empty_target
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr(
+        "mcp_memory.cli._migrate_sqlite_to_postgres_command",
+        fake_migrate_sqlite_to_postgres_command,
+    )
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "migrate-sqlite-to-postgres",
+            "--sqlite-path",
+            "/tmp/source.db",
+            "--postgres-dsn",
+            "postgresql://demo",
+            "--dry-run",
+            "--allow-non-empty-target",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "sqlite_path": Path("/tmp/source.db"),
+        "postgres_dsn": "postgresql://demo",
+        "dry_run": True,
+        "allow_non_empty_target": True,
+        "json_output": True,
+    }
+
+
 def test_admin_install_forwards_to_existing_install_helper(monkeypatch) -> None:
     runner = CliRunner()
 
@@ -847,3 +894,12 @@ def test_removed_legacy_roots_fail_with_no_such_command(argv: list[str], missing
 
     assert result.exit_code != 0
     assert f"No such command '{missing_command}'" in result.output
+
+
+def test_removed_top_level_migrate_sqlite_to_postgres_route_fails() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["migrate-sqlite-to-postgres", "--help"])
+
+    assert result.exit_code != 0
+    assert "No such command 'migrate-sqlite-to-postgres'" in result.output

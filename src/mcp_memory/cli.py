@@ -1895,7 +1895,7 @@ def import_markdown(
 memory_group.add_command(import_markdown)
 
 
-@main.command(name="migrate-sqlite-to-postgres")
+@admin_group.command(name="migrate-sqlite-to-postgres")
 @click.option(
     "--sqlite-path",
     type=click.Path(path_type=Path, dir_okay=False, resolve_path=True),
