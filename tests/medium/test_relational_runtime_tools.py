@@ -132,6 +132,66 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_relational_runtime_search_debug_skips_semantic_scoring_for_supported_technical_single_token_queries(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(workspace_root_override=None, cwd=tmp_path / "workspace")
+    try:
+        assert runtime.repository is not None
+        assert runtime.db_manager is not None
+        runtime.embedder = _RuntimeFusionFakeEmbedder()
+        runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
+        monkeypatch.setattr(runtime.vector_store, "supports_candidate_filtering", True, raising=False)
+        assert runtime.relational_search is not None
+        runtime.relational_search._embedder = runtime.embedder
+        runtime.relational_search._vector_store = runtime.vector_store
+
+        for index in range(5):
+            record = runtime.repository.create_memory(
+                title=f"Operational incident note {index:02d}",
+                content="Observed daemon_request_timed_out while servicing the live memory search request.",
+                summary=f"Operational incident summary {index:02d}.",
+                workspace_ids=[runtime.workspace_id or "workspace-local"],
+                memory_type="fact",
+                tags=["incident"],
+            )
+            assert record is not None
+
+        semantic_calls = 0
+
+        def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+            nonlocal semantic_calls
+            _ = _query, candidates, _workspace_id, candidate_ids, limit
+            semantic_calls += 1
+            raise AssertionError("technical single-token keyword-supported queries should skip semantic scoring")
+
+        monkeypatch.setattr(runtime.relational_search, "_semantic_scores", _semantic_scores)
+
+        payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {"query": "daemon_request_timed_out", "limit": 5, "debug": True},
+                )
+            )[0].text
+        )
+
+        assert semantic_calls == 0
+        assert payload["status"] == "ok"
+        assert len(payload["results"]) == 5
+        assert payload["search_diagnostics"]["semantic_candidate_count"] == 0
+        assert payload["search_diagnostics"]["semantic_candidate_strategy"] == "keyword-only-bounded"
+        assert payload["search_diagnostics"]["timing_ms"]["semantic_query_embedding"] == 0.0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_search_memory_tool_hides_archived_by_default_but_can_request_them(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

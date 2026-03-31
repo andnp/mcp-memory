@@ -13,6 +13,7 @@ from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
     ScoringWeights,
+    _is_technical_single_token_query,
     _keyword_token_coverage,
     _query_tokens,
     _rank_semantic_candidate_ids,
@@ -1028,6 +1029,149 @@ def test_bounded_semantic_candidates_use_lightweight_searchable_memory_projectio
     assert bounded is not None
     assert [candidate.id for candidate in bounded] == [record.id]
     assert speculative is False
+
+
+def test_technical_single_token_query_detection_is_narrow() -> None:
+    assert _is_technical_single_token_query(["daemon_request_timed_out"]) is True
+    assert _is_technical_single_token_query(["daemon-request-timeout"]) is True
+    assert _is_technical_single_token_query(["timeout"]) is False
+    assert _is_technical_single_token_query(["daemon", "request"]) is False
+
+
+def test_search_memories_skips_semantic_scoring_for_supported_technical_single_token_queries(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    for index in range(5):
+        record = repository.create_memory(
+            title=f"Operational incident note {index:02d}",
+            content="Observed daemon_request_timed_out while servicing the live memory search request.",
+            summary=f"Operational incident summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["incident"],
+        )
+        assert record is not None
+
+    query = "daemon_request_timed_out"
+    keyword_ids = repository.search_keyword_memory_ids(query, limit=50)
+    semantic_calls = 0
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        nonlocal semantic_calls
+        _ = _query, candidates, _workspace_id, candidate_ids, limit
+        semantic_calls += 1
+        raise AssertionError("technical single-token keyword-supported queries should skip semantic scoring")
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results, diagnostics = service.search_memories_with_diagnostics(
+        query,
+        workspace_id="workspace-alpha",
+        limit=5,
+        debug=True,
+    )
+
+    assert len(keyword_ids) == 5
+    assert semantic_calls == 0
+    assert [result.memory_id for result in results] == keyword_ids
+    assert len(results) == 5
+    assert diagnostics.semantic_candidate_count == 0
+    assert diagnostics.semantic_candidate_strategy == "keyword-only-bounded"
+    assert diagnostics.timing_ms["semantic_query_embedding"] == 0.0
+
+
+def test_search_memories_preserves_global_semantic_search_for_nontechnical_single_token_queries(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    for index in range(25):
+        record = repository.create_memory(
+            title=f"Operational incident note {index:02d}",
+            content="Observed timeout while servicing the live memory search request.",
+            summary=f"Operational incident summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["incident"],
+        )
+        assert record is not None
+
+    call_modes: list[str] = []
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        call_modes.append("bounded" if candidate_ids is not None else "global")
+        candidate_ids = candidate_ids or [candidate.id for candidate in candidates]
+        return {
+            memory_id: 1.0 - (rank * 0.01)
+            for rank, memory_id in enumerate(candidate_ids)
+        }
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    _, diagnostics = service.search_memories_with_diagnostics(
+        "timeout",
+        workspace_id="workspace-alpha",
+        limit=5,
+        debug=True,
+    )
+
+    assert call_modes == ["global"]
+    assert diagnostics.semantic_candidate_strategy == "global"
+
+
+def test_search_memories_preserves_global_semantic_search_when_technical_single_token_keyword_support_is_insufficient(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    for index in range(4):
+        record = repository.create_memory(
+            title=f"Operational incident note {index:02d}",
+            content="Observed daemon_request_timed_out while servicing the live memory search request.",
+            summary=f"Operational incident summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["incident"],
+        )
+        assert record is not None
+
+    call_modes: list[str] = []
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        call_modes.append("bounded" if candidate_ids is not None else "global")
+        candidate_ids = candidate_ids or [candidate.id for candidate in candidates]
+        return {
+            memory_id: 1.0 - (rank * 0.01)
+            for rank, memory_id in enumerate(candidate_ids)
+        }
+
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    _, diagnostics = service.search_memories_with_diagnostics(
+        "daemon_request_timed_out",
+        workspace_id="workspace-alpha",
+        limit=5,
+        debug=True,
+    )
+
+    assert call_modes == ["global"]
+    assert diagnostics.semantic_candidate_strategy == "global"
 
 
 def test_repository_list_memory_ids_matches_list_memories_ordering_and_filters(db_manager) -> None:

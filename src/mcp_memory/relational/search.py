@@ -183,6 +183,7 @@ class SemanticCandidatePool:
     candidate_ids: list[str] | None = None
     speculative: bool = False
     strategy: str = "global"
+    skip_semantic_scoring: bool = False
 
 
 @dataclass(slots=True)
@@ -1002,6 +1003,8 @@ class RelationalMemorySearchService:
         if diagnostics is not None:
             _record_timing_ms(diagnostics.timing_ms, "semantic_candidate_pool", pool_started)
             diagnostics.semantic_candidate_strategy = candidate_pool.strategy
+        if candidate_pool.skip_semantic_scoring:
+            return ([], {})
         candidates = candidate_pool.candidates
         bounded_candidate_ids = candidate_pool.candidate_ids
         semantic_timing_ms = diagnostics.timing_ms if diagnostics is not None else None
@@ -1089,11 +1092,13 @@ class RelationalMemorySearchService:
             requested_limit=requested_limit,
         )
         if bounded_candidates is not None:
+            keyword_only_bounded = _is_technical_single_token_query(query_tokens) and not speculative
             return SemanticCandidatePool(
                 candidates=bounded_candidates,
                 candidate_ids=[candidate.id for candidate in bounded_candidates],
                 speculative=speculative,
-                strategy="speculative-bounded" if speculative else "bounded",
+                skip_semantic_scoring=keyword_only_bounded,
+                strategy="keyword-only-bounded" if keyword_only_bounded else ("speculative-bounded" if speculative else "bounded"),
             )
         return SemanticCandidatePool(candidates=self._repository.list_memories(status=status, limit=500))
 
@@ -1147,6 +1152,10 @@ class RelationalMemorySearchService:
         if not keyword_candidates:
             return None, False
 
+        candidate_cap = _strong_keyword_bounded_candidate_cap(requested_limit)
+        if _is_technical_single_token_query(query_tokens) and len(keyword_candidates) >= max(requested_limit, 1):
+            return keyword_candidates[:candidate_cap], False
+
         evaluated_candidates = keyword_candidates[:LEXICAL_STRENGTH_EVAL_LIMIT]
         strongest_keyword_coverage = max(
             (_keyword_token_coverage(query_tokens, keyword_candidate) for keyword_candidate in evaluated_candidates),
@@ -1163,8 +1172,6 @@ class RelationalMemorySearchService:
             ):
                 return None, False
             return keyword_candidates, True
-
-        candidate_cap = _strong_keyword_bounded_candidate_cap(requested_limit)
         return keyword_candidates[:candidate_cap], False
 
     def _should_broaden_semantic_search(
@@ -1449,6 +1456,10 @@ def _smart_truncate(text: str, *, max_chars: int = 200):
 
 def _query_tokens(query: str) -> list[str]:
     return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+
+
+def _is_technical_single_token_query(query_tokens: Sequence[str]) -> bool:
+    return len(query_tokens) == 1 and any(character in query_tokens[0] for character in "_:-")
 
 
 def _keyword_token_coverage(
