@@ -63,6 +63,49 @@ def test_memory_stash_forwards_to_existing_stash_behavior(monkeypatch) -> None:
     assert captured == {"workspace_root": "/tmp/demo", "content": "remember this"}
 
 
+def test_memory_import_markdown_forwards_to_existing_import_behavior(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_import_markdown_files(
+        file_paths: tuple[str, ...],
+        workspace_root: str | None,
+        workspace_ids: tuple[str, ...],
+        thought: bool,
+    ) -> None:
+        captured["file_paths"] = file_paths
+        captured["workspace_root"] = workspace_root
+        captured["workspace_ids"] = workspace_ids
+        captured["thought"] = thought
+
+    monkeypatch.setattr("mcp_memory.cli._import_markdown_files", fake_import_markdown_files)
+
+    result = runner.invoke(
+        main,
+        [
+            "memory",
+            "import-markdown",
+            "--workspace-root",
+            "/tmp/demo",
+            "--workspace-id",
+            "workspace-a",
+            "--workspace-id",
+            "workspace-b",
+            "--thought",
+            "one.md",
+            "two.md",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "file_paths": ("one.md", "two.md"),
+        "workspace_root": "/tmp/demo",
+        "workspace_ids": ("workspace-a", "workspace-b"),
+        "thought": True,
+    }
+
+
 def test_admin_health_forwards_to_existing_operator_health_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
@@ -710,6 +753,7 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
 @pytest.mark.parametrize(
     ("argv", "missing_command"),
     [
+        (["import-markdown", "demo.md"], "import-markdown"),
         (["stash"], "stash"),
         (["task", "list"], "task"),
         (["log", "list"], "log"),

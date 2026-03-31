@@ -1868,7 +1868,7 @@ def admin_dashboard_build_command() -> None:
     _run_or_exit(_build_dashboard_frontend)
 
 
-@main.command(name="import-markdown")
+@click.command(name="import-markdown")
 @click.argument("file_paths", nargs=-1, type=str)
 @workspace_root_option
 @click.option(
@@ -1890,6 +1890,9 @@ def import_markdown(
 ) -> None:
     """Import one or more markdown memory files into the relational store or thought buffer."""
     _run_or_exit(lambda: _import_markdown_files(file_paths, workspace_root, workspace_ids, thought))
+
+
+memory_group.add_command(import_markdown)
 
 
 @main.command(name="migrate-sqlite-to-postgres")

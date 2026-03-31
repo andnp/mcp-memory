@@ -103,8 +103,8 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 - `uv run mcp-memory agents run sweeper`: trigger one background agent for the active workspace.
 - `uv run mcp-memory agents run-all`: enqueue all background agents for the active workspace.
 - `uv run mcp-memory stats`: print background task and memory statistics from the active backend.
-- `uv run mcp-memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
-- `uv run mcp-memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
+- `uv run mcp-memory memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
+- `uv run mcp-memory memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
 Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
 
@@ -315,7 +315,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 9. **Import legacy markdown** (optional admin flow):
    ```bash
-   uv run mcp-memory import-markdown /path/to/memory.md
+   uv run mcp-memory memory import-markdown /path/to/memory.md
    ```
 
 10. **Trigger or inspect background agents** (optional admin flow):
