@@ -220,6 +220,110 @@ def test_mcp_server_tool_requests_retry_once_after_transport_timeout(monkeypatch
     ]
 
 
+def test_mcp_server_tool_requests_retry_twice_after_transient_timeouts(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    initial_daemon = object()
+    refreshed_daemon_first = object()
+    refreshed_daemon_second = object()
+    request_calls: list[tuple[object, str, dict | None]] = []
+    ensure_calls: list[tuple[str | None, None]] = []
+    refreshed_daemons = iter((refreshed_daemon_first, refreshed_daemon_second))
+
+    def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        request_calls.append((metadata, path, payload))
+        if len(request_calls) < 3:
+            raise TimeoutError("daemon_request_timed_out")
+        return {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
+
+    def fake_ensure_daemon_started(workspace_root, cwd=None):
+        ensure_calls.append((workspace_root, cwd))
+        return next(refreshed_daemons)
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_ensure_daemon_started)
+
+    server._daemon = initial_daemon
+
+    payload = server._request_json_with_recovery(
+        "/internal/tools/record_thought",
+        {"content": "retry after multiple timeouts"},
+    )
+
+    assert payload == {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
+    assert ensure_calls == [
+        ("demo-workspace", None),
+        ("demo-workspace", None),
+    ]
+    assert request_calls == [
+        (
+            initial_daemon,
+            "/internal/tools/record_thought",
+            {"content": "retry after multiple timeouts", "__workspace_root": "demo-workspace"},
+        ),
+        (
+            refreshed_daemon_first,
+            "/internal/tools/record_thought",
+            {"content": "retry after multiple timeouts", "__workspace_root": "demo-workspace"},
+        ),
+        (
+            refreshed_daemon_second,
+            "/internal/tools/record_thought",
+            {"content": "retry after multiple timeouts", "__workspace_root": "demo-workspace"},
+        ),
+    ]
+
+
+def test_mcp_server_tool_requests_raise_after_exhausting_retry_budget(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    initial_daemon = object()
+    refreshed_daemon_first = object()
+    refreshed_daemon_second = object()
+    request_calls: list[tuple[object, str, dict | None]] = []
+    ensure_calls: list[tuple[str | None, None]] = []
+    refreshed_daemons = iter((refreshed_daemon_first, refreshed_daemon_second))
+
+    def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        request_calls.append((metadata, path, payload))
+        raise TimeoutError("daemon_request_timed_out")
+
+    def fake_ensure_daemon_started(workspace_root, cwd=None):
+        ensure_calls.append((workspace_root, cwd))
+        return next(refreshed_daemons)
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_ensure_daemon_started)
+
+    server._daemon = initial_daemon
+
+    with pytest.raises(TimeoutError, match="daemon_request_timed_out"):
+        server._request_json_with_recovery(
+            "/internal/tools/record_thought",
+            {"content": "retry budget exhausted"},
+        )
+
+    assert ensure_calls == [
+        ("demo-workspace", None),
+        ("demo-workspace", None),
+    ]
+    assert request_calls == [
+        (
+            initial_daemon,
+            "/internal/tools/record_thought",
+            {"content": "retry budget exhausted", "__workspace_root": "demo-workspace"},
+        ),
+        (
+            refreshed_daemon_first,
+            "/internal/tools/record_thought",
+            {"content": "retry budget exhausted", "__workspace_root": "demo-workspace"},
+        ),
+        (
+            refreshed_daemon_second,
+            "/internal/tools/record_thought",
+            {"content": "retry budget exhausted", "__workspace_root": "demo-workspace"},
+        ),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_call_memory_tool_records_real_journal_entry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

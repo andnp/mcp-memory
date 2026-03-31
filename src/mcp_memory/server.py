@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
+_REQUEST_RECOVERY_RETRY_COUNT = 2
 
 
 class MCPServer:
@@ -87,11 +88,13 @@ class MCPServer:
         return request_daemon_json(self._daemon, path, request_payload)
 
     def _request_json_with_recovery(self, path: str, payload: dict | None):
-        try:
-            return self._request_json(path, payload)
-        except (OSError, TimeoutError):
-            self._daemon = ensure_daemon_started(self.workspace_root, None)
-            return self._request_json(path, payload)
+        for attempt_index in range(_REQUEST_RECOVERY_RETRY_COUNT + 1):
+            try:
+                return self._request_json(path, payload)
+            except (OSError, TimeoutError):
+                if attempt_index >= _REQUEST_RECOVERY_RETRY_COUNT:
+                    raise
+                self._daemon = ensure_daemon_started(self.workspace_root, None)
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:
