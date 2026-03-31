@@ -27,6 +27,7 @@ from mcp_memory.serialization import (
     search_result_payload,
 )
 from mcp_memory.storage.shared_read_cache import (
+    SharedReadCacheInFlightSearch,
     SharedReadCacheProjectionEntry,
     SharedReadCacheProjectionUpsert,
     SharedReadCacheSearchRequest,
@@ -147,6 +148,36 @@ def _store_cached_search_response(
     cache = getattr(ctx, "read_cache", None)
     if cache is not None:
         cache.store_search_response(request, payload)
+
+
+def _begin_inflight_search_coalescing(
+    ctx: ApplicationContext,
+    request: SharedReadCacheSearchRequest,
+    *,
+    caller_kind: str,
+    debug_enabled: bool,
+) -> SharedReadCacheInFlightSearch | None:
+    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+        return None
+    cache = getattr(ctx, "read_cache", None)
+    if cache is None:
+        return None
+    return cache.begin_inflight_search(request)
+
+
+def _finish_inflight_search_coalescing(
+    ctx: ApplicationContext,
+    entry: SharedReadCacheInFlightSearch | None,
+    *,
+    payload: dict[str, object] | None = None,
+    error: Exception | None = None,
+) -> None:
+    if entry is None or not entry.is_leader:
+        return
+    cache = getattr(ctx, "read_cache", None)
+    if cache is None:
+        return
+    cache.finish_inflight_search(entry, payload=payload, error=error)
 
 
 def _resolve_read_cache_validation_tokens(
@@ -387,6 +418,34 @@ def _log_slow_memory_tool_operation(
     logger.warning("Slow %s operation: %.3fms %s", tool_name, duration_ms, data)
 
 
+def _record_search_invocation(
+    ctx: ApplicationContext,
+    *,
+    caller_kind: str,
+    query: str,
+    surfaced_memory_ids: list[str],
+    duration_ms: float,
+) -> None:
+    _retrieval_telemetry_repository(ctx).record_search(
+        invocation_id=str(uuid4()),
+        caller_kind=caller_kind,
+        query=query,
+        surfaced_memory_ids=surfaced_memory_ids,
+        duration_ms=duration_ms,
+    )
+    _log_slow_memory_tool_operation(
+        ctx,
+        tool_name="search_memory_records",
+        duration_ms=duration_ms,
+        data={
+            "caller_kind": caller_kind,
+            "query": query,
+            "result_count": len(surfaced_memory_ids),
+            "storage_backend": ctx.storage_backend or "sqlite",
+        },
+    )
+
+
 def search_memory_records_service(
     ctx: ApplicationContext,
     arguments: dict,
@@ -439,6 +498,50 @@ def search_memory_records_service(
             debug_enabled=debug_enabled,
         )
         return cached_payload
+    inflight_search = _begin_inflight_search_coalescing(
+        ctx,
+        cache_request,
+        caller_kind=caller_kind,
+        debug_enabled=debug_enabled,
+    )
+    if inflight_search is not None and not inflight_search.is_leader:
+        try:
+            payload = ctx.read_cache.wait_for_inflight_search(inflight_search)
+        except Exception as error:
+            if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+                cached_payload = _load_cached_search_fallback(ctx, cache_request, error=error)
+                if cached_payload is not None:
+                    _increment_shared_read_cache_metric(
+                        ctx,
+                        "stale_exact_search_fallbacks",
+                        caller_kind=caller_kind,
+                        debug_enabled=debug_enabled,
+                    )
+                    return cached_payload
+                projection_payload = _load_projection_search_fallback(ctx, cache_request, error=error)
+                if projection_payload is not None:
+                    _increment_shared_read_cache_metric(
+                        ctx,
+                        "projection_fallbacks",
+                        caller_kind=caller_kind,
+                        debug_enabled=debug_enabled,
+                    )
+                    return projection_payload
+            raise
+        duration_ms = (perf_counter() - started_at) * 1000.0
+        surfaced_memory_ids = [
+            str(result["memory_id"])
+            for result in payload.get("results", [])
+            if isinstance(result, dict) and isinstance(result.get("memory_id"), str)
+        ]
+        _record_search_invocation(
+            ctx,
+            caller_kind=caller_kind,
+            query=query,
+            surfaced_memory_ids=surfaced_memory_ids,
+            duration_ms=duration_ms,
+        )
+        return payload
     diagnostics = None
     try:
         if debug_enabled:
@@ -446,6 +549,7 @@ def search_memory_records_service(
         else:
             results = operation.execute(**execution_arguments)
     except Exception as error:
+        _finish_inflight_search_coalescing(ctx, inflight_search, error=error)
         if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
             cached_payload = _load_cached_search_fallback(ctx, cache_request, error=error)
             if cached_payload is not None:
@@ -467,23 +571,13 @@ def search_memory_records_service(
                 return projection_payload
         raise
     duration_ms = (perf_counter() - started_at) * 1000.0
-    _retrieval_telemetry_repository(ctx).record_search(
-        invocation_id=str(uuid4()),
+    surfaced_memory_ids = [result.memory_id for result in results]
+    _record_search_invocation(
+        ctx,
         caller_kind=caller_kind,
         query=query,
-        surfaced_memory_ids=[result.memory_id for result in results],
+        surfaced_memory_ids=surfaced_memory_ids,
         duration_ms=duration_ms,
-    )
-    _log_slow_memory_tool_operation(
-        ctx,
-        tool_name="search_memory_records",
-        duration_ms=duration_ms,
-        data={
-            "caller_kind": caller_kind,
-            "query": query,
-            "result_count": len(results),
-            "storage_backend": ctx.storage_backend or "sqlite",
-        },
     )
     result_payloads = _build_search_result_payloads(results, debug_enabled=debug_enabled)
     payload = {
@@ -518,6 +612,7 @@ def search_memory_records_service(
         )
     if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
         _store_cached_search_response(ctx, cache_request, payload)
+    _finish_inflight_search_coalescing(ctx, inflight_search, payload=payload)
     return payload
 
 

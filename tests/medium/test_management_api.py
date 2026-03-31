@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import logging
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from datetime import UTC, datetime
 import json
@@ -26,6 +27,7 @@ from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.runtime_logging import SQLiteStructuredLogHandler
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
@@ -1218,11 +1220,13 @@ async def test_daemon_zmq_health_fast_path_ignores_saturated_request_pool(tmp_pa
         health_elapsed = time.monotonic() - health_started_at
 
         assert blocking_request.done() is False
-        assert health == {
-            "status": "ready",
-            "transport": "zmq",
-            "socket_path": str(socket_path),
-        }
+        assert health["status"] == "ready"
+        assert health["transport"] == "zmq"
+        assert health["socket_path"] == str(socket_path)
+        assert health["transport_diagnostics"]["max_concurrent_requests"] == 1
+        assert health["transport_diagnostics"]["queued_waiter_count"] == 0
+        assert isinstance(health["transport_diagnostics"]["active_requests"], list)
+        assert isinstance(health["transport_diagnostics"]["recent_requests"], list)
         assert health_elapsed < 0.2
 
         release_blocking_request.set()
@@ -1306,6 +1310,12 @@ async def test_management_health_reports_transport_queue_wait_and_pressure(monke
         assert transport_diagnostics.current_constrained_in_flight_count == 1
         assert transport_diagnostics.request_slots_available == 0
         assert transport_diagnostics.max_concurrent_requests == 1
+        assert [request.path for request in transport_diagnostics.active_requests] == [
+            "/api/hooks/block",
+            "/api/hooks/block",
+        ]
+        assert {request.phase for request in transport_diagnostics.active_requests} == {"dispatching", "queued"}
+        assert all(request.age_ms >= 0.0 for request in transport_diagnostics.active_requests)
 
         release_first_request.set()
         assert await asyncio.wait_for(first_request, timeout=0.5) == {"status": "ok", "request": "first"}
@@ -1318,9 +1328,94 @@ async def test_management_health_reports_transport_queue_wait_and_pressure(monke
         assert completed_diagnostics.recent_queue_wait_avg_ms > 0.0
         assert completed_diagnostics.recent_queue_wait_max_ms > 0.0
         assert completed_diagnostics.recent_execution_max_ms > 0.0
+        completed_requests = [
+            request
+            for request in completed_diagnostics.recent_requests
+            if request.path == "/api/hooks/block"
+        ]
+        assert len(completed_requests) >= 2
+        assert {request.phase for request in completed_requests[:2]} == {"reply_sent"}
+        assert {request.response_status for request in completed_requests[:2]} == {"ok"}
+        assert any(request.queue_wait_ms > 0.0 for request in completed_requests[:2])
+        assert all(request.total_ms >= request.execution_ms for request in completed_requests[:2])
     finally:
         release_first_request.set()
         await server.stop()
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_transport_slow_path_warning_is_persisted_to_runtime_logs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    socket_path = tmp_path / "daemon.sock"
+
+    async def _slow_handler(_payload: dict[str, object]) -> dict[str, object]:
+        await asyncio.sleep(1.05)
+        return {"status": "ok"}
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.db_manager is not None
+    assert runtime.workspace_id is not None
+
+    transport_logger = logging.getLogger("mcp_memory.daemon_transport")
+    handler = SQLiteStructuredLogHandler(
+        db_manager=runtime.db_manager,
+        workspace_id=runtime.workspace_id,
+        source="daemon",
+    )
+    previous_level = transport_logger.level
+    previous_propagate = transport_logger.propagate
+    transport_logger.addHandler(handler)
+    transport_logger.setLevel(logging.WARNING)
+    transport_logger.propagate = False
+
+    server = DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/slow": _slow_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: _HealthMetadata(
+            status="ready",
+            transport="zmq",
+            socket_path=str(socket_path),
+        ),
+    )
+    service = ManagementService(
+        runtime,
+        controller=SimpleNamespace(has_runtime=True, client_count=0),
+    )
+
+    await server.start()
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        response = await _request_json(metadata, "/api/hooks/slow", {}, timeout_seconds=2.5)
+
+        assert response == {"status": "ok"}
+
+        logs = service.list_logs(
+            source="daemon",
+            logger_name="mcp_memory.daemon_transport",
+            query="Slow daemon transport request",
+            limit=10,
+        ).logs
+
+        assert logs
+        extra = cast(dict[str, object], logs[0].data["extra"])
+        assert logs[0].message == "Slow daemon transport request"
+        assert extra["path"] == "/api/hooks/slow"
+        assert extra["phase"] == "reply_sent"
+        assert cast(float, extra["execution_ms"]) >= 1000.0
+        assert extra["response_status"] == "ok"
+    finally:
+        await server.stop()
+        transport_logger.removeHandler(handler)
+        transport_logger.setLevel(previous_level)
+        transport_logger.propagate = previous_propagate
+        handler.close()
         runtime.close()
 
 

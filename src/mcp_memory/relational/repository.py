@@ -716,6 +716,36 @@ class RelationalMemoryRepository:
         rows = conn.execute(query, params).fetchall()
         return [self._hydrate_record(conn, row) for row in rows]
 
+    def list_memory_ids(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[str]:
+        conn = self._db.get_connection()
+        clauses = []
+        params = []
+
+        query = "SELECT DISTINCT memories.id FROM memories"
+        if workspace_id is not None:
+            query += " JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+            clauses.append("memory_workspaces.workspace_id = ?")
+            params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = ?")
+            params.append(memory_type)
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY memories.updated_at DESC, memories.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [str(row[0]) for row in rows]
+
     def _hydrate_record(self, conn, row):
         workspace_rows = conn.execute(
             "SELECT workspace_id FROM memory_workspaces WHERE memory_id = ? ORDER BY workspace_id ASC",

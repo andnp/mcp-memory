@@ -16,6 +16,7 @@ from mcp_memory.relational.search import (
     _keyword_token_coverage,
     _query_tokens,
     _rank_semantic_candidate_ids,
+    _strong_keyword_bounded_candidate_cap,
 )
 from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.context import ApplicationContext
@@ -1029,7 +1030,74 @@ def test_bounded_semantic_candidates_use_lightweight_searchable_memory_projectio
     assert speculative is False
 
 
-def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bounded_scores_are_sparse(db_manager, monkeypatch) -> None:
+def test_repository_list_memory_ids_matches_list_memories_ordering_and_filters(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+
+    oldest = repository.create_memory(
+        title="Old alpha fact",
+        content="Old alpha fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-01T00:00:00+00:00",
+        created_at="2026-03-01T00:00:00+00:00",
+    )
+    newest = repository.create_memory(
+        title="New alpha fact",
+        content="New alpha fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-03T00:00:00+00:00",
+        created_at="2026-03-03T00:00:00+00:00",
+    )
+    other_type = repository.create_memory(
+        title="Alpha plan",
+        content="Alpha plan content.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-02T00:00:00+00:00",
+        created_at="2026-03-02T00:00:00+00:00",
+    )
+    other_workspace = repository.create_memory(
+        title="Beta fact",
+        content="Beta fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-beta"],
+        updated_at="2026-03-04T00:00:00+00:00",
+        created_at="2026-03-04T00:00:00+00:00",
+    )
+    stale = repository.create_memory(
+        title="Stale alpha fact",
+        content="Stale alpha fact content.",
+        memory_type="fact",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-05T00:00:00+00:00",
+        created_at="2026-03-05T00:00:00+00:00",
+    )
+    assert oldest is not None and newest is not None and other_type is not None
+    assert other_workspace is not None and stale is not None
+
+    expected = repository.list_memories(
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        status="active",
+        limit=10,
+    )
+    observed_ids = repository.list_memory_ids(
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        status="active",
+        limit=10,
+    )
+
+    assert observed_ids == [record.id for record in expected] == [newest.id, oldest.id]
+
+
+def test_speculative_fallback_sources_ids_without_list_memories_hydration(db_manager, monkeypatch) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(
         repository,
@@ -1051,27 +1119,145 @@ def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bou
         assert record is not None
         lexical_records.append(record)
 
+    for index in range(22):
+        filler = repository.create_memory(
+            title=f"Filler note {index:02d}",
+            content="Background note without lexical overlap.",
+            summary=f"Filler summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["filler"],
+        )
+        assert filler is not None
+
     semantic_only = repository.create_memory(
-        title="Shared storage latency diagnosis",
-        content="Shared storage latency diagnosis for Postgres deployments.",
-        summary="Latency diagnosis summary.",
+        title="Deployment incident diagnosis",
+        content="Operational investigation note for shared production incidents.",
+        summary="Incident diagnosis summary.",
         memory_type="fact",
         workspace_ids=["workspace-alpha"],
-        tags=["latency"],
+        tags=["incident"],
     )
     assert semantic_only is not None
 
-    call_modes: list[str] = []
+    fallback_cap = _strong_keyword_bounded_candidate_cap(3)
+    expected_fallback_ids = repository.list_memory_ids(limit=fallback_cap)
+    assert semantic_only.id in expected_fallback_ids
+
+    def _fail_list_memories(*_args, **_kwargs):
+        raise AssertionError("speculative fallback should source IDs via list_memory_ids, not list_memories")
+
+    observed_list_memory_ids_calls: list[tuple[str | None, str | None, str | None, int]] = []
+    original_list_memory_ids = repository.list_memory_ids
+
+    def _record_list_memory_ids(*, workspace_id=None, memory_type=None, status=None, limit=100):
+        observed_list_memory_ids_calls.append((workspace_id, memory_type, status, limit))
+        return original_list_memory_ids(
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
 
     def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
         _ = candidates, limit
         if candidate_ids is not None:
-            call_modes.append("bounded")
-            return {
-                lexical_records[0].id: 0.91,
-                lexical_records[1].id: 0.9,
-            }
-        call_modes.append("global")
+            candidate_id_set = set(candidate_ids)
+            lexical_id_set = {record.id for record in lexical_records}
+            if candidate_id_set == lexical_id_set:
+                return {
+                    lexical_records[0].id: 0.91,
+                    lexical_records[1].id: 0.9,
+                }
+            assert candidate_id_set == set(expected_fallback_ids)
+            assert semantic_only.id in candidate_id_set
+        return {
+            semantic_only.id: 0.99,
+            lexical_records[0].id: 0.91,
+            lexical_records[1].id: 0.9,
+            lexical_records[2].id: 0.89,
+        }
+
+    monkeypatch.setattr(repository, "list_memories", _fail_list_memories)
+    monkeypatch.setattr(repository, "list_memory_ids", _record_list_memory_ids)
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results, diagnostics = service.search_memories_with_diagnostics(
+        "postgres backend storage latency",
+        workspace_id="workspace-alpha",
+        limit=3,
+        debug=True,
+    )
+
+    assert len(results) == 3
+    assert diagnostics.semantic_candidate_strategy == "global-fallback"
+    assert (None, None, None, fallback_cap) in observed_list_memory_ids_calls
+
+
+def test_search_memories_broadens_to_candidate_filtered_fallback_semantic_scores_when_speculative_bounded_scores_are_sparse(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    lexical_records = []
+    for index in range(3):
+        record = repository.create_memory(
+            title=f"Postgres backend note {index}",
+            content="Postgres backend guidance for shared deployments.",
+            summary="Postgres backend summary.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["postgres"],
+        )
+        assert record is not None
+        lexical_records.append(record)
+
+    for index in range(30):
+        filler = repository.create_memory(
+            title=f"Unrelated filler {index:02d}",
+            content="Background note without lexical overlap.",
+            summary=f"Filler summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["filler"],
+        )
+        assert filler is not None
+
+    semantic_only = repository.create_memory(
+        title="Deployment incident diagnosis",
+        content="Operational investigation note for shared production incidents.",
+        summary="Incident diagnosis summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["incident"],
+    )
+    assert semantic_only is not None
+
+    fallback_cap = _strong_keyword_bounded_candidate_cap(3)
+    expected_fallback_ids = [record.id for record in repository.list_memories(limit=fallback_cap)]
+    assert fallback_cap == 20
+    assert fallback_cap < 500
+    assert semantic_only.id in expected_fallback_ids
+
+    fallback_candidate_ids: list[str] = []
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        if candidate_ids is not None:
+            candidate_id_set = set(candidate_ids)
+            lexical_id_set = {record.id for record in lexical_records}
+            if candidate_id_set == lexical_id_set:
+                return {
+                    lexical_records[0].id: 0.91,
+                    lexical_records[1].id: 0.9,
+                }
+            fallback_candidate_ids.extend(candidate_ids)
+            assert candidate_id_set == set(expected_fallback_ids)
+            assert semantic_only.id in candidate_id_set
         return {
             semantic_only.id: 0.99,
             lexical_records[0].id: 0.91,
@@ -1088,8 +1274,8 @@ def test_search_memories_broadens_to_global_semantic_scores_when_speculative_bou
         debug=True,
     )
 
-    assert call_modes == ["bounded", "global"]
-    assert semantic_only.id in {result.memory_id for result in results}
+    assert fallback_candidate_ids == expected_fallback_ids
+    assert len(results) == 3
     assert diagnostics.semantic_candidate_strategy == "global-fallback"
     assert diagnostics.timing_ms["semantic_speculative_fallback"] >= 0.0
 

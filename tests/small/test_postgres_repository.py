@@ -120,6 +120,8 @@ class FakeCursor:
                 )
                 rows.extend((memory_id, tag_name) for tag_name in tag_names)
             self._result = rows
+        elif normalized.startswith("SELECT DISTINCT memories.id FROM memories"):
+            self._select_memory_ids(normalized, arguments)
         elif normalized.startswith("SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memories(normalized, arguments)
         elif normalized.startswith("SELECT DISTINCT memories.id,"):
@@ -263,6 +265,34 @@ class FakeCursor:
             if status is not None and str(memory["status"]) != status:
                 continue
             rows.append(self._memory_row(memory))
+            if len(rows) >= limit:
+                break
+        self._result = rows
+
+    def _select_memory_ids(self, normalized: str, arguments: SqlParams) -> None:
+        params = list(arguments)
+        limit = self._as_int(params.pop())
+        workspace_id: str | None = None
+        memory_type: str | None = None
+        status: str | None = None
+
+        if "memory_workspaces.workspace_id = %s" in normalized:
+            workspace_id = str(params.pop(0))
+        if "memories.type = %s" in normalized:
+            memory_type = str(params.pop(0))
+        if "memories.status = %s" in normalized:
+            status = str(params.pop(0))
+
+        rows = []
+        for memory in self._sorted_memories():
+            memory_id = str(memory["id"])
+            if workspace_id is not None and workspace_id not in self._state.memory_workspaces.get(memory_id, set()):
+                continue
+            if memory_type is not None and str(memory["type"]) != memory_type:
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
+            rows.append((memory_id,))
             if len(rows) >= limit:
                 break
         self._result = rows
@@ -840,6 +870,75 @@ def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_f
     assert timing_ms["candidate_hydration_candidate_build"] >= 0.0
 
 
+def test_postgres_repository_list_memory_ids_matches_list_memories_ordering_and_filters(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    oldest = repository.create_memory(
+        title="Old alpha fact",
+        content="Old alpha fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-01T00:00:00+00:00",
+        created_at="2026-03-01T00:00:00+00:00",
+    )
+    newest = repository.create_memory(
+        title="New alpha fact",
+        content="New alpha fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-03T00:00:00+00:00",
+        created_at="2026-03-03T00:00:00+00:00",
+    )
+    other_type = repository.create_memory(
+        title="Alpha plan",
+        content="Alpha plan content.",
+        memory_type="plan",
+        status="active",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-02T00:00:00+00:00",
+        created_at="2026-03-02T00:00:00+00:00",
+    )
+    other_workspace = repository.create_memory(
+        title="Beta fact",
+        content="Beta fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-beta"],
+        updated_at="2026-03-04T00:00:00+00:00",
+        created_at="2026-03-04T00:00:00+00:00",
+    )
+    stale = repository.create_memory(
+        title="Stale alpha fact",
+        content="Stale alpha fact content.",
+        memory_type="fact",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-03-05T00:00:00+00:00",
+        created_at="2026-03-05T00:00:00+00:00",
+    )
+    assert oldest is not None and newest is not None and other_type is not None
+    assert other_workspace is not None and stale is not None
+
+    expected = repository.list_memories(
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        status="active",
+        limit=10,
+    )
+    observed_ids = repository.list_memory_ids(
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        status="active",
+        limit=10,
+    )
+
+    assert observed_ids == [record.id for record in expected] == [newest.id, oldest.id]
+
+
 def test_postgres_repository_ranking_candidates_aggregate_without_join_fanout_inflation(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:
@@ -1239,9 +1338,11 @@ class _RecordingCandidateAwareVectorStore:
         model_name: str,
         query_embedding: list[float],
         candidate_ids: list[str] | None = None,
+        diagnostics: dict[str, object] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
+        del diagnostics
         del workspace_id
         self.last_candidate_ids = None if candidate_ids is None else list(candidate_ids)
         candidate_id_filter = None if candidate_ids is None else set(candidate_ids)
@@ -1332,3 +1433,70 @@ def test_postgres_search_service_keeps_global_semantic_fallback_when_lexical_hit
     assert results
     assert semantic_match.id in {result.memory_id for result in results}
     assert vector_store.last_candidate_ids is None
+
+
+def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculative_bounded_search(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _session_manager = postgres_repository
+    vector_store = _RecordingCandidateAwareVectorStore()
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_PostgresSearchFakeEmbedder(),
+        vector_store=vector_store,
+    )
+    monkeypatch.setattr(service, "_should_broaden_semantic_search", lambda *_args, **_kwargs: True)
+
+    lexical_records = []
+    for index in range(3):
+        record = repository.create_memory(
+            title=f"Permissions security note {index}",
+            content="Permissions security guidance for access control reviews.",
+            summary="Permissions security summary.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["security"],
+        )
+        assert record is not None
+        lexical_records.append(record)
+
+    semantic_only = repository.create_memory(
+        title="Identity policy",
+        content="Authentication token rotation and credential policy.",
+        summary="Identity controls.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["auth"],
+    )
+    assert semantic_only is not None
+    expected_fallback_ids = [record.id for record in repository.list_memories(limit=500)]
+
+    for record in lexical_records:
+        vector_store.upsert(
+            source_kind="memory",
+            source_id=record.id,
+            workspace_id=None,
+            model_name=_PostgresSearchFakeEmbedder.model_name,
+            embedding=[1.0, 0.0],
+        )
+    vector_store.upsert(
+        source_kind="memory",
+        source_id=semantic_only.id,
+        workspace_id=None,
+        model_name=_PostgresSearchFakeEmbedder.model_name,
+        embedding=[1.0, 0.0],
+    )
+
+    results, diagnostics = service.search_memories_with_diagnostics(
+        "permissions security access control latency",
+        workspace_id="workspace-alpha",
+        limit=4,
+        debug=True,
+    )
+
+    assert results
+    assert vector_store.last_candidate_ids == expected_fallback_ids
+    assert diagnostics.semantic_candidate_strategy == "global-fallback"
+    assert diagnostics.timing_ms["semantic_speculative_fallback"] >= 0.0

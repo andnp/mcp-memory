@@ -98,6 +98,14 @@ class SearchRepositoryLike(Protocol):
         limit: int = 100,
     ) -> list[RelationalMemoryRecord]: ...
 
+    def list_memory_ids(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[str]: ...
+
 
 @dataclass(slots=True)
 class RelationalSearchResult:
@@ -1017,12 +1025,21 @@ class RelationalMemorySearchService:
                 requested_limit=requested_limit,
             ):
                 fallback_started = time.perf_counter()
-                candidates = self._repository.list_memories(status=status, limit=500)
+                fallback_candidate_ids = self._repository.list_memory_ids(
+                    status=status,
+                    limit=_strong_keyword_bounded_candidate_cap(requested_limit),
+                )
+                candidates = self._repository.get_searchable_memories(
+                    fallback_candidate_ids,
+                    status=status,
+                    include_superseded=True,
+                )
                 vector_search_diagnostics = {} if diagnostics is not None else None
                 semantic_scores = self._semantic_scores_with_optional_diagnostics(
                     query,
                     candidates,
                     None,
+                    candidate_ids=fallback_candidate_ids,
                     semantic_timing_ms=semantic_timing_ms,
                     vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,

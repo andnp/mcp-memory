@@ -19,6 +19,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
+_HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 
 
 class MCPServer:
@@ -94,4 +95,31 @@ class MCPServer:
                 },
             )
         except (OSError, TimeoutError, ValueError) as exc:
-            logger.warning("Failed to send %s hook for session %s: %s", event_name, self._session_id, exc)
+            transport_health_snapshot = self._probe_transport_health_snapshot()
+            logger.warning(
+                "Failed to send %s hook for session %s: %s",
+                event_name,
+                self._session_id,
+                exc,
+                extra={
+                    "event_name": event_name,
+                    "session_id": self._session_id,
+                    "transport_health_snapshot": transport_health_snapshot,
+                },
+            )
+
+    def _probe_transport_health_snapshot(self) -> dict[str, object] | None:
+        if self._daemon is None:
+            return None
+        try:
+            payload = request_daemon_json(
+                self._daemon,
+                "/internal/health",
+                None,
+                timeout_seconds=_HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, TimeoutError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload

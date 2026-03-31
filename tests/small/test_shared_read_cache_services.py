@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -75,6 +76,42 @@ class CountingSearchService:
                 ranking_debug=None,
             )
         ]
+
+
+class BlockingProjectionAwareSearchService:
+    def __init__(self, *, token_by_memory_id: dict[str, str] | None = None) -> None:
+        self.calls = 0
+        self.started = Event()
+        self.release = Event()
+        self.token_by_memory_id = token_by_memory_id or {}
+        self.validation_calls: list[list[str]] = []
+
+    def search_memories(self, **kwargs):
+        del kwargs
+        self.calls += 1
+        self.started.set()
+        assert self.release.wait(timeout=5.0)
+        return [
+            SimpleNamespace(
+                memory_id="memory-1",
+                title="Warm cache",
+                summary="Fresh authoritative result",
+                memory_type="fact",
+                status="active",
+                tags=["cache"],
+                workspace_ids=["workspace-123"],
+                score=0.9,
+                ranking_debug=None,
+            )
+        ]
+
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        self.validation_calls.append(list(memory_ids))
+        return {
+            memory_id: token
+            for memory_id, token in self.token_by_memory_id.items()
+            if memory_id in memory_ids
+        }
 
 
 class FailingSearchService:
@@ -1276,6 +1313,120 @@ def test_search_memory_records_service_records_cache_metrics_for_external_non_de
     assert snapshot.fresh_exact_search_hit_rate == 0.25
     assert snapshot.stale_exact_search_fallback_rate == 0.25
     assert snapshot.projection_fallback_rate == 0.25
+
+
+def test_search_memory_records_service_coalesces_concurrent_identical_external_requests(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = BlockingProjectionAwareSearchService(token_by_memory_id={"memory-1": "token-1"})
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+    responses: list[dict[str, object] | None] = [None, None, None]
+    failures: list[BaseException] = []
+    follower_joined = Event()
+    original_begin_inflight_search = cache.begin_inflight_search
+
+    def _begin_inflight_search(request: SharedReadCacheSearchRequest):
+        entry = original_begin_inflight_search(request)
+        if not entry.is_leader:
+            follower_joined.set()
+        return entry
+
+    cache.begin_inflight_search = _begin_inflight_search
+
+    def _invoke(index: int) -> None:
+        try:
+            responses[index] = search_memory_records_service(ctx, {"query": "warm cache"})
+        except BaseException as error:  # pragma: no cover - test harness capture
+            failures.append(error)
+
+    threads = [Thread(target=_invoke, args=(index,)) for index in range(3)]
+    for thread in threads:
+        thread.start()
+    assert search_service.started.wait(timeout=5.0)
+    assert follower_joined.wait(timeout=5.0)
+    search_service.release.set()
+    for thread in threads:
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+
+    assert failures == []
+    assert search_service.calls == 1
+    assert search_service.validation_calls == [["memory-1"]]
+    assert responses[0] == responses[1] == responses[2]
+    assert responses[0] is not None
+    assert responses[0]["status"] == "ok"
+    assert len(ctx.retrieval_telemetry.search_calls) >= 2
+
+    snapshot = cache.get_metrics_snapshot()
+    assert snapshot.search_requests == 3
+    assert snapshot.warmed_projection_rows == 1
+
+
+def test_search_memory_records_service_coalesced_authoritative_failure_preserves_stale_fallbacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    cached_payload = {
+        "status": "ok",
+        "results": [_projection_payload("memory-1", title="Warm cache", summary="Cached result")],
+        "recommended_follow_up_tool": "read_memory_record",
+        "guidance": "cached guidance",
+    }
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
+    cache.store_search_response(request, cached_payload)
+    search_service = BlockingProjectionAwareSearchService()
+    original_search_memories = search_service.search_memories
+
+    def _failing_search_memories(**kwargs):
+        original_search_memories(**kwargs)
+        raise TimeoutError("authoritative search timed out")
+
+    search_service.search_memories = _failing_search_memories
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+    responses: list[dict[str, object] | None] = [None, None]
+    failures: list[BaseException] = []
+    follower_joined = Event()
+    original_begin_inflight_search = cache.begin_inflight_search
+
+    def _begin_inflight_search(request: SharedReadCacheSearchRequest):
+        entry = original_begin_inflight_search(request)
+        if not entry.is_leader:
+            follower_joined.set()
+        return entry
+
+    cache.begin_inflight_search = _begin_inflight_search
+
+    def _invoke(index: int) -> None:
+        try:
+            responses[index] = search_memory_records_service(ctx, {"query": "warm cache"})
+        except BaseException as error:  # pragma: no cover - test harness capture
+            failures.append(error)
+
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 106.0)
+    threads = [Thread(target=_invoke, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    assert search_service.started.wait(timeout=5.0)
+    assert follower_joined.wait(timeout=5.0)
+    search_service.release.set()
+    for thread in threads:
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+
+    assert failures == []
+    assert search_service.calls == 1
+    assert responses[0] == responses[1]
+    assert responses[0] is not None
+    assert responses[0]["cache_status"] == "stale_fallback"
 
 
 def test_read_memory_record_service_records_cache_metrics_for_validation_paths(tmp_path: Path) -> None:

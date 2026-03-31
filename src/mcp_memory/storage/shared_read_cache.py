@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import re
 import sqlite3
+from threading import Event, Lock
 from time import time
 from collections.abc import Sequence
 from typing import Any
@@ -92,6 +93,20 @@ class SharedReadCacheProjectionEntry:
     cached_at: float
 
 
+@dataclass
+class _SharedReadCacheInFlightSearchState:
+    completed: Event = field(default_factory=Event)
+    payload: dict[str, Any] | None = None
+    error: Exception | None = None
+
+
+@dataclass(frozen=True)
+class SharedReadCacheInFlightSearch:
+    cache_key: str
+    is_leader: bool
+    _state: _SharedReadCacheInFlightSearchState
+
+
 @dataclass(frozen=True)
 class SharedReadCacheMetricsSnapshot:
     search_requests: int = 0
@@ -119,6 +134,8 @@ class SharedReadCache:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._inflight_searches: dict[str, _SharedReadCacheInFlightSearchState] = {}
+        self._inflight_searches_lock = Lock()
         self._initialize()
 
     def close(self) -> None:
@@ -168,6 +185,39 @@ class SharedReadCache:
                 time(),
             ),
         )
+
+    def begin_inflight_search(self, request: SharedReadCacheSearchRequest) -> SharedReadCacheInFlightSearch:
+        cache_key = self._search_cache_key(request)
+        with self._inflight_searches_lock:
+            state = self._inflight_searches.get(cache_key)
+            if state is None:
+                state = _SharedReadCacheInFlightSearchState()
+                self._inflight_searches[cache_key] = state
+                return SharedReadCacheInFlightSearch(cache_key=cache_key, is_leader=True, _state=state)
+        return SharedReadCacheInFlightSearch(cache_key=cache_key, is_leader=False, _state=state)
+
+    def wait_for_inflight_search(self, entry: SharedReadCacheInFlightSearch) -> dict[str, Any]:
+        entry._state.completed.wait()
+        if entry._state.payload is not None:
+            return entry._state.payload
+        if entry._state.error is not None:
+            raise entry._state.error
+        raise RuntimeError("In-flight search completed without payload or error")
+
+    def finish_inflight_search(
+        self,
+        entry: SharedReadCacheInFlightSearch,
+        *,
+        payload: dict[str, Any] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        entry._state.payload = payload
+        entry._state.error = error
+        entry._state.completed.set()
+        with self._inflight_searches_lock:
+            current = self._inflight_searches.get(entry.cache_key)
+            if current is entry._state:
+                self._inflight_searches.pop(entry.cache_key, None)
 
     def load_read_entry(self, memory_id: str) -> SharedReadCacheReadEntry | None:
         row = self._fetchone(

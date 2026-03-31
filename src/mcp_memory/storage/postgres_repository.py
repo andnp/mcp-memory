@@ -360,6 +360,41 @@ class PostgresRelationalMemoryRepository:
                 rows = cursor.fetchall()
                 return [self._hydrate_record(cursor, row) for row in rows]
 
+    def list_memory_ids(
+        self,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[str]:
+        joins: list[str] = []
+        clauses: list[str] = []
+        params: list[object] = []
+        if workspace_id is not None:
+            joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
+            clauses.append("memory_workspaces.workspace_id = %s")
+            params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = %s")
+            params.append(memory_type)
+        if status is not None:
+            clauses.append("memories.status = %s")
+            params.append(status)
+
+        query = "SELECT DISTINCT memories.id FROM memories "
+        if joins:
+            query += " ".join(joins) + " "
+        if clauses:
+            query += "WHERE " + " AND ".join(clauses) + " "
+        query += "ORDER BY memories.updated_at DESC, memories.created_at DESC LIMIT %s"
+        params.append(limit)
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                return [str(row[0]) for row in rows]
+
     def search_keyword_memory_ids(
         self,
         query: str,

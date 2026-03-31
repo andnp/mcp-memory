@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import json
+import logging
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from time import perf_counter, time
-from typing import Awaitable, Callable, cast
+from types import TracebackType
+from typing import Any, Awaitable, Callable, cast
 
 import zmq
 import zmq.asyncio
@@ -24,6 +26,9 @@ from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import get_memory_tools
 
 
+logger = logging.getLogger(__name__)
+
+
 DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
 EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 30.0
 _SOCKET_PROBE_TIMEOUT_SECONDS = 0.1
@@ -35,6 +40,10 @@ _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/internal/maintenance/tools",
 )
 _RECENT_TRANSPORT_SAMPLE_LIMIT = 32
+_ACTIVE_TRANSPORT_REQUEST_SUMMARY_LIMIT = 8
+_SLOW_TRANSPORT_QUEUE_WAIT_WARNING_MS = 250.0
+_SLOW_TRANSPORT_EXECUTION_WARNING_MS = 1_000.0
+_SLOW_TRANSPORT_TOTAL_WARNING_MS = 4_000.0
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,33 @@ class DaemonTransportRequestSample:
     queue_wait_ms: float = 0.0
     execution_ms: float = 0.0
     completed_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class DaemonTransportRequestDiagnostic:
+    request_id: int
+    path: str
+    phase: str
+    age_ms: float = 0.0
+    queue_wait_ms: float = 0.0
+    execution_ms: float = 0.0
+    total_ms: float = 0.0
+    response_status: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class _TrackedDaemonTransportRequest:
+    request_id: int
+    path: str
+    started_at: float
+    started_at_perf: float
+    phase: str = "received"
+    queue_wait_ms: float = 0.0
+    execution_ms: float = 0.0
+    response_status: str | None = None
+    error: str | None = None
+    warning_logged: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +93,8 @@ class DaemonTransportDiagnosticsSnapshot:
     recent_queue_wait_max_ms: float = 0.0
     recent_execution_avg_ms: float = 0.0
     recent_execution_max_ms: float = 0.0
+    active_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
+    recent_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
 
 
 def request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds: float | None = None):
@@ -141,11 +179,16 @@ class DaemonZmqServer:
         self._active_constrained_request_count = 0
         self._queued_waiter_count = 0
         self._recent_request_samples: deque[DaemonTransportRequestSample] = deque(maxlen=_RECENT_TRANSPORT_SAMPLE_LIMIT)
+        self._recent_request_diagnostics: deque[DaemonTransportRequestDiagnostic] = deque(maxlen=_RECENT_TRANSPORT_SAMPLE_LIMIT)
+        self._active_requests: dict[int, _TrackedDaemonTransportRequest] = {}
+        self._next_request_id = 0
 
     def get_diagnostics_snapshot(self) -> DaemonTransportDiagnosticsSnapshot:
         samples = tuple(self._recent_request_samples)
         queue_waits = [sample.queue_wait_ms for sample in samples]
         execution_times = [sample.execution_ms for sample in samples]
+        active_requests = tuple(self._build_active_request_diagnostics())
+        recent_requests = tuple(reversed(self._recent_request_diagnostics))
         return DaemonTransportDiagnosticsSnapshot(
             current_in_flight_count=self._active_request_count,
             current_constrained_in_flight_count=self._active_constrained_request_count,
@@ -157,6 +200,8 @@ class DaemonZmqServer:
             recent_queue_wait_max_ms=_max_ms(queue_waits),
             recent_execution_avg_ms=_average_ms(execution_times),
             recent_execution_max_ms=_max_ms(execution_times),
+            active_requests=active_requests,
+            recent_requests=recent_requests,
         )
 
     async def start(self) -> None:
@@ -217,7 +262,7 @@ class DaemonZmqServer:
                     completed_recv_task = None
 
                 completed_requests = [
-                    cast(asyncio.Task[tuple[bytes, dict]], task)
+                    cast(asyncio.Task[tuple[bytes, dict, int]], task)
                     for task in done
                     if task is not completed_recv_task
                 ]
@@ -226,27 +271,44 @@ class DaemonZmqServer:
                     if task.cancelled():
                         continue
                     try:
-                        identity, response = task.result()
+                        identity, response, request_id = task.result()
                     except Exception:
                         continue
-                    await socket.send_multipart([identity, json.dumps(response, sort_keys=True).encode("utf-8")])
+                    tracked_request = self._active_requests.get(request_id)
+                    if tracked_request is not None:
+                        tracked_request.phase = "reply_sending"
+                        tracked_request.response_status = _response_status(response)
+                    try:
+                        await socket.send_multipart([identity, json.dumps(response, sort_keys=True).encode("utf-8")])
+                    except Exception as exc:
+                        if tracked_request is not None:
+                            tracked_request.phase = "reply_failed"
+                            tracked_request.error = f"{type(exc).__name__}: {exc}"
+                            self._log_request_warning("Daemon transport reply failed", tracked_request, exc_info=exc)
+                            self._finalize_request_tracking(tracked_request)
+                        continue
+                    if tracked_request is not None:
+                        tracked_request.phase = "reply_sent"
+                        self._finalize_request_tracking(tracked_request)
         finally:
             recv_task.cancel()
             await asyncio.gather(recv_task, return_exceptions=True)
 
-    async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict]:
+    async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict, int]:
         path = _normalized_transport_path(payload_frame) or "<invalid_transport_payload>"
+        tracked_request = self._track_request(path)
         uses_request_semaphore = path != "/internal/health"
         queue_wait_started_at = perf_counter()
         acquired_request_slot = False
-        queue_wait_ms = 0.0
 
         if uses_request_semaphore:
+            tracked_request.phase = "queued"
             self._queued_waiter_count += 1
             try:
                 await self._request_semaphore.acquire()
                 acquired_request_slot = True
-                queue_wait_ms = (perf_counter() - queue_wait_started_at) * 1000.0
+                tracked_request.queue_wait_ms = (perf_counter() - queue_wait_started_at) * 1000.0
+                tracked_request.phase = "admitted"
             finally:
                 self._queued_waiter_count = max(self._queued_waiter_count - 1, 0)
 
@@ -256,16 +318,118 @@ class DaemonZmqServer:
 
         execution_started_at = perf_counter()
         try:
+            tracked_request.phase = "dispatching"
             response = await self._dispatch(payload_frame)
+            tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            tracked_request.response_status = _response_status(response)
+            tracked_request.phase = "dispatched"
+            return identity, response, tracked_request.request_id
+        except asyncio.CancelledError:
+            tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            tracked_request.phase = "cancelled"
+            tracked_request.error = "cancelled"
+            self._finalize_request_tracking(tracked_request)
+            raise
+        except Exception as exc:
+            tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            tracked_request.phase = "dispatch_failed"
+            tracked_request.error = f"{type(exc).__name__}: {exc}"
+            self._log_request_warning("Daemon transport request failed before reply", tracked_request, exc_info=exc)
+            self._finalize_request_tracking(tracked_request)
+            raise
         finally:
-            execution_ms = (perf_counter() - execution_started_at) * 1000.0
             self._active_request_count = max(self._active_request_count - 1, 0)
             if uses_request_semaphore:
                 self._active_constrained_request_count = max(self._active_constrained_request_count - 1, 0)
                 if acquired_request_slot:
                     self._request_semaphore.release()
-            self._record_request_sample(path, queue_wait_ms=queue_wait_ms, execution_ms=execution_ms)
-        return identity, response
+
+    def _track_request(self, path: str) -> _TrackedDaemonTransportRequest:
+        self._next_request_id += 1
+        tracked_request = _TrackedDaemonTransportRequest(
+            request_id=self._next_request_id,
+            path=path,
+            started_at=time(),
+            started_at_perf=perf_counter(),
+        )
+        self._active_requests[tracked_request.request_id] = tracked_request
+        return tracked_request
+
+    def _build_active_request_diagnostics(self) -> list[DaemonTransportRequestDiagnostic]:
+        active_requests = sorted(
+            self._active_requests.values(),
+            key=lambda tracked_request: tracked_request.started_at,
+        )
+        return [
+            self._build_request_diagnostic(tracked_request)
+            for tracked_request in active_requests[:_ACTIVE_TRANSPORT_REQUEST_SUMMARY_LIMIT]
+        ]
+
+    def _build_request_diagnostic(
+        self,
+        tracked_request: _TrackedDaemonTransportRequest,
+        *,
+        now_perf: float | None = None,
+    ) -> DaemonTransportRequestDiagnostic:
+        resolved_now_perf = perf_counter() if now_perf is None else now_perf
+        total_ms = max((resolved_now_perf - tracked_request.started_at_perf) * 1000.0, 0.0)
+        return DaemonTransportRequestDiagnostic(
+            request_id=tracked_request.request_id,
+            path=tracked_request.path,
+            phase=tracked_request.phase,
+            age_ms=round(total_ms, 3),
+            queue_wait_ms=round(max(tracked_request.queue_wait_ms, 0.0), 3),
+            execution_ms=round(max(tracked_request.execution_ms, 0.0), 3),
+            total_ms=round(total_ms, 3),
+            response_status=tracked_request.response_status,
+            error=tracked_request.error,
+        )
+
+    def _finalize_request_tracking(self, tracked_request: _TrackedDaemonTransportRequest) -> None:
+        diagnostic = self._build_request_diagnostic(tracked_request)
+        self._record_request_sample(
+            tracked_request.path,
+            queue_wait_ms=tracked_request.queue_wait_ms,
+            execution_ms=tracked_request.execution_ms,
+        )
+        self._recent_request_diagnostics.append(diagnostic)
+        self._active_requests.pop(tracked_request.request_id, None)
+        if tracked_request.warning_logged:
+            return
+        if (
+            diagnostic.queue_wait_ms >= _SLOW_TRANSPORT_QUEUE_WAIT_WARNING_MS
+            or diagnostic.execution_ms >= _SLOW_TRANSPORT_EXECUTION_WARNING_MS
+            or diagnostic.total_ms >= _SLOW_TRANSPORT_TOTAL_WARNING_MS
+        ):
+            self._log_request_warning("Slow daemon transport request", tracked_request)
+
+    def _log_request_warning(
+        self,
+        message: str,
+        tracked_request: _TrackedDaemonTransportRequest,
+        *,
+        exc_info: BaseException | tuple[type[BaseException], BaseException, TracebackType | None] | None = None,
+    ) -> None:
+        diagnostic = self._build_request_diagnostic(tracked_request)
+        tracked_request.warning_logged = True
+        logger.warning(
+            message,
+            exc_info=cast(Any, exc_info),
+            extra={
+                "request_id": diagnostic.request_id,
+                "path": diagnostic.path,
+                "phase": diagnostic.phase,
+                "queue_wait_ms": diagnostic.queue_wait_ms,
+                "execution_ms": diagnostic.execution_ms,
+                "total_ms": diagnostic.total_ms,
+                "response_status": diagnostic.response_status,
+                "error": diagnostic.error,
+                "current_in_flight_count": self._active_request_count,
+                "current_constrained_in_flight_count": self._active_constrained_request_count,
+                "queued_waiter_count": self._queued_waiter_count,
+                "max_concurrent_requests": self._max_concurrent_requests,
+            },
+        )
 
     def _record_request_sample(self, path: str, *, queue_wait_ms: float, execution_ms: float) -> None:
         self._recent_request_samples.append(
@@ -295,7 +459,7 @@ class DaemonZmqServer:
         normalized_path, request_payload = normalize_request(path, payload)
         try:
             if normalized_path == "/internal/health":
-                return asdict(self._metadata_provider())
+                return self._build_health_payload()
             if normalized_path == "/internal/tools":
                 return {"tools": [serialize_tool(tool) for tool in get_memory_tools()]}
             if normalized_path == "/internal/maintenance/tools":
@@ -326,6 +490,17 @@ class DaemonZmqServer:
             path,
             payload,
         )
+
+    def _build_health_payload(self) -> dict[str, object]:
+        metadata = self._metadata_provider()
+        if isinstance(metadata, dict):
+            payload = dict(metadata)
+        elif is_dataclass(metadata):
+            payload = cast(dict[str, object], asdict(cast(Any, metadata)))
+        else:
+            raise ValueError("transport_health_metadata_must_be_mapping_or_dataclass")
+        payload["transport_diagnostics"] = cast(dict[str, object], asdict(self.get_diagnostics_snapshot()))
+        return payload
 
 
 def _socket_endpoint(socket_path: str) -> str:
@@ -366,6 +541,13 @@ def _max_ms(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(max(values), 3)
+
+
+def _response_status(response: dict) -> str | None:
+    status = response.get("status")
+    if isinstance(status, str) and status:
+        return status
+    return None
 
 
 def _remove_stale_socket(socket_path: Path) -> None:
