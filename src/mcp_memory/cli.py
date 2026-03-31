@@ -33,6 +33,7 @@ from mcp_memory.management.task_sampling_summary import build_task_sampling_summ
 from mcp_memory.management.service import ManagementService
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
+from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
     record_markdown_memory_paths_as_thoughts,
@@ -307,6 +308,75 @@ def _repair_search_index(workspace_root: str | None, json_output: bool) -> None:
         console.print(f"[yellow]Search repair skipped:[/] {payload['reason']}")
         return
     console.print(f"[green]Search index rebuilt:[/] {payload['records_indexed']} records")
+
+
+def _show_search_debug(
+    workspace_root: str | None,
+    query: str,
+    limit: int,
+    json_output: bool,
+) -> None:
+    payload = _with_runtime(
+        workspace_root,
+        lambda runtime: search_memory_records_service(
+            runtime,
+            {"query": query, "limit": limit, "debug": True},
+            caller_kind="operator",
+        ),
+    )
+    if payload.get("status") != "ok":
+        raise RuntimeError(str(payload.get("error") or "search_debug_failed"))
+
+    results = payload.get("results")
+    result_count = len(results) if isinstance(results, list) else 0
+    search_diagnostics = payload.get("search_diagnostics")
+    timing_ms = payload.get("timing_ms")
+    cli_payload = dict(payload)
+    cli_payload["query"] = query
+    cli_payload["result_count"] = result_count
+    cli_payload["semantic_candidate_strategy"] = (
+        search_diagnostics.get("semantic_candidate_strategy")
+        if isinstance(search_diagnostics, dict)
+        else None
+    )
+    cli_payload["total_timing_ms"] = (
+        timing_ms.get("total")
+        if isinstance(timing_ms, dict)
+        else None
+    )
+
+    if json_output:
+        click.echo(json.dumps(cli_payload, sort_keys=True))
+        return
+
+    console.print(f"[bold]Query:[/] {query}")
+    console.print(f"[bold]Result count:[/] {result_count}")
+    console.print(
+        "[bold]Semantic candidate strategy:[/] "
+        f"{cli_payload['semantic_candidate_strategy'] or '-'}"
+    )
+    total_timing_ms = cli_payload["total_timing_ms"]
+    total_timing_label = "-"
+    if isinstance(total_timing_ms, int | float):
+        total_timing_label = f"{total_timing_ms:.3f}ms"
+    console.print(f"[bold]Total timing:[/] {total_timing_label}")
+
+    timing_breakdown = timing_ms if isinstance(timing_ms, dict) else {}
+    timing_rows = [
+        (name, value)
+        for name, value in timing_breakdown.items()
+        if name != "total" and isinstance(value, int | float)
+    ]
+    timing_rows.sort(key=lambda item: item[1], reverse=True)
+
+    timing_table = Table(title="Timing Breakdown")
+    timing_table.add_column("Component")
+    timing_table.add_column("Time", justify="right")
+    if not timing_rows:
+        timing_table.add_row("-", "-")
+    for name, value in timing_rows:
+        timing_table.add_row(name, f"{value:.3f}ms")
+    console.print(timing_table)
 
 
 def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
@@ -1760,6 +1830,24 @@ def search_health_command(workspace_root: str | None, json_output: bool) -> None
 def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
     """Rebuild semantic search embeddings for the current model."""
     _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
+
+
+@admin_search_group.command(name="debug")
+@workspace_root_option
+@click.argument("query_parts", nargs=-1, required=True)
+@click.option("--limit", default=5, show_default=True, type=int, help="Maximum number of search results to inspect")
+@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
+def search_debug_command(
+    workspace_root: str | None,
+    query_parts: tuple[str, ...],
+    limit: int,
+    json_output: bool,
+) -> None:
+    """Run one search query and print timing/strategy diagnostics."""
+    query = " ".join(part for part in query_parts if part.strip()).strip()
+    if not query:
+        raise click.UsageError("Provide a non-empty query.")
+    _run_or_exit(lambda: _show_search_debug(workspace_root, query, limit, json_output))
 
 
 @admin_agent_group.command(name="run")

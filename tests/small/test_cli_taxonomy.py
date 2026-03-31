@@ -459,6 +459,88 @@ def test_admin_search_repair_forwards_to_existing_search_repair_helper(monkeypat
     }
 
 
+def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summary(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_with_runtime(workspace_root: str | None, action):
+        captured["workspace_root"] = workspace_root
+        return action(object())
+
+    def fake_search_memory_records_service(runtime, arguments: dict[str, object], *, caller_kind: str = "external") -> dict[str, object]:
+        captured["runtime_type"] = type(runtime).__name__
+        captured["arguments"] = arguments
+        captured["caller_kind"] = caller_kind
+        return {
+            "status": "ok",
+            "results": [{"memory_id": "memory-1"}, {"memory_id": "memory-2"}],
+            "timing_ms": {
+                "total": 12.5,
+                "semantic_selection": 4.0,
+                "keyword_lookup": 3.0,
+            },
+            "search_diagnostics": {
+                "semantic_candidate_strategy": "speculative-bounded",
+            },
+        }
+
+    monkeypatch.setattr("mcp_memory.cli._with_runtime", fake_with_runtime)
+    monkeypatch.setattr("mcp_memory.cli.search_memory_records_service", fake_search_memory_records_service)
+
+    result = runner.invoke(
+        main,
+        ["admin", "search", "debug", "--workspace-root", "/tmp/demo", "semantic", "latency"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "runtime_type": "object",
+        "arguments": {"query": "semantic latency", "limit": 5, "debug": True},
+        "caller_kind": "operator",
+    }
+    assert "Query: semantic latency" in result.output
+    assert "Result count: 2" in result.output
+    assert "Semantic candidate strategy: speculative-bounded" in result.output
+    assert "Total timing: 12.500ms" in result.output
+    assert "semantic_selection" in result.output
+    assert "keyword_lookup" in result.output
+
+
+def test_admin_search_debug_json_includes_query_result_count_and_diagnostics(monkeypatch) -> None:
+    runner = CliRunner()
+
+    def fake_with_runtime(workspace_root: str | None, action):
+        assert workspace_root == "/tmp/demo"
+        return action(object())
+
+    def fake_search_memory_records_service(runtime, arguments: dict[str, object], *, caller_kind: str = "external") -> dict[str, object]:
+        _ = runtime, arguments, caller_kind
+        return {
+            "status": "ok",
+            "results": [{"memory_id": "memory-1"}],
+            "timing_ms": {"total": 7.25, "ranking": 1.5},
+            "search_diagnostics": {
+                "semantic_candidate_strategy": "global",
+                "timing_ms": {"total": 7.25, "ranking": 1.5},
+            },
+        }
+
+    monkeypatch.setattr("mcp_memory.cli._with_runtime", fake_with_runtime)
+    monkeypatch.setattr("mcp_memory.cli.search_memory_records_service", fake_search_memory_records_service)
+
+    result = runner.invoke(
+        main,
+        ["admin", "search", "debug", "--workspace-root", "/tmp/demo", "--json", "latency"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '"query": "latency"' in result.output
+    assert '"result_count": 1' in result.output
+    assert '"semantic_candidate_strategy": "global"' in result.output
+    assert '"total_timing_ms": 7.25' in result.output
+
+
 def test_legacy_top_level_search_root_is_removed() -> None:
     runner = CliRunner()
 
