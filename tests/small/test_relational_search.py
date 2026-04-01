@@ -1,4 +1,6 @@
 import sqlite3
+import threading
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,6 +15,7 @@ from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
     ScoringWeights,
+    _clear_query_embedding_cache_for_tests,
     _is_technical_single_token_query,
     _keyword_token_coverage,
     _query_tokens,
@@ -24,6 +27,13 @@ from mcp_memory.context import ApplicationContext
 
 
 pytestmark = pytest.mark.small
+
+
+@pytest.fixture(autouse=True)
+def _clear_query_embedding_cache() -> Iterator[None]:
+    _clear_query_embedding_cache_for_tests()
+    yield
+    _clear_query_embedding_cache_for_tests()
 
 
 def test_ranking_engine_fuses_rrf_across_vector_and_keyword_lists(db_manager) -> None:
@@ -764,6 +774,119 @@ class _CountingFakeEmbedder(_FakeEmbedder):
 
 class _CandidateFilteringVectorStore:
     supports_candidate_filtering = True
+
+
+class _NamedCountingEmbedder:
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        self.call_count = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.call_count += len(texts)
+        return [[float(len(self.model_name)), float(len(text))] for text in texts]
+
+
+class _BlockingEmbedder:
+    def __init__(self, *, model_name: str = "blocking-mini", fail_first_call: bool = False) -> None:
+        self.model_name = model_name
+        self.fail_first_call = fail_first_call
+        self.call_count = 0
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.call_count += len(texts)
+        self.started.set()
+        self.release.wait(timeout=5.0)
+        if self.fail_first_call and self.call_count == 1:
+            raise RuntimeError("query embed boom")
+        return [[1.0, float(len(text))] for text in texts]
+
+
+def test_query_embedding_cache_reuses_exact_query_per_model_key(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    alpha_embedder = _NamedCountingEmbedder("alpha-mini")
+    beta_embedder = _NamedCountingEmbedder("beta-mini")
+    alpha_service = RelationalMemorySearchService(repository, Config(), embedder=alpha_embedder, vector_store=object())
+    beta_service = RelationalMemorySearchService(repository, Config(), embedder=beta_embedder, vector_store=object())
+
+    alpha_first = alpha_service._get_query_embedding("permissions security")
+    alpha_second = alpha_service._get_query_embedding("permissions security")
+    beta_first = beta_service._get_query_embedding("permissions security")
+
+    assert alpha_first == alpha_second
+    assert alpha_embedder.call_count == 1
+    assert beta_embedder.call_count == 1
+    assert alpha_first != beta_first
+
+
+def test_query_embedding_coalescing_shares_inflight_work_across_threads(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    embedder = _BlockingEmbedder()
+    service = RelationalMemorySearchService(repository, Config(), embedder=embedder, vector_store=object())
+    results: list[list[float]] = []
+    errors: list[Exception] = []
+
+    def _load_embedding() -> None:
+        try:
+            results.append(service._get_query_embedding("permissions security"))
+        except Exception as exc:  # pragma: no cover - defensive failure capture for the thread
+            errors.append(exc)
+
+    leader = threading.Thread(target=_load_embedding)
+    follower = threading.Thread(target=_load_embedding)
+    leader.start()
+    assert embedder.started.wait(timeout=5.0)
+    follower.start()
+    embedder.release.set()
+    leader.join(timeout=5.0)
+    follower.join(timeout=5.0)
+
+    assert errors == []
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert embedder.call_count == 1
+
+
+def test_query_embedding_failures_do_not_cache_or_leak_waiters(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    embedder = _BlockingEmbedder(fail_first_call=True)
+    service = RelationalMemorySearchService(repository, Config(), embedder=embedder, vector_store=object())
+    errors: list[str] = []
+
+    def _load_embedding() -> None:
+        try:
+            service._get_query_embedding("permissions security")
+        except Exception as exc:
+            errors.append(str(exc))
+
+    leader = threading.Thread(target=_load_embedding)
+    follower = threading.Thread(target=_load_embedding)
+    leader.start()
+    assert embedder.started.wait(timeout=5.0)
+    follower.start()
+    embedder.release.set()
+    leader.join(timeout=5.0)
+    follower.join(timeout=5.0)
+
+    assert errors == ["query embed boom", "query embed boom"]
+    assert embedder.call_count == 1
+
+    embedder.started.clear()
+    embedder.release = threading.Event()
+    retry_results: list[list[float]] = []
+
+    def _retry_load() -> None:
+        retry_results.append(service._get_query_embedding("permissions security"))
+
+    retry = threading.Thread(target=_retry_load)
+    retry.start()
+    assert embedder.started.wait(timeout=5.0)
+    embedder.release.set()
+    retry.join(timeout=5.0)
+
+    assert retry_results == [[1.0, float(len("permissions security"))]]
+    assert embedder.call_count == 2
 
 
 def test_search_memories_supports_semantic_candidates_without_lexical_overlap(db_manager) -> None:
