@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.daemon_app import _context_for_request
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.server import MCPServer
 
@@ -38,6 +39,11 @@ def test_resolve_daemon_request_timeout_seconds_preserves_default_and_explicit_o
 
 
 def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> None:
+    """Verify proxy requests preserve deterministic routing metadata.
+
+    Internal tool requests need both workspace and session identity so the daemon can attribute counts to the active run.
+    """
+
     server = MCPServer(workspace_root="demo-workspace")
     server._daemon = DaemonMetadata(
         host="127.0.0.1",
@@ -47,6 +53,7 @@ def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> 
         status="ready",
         socket_path="/tmp/mcp-memory-test.sock",
     )
+    server._session_id = "session-123"
     captured: dict[str, object] = {}
 
     def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
@@ -66,8 +73,31 @@ def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> 
     assert captured["payload"] == {
         "query": "auth",
         "__workspace_root": "demo-workspace",
+        "__session_id": "session-123",
     }
     assert captured["timeout_seconds"] is None
+
+
+def test_context_for_request_copies_session_id_and_workspace_root(tmp_path) -> None:
+    """Verify daemon request context carries session identity alongside workspace scope.
+
+    The tracker relies on request-scoped session ids instead of provider-parsed tool summaries.
+    """
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    request_ctx = _context_for_request(
+        ApplicationContext(),
+        {
+            "__session_id": "session-123",
+            "__workspace_root": str(workspace),
+        },
+    )
+
+    assert request_ctx.session_id == "session-123"
+    assert request_ctx.workspace_root == workspace
+    assert request_ctx.workspace_id is not None
 
 
 @pytest.mark.asyncio

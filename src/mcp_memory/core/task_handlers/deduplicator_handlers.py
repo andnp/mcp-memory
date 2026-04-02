@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+    finalize_agentic_tool_tracking,
+    prefer_deterministic_agentic_counts,
+    reset_agentic_tool_tracking,
+)
 import mcp_memory.core.task_handlers.deduplicator_merge as _deduplicator_merge
 import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
@@ -49,6 +54,7 @@ async def handle_deduplicator_task(
             run_agent = getattr(provider, "run_agent", None)
             supports_agentic = getattr(provider, "supports_agentic", None)
             if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
+                reset_agentic_tool_tracking(ctx, task.id)
                 try:
                     agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
                         _deduplicator_support.build_deduplicator_agent_prompt(
@@ -59,9 +65,13 @@ async def handle_deduplicator_task(
                     )
                 except Exception:
                     release_work_item(ctx, review_item.id)
+                    finalize_agentic_tool_tracking(ctx, task.id)
                     raise
                 complete_work_item(ctx, review_item.id)
-                normalized = _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records)
+                normalized = prefer_deterministic_agentic_counts(
+                    _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
+                    deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
+                )
                 normalized["claimed_work_item_count"] = 1
                 return sampling_payload(
                     _deduplicator_support.review_sampling_batch(review_item.payload, seed_records),
@@ -100,13 +110,21 @@ async def handle_deduplicator_task(
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
-        agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-            _deduplicator_support.build_deduplicator_agent_prompt(task, seed_records, strategy_used=seed_batch.strategy_used)
-        )
+        reset_agentic_tool_tracking(ctx, task.id)
+        try:
+            agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
+                _deduplicator_support.build_deduplicator_agent_prompt(task, seed_records, strategy_used=seed_batch.strategy_used)
+            )
+        except Exception:
+            finalize_agentic_tool_tracking(ctx, task.id)
+            raise
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
-            extra=_deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
+            extra=prefer_deterministic_agentic_counts(
+                _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
+                deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
+            ),
         )
 
     deterministic_result = await _deduplicator_merge.run_deterministic_deduplicator_pass(

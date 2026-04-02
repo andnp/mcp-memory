@@ -4,6 +4,11 @@ from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.provider_admission import classify_provider_failure
+from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+    finalize_agentic_tool_tracking,
+    prefer_deterministic_agentic_counts,
+    reset_agentic_tool_tracking,
+)
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates
 from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
@@ -101,6 +106,7 @@ async def handle_taxonomist_task(
             claimed_work_item_count=agentic_result["claimed_work_item_count"],
             tool_calls_executed=agentic_result["tool_calls_executed"],
             mutations=agentic_result["mutations"],
+            tool_names_used=agentic_result["tool_names_used"],
             compatible_batch_calls=agentic_result["compatible_batch_calls"],
             execution_mode="agentic_mcp",
             summary=agentic_result["summary"],
@@ -243,6 +249,7 @@ async def _run_taxonomist_agentic_pass(
     assert callable(run_agent)
     work_item_batch_limit = _taxonomist_support.work_item_batch_limit(task)
     max_batches_per_run = _taxonomist_support.max_batches_per_run(task)
+    reset_agentic_tool_tracking(ctx, task.id)
     try:
         agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
             _taxonomist_support.build_agent_prompt(
@@ -254,6 +261,15 @@ async def _run_taxonomist_agentic_pass(
             )
         )
     except Exception as exc:
+        deterministic_counts = finalize_agentic_tool_tracking(ctx, task.id)
+        normalized_counts = prefer_deterministic_agentic_counts(
+            {
+                "tool_calls_executed": 0,
+                "mutations": 0,
+                "tool_names_used": [],
+            },
+            deterministic_counts=deterministic_counts,
+        )
         running_items = _taxonomist_support.list_running_work_items(
             ctx,
             task_id=task.id,
@@ -283,13 +299,14 @@ async def _run_taxonomist_agentic_pass(
                 "provider_deferred_reason_code": reason.reason_code,
                 "provider_deferred_retry_delay_seconds": reason.retry_delay_seconds,
                 "claimed_work_item_count": _taxonomist_support.count_claimed_work_items(ctx, seeded_work_items),
-                "tool_calls_executed": 0,
-                "mutations": 0,
+                "tool_calls_executed": normalized_counts["tool_calls_executed"],
+                "mutations": normalized_counts["mutations"],
                 "compatible_batch_calls": 0,
                 "compatibility_group": "lightweight_review",
                 "work_item_batch_limit": work_item_batch_limit,
                 "max_batches_per_run": max_batches_per_run,
                 "summary": None,
+                "tool_names_used": normalized_counts["tool_names_used"],
             }
         for work_item in running_items:
             release_work_item(ctx, work_item.id)
@@ -302,10 +319,13 @@ async def _run_taxonomist_agentic_pass(
         limit=max(_taxonomist_support.TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET, DEFAULT_AGENT_SCAN_LIMIT),
     ):
         release_work_item(ctx, work_item.id)
-    normalized = _taxonomist_support.normalize_agentic_result(
-        agentic_result,
-        coerce_text_summary=coerce_text_summary,
-        extract_embedded_json_object=extract_embedded_json_object,
+    normalized = prefer_deterministic_agentic_counts(
+        _taxonomist_support.normalize_agentic_result(
+            agentic_result,
+            coerce_text_summary=coerce_text_summary,
+            extract_embedded_json_object=extract_embedded_json_object,
+        ),
+        deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
     )
     return {
         "updated": _taxonomist_support.count_updated_records(ctx, candidate_memory_ids),
@@ -320,6 +340,7 @@ async def _run_taxonomist_agentic_pass(
         "work_item_batch_limit": work_item_batch_limit,
         "max_batches_per_run": max_batches_per_run,
         "summary": normalized["summary"],
+        "tool_names_used": normalized["tool_names_used"],
     }
 
 

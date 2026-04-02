@@ -1,5 +1,6 @@
 import json
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import time
@@ -48,6 +49,7 @@ from mcp_memory.core.agent_runtime import (
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult
+import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.task_handlers.maintenance import (
     CURATOR_MAX_MEMORY_CHARS,
@@ -62,6 +64,7 @@ from mcp_memory.core.task_handlers.ingest import (
     _build_ingest_agent_prompt,
     _normalize_ingest_agentic_result,
 )
+import mcp_memory.core.task_handlers.ingest_agentic_support as _ingest_agentic_support
 from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
@@ -774,6 +777,112 @@ async def test_ingest_handler_agentic_append_uses_task_attributed_counts_when_pr
         assert result["provider_reported_tool_names_used"] == []
         assert result["appended_memory_ids"] == [target.id]
         assert result["matched_memory_ids"] == [target.id]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ingest_handler_agentic_prefers_tracker_counts_over_recorded_task_tool_usage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.journal is not None
+    assert runtime.task_queue is not None
+    assert runtime.repository is not None
+
+    original_recorded_run_metadata = _ingest_agentic_support._recorded_ingest_run_metadata
+
+    def _zero_recorded_tool_usage(ctx, task_id: str):
+        recorded = original_recorded_run_metadata(ctx, task_id)
+        return {
+            **recorded,
+            "tool_usage": {
+                "tool_calls_executed": 0,
+                "mutations": 0,
+                "tool_names_used": [],
+            },
+        }
+
+    monkeypatch.setattr(_ingest_agentic_support, "_recorded_ingest_run_metadata", _zero_recorded_tool_usage)
+
+    try:
+        target = runtime.repository.create_memory(
+            title="User testing preferences",
+            content="Prefer pytest-based integration coverage.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["testing"],
+        )
+        assert target is not None
+        entry = runtime.journal.record(
+            "The user also prefers deterministic fixtures for pytest.",
+            workspace_id=runtime.workspace_id,
+        )
+        task = runtime.task_queue.enqueue(
+            SYSTEM1_INGEST_TASK_NAME,
+            workspace_id=runtime.workspace_id,
+            data={"workspace_id": runtime.workspace_id},
+            available_at=0.0,
+            task_id="ingest-agentic-tracker-preferred",
+        )
+
+        class _ZeroStatsAppendProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                del prompt
+                batch_result = await call_internal_memory_tool(
+                    runtime,
+                    "internal_get_next_ingest_batch",
+                    {"task_id": task.id, "batch_size": 10},
+                )
+                batch_payload = json.loads(batch_result[0].text)
+                append_result = await call_internal_memory_tool(
+                    runtime,
+                    INGEST_APPEND_TOOL_NAME,
+                    {
+                        "memory_id": target.id,
+                        "content": "Prefer deterministic fixtures for pytest.",
+                        "task_id": task.id,
+                        "entry_ids": batch_payload["claimed_entry_ids"],
+                        "workspace_ids": [runtime.workspace_id],
+                        "tags": ["testing"],
+                    },
+                )
+                append_payload = json.loads(append_result[0].text)
+                return AgenticRunResult(
+                    status="success",
+                    summary="Agentic ingest appended the new preference into the canonical testing memory.",
+                    parsed={
+                        "response": json.dumps(
+                            {
+                                "summary": "Agentic ingest appended the new preference into the canonical testing memory.",
+                                "created_memory_ids": [append_payload["record"]["id"]],
+                                "meaningful_actions": 1,
+                            }
+                        ),
+                        "stats": {"tools": {"totalCalls": 0, "byName": {}}},
+                    },
+                )
+
+        result = await handle_ingest_system1_task(runtime, task, _ZeroStatsAppendProvider())
+
+        assert result["claimed_entry_ids"] == [entry.id]
+        assert result["recoverable_entry_ids"] == [entry.id]
+        assert result["tool_calls_executed"] == 2
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == [
+            "internal_get_next_ingest_batch",
+            INGEST_APPEND_TOOL_NAME,
+        ]
+        assert result["provider_reported_tool_calls"] == 0
+        assert result["provider_reported_mutations"] == 0
+        assert result["provider_reported_tool_names_used"] == []
+        assert result["appended_memory_ids"] == [target.id]
     finally:
         runtime.close()
 
@@ -3817,6 +3926,14 @@ async def test_taxonomist_agentic_provider_uses_work_item_lifecycle_tools(monkey
         assert result["provider_calls_used"] == 1
         assert result["claimed_work_item_count"] == 1
         assert result["summary"] == "Tagged one record through the work-item lifecycle tools."
+        assert result["tool_calls_executed"] == 4
+        assert result["mutations"] == 2
+        assert result["tool_names_used"] == [
+            "internal_complete_work_item",
+            "internal_get_work_batch",
+            "internal_read_memory_record",
+            "internal_update_memory_record",
+        ]
         assert updated is not None and updated.tags == ["auth", "testing"]
         assert runtime.work_items is not None
         work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
@@ -4645,14 +4762,7 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
                                 "absorbed_observations": 0,
                             }
                         ),
-                        "stats": {
-                            "tools": {
-                                "totalCalls": 1,
-                                "byName": {
-                                    "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 1}
-                                },
-                            }
-                        },
+                        "stats": {"tools": {"totalCalls": 0, "byName": {}}},
                     },
                 )
 
@@ -4687,6 +4797,9 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
         assert result["archived"] == 1
         assert result["claimed_work_item_count"] == 1
         assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == ["internal_merge_memory_into_canonical"]
         assert canonical is not None
         assert archived is not None and archived.status == "archived"
         assert [item.status for item in review_items] == ["completed"]
@@ -5557,6 +5670,91 @@ async def test_memory_curator_retries_when_provider_claims_actions_without_tool_
 
 
 @pytest.mark.asyncio
+async def test_memory_curator_retries_when_summary_claims_mutations_without_tool_calls(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Auth cleanup target",
+            content="JWT coverage is required for client auth.",
+            summary="Old generic summary.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "cleanup"],
+        )
+        assert record is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {
+                    "summary": "Cleaned tags and updated summary for the auth cleanup target.",
+                },
+                {
+                    "tool_calls": [
+                        {
+                            "name": "internal_update_memory_record",
+                            "arguments": {
+                                "memory_id": record.id,
+                                "summary": "JWT auth coverage remains the canonical requirement for clients.",
+                                "tags": ["auth", "jwt"],
+                            },
+                        }
+                    ]
+                },
+                {
+                    "summary": "Cleaned tags and updated summary for the auth cleanup target.",
+                    "actions_taken": 1,
+                },
+            ]
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-summary-claim-retry-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed = runtime.repository.get_memory(record.id)
+
+        assert provider.call_count == 3
+        assert "validation_error" in provider.prompts[1]
+        assert "Do not claim curator maintenance actions in the summary" in provider.prompts[1]
+        assert result["summary"] == "Cleaned tags and updated summary for the auth cleanup target."
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
+        assert refreshed is not None
+        assert refreshed.summary == "JWT auth coverage remains the canonical requirement for clients."
+        assert refreshed.tags == ["auth", "jwt"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -5623,6 +5821,257 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
         assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
         assert record.id not in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_agentic_prefers_deterministic_internal_tool_counts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Verify curator result metadata comes from actual internal tool execution.
+
+    Provider-parsed stats may be empty even when the run mutates memories, so the daemon/runtime tracker must win.
+    """
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    task = TaskRecord(
+        id="memory-curator-deterministic-counts-task",
+        task_name=CURATOR_TASK_NAME,
+        data={"workspace_id": runtime.workspace_id},
+        workspace_id=runtime.workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            del prompt
+            await call_internal_memory_tool(
+                runtime,
+                "internal_get_next_curator_batch",
+                {"task_id": task.id, "strategy": "anomaly", "limit": 1},
+            )
+            await call_internal_memory_tool(
+                runtime,
+                "internal_update_memory_record",
+                {
+                    "memory_id": record.id,
+                    "summary": "Architecture cleanup note now names the durable conclusion.",
+                    "tags": ["architecture", "curated"],
+                },
+            )
+            await call_internal_memory_tool(
+                runtime,
+                "task_complete",
+                {"task_id": task.id, "task_name": "memory-curator", "summary": "done"},
+            )
+            return AgenticRunResult(
+                status="success",
+                summary="Curator refreshed the architecture note via MCP tools.",
+                parsed={
+                    "summary": "Curator refreshed the architecture note via MCP tools.",
+                    "stats": {"tools": {"totalCalls": 0, "byName": {}}},
+                },
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Architecture cleanup target",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "cleanup"],
+        )
+        assert record is not None
+
+        result = await handle_memory_curator_task(runtime, task, _AgenticProvider())
+        refreshed = runtime.repository.get_memory(record.id)
+
+        assert result["summary"] == "Curator refreshed the architecture note via MCP tools."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 3
+        assert result["mutations"] == 1
+        assert result["tool_names_used"] == [
+            "internal_get_next_curator_batch",
+            "internal_update_memory_record",
+            "task_complete",
+        ]
+        assert refreshed is not None
+        assert refreshed.summary == "Architecture cleanup note now names the durable conclusion."
+        assert refreshed.tags == ["architecture", "curated"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_agentic_falls_back_to_provider_stats_without_deterministic_tracker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Verify existing provider-stat behavior survives when deterministic counts are unavailable.
+
+    This keeps older or non-daemon execution paths backward compatible while the new tracker is absent.
+    """
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            del prompt
+            return AgenticRunResult(
+                status="success",
+                summary="Curator completed maintenance via provider-reported stats.",
+                parsed={
+                    "stats": {
+                        "tools": {
+                            "totalCalls": 4,
+                            "byName": {
+                                "mcp_mcp-memory-internal_internal_get_next_curator_batch": {"count": 1},
+                                "mcp_mcp-memory-internal_internal_update_memory_record": {"count": 2},
+                                "mcp_mcp-memory-internal_task_complete": {"count": 1},
+                            },
+                        }
+                    }
+                },
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Architecture cleanup target",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "cleanup"],
+        )
+        assert record is not None
+
+        result = await handle_memory_curator_task(
+            replace(runtime, internal_tool_call_tracker=None),
+            TaskRecord(
+                id="memory-curator-provider-stats-fallback-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            _AgenticProvider(),
+        )
+
+        assert result["summary"] == "Curator completed maintenance via provider-reported stats."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 4
+        assert result["mutations"] == 2
+        assert result["tool_names_used"] == [
+            "mcp_mcp-memory-internal_internal_get_next_curator_batch",
+            "mcp_mcp-memory-internal_internal_update_memory_record",
+            "mcp_mcp-memory-internal_task_complete",
+        ]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_agentic_summary_normalizes_unsupported_mutation_claims(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            return AgenticRunResult(
+                status="success",
+                summary="Split a record, improved summaries, and cleaned tags across the cluster.",
+                parsed={
+                    "stats": {
+                        "tools": {
+                            "totalCalls": 0,
+                            "byName": {},
+                        }
+                    }
+                },
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        assert record is not None
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-agentic-summary-normalization-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            _AgenticProvider(),
+        )
+
+        assert result["summary"] == (
+            "Provider claimed maintenance actions without MCP tool execution; "
+            "no curator maintenance actions were executed."
+        )
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["tool_calls_executed"] == 0
+        assert result["mutations"] == 0
+        assert result["tool_names_used"] == []
     finally:
         runtime.close()
 
@@ -6410,7 +6859,11 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         assert "Build a shortlist of concrete possible mutations" in prompt
         assert "high-confidence and at least medium-impact" in prompt
         assert "Do not report incremental results between batches." in prompt
+        assert "Size policy: target band is" in prompt
+        assert "Rewrite or trim when it is still one takeaway but the acceptable band carries filler" in prompt
+        assert "Merge when a memory is too thin to stand alone or mostly duplicates a nearby canonical." in prompt
         assert seed_payload[0]["id"] == record.id
+        assert seed_payload[0]["size_band"] == "oversized"
         assert seed_payload[0]["oversized_for_curator"] is True
         assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
     finally:
@@ -6436,6 +6889,15 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
             tags=["auth", "rollout"],
         )
         assert record is not None
+
+        acceptable = runtime.repository.create_memory(
+            title="Auth rollout acceptable detail",
+            content="A" * (_curator_support.CURATOR_SIZE_POLICY.target_max_chars + 200),
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "rollout"],
+        )
+        assert acceptable is not None
 
         provider = FakeAIProvider(responses=[{"summary": "No-op", "actions_taken": 0}])
 
@@ -6468,17 +6930,22 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         end = prompt.index(suffix, start)
         seed_json = prompt[start:end]
         seed_payload = json.loads(seed_json)
+        payload_by_id = {item["id"]: item for item in seed_payload}
 
         assert isinstance(seed_payload, list)
         assert seed_payload
-        assert seed_payload[0]["id"] == record.id
-        assert seed_payload[0]["title"] == "Auth rollout note"
-        assert seed_payload[0]["read_count"] == record.read_count
-        assert seed_payload[0]["content_size_chars"] == len(record.content.strip())
-        assert seed_payload[0]["oversized_for_curator"] is False
-        assert seed_payload[0]["retrieval_friction_flags"] == []
+        assert payload_by_id[record.id]["title"] == "Auth rollout note"
+        assert payload_by_id[record.id]["read_count"] == record.read_count
+        assert payload_by_id[record.id]["content_size_chars"] == len(record.content.strip())
+        assert payload_by_id[record.id]["size_band"] == "target"
+        assert payload_by_id[record.id]["oversized_for_curator"] is False
+        assert payload_by_id[record.id]["retrieval_friction_flags"] == []
+        assert payload_by_id[acceptable.id]["size_band"] == "acceptable"
+        assert payload_by_id[acceptable.id]["oversized_for_curator"] is False
         assert "Prefer focused durable memories with specific titles/summaries" in prompt
         assert "Treat frequently surfaced but rarely read records as retrieval-friction candidates" in prompt
+        assert "one focused durable takeaway plus enough evidence to stand alone" in prompt
+        assert "Leave alone when a memory already has one focused durable takeaway plus enough evidence to stand alone." in prompt
         assert "Your workflow is a loop, not a one-shot response." in prompt
         assert "your final summary must make clear whether adjacency review was actually performed" in prompt
         assert "no concrete safe cleanup remains above the high-confidence/medium-impact bar" in prompt

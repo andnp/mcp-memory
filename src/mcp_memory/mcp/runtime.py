@@ -16,6 +16,7 @@ from mcp_memory.config import (
     resolve_workspace_root,
 )
 from mcp_memory.context import ApplicationContext
+from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.embeddings import build_embedder
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
@@ -58,6 +59,7 @@ def resolve_runtime_spec(
 
 def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queue: bool = False) -> ApplicationContext:
     embedder = build_embedder(spec.config.embeddings)
+    internal_tool_call_tracker = InternalToolCallTracker()
     storage = build_storage_runtime_components(
         spec,
         embedder=embedder,
@@ -93,6 +95,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         embedder=embedder,
         vector_store=storage.vector_store,
         search_health=storage.relational_search.get_health(),
+        internal_tool_call_tracker=internal_tool_call_tracker,
     )
 
 

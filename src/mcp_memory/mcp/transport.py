@@ -7,6 +7,7 @@ from collections.abc import Callable
 from mcp.types import TextContent
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
 ToolService = Callable[[ApplicationContext, dict], dict]
@@ -165,4 +166,19 @@ async def dispatch_internal_memory_tool(
             }
         )
 
-    return await call_service(service, ctx, arguments)
+    response = await call_service(service, ctx, arguments)
+    _record_internal_tool_call(ctx, name, arguments)
+    return response
+
+
+def _record_internal_tool_call(ctx: ApplicationContext, name: str, arguments: dict[str, object]) -> None:
+    tracker = getattr(ctx, "internal_tool_call_tracker", None)
+    if not isinstance(tracker, InternalToolCallTracker):
+        return
+    raw_task_id = arguments.get("task_id")
+    task_id = raw_task_id if isinstance(raw_task_id, str) else None
+    tracker.record_call(
+        name,
+        task_id=task_id,
+        session_id=getattr(ctx, "session_id", None),
+    )

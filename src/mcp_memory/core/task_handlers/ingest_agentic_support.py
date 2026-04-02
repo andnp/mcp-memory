@@ -8,6 +8,11 @@ from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_run_metadata,
     _reset_recorded_ingest_handled_entry_ids,
 )
+from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+    finalize_agentic_tool_tracking,
+    prefer_deterministic_agentic_counts,
+    reset_agentic_tool_tracking,
+)
 from mcp_memory.core.task_handlers.agentic_guardrails import build_ingest_guardrails
 from mcp_memory.core.task_handlers.ingest_support import _build_ingest_result, _normalize_ingest_agentic_result
 from mcp_memory.core.tasks import TaskRecord
@@ -30,18 +35,31 @@ async def run_agentic_ingest_pass(
     pending_count_before_run: int,
 ) -> dict[str, Any] | None:
     _reset_recorded_ingest_handled_entry_ids(ctx, task.id)
-    agentic_result = await run_agent(
-        build_ingest_agent_prompt(
-            task,
-            workspace_id=workspace_id,
-            batch_size=batch_size,
-            grouping_strategy=grouping_strategy,
-            max_batches_per_run=max_batches_per_run,
+    reset_agentic_tool_tracking(ctx, task.id)
+    try:
+        agentic_result = await run_agent(
+            build_ingest_agent_prompt(
+                task,
+                workspace_id=workspace_id,
+                batch_size=batch_size,
+                grouping_strategy=grouping_strategy,
+                max_batches_per_run=max_batches_per_run,
+            )
         )
+    except BaseException:
+        finalize_agentic_tool_tracking(ctx, task.id)
+        raise
+    provider_reported = _normalize_ingest_agentic_result(agentic_result)
+    normalized = prefer_deterministic_agentic_counts(
+        provider_reported,
+        deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
     )
-    normalized = _normalize_ingest_agentic_result(agentic_result)
     recorded_run_metadata = _recorded_ingest_run_metadata(ctx, task.id)
-    authoritative_tool_usage = recorded_run_metadata["tool_usage"]
+    authoritative_tool_usage = {
+        "tool_calls_executed": normalized["tool_calls_executed"],
+        "mutations": normalized["mutations"],
+        "tool_names_used": normalized["tool_names_used"],
+    }
     meaningful_actions = max(normalized["meaningful_actions"], authoritative_tool_usage["mutations"])
     if (
         pending_count_before_run > 0
@@ -79,13 +97,13 @@ async def run_agentic_ingest_pass(
         "tool_calls_executed": authoritative_tool_usage["tool_calls_executed"],
         "mutations": authoritative_tool_usage["mutations"],
         "tool_names_used": authoritative_tool_usage["tool_names_used"],
-        "provider_reported_tool_calls": normalized["tool_calls_executed"],
-        "provider_reported_mutations": normalized["mutations"],
-        "provider_reported_tool_names_used": normalized["tool_names_used"],
-        "provider_reported_entry_outcomes": normalized["entry_outcomes"],
-        "provider_reported_cluster_outcomes": normalized["cluster_outcomes"],
-        "provider_reported_touched_memory_ids": normalized["touched_memory_ids"],
-        "provider_reported_matched_memory_ids": normalized["matched_memory_ids"],
+        "provider_reported_tool_calls": provider_reported["tool_calls_executed"],
+        "provider_reported_mutations": provider_reported["mutations"],
+        "provider_reported_tool_names_used": provider_reported["tool_names_used"],
+        "provider_reported_entry_outcomes": provider_reported["entry_outcomes"],
+        "provider_reported_cluster_outcomes": provider_reported["cluster_outcomes"],
+        "provider_reported_touched_memory_ids": provider_reported["touched_memory_ids"],
+        "provider_reported_matched_memory_ids": provider_reported["matched_memory_ids"],
         "pending_remaining": 0
         if ctx.journal is None
         else ctx.journal.count_by_status(workspace_id=journal_workspace_id).get("pending", 0),

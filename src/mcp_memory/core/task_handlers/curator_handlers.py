@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+    finalize_agentic_tool_tracking,
+    prefer_deterministic_agentic_counts,
+    reset_agentic_tool_tracking,
+)
 from mcp_memory.core.task_handlers.agentic_guardrails import build_curator_guardrails
 from mcp_memory.core.task_handlers.campaigns import campaign_metadata, count_named_tool_calls
 import mcp_memory.core.task_handlers.curator_support as _curator_support
@@ -89,6 +94,7 @@ async def handle_memory_curator_task(
     )
     run_agent = getattr(provider, "run_agent", None)
     supports_agentic = getattr(provider, "supports_agentic", None)
+    reset_agentic_tool_tracking(ctx, task.id)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
         try:
             agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
@@ -102,10 +108,19 @@ async def handle_memory_curator_task(
         except Exception:
             if claimed_review_item is not None:
                 release_work_item(ctx, claimed_review_item.id)
+            finalize_agentic_tool_tracking(ctx, task.id)
             raise
         if claimed_review_item is not None:
             complete_work_item(ctx, claimed_review_item.id)
-        normalized_agentic = _curator_support.normalize_curator_agentic_result(agentic_result)
+        deterministic_counts = finalize_agentic_tool_tracking(ctx, task.id)
+        normalized_agentic = prefer_deterministic_agentic_counts(
+            _curator_support.normalize_curator_agentic_result(agentic_result),
+            deterministic_counts=deterministic_counts,
+        )
+        normalized_agentic["summary"] = _curator_support.normalize_curator_summary(
+            {"summary": getattr(agentic_result, "summary", None)},
+            tool_calls_executed=normalized_agentic["tool_calls_executed"],
+        )
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
@@ -152,14 +167,27 @@ async def handle_memory_curator_task(
             ],
             max_rounds=CURATOR_JSON_TOOL_LOOP_MAX_ROUNDS,
             max_tool_calls_per_round=CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND,
+            unsupported_no_tool_response_error=_curator_support.unsupported_curator_no_tool_response_error,
         )
     except Exception:
         if claimed_review_item is not None:
             release_work_item(ctx, claimed_review_item.id)
+        finalize_agentic_tool_tracking(ctx, task.id)
         raise
     if claimed_review_item is not None:
         complete_work_item(ctx, claimed_review_item.id)
-    summary = _curator_support.normalize_curator_summary(loop_result.response, tool_calls_executed=loop_result.tool_calls_executed)
+    deterministic_counts = finalize_agentic_tool_tracking(ctx, task.id)
+    tool_calls_executed = loop_result.tool_calls_executed
+    mutating_tool_calls = loop_result.mutating_tool_calls
+    tool_names_used = loop_result.tool_names_used
+    if deterministic_counts is not None:
+        tool_calls_executed = int(getattr(deterministic_counts, "total_calls", 0))
+        mutating_tool_calls = int(getattr(deterministic_counts, "mutating_calls", 0))
+        tool_names_used = list(getattr(deterministic_counts, "tool_names_used", []))
+    summary = _curator_support.normalize_curator_summary(
+        loop_result.response,
+        tool_calls_executed=tool_calls_executed,
+    )
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
@@ -168,11 +196,11 @@ async def handle_memory_curator_task(
         summary=summary,
         execution_mode="json_tool_loop",
         claimed_work_item_count=1 if claimed_review_item is not None else 0,
-        tool_calls_executed=loop_result.tool_calls_executed,
-        mutations=loop_result.mutating_tool_calls,
-        tool_names_used=loop_result.tool_names_used,
+        tool_calls_executed=tool_calls_executed,
+        mutations=mutating_tool_calls,
+        tool_names_used=tool_names_used,
         compatible_batch_calls=count_named_tool_calls(
-            loop_result.tool_names_used,
+            tool_names_used,
             tool_name="internal_get_compatible_work_batch",
         ),
     )

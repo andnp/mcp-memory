@@ -12,6 +12,7 @@ class ApplicationContext:
     config: Config | None = None
     workspace_id: str | None = None
     workspace_root: Path | None = None
+    session_id: str | None = None
     memory_path: Path | None = None
     storage_backend: str | None = None
     db_manager: Any = None
@@ -34,6 +35,7 @@ class ApplicationContext:
     embedder: Any = None
     vector_store: Any = None
     search_health: Any = None
+    internal_tool_call_tracker: Any = None
 
     def close(self) -> None:
         for resource in (self.read_cache, self.retrieval_telemetry, self.runtime_logs, self.repository):

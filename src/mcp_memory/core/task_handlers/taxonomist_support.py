@@ -392,6 +392,7 @@ def build_taxonomist_result(
     claimed_work_item_count: int,
     tool_calls_executed: int | None = None,
     mutations: int | None = None,
+    tool_names_used: list[str] | None = None,
     compatible_batch_calls: int | None = None,
     summary: str | None = None,
     execution_mode: str | None = None,
@@ -421,6 +422,8 @@ def build_taxonomist_result(
         metrics["tool_calls_executed"] = tool_calls_executed
     if mutations is not None:
         metrics["mutations"] = mutations
+    if tool_names_used is not None:
+        metrics["tool_names_used"] = tool_names_used
     if compatible_batch_calls is not None:
         metrics["compatible_batch_calls"] = compatible_batch_calls
     if execution_mode is not None:

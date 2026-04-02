@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
+_REQUEST_SESSION_ID_KEY = "__session_id"
 _GLOBAL_DEFAULT_API_PATHS = {
     "overview",
     "metrics/nerd",
@@ -356,12 +357,16 @@ def _resolve_runtime_version() -> str | None:
 def _context_for_request(ctx, arguments: dict[str, Any] | None):
     if arguments is None:
         return ctx
+    request_ctx = ctx
+    session_id_value = arguments.get(_REQUEST_SESSION_ID_KEY) or arguments.get("session_id")
+    if isinstance(session_id_value, str) and session_id_value.strip():
+        request_ctx = replace(request_ctx, session_id=session_id_value.strip())
     workspace_root_value = arguments.get(_REQUEST_WORKSPACE_ROOT_KEY) or arguments.get("workspace_root")
     if not isinstance(workspace_root_value, str) or not workspace_root_value.strip():
-        return ctx
+        return request_ctx
     workspace_root = resolve_workspace_root(workspace_root=workspace_root_value)
     workspace_id = resolve_workspace_id(workspace_root=workspace_root_value)
-    return replace(ctx, workspace_root=workspace_root, workspace_id=workspace_id)
+    return replace(request_ctx, workspace_root=workspace_root, workspace_id=workspace_id)
 
 
 async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:

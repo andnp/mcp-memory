@@ -19,6 +19,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
+_REQUEST_SESSION_ID_KEY = "__session_id"
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 
 
@@ -78,8 +79,11 @@ class MCPServer:
         if self._daemon is None:
             raise RuntimeError("daemon_not_started")
         request_payload = None if payload is None else dict(payload)
-        if request_payload is not None and self.workspace_root is not None:
-            request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
+        if request_payload is not None:
+            if self.workspace_root is not None:
+                request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
+            if self._session_id is not None:
+                request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
         return request_daemon_json(self._daemon, path, request_payload)
 
     def _send_session_hook(self, event_name: str) -> None:
