@@ -260,3 +260,71 @@ def test_selection_strategy_utility_priors_include_curator_strategies_with_enoug
 
     assert set(priors) == {"cold-storage"}
     assert 0.0 < priors["cold-storage"] <= 1.0
+
+
+def test_selection_strategy_utility_priors_include_deduplicator_strategies_with_enough_runs() -> None:
+    priors = build_selection_strategy_utility_priors(
+        [
+            AgentRunHistoryPayload(
+                task_id="task-1",
+                task_name="deduplicator",
+                status="completed",
+                started_at=1.0,
+                completed_at=2.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=6,
+                    tool_calls_executed=2,
+                    mutations=2,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-2",
+                task_name="deduplicator",
+                status="completed",
+                started_at=3.0,
+                completed_at=4.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=7,
+                    tool_calls_executed=2,
+                    mutations=1,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-3",
+                task_name="deduplicator",
+                status="completed",
+                started_at=5.0,
+                completed_at=6.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=5,
+                    tool_calls_executed=1,
+                    mutations=1,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-4",
+                task_name="deduplicator",
+                status="completed",
+                started_at=7.0,
+                completed_at=8.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="anomaly",
+                    candidate_count=4,
+                    tool_calls_executed=3,
+                    mutations=0,
+                ),
+            ),
+        ],
+        task_name="deduplicator",
+        allowed_strategies=("semantic", "anomaly"),
+    )
+
+    assert set(priors) == {"semantic"}
+    assert 0.0 < priors["semantic"] <= 1.0

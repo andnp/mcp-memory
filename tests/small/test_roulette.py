@@ -275,16 +275,84 @@ def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_c
     assert "utility_priors=" in with_priors.strategy_selection_reason
 
 
-def test_non_curator_strategy_selection_ignores_utility_priors() -> None:
+def test_deduplicator_prefers_semantic_when_overlap_signal_dominates() -> None:
+    candidates = [
+        _FakeRecord(id="a", title="Alpha note", content="alpha beta gamma duplicate cluster"),
+        _FakeRecord(id="b", title="Alpha duplicate", content="alpha beta gamma duplicate cluster extra"),
+        _FakeRecord(id="c", title="Gamma note", content="gamma delta"),
+    ]
+
+    batch = RouletteProvider(task_name="deduplicator", task_id="task-overlap", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, ANOMALY_STRATEGY, COOLDOWN_ESCAPE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used == SEMANTIC_STRATEGY
+    assert batch.strategy_selection_mode == "deterministic_scores"
+    assert batch.strategy_selection_reason is not None
+    assert "semantic_overlap_share" in batch.strategy_selection_reason
+
+
+def test_deduplicator_utility_priors_can_shift_close_strategy_choice() -> None:
+    candidates = [
+        _FakeRecord(id="small-a", title="Alpha", content="alpha beta gamma duplicate cluster"),
+        _FakeRecord(id="small-b", title="Alpha copy", content="alpha beta gamma duplicate cluster copy"),
+        _FakeRecord(id="large-a", title="Outlier one", content="x" * 1600),
+        _FakeRecord(id="large-b", title="Monster two", content="y" * 1700),
+    ]
+
+    without_priors = RouletteProvider(task_name="deduplicator", task_id="task-live-only", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(ANOMALY_STRATEGY, SEMANTIC_STRATEGY),
+        limit=1,
+    )
+    with_priors = RouletteProvider(
+        task_name="deduplicator",
+        task_id="task-live-with-priors",
+        candidates=candidates,
+        strategy_prior_scores={ANOMALY_STRATEGY: 0.0, SEMANTIC_STRATEGY: 1.0},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(ANOMALY_STRATEGY, SEMANTIC_STRATEGY),
+        limit=1,
+    )
+
+    assert without_priors.strategy_used == ANOMALY_STRATEGY
+    assert with_priors.strategy_used == SEMANTIC_STRATEGY
+    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
+    assert with_priors.strategy_selection_reason is not None
+    assert "utility_priors=" in with_priors.strategy_selection_reason
+
+
+def test_deduplicator_explicit_requested_strategy_still_wins_when_valid() -> None:
+    candidates = [
+        _FakeRecord(id="hot", title="Hot", content="hot", updated_at="1970-01-12T13:45:00+00:00"),
+        _FakeRecord(id="cool", title="Cool", content="cool", updated_at="1970-01-01T00:00:00+00:00"),
+    ]
+
+    batch = RouletteProvider(task_name="deduplicator", task_id="task-requested", candidates=candidates).get_batch(
+        strategy=COOLDOWN_ESCAPE_STRATEGY,
+        allowed_strategies=(SEMANTIC_STRATEGY, COOLDOWN_ESCAPE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.requested_strategy == COOLDOWN_ESCAPE_STRATEGY
+    assert batch.strategy_used == COOLDOWN_ESCAPE_STRATEGY
+    assert batch.strategy_fallback_reason is None
+    assert batch.strategy_selection_mode == "requested_strategy"
+
+
+def test_non_curator_and_non_deduplicator_strategy_selection_ignores_utility_priors() -> None:
     candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
 
-    without_priors = RouletteProvider(task_name="deduplicator", task_id="same-task", candidates=candidates).get_batch(
+    without_priors = RouletteProvider(task_name="graph-linker", task_id="same-task", candidates=candidates).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
         limit=1,
     )
     with_priors = RouletteProvider(
-        task_name="deduplicator",
+        task_name="graph-linker",
         task_id="same-task",
         candidates=candidates,
         strategy_prior_scores={COLD_STORAGE_STRATEGY: 0.0, BOUNDED_NOISE_STRATEGY: 1.0},

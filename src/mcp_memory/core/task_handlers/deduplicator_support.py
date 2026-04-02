@@ -89,6 +89,9 @@ def select_deduplicator_seed_batch(
         strategy_fallback_reason=sampled_batch.strategy_fallback_reason,
         candidate_count=sampled_batch.candidate_count,
         records=seed_records,
+        strategy_selection_mode=sampled_batch.strategy_selection_mode,
+        strategy_selection_reason=sampled_batch.strategy_selection_reason,
+        strategy_selection_scores=sampled_batch.strategy_selection_scores,
     )
 
 

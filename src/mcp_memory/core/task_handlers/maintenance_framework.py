@@ -8,7 +8,8 @@ from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors
 
 
-CURATOR_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
+SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
+UTILITY_PRIOR_TASK_NAMES = frozenset({"memory-curator", "deduplicator"})
 
 
 def requested_sampling_strategy(task: TaskRecord) -> str | None:
@@ -48,7 +49,7 @@ def sample_maintenance_candidates(
         task_id=task.id,
         candidates=candidates,
         support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
-        strategy_prior_scores=_curator_strategy_prior_scores(
+        strategy_prior_scores=_selection_strategy_prior_scores(
             ctx,
             task_name=task.task_name,
             allowed_strategies=allowed_strategies,
@@ -61,20 +62,20 @@ def sample_maintenance_candidates(
     )
 
 
-def _curator_strategy_prior_scores(
+def _selection_strategy_prior_scores(
     ctx: ApplicationContext,
     *,
     task_name: str,
     allowed_strategies: tuple[str, ...],
 ) -> dict[str, float] | None:
-    if task_name != "memory-curator":
+    if task_name not in UTILITY_PRIOR_TASK_NAMES:
         return None
     from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 
     recent_runs = build_recent_agent_runs(
         ctx.db_manager,
         ctx.workspace_id,
-        limit=CURATOR_UTILITY_PRIOR_RECENT_RUN_LIMIT,
+        limit=SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT,
         detail_level="compact",
     )
     if not recent_runs:

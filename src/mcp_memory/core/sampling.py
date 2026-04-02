@@ -7,12 +7,13 @@ from random import Random
 import time
 import re
 from statistics import median
-from typing import Generic, Protocol, TypeVar
+from typing import Callable, Generic, Protocol, TypeVar
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 CURATOR_TASK_NAME = "memory-curator"
+DEDUPLICATOR_TASK_NAME = "deduplicator"
 CURATOR_COLD_TAIL_SECONDS = 30 * 24 * 60 * 60
 CURATOR_LOW_SUPPORT_THRESHOLD = 1
 CURATOR_LOW_READ_THRESHOLD = 3
@@ -20,8 +21,12 @@ CURATOR_LARGE_CANDIDATE_MIN_CHARS = 1200
 CURATOR_OVERSIZED_MULTIPLIER = 1.75
 CURATOR_LENGTH_OUTLIER_RATIO = 0.75
 CURATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
-CURATOR_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
-CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
+DEDUPLICATOR_LARGE_FACT_MIN_CHARS = 1200
+DEDUPLICATOR_OVERSIZED_MULTIPLIER = 1.6
+DEDUPLICATOR_LENGTH_OUTLIER_RATIO = 0.7
+DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
+SELECTION_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
+SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
 
 SEMANTIC_STRATEGY = "semantic"
 COLD_STORAGE_STRATEGY = "cold-storage"
@@ -189,6 +194,8 @@ class RouletteProvider(Generic[T]):
     ) -> tuple[str, str | None, str | None, dict[str, float] | None]:
         if self._task_name == CURATOR_TASK_NAME:
             return self._choose_curator_strategy(allowed_strategies)
+        if self._task_name == DEDUPLICATOR_TASK_NAME:
+            return self._choose_deduplicator_strategy(allowed_strategies)
         return (
             self.choose_strategy(allowed_strategies, strategy_weights),
             "seeded_random",
@@ -201,6 +208,33 @@ class RouletteProvider(Generic[T]):
         allowed_strategies: tuple[str, ...],
     ) -> tuple[str, str, str, dict[str, float]]:
         scores, signals, applied_utility_priors = self._curator_strategy_scores(allowed_strategies)
+        return self._finalize_deterministic_strategy_choice(
+            allowed_strategies,
+            scores=scores,
+            signals=signals,
+            applied_utility_priors=applied_utility_priors,
+        )
+
+    def _choose_deduplicator_strategy(
+        self,
+        allowed_strategies: tuple[str, ...],
+    ) -> tuple[str, str, str, dict[str, float]]:
+        scores, signals, applied_utility_priors = self._deduplicator_strategy_scores(allowed_strategies)
+        return self._finalize_deterministic_strategy_choice(
+            allowed_strategies,
+            scores=scores,
+            signals=signals,
+            applied_utility_priors=applied_utility_priors,
+        )
+
+    def _finalize_deterministic_strategy_choice(
+        self,
+        allowed_strategies: tuple[str, ...],
+        *,
+        scores: dict[str, float],
+        signals: dict[str, float],
+        applied_utility_priors: dict[str, float],
+    ) -> tuple[str, str, str, dict[str, float]]:
         strategy_used = min(
             allowed_strategies,
             key=lambda strategy: (-scores.get(strategy, 0.0), allowed_strategies.index(strategy), strategy),
@@ -321,16 +355,85 @@ class RouletteProvider(Generic[T]):
             return scores, signals, {}
 
         blended_scores = {
-            strategy: self._blend_curator_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
+            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
             for strategy in allowed_strategies
         }
         return blended_scores, signals, applied_utility_priors
 
-    def _blend_curator_score(self, live_score: float, prior_score: float | None) -> float:
+    def _deduplicator_strategy_scores(
+        self,
+        allowed_strategies: tuple[str, ...],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        fact_candidates = [item for item in self._candidates if item.type == "fact"]
+        fact_lengths = [len(item.content.strip()) for item in fact_candidates]
+        median_length = median(fact_lengths) if fact_lengths else 0.0
+        oversized_threshold = max(median_length * DEDUPLICATOR_OVERSIZED_MULTIPLIER, DEDUPLICATOR_LARGE_FACT_MIN_CHARS)
+        outlier_threshold = max(median_length * DEDUPLICATOR_LENGTH_OUTLIER_RATIO, 300.0)
+
+        semantic_overlap_share = (
+            self._semantic_cluster_share(threshold=DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD)
+            if len(self._candidates) > 1
+            else 0.0
+        )
+        large_fact_share = self._typed_share(
+            fact_candidates,
+            lambda item: len(item.content.strip()) >= oversized_threshold,
+        )
+        fact_length_outlier_share = self._typed_share(
+            fact_candidates,
+            lambda item: abs(len(item.content.strip()) - median_length) >= outlier_threshold,
+        ) if median_length > 0 else 0.0
+        size_anomaly_pressure = 0.65 * large_fact_share + 0.35 * fact_length_outlier_share
+        cooldown_pressure_share = self._share(1 for item in self._candidates if self._is_in_cooldown(item))
+
+        signals = {
+            "semantic_overlap_share": semantic_overlap_share,
+            "size_anomaly_pressure": size_anomaly_pressure,
+            "cooldown_pressure_share": cooldown_pressure_share,
+        }
+
+        scores: dict[str, float] = {}
+        for strategy in allowed_strategies:
+            if strategy == SEMANTIC_STRATEGY:
+                scores[strategy] = (
+                    0.72 * semantic_overlap_share
+                    + 0.18 * (1.0 - min(size_anomaly_pressure, 1.0))
+                    + 0.10 * (1.0 - min(cooldown_pressure_share, 1.0))
+                )
+            elif strategy == ANOMALY_STRATEGY:
+                scores[strategy] = (
+                    0.70 * size_anomaly_pressure
+                    + 0.20 * semantic_overlap_share
+                    + 0.10 * (1.0 - min(cooldown_pressure_share, 1.0))
+                )
+            elif strategy == COOLDOWN_ESCAPE_STRATEGY:
+                scores[strategy] = (
+                    0.75 * cooldown_pressure_share
+                    + 0.15 * semantic_overlap_share
+                    + 0.10 * (1.0 - min(size_anomaly_pressure, 1.0))
+                )
+            else:
+                scores[strategy] = 0.0
+
+        applied_utility_priors = {
+            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
+            for strategy in allowed_strategies
+            if strategy in self._strategy_prior_scores
+        }
+        if not applied_utility_priors:
+            return scores, signals, {}
+
+        blended_scores = {
+            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
+            for strategy in allowed_strategies
+        }
+        return blended_scores, signals, applied_utility_priors
+
+    def _blend_utility_prior_score(self, live_score: float, prior_score: float | None) -> float:
         if prior_score is None:
             return live_score
-        shift = (prior_score - 0.5) * CURATOR_UTILITY_PRIOR_BLEND_WEIGHT
-        shift = min(max(shift, -CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT), CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT)
+        shift = (prior_score - 0.5) * SELECTION_UTILITY_PRIOR_BLEND_WEIGHT
+        shift = min(max(shift, -SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT), SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT)
         return live_score + shift
 
     def _rank_candidates(self, strategy: str) -> list[T]:
@@ -441,12 +544,21 @@ class RouletteProvider(Generic[T]):
             default=0.0,
         )
 
-    def _semantic_cluster_share(self) -> float:
+    def _semantic_cluster_share(self, *, threshold: float = CURATOR_SEMANTIC_CLUSTER_THRESHOLD) -> float:
         return self._share(
             1
             for item in self._candidates
-            if self._best_neighbor_similarity(item) >= CURATOR_SEMANTIC_CLUSTER_THRESHOLD
+            if self._best_neighbor_similarity(item) >= threshold
         )
+
+    def _typed_share(self, items: Sequence[T], predicate: Callable[[T], bool]) -> float:
+        if not items:
+            return 0.0
+        matches = 0
+        for item in items:
+            if predicate(item):
+                matches += 1
+        return matches / len(items)
 
     def _best_conflict_signal(self, item: T) -> float:
         return max(
