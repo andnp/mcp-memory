@@ -66,6 +66,12 @@ def sampling_payload(
         "strategy_fallback_reason": batch.strategy_fallback_reason,
         "candidate_count": batch.candidate_count,
     }
+    if batch.strategy_selection_mode is not None:
+        payload["strategy_selection_mode"] = batch.strategy_selection_mode
+    if batch.strategy_selection_reason is not None:
+        payload["strategy_selection_reason"] = batch.strategy_selection_reason
+    if batch.strategy_selection_scores is not None:
+        payload["strategy_selection_scores"] = batch.strategy_selection_scores
     if sampled_records is not None:
         payload["sampled_memory_ids"] = [record.id for record in sampled_records]
     if seed_records is not None:

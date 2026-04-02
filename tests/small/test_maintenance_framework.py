@@ -13,6 +13,9 @@ def test_sampling_payload_merges_strategy_metadata_and_result_metrics() -> None:
         strategy_fallback_reason=None,
         candidate_count=4,
         records=[],
+        strategy_selection_mode="deterministic_scores",
+        strategy_selection_reason="selected=semantic",
+        strategy_selection_scores={"semantic": 0.75, "anomaly": 0.2},
     )
     sampled_records = [SimpleNamespace(id="a"), SimpleNamespace(id="b")]
     seed_records = [SimpleNamespace(id="seed-a")]
@@ -30,6 +33,9 @@ def test_sampling_payload_merges_strategy_metadata_and_result_metrics() -> None:
         "strategy_used": "semantic",
         "strategy_fallback_reason": None,
         "candidate_count": 4,
+        "strategy_selection_mode": "deterministic_scores",
+        "strategy_selection_reason": "selected=semantic",
+        "strategy_selection_scores": {"semantic": 0.75, "anomaly": 0.2},
         "sampled_memory_ids": ["a", "b"],
         "seed_memory_ids": ["seed-a"],
         "created": 2,

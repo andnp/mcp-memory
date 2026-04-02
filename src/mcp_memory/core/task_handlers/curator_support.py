@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
+import re
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
@@ -24,11 +26,11 @@ from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import COMPATIBILITY_GROUP_STRUCTURAL_REVIEW
 
 CURATOR_MAX_SEED_RECORDS = 16
-CURATOR_SIZE_ANOMALY_SEED_RECORDS = 4
+CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
 CURATOR_RECENCY_SEED_RECORDS = 4
 CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
 CURATOR_MAX_BATCH_RECORDS = 24
-CURATOR_MAX_MEMORY_CHARS = 4000
+CURATOR_MAX_MEMORY_CHARS = 3000
 CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
@@ -54,6 +56,55 @@ CURATOR_STRATEGY_WEIGHTS = {
     BOUNDED_NOISE_STRATEGY: 1,
 }
 
+CURATOR_SIZE_BAND_TARGET = "target"
+CURATOR_SIZE_BAND_ACCEPTABLE = "acceptable"
+CURATOR_SIZE_BAND_OVERSIZED = "oversized"
+CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY = (
+    "Provider claimed maintenance actions without MCP tool execution; "
+    "no curator maintenance actions were executed."
+)
+_CURATOR_MUTATION_SUMMARY_PATTERNS = (
+    re.compile(r"\bsplit(?:ting)?\b"),
+    re.compile(r"\bmerg(?:e|ed|ing)\b"),
+    re.compile(r"\barchiv(?:e|ed|ing)\b"),
+    re.compile(r"\bdelet(?:e|ed|ing)\b"),
+    re.compile(r"\brewrot(?:e|ten)\b|\brewrit(?:e|ing)\b"),
+    re.compile(r"\bretitl(?:e|ed|ing)\b|\bresummar(?:ize|ized|izing)\b|\bretagg(?:ed|ing)\b"),
+    re.compile(r"\bclean(?:ed|ing)?(?: up)? tags?\b"),
+    re.compile(r"\bimprov(?:e|ed|ing)\s+(?:the\s+)?(?:summary|summaries|title|titles|tag|tags)\b"),
+    re.compile(r"\bupdat(?:e|ed|ing)\s+(?:the\s+)?(?:summary|summaries|title|titles|tag|tags)\b"),
+    re.compile(r"\bnormaliz(?:e|ed|ing)\s+(?:the\s+)?tags?\b"),
+)
+_CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS = (
+    "no-op",
+    "no op",
+    "no change",
+    "no changes",
+    "no mutation",
+    "no mutations",
+    "no maintenance actions",
+    "did not ",
+    "didn't ",
+    "without changes",
+    "without mutation",
+    "without mutations",
+    "declined",
+)
+
+
+@dataclass(frozen=True)
+class CuratorSizePolicy:
+    target_max_chars: int
+    acceptable_max_chars: int
+    split_threshold_chars: int
+
+
+CURATOR_SIZE_POLICY = CuratorSizePolicy(
+    target_max_chars=1600,
+    acceptable_max_chars=CURATOR_MAX_MEMORY_CHARS,
+    split_threshold_chars=CURATOR_MAX_MEMORY_CHARS,
+)
+
 
 def normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: int) -> str | None:
     raw_summary = response.get("summary")
@@ -67,6 +118,8 @@ def normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: 
             f"Provider reported actions_taken={reported_actions_taken} without using internal tools; "
             "no curator maintenance actions were executed."
         )
+    if tool_calls_executed <= 0 and curator_summary_claims_mutating_actions(summary):
+        return CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY
     return summary
 
 
@@ -85,12 +138,38 @@ def normalize_curator_agentic_result(response: Any) -> dict[str, Any]:
             if isinstance(raw_tool_counts, dict):
                 tool_counts = raw_tool_counts
     tool_names_used = _extract_agentic_tool_names(tool_counts)
+    summary = getattr(response, "summary", None)
+    tool_calls_executed = _coerce_non_negative_int(tool_payload.get("totalCalls"))
+    if tool_calls_executed <= 0 and curator_summary_claims_mutating_actions(summary):
+        summary = CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY
     return {
-        "summary": getattr(response, "summary", None),
-        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
+        "summary": summary,
+        "tool_calls_executed": tool_calls_executed,
         "mutations": _count_mutating_agentic_tool_calls(tool_counts),
         "tool_names_used": tool_names_used,
     }
+
+
+def curator_summary_claims_mutating_actions(summary: str | None) -> bool:
+    normalized = _normalize_curator_text(summary)
+    if not normalized:
+        return False
+    if any(fragment in normalized for fragment in _CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS):
+        return False
+    return any(pattern.search(normalized) for pattern in _CURATOR_MUTATION_SUMMARY_PATTERNS)
+
+
+def unsupported_curator_no_tool_response_error(response: dict[str, Any], tool_calls_executed: int) -> str | None:
+    if tool_calls_executed > 0:
+        return None
+    raw_summary = response.get("summary")
+    summary = raw_summary.strip() if isinstance(raw_summary, str) and raw_summary.strip() else None
+    if not curator_summary_claims_mutating_actions(summary):
+        return None
+    return (
+        "Do not claim curator maintenance actions in the summary without first issuing tool_calls. "
+        "If no tools were used, return a no-op summary that does not describe mutations."
+    )
 
 
 def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
@@ -190,19 +269,24 @@ def select_curator_seed_batch(
         strategy_fallback_reason=sampled_batch.strategy_fallback_reason,
         candidate_count=sampled_batch.candidate_count,
         records=seed_records[:limit],
+        strategy_selection_mode=sampled_batch.strategy_selection_mode,
+        strategy_selection_reason=sampled_batch.strategy_selection_reason,
+        strategy_selection_scores=sampled_batch.strategy_selection_scores,
     )
 
 
 def curator_seed_payload_item(record) -> dict[str, Any]:
     summary_source = record.summary or record.content
     retrieval_flags = retrieval_friction_flags(record)
+    content_size_chars = len(record.content.strip())
     return {
         "id": record.id,
         "type": record.type,
         "status": record.status,
         "read_count": record.read_count,
         "last_surfaced_at": getattr(record, "last_surfaced_at", None),
-        "content_size_chars": len(record.content.strip()),
+        "content_size_chars": content_size_chars,
+        "size_band": curator_size_band_for_char_count(content_size_chars),
         "oversized_for_curator": is_oversized_curator_memory(record),
         "retrieval_friction_flags": retrieval_flags,
         "title": truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
@@ -224,6 +308,7 @@ def build_json_tool_loop_prompt(
         "You are the curator maintenance agent for the global memory store.\n"
         "Improve retrieval quality by merging, rewriting, retagging, relinking, splitting, archiving, or deleting only when clearly justified.\n"
         "Prefer focused durable memories with specific titles/summaries. Treat frequently surfaced but rarely read records as retrieval-friction candidates, along with generic summaries, mixed-topic blobs, and thin split children.\n"
+        f"{_curator_size_policy_prompt()}\n"
         "Your workflow is a loop, not a one-shot response.\n"
         f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the next active curator batch.\n"
         "2. For each returned memory, use the available read/search/list tools plus mutation tools as needed to gain context and improve the store.\n"
@@ -237,7 +322,7 @@ def build_json_tool_loop_prompt(
         f"When the current frontier is exhausted, you may continue by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families)}, and limit=1.\n"
         "For claimed memory_curation_review items, load payload.seed_memory_ids and continue curator maintenance. For claimed memory_dedup_review items, prefer internal_merge_memory_into_canonical and preserve lineage. Finish claimed follow-on work yourself.\n"
         f"{guardrails}\n"
-        f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records. Avoid growing a memory past that size unless no reasonable split exists.\n"
+        f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records. Avoid growing a memory past that size unless no reasonable split exists.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
         "Before stopping, check once more for any adjacent worthwhile maintenance action. No-op is fine only when no concrete safe cleanup remains above the high-confidence/medium-impact bar, and your final summary must make clear whether adjacency review was actually performed for risky records.\n"
         f"When your full looping pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
@@ -258,7 +343,8 @@ def build_agentic_prompt(
         "You are the memory-curator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
         "Treat this run as a structural-review campaign: the session should keep going while compatible structural work remains high-value and safe.\n"
-        "Good memory anatomy: one focused durable takeaway, concrete supporting details, a title/summary that names the conclusion, and tags that make the record discoverable later.\n"
+        "Good memory anatomy: one focused durable takeaway plus enough evidence to stand alone, a title/summary that names the conclusion, and tags that make the record discoverable later.\n"
+        f"{_curator_size_policy_prompt()}\n"
         "Bad memory smells from live retrieval telemetry include generic summaries, mixed-topic blobs, thin split-child fragments, repeated overlap across neighboring memories, and memories that keep getting surfaced but almost never opened.\n"
         "Your standing curator jobs are: retitle vague memories; resummarize generic memories; rewrite memories into more durable language; trim noise, filler, and unnecessary detail; retag or normalize taxonomy; split oversized or mixed-topic records; merge near-duplicates; reorganize overlapping clusters into a smaller clearer set; archive/delete low-value leftovers after preserving lineage; and relink or remove misleading edges when clearly justified.\n"
         "Tool mapping: use internal_update_memory_record for retitling, resummarizing, rewriting for durability, trimming noise, and retagging; use internal_split_memory_record for decompositions; use internal_merge_memory_into_canonical for canonicalization; use internal_archive_memory_record or internal_delete_memory_record for safe cleanup of leftovers; and use internal_create_memory_link or internal_delete_memory_link for structural edge cleanup.\n"
@@ -281,7 +367,7 @@ def build_agentic_prompt(
         "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
         "Do not end the provider session merely because the initial handler-local frontier is complete if a compatible structural follow-on item is still worth doing.\n"
         f"{guardrails}\n"
-        f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records.\n"
+        f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records.\n"
         "If you split or rewrite a record, make each resulting memory self-contained enough to stand alone in search results.\n"
         "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
@@ -363,12 +449,24 @@ def review_sampling_batch(payload: dict[str, Any], seed_records: list[Any]) -> S
     candidate_count = payload.get("candidate_count")
     if not isinstance(candidate_count, int):
         candidate_count = len(seed_records)
+    strategy_selection_mode = payload.get("strategy_selection_mode")
+    if not isinstance(strategy_selection_mode, str):
+        strategy_selection_mode = None
+    strategy_selection_reason = payload.get("strategy_selection_reason")
+    if not isinstance(strategy_selection_reason, str):
+        strategy_selection_reason = None
+    strategy_selection_scores = payload.get("strategy_selection_scores")
+    if not isinstance(strategy_selection_scores, dict):
+        strategy_selection_scores = None
     return SamplingBatch(
         requested_strategy=requested_strategy,
         strategy_used=requested_strategy or "none",
         strategy_fallback_reason=None,
         candidate_count=candidate_count,
         records=seed_records,
+        strategy_selection_mode=strategy_selection_mode,
+        strategy_selection_reason=strategy_selection_reason,
+        strategy_selection_scores=strategy_selection_scores,
     )
 
 
@@ -396,7 +494,15 @@ def sort_recent_curator_candidates(candidates: list[Any]) -> list[Any]:
 
 
 def is_oversized_curator_memory(record) -> bool:
-    return len(record.content.strip()) > CURATOR_MAX_MEMORY_CHARS
+    return len(record.content.strip()) > CURATOR_SIZE_POLICY.split_threshold_chars
+
+
+def curator_size_band_for_char_count(content_size_chars: int) -> str:
+    if content_size_chars <= CURATOR_SIZE_POLICY.target_max_chars:
+        return CURATOR_SIZE_BAND_TARGET
+    if content_size_chars <= CURATOR_SIZE_POLICY.acceptable_max_chars:
+        return CURATOR_SIZE_BAND_ACCEPTABLE
+    return CURATOR_SIZE_BAND_OVERSIZED
 
 
 def retrieval_friction_flags(record) -> list[str]:
@@ -444,6 +550,18 @@ def truncate_text(value: str | None, limit: int) -> str:
 
 def _normalize_curator_text(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def _curator_size_policy_prompt() -> str:
+    target_max = CURATOR_SIZE_POLICY.target_max_chars
+    split_threshold = CURATOR_SIZE_POLICY.split_threshold_chars
+    return (
+        f"Size policy: target band is {target_max} chars or less; acceptable band is {target_max + 1}-{split_threshold} chars; oversized is anything above {split_threshold} chars. "
+        "Leave alone when a memory already has one focused durable takeaway plus enough evidence to stand alone. "
+        "Rewrite or trim when it is still one takeaway but the acceptable band carries filler, drift, or avoidable detail. "
+        "Split when it crosses the oversized threshold or carries multiple takeaways. "
+        "Merge when a memory is too thin to stand alone or mostly duplicates a nearby canonical."
+    )
 
 
 def _requested_sampling_strategy(task: TaskRecord) -> str | None:

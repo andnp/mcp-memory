@@ -41,6 +41,13 @@ def test_get_memory_tools_returns_expected_names() -> None:
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
     assert search_tool.description is not None
     assert "follow up with read_memory_record" in search_tool.description
+    read_tool = next(tool for tool in tools if tool.name == "read_memory_record")
+    assert read_tool.description is not None
+    assert read_tool.inputSchema == {
+        "type": "object",
+        "properties": {"memory_id": {"type": "string"}},
+        "required": ["memory_id"],
+    }
 
 
 def test_get_internal_maintenance_tools_returns_expected_names() -> None:
@@ -324,7 +331,7 @@ async def test_call_internal_memory_tool_can_fetch_dedup_curator_and_ingest_batc
         curator_result = await call_internal_memory_tool(
             runtime,
             "internal_get_next_curator_batch",
-            {"task_id": "curator-batch-test", "strategy": "anomaly", "limit": 5, "exclude_memory_ids": [fact.id]},
+            {"task_id": "curator-batch-test", "limit": 5, "exclude_memory_ids": [fact.id]},
         )
         ingest_result = await call_internal_memory_tool(
             runtime,
@@ -347,10 +354,13 @@ async def test_call_internal_memory_tool_can_fetch_dedup_curator_and_ingest_batc
         assert dedup_payload["sampled_memory_ids"]
 
         assert curator_payload["status"] == "ok"
-        assert curator_payload["requested_strategy"] == "anomaly"
-        assert curator_payload["strategy"] == "anomaly"
-        assert curator_payload["strategy_used"] == "anomaly"
+        assert curator_payload["requested_strategy"] is None
+        assert curator_payload["strategy"] == curator_payload["strategy_used"]
         assert curator_payload["strategy_fallback_reason"] is None
+        assert curator_payload["strategy_selection_mode"] == "deterministic_scores"
+        assert isinstance(curator_payload["strategy_selection_reason"], str)
+        assert isinstance(curator_payload["strategy_selection_scores"], dict)
+        assert curator_payload["strategy"] in curator_payload["strategy_selection_scores"]
         assert curator_payload["excluded_memory_ids"] == [fact.id]
         assert curator_payload["records"]
         assert all(record["id"] != fact.id for record in curator_payload["records"])

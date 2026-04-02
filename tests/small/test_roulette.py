@@ -71,6 +71,57 @@ def test_roulette_strategy_choice_is_seeded_and_reproducible() -> None:
     assert [record.id for record in first.records] == [record.id for record in second.records]
 
 
+def test_curator_strategy_selection_is_deterministic_and_signal_driven_without_request() -> None:
+    candidates = [
+        _FakeRecord(
+            id="never-1",
+            title="Alpha One",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="never-2",
+            title="Zeta Two",
+            content="beta",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+    ]
+
+    first = RouletteProvider(task_name="memory-curator", task_id="task-a", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(
+            SEMANTIC_STRATEGY,
+            ANOMALY_STRATEGY,
+            COLD_STORAGE_STRATEGY,
+            NEVER_SURFACED_STRATEGY,
+            ORPHAN_LOW_SUPPORT_STRATEGY,
+            BOUNDED_NOISE_STRATEGY,
+        ),
+        limit=1,
+    )
+    second = RouletteProvider(task_name="memory-curator", task_id="task-b", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(
+            SEMANTIC_STRATEGY,
+            ANOMALY_STRATEGY,
+            COLD_STORAGE_STRATEGY,
+            NEVER_SURFACED_STRATEGY,
+            ORPHAN_LOW_SUPPORT_STRATEGY,
+            BOUNDED_NOISE_STRATEGY,
+        ),
+        limit=1,
+    )
+
+    assert first.strategy_used == NEVER_SURFACED_STRATEGY
+    assert second.strategy_used == NEVER_SURFACED_STRATEGY
+    assert first.strategy_selection_mode == "deterministic_scores"
+    assert second.strategy_selection_mode == "deterministic_scores"
+    assert first.strategy_selection_scores is not None
+    assert first.strategy_selection_scores[NEVER_SURFACED_STRATEGY] > first.strategy_selection_scores[COLD_STORAGE_STRATEGY]
+    assert first.strategy_selection_reason is not None
+    assert "never_surfaced_share" in first.strategy_selection_reason
+
+
 def test_roulette_cold_and_never_surfaced_treat_missing_timestamps_as_oldest() -> None:
     candidates = [
         _FakeRecord(id="missing", title="Missing", content="missing timestamps"),
@@ -135,10 +186,56 @@ def test_roulette_invalid_requested_strategy_falls_back_without_error() -> None:
     assert batch.strategy_fallback_reason == "unknown_requested_strategy"
 
 
+def test_curator_explicit_requested_strategy_still_wins_when_valid() -> None:
+    candidates = [
+        _FakeRecord(id="a", title="Alpha", content="a" * 1500),
+        _FakeRecord(id="b", title="Beta", content="b" * 40),
+    ]
+
+    batch = RouletteProvider(task_name="memory-curator", task_id="task-requested", candidates=candidates).get_batch(
+        strategy=ANOMALY_STRATEGY,
+        allowed_strategies=(ANOMALY_STRATEGY, NEVER_SURFACED_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.requested_strategy == ANOMALY_STRATEGY
+    assert batch.strategy_used == ANOMALY_STRATEGY
+    assert batch.strategy_fallback_reason is None
+    assert batch.strategy_selection_mode == "requested_strategy"
+
+
+def test_curator_invalid_requested_strategy_falls_back_to_deterministic_selection() -> None:
+    candidates = [
+        _FakeRecord(
+            id="never-1",
+            title="Alpha One",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="never-2",
+            title="Zeta Two",
+            content="beta",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+    ]
+
+    batch = RouletteProvider(task_name="memory-curator", task_id="task-invalid-curator", candidates=candidates).get_batch(
+        strategy="totally-not-real",
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.requested_strategy == "totally-not-real"
+    assert batch.strategy_used == NEVER_SURFACED_STRATEGY
+    assert batch.strategy_fallback_reason == "unknown_requested_strategy"
+    assert batch.strategy_selection_mode == "deterministic_scores"
+
+
 def test_roulette_weighted_strategy_mix_can_force_one_strategy() -> None:
     candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
 
-    batch = RouletteProvider(task_name="memory-curator", task_id="task-weighted", candidates=candidates).get_batch(
+    batch = RouletteProvider(task_name="deduplicator", task_id="task-weighted", candidates=candidates).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
         strategy_weights={COLD_STORAGE_STRATEGY: 5, BOUNDED_NOISE_STRATEGY: 0},

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from inspect import isawaitable
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
@@ -28,6 +28,7 @@ async def run_internal_tool_loop(
     allowed_tool_names: list[str],
     max_rounds: int = 4,
     max_tool_calls_per_round: int = 5,
+    unsupported_no_tool_response_error: Callable[[dict[str, Any], int], str | None] | None = None,
 ) -> InternalToolLoopResult:
     services = internal_tool_services()
     allowed_tools = {
@@ -52,15 +53,14 @@ async def run_internal_tool_loop(
 
         tool_calls = _normalize_tool_calls(response.get("tool_calls"))
         if not tool_calls:
-            reported_actions_taken = _reported_positive_actions_taken(response)
-            if reported_actions_taken is not None and executed_calls <= 0:
+            validation_error = _default_unsupported_no_tool_response_error(response, executed_calls)
+            if validation_error is None and unsupported_no_tool_response_error is not None:
+                validation_error = unsupported_no_tool_response_error(response, executed_calls)
+            if validation_error is not None:
                 last_invalid_positive_response = response
                 transcript.append(
                     {
-                        "validation_error": (
-                            "Do not claim positive actions without first issuing tool_calls. "
-                            "If no tools were used, return actions_taken=0 and a no-op summary."
-                        ),
+                        "validation_error": validation_error,
                         "invalid_response": response,
                     }
                 )
@@ -200,6 +200,18 @@ def _reported_positive_actions_taken(response: dict[str, Any]) -> int | None:
     if actions_taken <= 0:
         return None
     return actions_taken
+
+
+def _default_unsupported_no_tool_response_error(response: dict[str, Any], executed_calls: int) -> str | None:
+    if executed_calls > 0:
+        return None
+    reported_actions_taken = _reported_positive_actions_taken(response)
+    if reported_actions_taken is None:
+        return None
+    return (
+        "Do not claim positive actions without first issuing tool_calls. "
+        "If no tools were used, return actions_taken=0 and a no-op summary."
+    )
 
 
 def _handled_ingest_entry_ids(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> list[int]:
