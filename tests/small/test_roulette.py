@@ -232,6 +232,72 @@ def test_curator_invalid_requested_strategy_falls_back_to_deterministic_selectio
     assert batch.strategy_selection_mode == "deterministic_scores"
 
 
+def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_close() -> None:
+    candidates = [
+        _FakeRecord(
+            id="mixed-1",
+            title="Alpha One",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+            last_surfaced_at=None,
+            read_count=5,
+        ),
+        _FakeRecord(
+            id="mixed-2",
+            title="Beta Two",
+            content="beta",
+            last_accessed_at="2026-02-01T00:00:00+00:00",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+            read_count=5,
+        ),
+    ]
+
+    without_priors = RouletteProvider(task_name="memory-curator", task_id="task-live-only", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
+        limit=1,
+    )
+    with_priors = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-live-with-priors",
+        candidates=candidates,
+        strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
+        limit=1,
+    )
+
+    assert without_priors.strategy_used == NEVER_SURFACED_STRATEGY
+    assert with_priors.strategy_used == COLD_STORAGE_STRATEGY
+    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
+    assert with_priors.strategy_selection_reason is not None
+    assert "utility_priors=" in with_priors.strategy_selection_reason
+
+
+def test_non_curator_strategy_selection_ignores_utility_priors() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
+
+    without_priors = RouletteProvider(task_name="deduplicator", task_id="same-task", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+    with_priors = RouletteProvider(
+        task_name="deduplicator",
+        task_id="same-task",
+        candidates=candidates,
+        strategy_prior_scores={COLD_STORAGE_STRATEGY: 0.0, BOUNDED_NOISE_STRATEGY: 1.0},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert with_priors.strategy_used == without_priors.strategy_used
+    assert with_priors.strategy_selection_mode == without_priors.strategy_selection_mode
+
+
 def test_roulette_weighted_strategy_mix_can_force_one_strategy() -> None:
     candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
 

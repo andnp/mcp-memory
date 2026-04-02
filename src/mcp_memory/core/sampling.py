@@ -20,6 +20,8 @@ CURATOR_LARGE_CANDIDATE_MIN_CHARS = 1200
 CURATOR_OVERSIZED_MULTIPLIER = 1.75
 CURATOR_LENGTH_OUTLIER_RATIO = 0.75
 CURATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
+CURATOR_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
+CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
 
 SEMANTIC_STRATEGY = "semantic"
 COLD_STORAGE_STRATEGY = "cold-storage"
@@ -99,6 +101,7 @@ class RouletteProvider(Generic[T]):
         task_id: str,
         candidates: Sequence[T],
         support_counts: dict[str, int] | None = None,
+        strategy_prior_scores: dict[str, float] | None = None,
         cooldown_window_seconds: float = 21600.0,
         now_timestamp: float | None = None,
     ) -> None:
@@ -106,6 +109,7 @@ class RouletteProvider(Generic[T]):
         self._task_id = task_id
         self._candidates = list(candidates)
         self._support_counts = support_counts or {}
+        self._strategy_prior_scores = dict(strategy_prior_scores or {})
         self._rng = Random(f"{task_name}:{task_id}")
         self._cooldown_window_seconds = max(cooldown_window_seconds, 0.0)
         self._now_timestamp = time.time() if now_timestamp is None else now_timestamp
@@ -196,7 +200,7 @@ class RouletteProvider(Generic[T]):
         self,
         allowed_strategies: tuple[str, ...],
     ) -> tuple[str, str, str, dict[str, float]]:
-        scores, signals = self._curator_strategy_scores(allowed_strategies)
+        scores, signals, applied_utility_priors = self._curator_strategy_scores(allowed_strategies)
         strategy_used = min(
             allowed_strategies,
             key=lambda strategy: (-scores.get(strategy, 0.0), allowed_strategies.index(strategy), strategy),
@@ -206,17 +210,29 @@ class RouletteProvider(Generic[T]):
             f"{signal_name}={signal_value:.3f}"
             for signal_name, signal_value in sorted(signals.items(), key=lambda item: (-item[1], item[0]))[:3]
         )
+        selection_mode = "deterministic_scores"
+        selection_reason = f"selected={strategy_used}; signals={dominant_signals}"
+        if applied_utility_priors:
+            selection_mode = "deterministic_scores_with_utility_priors"
+            compact_priors = ",".join(
+                f"{strategy}:{score:.2f}"
+                for strategy, score in sorted(
+                    applied_utility_priors.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )[:3]
+            )
+            selection_reason = f"{selection_reason}; utility_priors={compact_priors}"
         return (
             strategy_used,
-            "deterministic_scores",
-            f"selected={strategy_used}; signals={dominant_signals}",
+            selection_mode,
+            selection_reason,
             rounded_scores,
         )
 
     def _curator_strategy_scores(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
         candidate_count = len(self._candidates)
         lengths = [len(item.content.strip()) for item in self._candidates]
         median_length = median(lengths) if lengths else 0.0
@@ -296,7 +312,26 @@ class RouletteProvider(Generic[T]):
                 scores[strategy] = 0.08 + 0.22 * (1.0 - dominant_signal)
             else:
                 scores[strategy] = 0.0
-        return scores, signals
+        applied_utility_priors = {
+            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
+            for strategy in allowed_strategies
+            if strategy in self._strategy_prior_scores
+        }
+        if not applied_utility_priors:
+            return scores, signals, {}
+
+        blended_scores = {
+            strategy: self._blend_curator_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
+            for strategy in allowed_strategies
+        }
+        return blended_scores, signals, applied_utility_priors
+
+    def _blend_curator_score(self, live_score: float, prior_score: float | None) -> float:
+        if prior_score is None:
+            return live_score
+        shift = (prior_score - 0.5) * CURATOR_UTILITY_PRIOR_BLEND_WEIGHT
+        shift = min(max(shift, -CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT), CURATOR_UTILITY_PRIOR_MAX_SCORE_SHIFT)
+        return live_score + shift
 
     def _rank_candidates(self, strategy: str) -> list[T]:
         if strategy == SEMANTIC_STRATEGY:

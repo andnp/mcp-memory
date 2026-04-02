@@ -5,6 +5,10 @@ from typing import Any
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import RouletteProvider, SamplingBatch
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors
+
+
+CURATOR_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
 
 
 def requested_sampling_strategy(task: TaskRecord) -> str | None:
@@ -44,12 +48,43 @@ def sample_maintenance_candidates(
         task_id=task.id,
         candidates=candidates,
         support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
+        strategy_prior_scores=_curator_strategy_prior_scores(
+            ctx,
+            task_name=task.task_name,
+            allowed_strategies=allowed_strategies,
+        ),
     ).get_batch(
         strategy=requested_strategy,
         allowed_strategies=allowed_strategies,
         strategy_weights=strategy_weights,
         limit=limit,
     )
+
+
+def _curator_strategy_prior_scores(
+    ctx: ApplicationContext,
+    *,
+    task_name: str,
+    allowed_strategies: tuple[str, ...],
+) -> dict[str, float] | None:
+    if task_name != "memory-curator":
+        return None
+    from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
+
+    recent_runs = build_recent_agent_runs(
+        ctx.db_manager,
+        ctx.workspace_id,
+        limit=CURATOR_UTILITY_PRIOR_RECENT_RUN_LIMIT,
+        detail_level="compact",
+    )
+    if not recent_runs:
+        return None
+    priors = build_selection_strategy_utility_priors(
+        recent_runs,
+        task_name=task_name,
+        allowed_strategies=allowed_strategies,
+    )
+    return priors or None
 
 
 def sampling_payload(

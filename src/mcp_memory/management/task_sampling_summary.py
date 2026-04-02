@@ -11,6 +11,14 @@ from mcp_memory.management.models import (
 )
 
 
+UTILITY_PRIOR_MIN_RUNS = 3
+UTILITY_PRIOR_MUTATION_RATE_WEIGHT = 0.45
+UTILITY_PRIOR_MUTATIONS_PER_RUN_WEIGHT = 0.30
+UTILITY_PRIOR_MUTATIONS_PER_TOOL_CALL_WEIGHT = 0.15
+UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT = 0.20
+UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE = 2.0
+
+
 @dataclass
 class _UsageAccumulator:
     name: str
@@ -118,6 +126,58 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
             for row in sorted(utility_rows.values(), key=lambda item: (item.task_name, -item.runs, item.strategy_used))
         ],
     )
+
+
+def build_selection_strategy_utility_priors(
+    runs: Iterable[AgentRunHistoryPayload],
+    *,
+    task_name: str,
+    allowed_strategies: Iterable[str] | None = None,
+    min_runs: int = UTILITY_PRIOR_MIN_RUNS,
+) -> dict[str, float]:
+    summary = build_task_sampling_summary(runs)
+    return selection_utility_prior_scores(
+        summary.selection_utility,
+        task_name=task_name,
+        allowed_strategies=allowed_strategies,
+        min_runs=min_runs,
+    )
+
+
+def selection_utility_prior_scores(
+    rows: Iterable[SelectionStrategyUtilityPayload],
+    *,
+    task_name: str,
+    allowed_strategies: Iterable[str] | None = None,
+    min_runs: int = UTILITY_PRIOR_MIN_RUNS,
+) -> dict[str, float]:
+    allowed = set(allowed_strategies or [])
+    priors: dict[str, float] = {}
+    for row in rows:
+        if row.task_name != task_name or row.runs < max(min_runs, 1):
+            continue
+        if allowed and row.strategy_used not in allowed:
+            continue
+        priors[row.strategy_used] = _utility_prior_score(row)
+    return priors
+
+
+def _utility_prior_score(row: SelectionStrategyUtilityPayload) -> float:
+    mutation_rate = _clamp01(row.mutation_rate)
+    mutations_per_run = _clamp01(row.mutations_per_run / UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE)
+    mutations_per_tool_call = _clamp01(row.mutations_per_tool_call or 0.0)
+    no_op_rate = _clamp01(row.no_op_rate)
+    score = (
+        UTILITY_PRIOR_MUTATION_RATE_WEIGHT * mutation_rate
+        + UTILITY_PRIOR_MUTATIONS_PER_RUN_WEIGHT * mutations_per_run
+        + UTILITY_PRIOR_MUTATIONS_PER_TOOL_CALL_WEIGHT * mutations_per_tool_call
+        - UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT * no_op_rate
+    )
+    return round(_clamp01(score), 4)
+
+
+def _clamp01(value: float) -> float:
+    return min(max(value, 0.0), 1.0)
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float | None:

@@ -1,6 +1,6 @@
 from mcp_memory.management.agent_run_reporting import build_agent_run_history_payload, decode_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, RunResultMetadataPayload
-from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
+from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
 
 
 def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:
@@ -122,3 +122,110 @@ def test_build_task_sampling_summary_aggregates_selection_utility_metrics() -> N
         ("graph-linker", "semantic", 2, 1, 1, 3, 6, 10.0, 0.5, 1.5, 0.5, 1, 0.5),
         ("memory-curator", "lexical", 1, 0, 1, 1, 1, 5.0, 1.0, 1.0, 1.0, 0, 0.0),
     ]
+
+
+def test_selection_strategy_utility_priors_ignore_strategies_below_minimum_runs() -> None:
+    priors = build_selection_strategy_utility_priors(
+        [
+            AgentRunHistoryPayload(
+                task_id="task-1",
+                task_name="memory-curator",
+                status="completed",
+                started_at=1.0,
+                completed_at=2.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=12,
+                    tool_calls_executed=3,
+                    mutations=2,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-2",
+                task_name="memory-curator",
+                status="completed",
+                started_at=3.0,
+                completed_at=4.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=10,
+                    tool_calls_executed=2,
+                    mutations=1,
+                ),
+            ),
+        ],
+        task_name="memory-curator",
+        allowed_strategies=("semantic",),
+    )
+
+    assert priors == {}
+
+
+def test_selection_strategy_utility_priors_include_curator_strategies_with_enough_runs() -> None:
+    priors = build_selection_strategy_utility_priors(
+        [
+            AgentRunHistoryPayload(
+                task_id="task-1",
+                task_name="memory-curator",
+                status="completed",
+                started_at=1.0,
+                completed_at=2.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="cold-storage",
+                    candidate_count=10,
+                    tool_calls_executed=2,
+                    mutations=2,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-2",
+                task_name="memory-curator",
+                status="completed",
+                started_at=3.0,
+                completed_at=4.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="cold-storage",
+                    candidate_count=11,
+                    tool_calls_executed=2,
+                    mutations=1,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-3",
+                task_name="memory-curator",
+                status="completed",
+                started_at=5.0,
+                completed_at=6.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="cold-storage",
+                    candidate_count=9,
+                    tool_calls_executed=1,
+                    mutations=1,
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-4",
+                task_name="graph-linker",
+                status="completed",
+                started_at=7.0,
+                completed_at=8.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="cold-storage",
+                    candidate_count=9,
+                    tool_calls_executed=5,
+                    mutations=0,
+                ),
+            ),
+        ],
+        task_name="memory-curator",
+        allowed_strategies=("cold-storage", "semantic"),
+    )
+
+    assert set(priors) == {"cold-storage"}
+    assert 0.0 < priors["cold-storage"] <= 1.0
