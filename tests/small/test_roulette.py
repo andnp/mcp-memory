@@ -275,6 +275,110 @@ def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_c
     assert "utility_priors=" in with_priors.strategy_selection_reason
 
 
+def test_taxonomist_prefers_never_surfaced_when_signal_dominates() -> None:
+    candidates = [
+        _FakeRecord(
+            id="never-1",
+            title="Needs tags one",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="never-2",
+            title="Needs tags two",
+            content="beta",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="surfaced-old",
+            title="Old surfaced",
+            content="gamma",
+            last_accessed_at="2026-01-01T00:00:00+00:00",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+        ),
+    ]
+
+    batch = RouletteProvider(task_name="taxonomist", task_id="task-never", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used == NEVER_SURFACED_STRATEGY
+    assert batch.strategy_selection_mode == "deterministic_scores"
+    assert batch.strategy_selection_reason is not None
+    assert "never_surfaced_share" in batch.strategy_selection_reason
+
+
+def test_taxonomist_utility_priors_can_shift_close_strategy_choice() -> None:
+    candidates = [
+        _FakeRecord(
+            id="mixed-1",
+            title="Needs tags one",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+            last_surfaced_at=None,
+        ),
+        _FakeRecord(
+            id="mixed-2",
+            title="Old taxonomy",
+            content="beta",
+            last_accessed_at="2026-02-01T00:00:00+00:00",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+        ),
+    ]
+
+    without_priors = RouletteProvider(task_name="taxonomist", task_id="task-live-only", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+    with_priors = RouletteProvider(
+        task_name="taxonomist",
+        task_id="task-live-with-priors",
+        candidates=candidates,
+        strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert without_priors.strategy_used == NEVER_SURFACED_STRATEGY
+    assert with_priors.strategy_used == COLD_STORAGE_STRATEGY
+    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
+    assert with_priors.strategy_selection_reason is not None
+    assert "utility_priors=" in with_priors.strategy_selection_reason
+
+
+def test_taxonomist_explicit_requested_strategy_still_wins_when_valid() -> None:
+    candidates = [
+        _FakeRecord(
+            id="never-1",
+            title="Needs tags one",
+            content="alpha",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="never-2",
+            title="Needs tags two",
+            content="beta",
+            last_accessed_at="2026-03-31T00:00:00+00:00",
+        ),
+    ]
+
+    batch = RouletteProvider(task_name="taxonomist", task_id="task-requested", candidates=candidates).get_batch(
+        strategy=BOUNDED_NOISE_STRATEGY,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.requested_strategy == BOUNDED_NOISE_STRATEGY
+    assert batch.strategy_used == BOUNDED_NOISE_STRATEGY
+    assert batch.strategy_fallback_reason is None
+    assert batch.strategy_selection_mode == "requested_strategy"
+
+
 def test_deduplicator_prefers_semantic_when_overlap_signal_dominates() -> None:
     candidates = [
         _FakeRecord(id="a", title="Alpha note", content="alpha beta gamma duplicate cluster"),

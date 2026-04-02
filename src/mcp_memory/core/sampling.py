@@ -14,7 +14,9 @@ TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
 CURATOR_TASK_NAME = "memory-curator"
 DEDUPLICATOR_TASK_NAME = "deduplicator"
+TAXONOMIST_TASK_NAME = "taxonomist"
 CURATOR_COLD_TAIL_SECONDS = 30 * 24 * 60 * 60
+TAXONOMIST_COLD_TAIL_SECONDS = 30 * 24 * 60 * 60
 CURATOR_LOW_SUPPORT_THRESHOLD = 1
 CURATOR_LOW_READ_THRESHOLD = 3
 CURATOR_LARGE_CANDIDATE_MIN_CHARS = 1200
@@ -196,6 +198,8 @@ class RouletteProvider(Generic[T]):
             return self._choose_curator_strategy(allowed_strategies)
         if self._task_name == DEDUPLICATOR_TASK_NAME:
             return self._choose_deduplicator_strategy(allowed_strategies)
+        if self._task_name == TAXONOMIST_TASK_NAME:
+            return self._choose_taxonomist_strategy(allowed_strategies)
         return (
             self.choose_strategy(allowed_strategies, strategy_weights),
             "seeded_random",
@@ -220,6 +224,18 @@ class RouletteProvider(Generic[T]):
         allowed_strategies: tuple[str, ...],
     ) -> tuple[str, str, str, dict[str, float]]:
         scores, signals, applied_utility_priors = self._deduplicator_strategy_scores(allowed_strategies)
+        return self._finalize_deterministic_strategy_choice(
+            allowed_strategies,
+            scores=scores,
+            signals=signals,
+            applied_utility_priors=applied_utility_priors,
+        )
+
+    def _choose_taxonomist_strategy(
+        self,
+        allowed_strategies: tuple[str, ...],
+    ) -> tuple[str, str, str, dict[str, float]]:
+        scores, signals, applied_utility_priors = self._taxonomist_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
             scores=scores,
@@ -412,6 +428,60 @@ class RouletteProvider(Generic[T]):
                     + 0.15 * semantic_overlap_share
                     + 0.10 * (1.0 - min(size_anomaly_pressure, 1.0))
                 )
+            else:
+                scores[strategy] = 0.0
+
+        applied_utility_priors = {
+            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
+            for strategy in allowed_strategies
+            if strategy in self._strategy_prior_scores
+        }
+        if not applied_utility_priors:
+            return scores, signals, {}
+
+        blended_scores = {
+            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
+            for strategy in allowed_strategies
+        }
+        return blended_scores, signals, applied_utility_priors
+
+    def _taxonomist_strategy_scores(
+        self,
+        allowed_strategies: tuple[str, ...],
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        never_surfaced_share = self._share(1 for item in self._candidates if item.last_surfaced_at is None)
+        never_accessed_share = self._share(1 for item in self._candidates if item.last_accessed_at is None)
+        cold_tail_or_never_accessed_share = self._share(
+            1
+            for item in self._candidates
+            if item.last_accessed_at is None
+            or self._is_older_than(item.last_accessed_at, TAXONOMIST_COLD_TAIL_SECONDS)
+        )
+
+        dominant_signal = max(never_surfaced_share, cold_tail_or_never_accessed_share)
+        frontier_gap = abs(never_surfaced_share - cold_tail_or_never_accessed_share)
+        low_signal_share = 1.0 - dominant_signal
+        flat_frontier_share = 1.0 - frontier_gap
+
+        signals = {
+            "never_surfaced_share": never_surfaced_share,
+            "cold_tail_or_never_accessed_share": cold_tail_or_never_accessed_share,
+            "never_accessed_share": never_accessed_share,
+            "low_signal_share": low_signal_share,
+            "flat_frontier_share": flat_frontier_share,
+        }
+
+        scores: dict[str, float] = {}
+        for strategy in allowed_strategies:
+            if strategy == NEVER_SURFACED_STRATEGY:
+                scores[strategy] = 0.85 * never_surfaced_share + 0.15 * never_accessed_share
+            elif strategy == COLD_STORAGE_STRATEGY:
+                scores[strategy] = (
+                    0.75 * cold_tail_or_never_accessed_share
+                    + 0.25 * never_accessed_share
+                )
+            elif strategy == BOUNDED_NOISE_STRATEGY:
+                scores[strategy] = 0.05 + 0.35 * low_signal_share * flat_frontier_share
             else:
                 scores[strategy] = 0.0
 

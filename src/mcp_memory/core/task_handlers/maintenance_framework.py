@@ -9,7 +9,7 @@ from mcp_memory.management.task_sampling_summary import build_selection_strategy
 
 
 SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
-UTILITY_PRIOR_TASK_NAMES = frozenset({"memory-curator", "deduplicator"})
+UTILITY_PRIOR_TASK_NAMES = frozenset({"memory-curator", "deduplicator", "taxonomist"})
 
 
 def requested_sampling_strategy(task: TaskRecord) -> str | None:
