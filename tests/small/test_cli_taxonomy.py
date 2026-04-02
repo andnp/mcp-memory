@@ -2,6 +2,7 @@ import pytest
 from click.testing import CliRunner
 
 from mcp_memory.cli import main
+from mcp_memory.management.models import TaskSamplingSummaryPayload
 
 
 pytestmark = pytest.mark.small
@@ -163,29 +164,25 @@ def test_admin_task_recent_runs_forwards_to_existing_task_run_listing(monkeypatc
     }
 
 
-def test_admin_task_sampling_summary_forwards_to_existing_sampling_summary_logic(monkeypatch) -> None:
+def test_admin_task_sampling_summary_uses_management_summary_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
 
-    class _FakePayload:
-        runs: list[object] = []
-
     class _FakeService:
-        def list_recent_agent_runs(self, *, limit: int) -> _FakePayload:
+        def get_task_sampling_summary(self, *, limit: int) -> TaskSamplingSummaryPayload:
             captured["limit"] = limit
-            return _FakePayload()
+            return TaskSamplingSummaryPayload(
+                selection=[],
+                grouping=[],
+                selection_utility=[],
+            )
 
     def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
         captured["workspace_root"] = workspace_root
         captured["workspace_id"] = workspace_id
         action(_FakeService())
 
-    def fake_build_sampling_summary(payload: _FakePayload) -> dict[str, list[dict[str, object]]]:
-        captured["payload_type"] = type(payload).__name__
-        return {"selection": [], "grouping": []}
-
     monkeypatch.setattr("mcp_memory.cli._with_management_service", fake_with_management_service)
-    monkeypatch.setattr("mcp_memory.cli._build_sampling_summary", fake_build_sampling_summary)
 
     result = runner.invoke(
         main,
@@ -193,11 +190,11 @@ def test_admin_task_sampling_summary_forwards_to_existing_sampling_summary_logic
     )
 
     assert result.exit_code == 0, result.output
+    assert result.output.strip() == '{"grouping": [], "selection": [], "selection_utility": []}'
     assert captured == {
         "workspace_root": "/tmp/demo",
         "workspace_id": None,
         "limit": 9,
-        "payload_type": "_FakePayload",
     }
 
 

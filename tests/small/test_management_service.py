@@ -109,6 +109,105 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.provider_latency == []
 
 
+def test_management_service_task_sampling_summary_aggregates_recent_run_utility(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    task_one = task_queue.enqueue(
+        "memory-curator",
+        task_id="sampling-run-1",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_two = task_queue.enqueue(
+        "memory-curator",
+        task_id="sampling-run-2",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_three = task_queue.enqueue(
+        "graph-linker",
+        task_id="sampling-run-3",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+
+    assert task_queue.claim_next(now=10.0) is not None
+    task_queue.complete(
+        task_one.id,
+        completed_at=12.0,
+        run_result={
+            "strategy_used": "semantic",
+            "strategy_fallback_reason": "insufficient_candidates",
+            "candidate_count": 6,
+            "tool_calls_executed": 4,
+            "mutations": 2,
+            "grouping_strategy_used": "compatibility",
+        },
+    )
+    assert task_queue.claim_next(now=13.0) is not None
+    task_queue.complete(
+        task_two.id,
+        completed_at=15.0,
+        run_result={
+            "strategy_used": "semantic",
+            "candidate_count": 4,
+            "tool_calls_executed": 1,
+            "mutations": 0,
+            "grouping_strategy_used": "compatibility",
+            "grouping_fallback_reason": "single_group",
+        },
+    )
+    assert task_queue.claim_next(now=16.0) is not None
+    task_queue.complete(
+        task_three.id,
+        completed_at=18.0,
+        run_result={
+            "strategy_used": "lexical",
+            "candidate_count": 5,
+            "tool_calls_executed": 2,
+            "mutations": 1,
+        },
+    )
+
+    summary = service.get_task_sampling_summary(limit=10)
+
+    assert [(row.name, row.runs, row.fallbacks) for row in summary.selection] == [
+        ("semantic", 2, 1),
+        ("lexical", 1, 0),
+    ]
+    assert [(row.name, row.runs, row.fallbacks) for row in summary.grouping] == [
+        ("compatibility", 2, 1),
+    ]
+    assert [
+        (
+            row.task_name,
+            row.strategy_used,
+            row.runs,
+            row.fallback_count,
+            row.mutation_runs,
+            row.total_mutations,
+            row.total_tool_calls,
+            row.average_candidate_count,
+            row.mutation_rate,
+            row.mutations_per_run,
+            row.mutations_per_tool_call,
+            row.no_op_runs,
+            row.no_op_rate,
+        )
+        for row in summary.selection_utility
+    ] == [
+        ("graph-linker", "lexical", 1, 0, 1, 1, 2, 5.0, 1.0, 1.0, 0.5, 0, 0.0),
+        ("memory-curator", "semantic", 2, 1, 1, 2, 5, 5.0, 0.5, 1.0, 0.4, 1, 0.5),
+    ]
+
+
 def test_management_service_health_reports_storage_backend(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

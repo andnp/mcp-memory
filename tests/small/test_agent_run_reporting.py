@@ -1,4 +1,6 @@
 from mcp_memory.management.agent_run_reporting import build_agent_run_history_payload, decode_run_result
+from mcp_memory.management.models import AgentRunHistoryPayload, RunResultMetadataPayload
+from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 
 
 def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:
@@ -38,3 +40,85 @@ def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:
     assert payload.ingest_audit.meaningful_actions == 1
     assert payload.ingest_audit.mutations == 1
     assert payload.ingest_audit.entry_dispositions[0].memory_id == "memory-101"
+
+
+def test_build_task_sampling_summary_aggregates_selection_utility_metrics() -> None:
+    summary = build_task_sampling_summary(
+        [
+            AgentRunHistoryPayload(
+                task_id="task-1",
+                task_name="graph-linker",
+                status="completed",
+                started_at=1.0,
+                completed_at=2.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    candidate_count=12,
+                    tool_calls_executed=4,
+                    mutations=3,
+                    grouping_strategy_used="compatibility",
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-2",
+                task_name="graph-linker",
+                status="completed",
+                started_at=3.0,
+                completed_at=4.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="semantic",
+                    strategy_fallback_reason="insufficient_candidates",
+                    candidate_count=8,
+                    tool_calls_executed=2,
+                    mutations=0,
+                    grouping_strategy_used="compatibility",
+                    grouping_fallback_reason="small_batch",
+                ),
+            ),
+            AgentRunHistoryPayload(
+                task_id="task-3",
+                task_name="memory-curator",
+                status="completed",
+                started_at=5.0,
+                completed_at=6.0,
+                duration_seconds=1.0,
+                result_metadata=RunResultMetadataPayload(
+                    strategy_used="lexical",
+                    candidate_count=5,
+                    tool_calls_executed=1,
+                    mutations=1,
+                ),
+            ),
+        ]
+    )
+
+    assert [(row.name, row.runs, row.fallbacks, row.tasks) for row in summary.selection] == [
+        ("semantic", 2, 1, ["graph-linker"]),
+        ("lexical", 1, 0, ["memory-curator"]),
+    ]
+    assert [(row.name, row.runs, row.fallbacks, row.tasks) for row in summary.grouping] == [
+        ("compatibility", 2, 1, ["graph-linker"]),
+    ]
+    assert [
+        (
+            row.task_name,
+            row.strategy_used,
+            row.runs,
+            row.fallback_count,
+            row.mutation_runs,
+            row.total_mutations,
+            row.total_tool_calls,
+            row.average_candidate_count,
+            row.mutation_rate,
+            row.mutations_per_run,
+            row.mutations_per_tool_call,
+            row.no_op_runs,
+            row.no_op_rate,
+        )
+        for row in summary.selection_utility
+    ] == [
+        ("graph-linker", "semantic", 2, 1, 1, 3, 6, 10.0, 0.5, 1.5, 0.5, 1, 0.5),
+        ("memory-curator", "lexical", 1, 0, 1, 1, 1, 5.0, 1.0, 1.0, 1.0, 0, 0.0),
+    ]

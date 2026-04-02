@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 import json
 import logging
@@ -29,6 +29,7 @@ from mcp_memory.daemon_process import find_free_port
 from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
+from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
 from mcp_memory.relational.importer import (
@@ -991,63 +992,21 @@ def _render_task_detail(payload) -> None:
             console.print_json(json.dumps(run.result, sort_keys=True))
 
 
-def _build_sampling_summary(payload) -> dict[str, list[dict[str, object]]]:
-    @dataclass
-    class _SamplingSummaryRow:
-        name: str
-        runs: int = 0
-        fallbacks: int = 0
-        tasks: set[str] | None = None
-
-    selection_rows: dict[str, _SamplingSummaryRow] = {}
-    grouping_rows: dict[str, _SamplingSummaryRow] = {}
-    for run in payload.runs:
-        metadata = run.result_metadata
-        if metadata.strategy_used is not None:
-            row = selection_rows.setdefault(
-                metadata.strategy_used,
-                _SamplingSummaryRow(name=metadata.strategy_used, tasks=set()),
-            )
-            row.runs += 1
-            if metadata.strategy_fallback_reason is not None:
-                row.fallbacks += 1
-            assert row.tasks is not None
-            row.tasks.add(run.task_name)
-        if metadata.grouping_strategy_used is not None:
-            row = grouping_rows.setdefault(
-                metadata.grouping_strategy_used,
-                _SamplingSummaryRow(name=metadata.grouping_strategy_used, tasks=set()),
-            )
-            row.runs += 1
-            if metadata.grouping_fallback_reason is not None:
-                row.fallbacks += 1
-            assert row.tasks is not None
-            row.tasks.add(run.task_name)
-    return {
-        "selection": [
-            {"name": row.name, "runs": row.runs, "fallbacks": row.fallbacks, "tasks": sorted(row.tasks or set())}
-            for row in sorted(selection_rows.values(), key=lambda item: (-item.runs, item.name))
-        ],
-        "grouping": [
-            {"name": row.name, "runs": row.runs, "fallbacks": row.fallbacks, "tasks": sorted(row.tasks or set())}
-            for row in sorted(grouping_rows.values(), key=lambda item: (-item.runs, item.name))
-        ],
-    }
+def _build_sampling_summary(payload):
+    return build_task_sampling_summary(payload.runs)
 
 
-def _render_sampling_summary(payload) -> None:
-    summary = _build_sampling_summary(payload)
+def _render_sampling_summary(summary) -> None:
     selection_table = Table(title="Selection Strategy Usage")
     selection_table.add_column("Strategy")
     selection_table.add_column("Runs", justify="right")
     selection_table.add_column("Fallbacks", justify="right")
     selection_table.add_column("Tasks")
-    if not summary["selection"]:
+    if not summary.selection:
         selection_table.add_row("-", "0", "0", "No strategy metadata recorded")
-    for row in summary["selection"]:
-        tasks = row.get("tasks")
-        tasks_text = ", ".join(task for task in tasks if isinstance(task, str)) if isinstance(tasks, list) else "-"
-        selection_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
+    for row in summary.selection:
+        tasks_text = ", ".join(row.tasks) if row.tasks else "-"
+        selection_table.add_row(row.name, str(row.runs), str(row.fallbacks), tasks_text)
     console.print(selection_table)
 
     grouping_table = Table(title="Ingest Grouping Strategy Usage")
@@ -1055,13 +1014,44 @@ def _render_sampling_summary(payload) -> None:
     grouping_table.add_column("Runs", justify="right")
     grouping_table.add_column("Fallbacks", justify="right")
     grouping_table.add_column("Tasks")
-    if not summary["grouping"]:
+    if not summary.grouping:
         grouping_table.add_row("-", "0", "0", "No grouping metadata recorded")
-    for row in summary["grouping"]:
-        tasks = row.get("tasks")
-        tasks_text = ", ".join(task for task in tasks if isinstance(task, str)) if isinstance(tasks, list) else "-"
-        grouping_table.add_row(str(row["name"]), str(row["runs"]), str(row["fallbacks"]), tasks_text)
+    for row in summary.grouping:
+        tasks_text = ", ".join(row.tasks) if row.tasks else "-"
+        grouping_table.add_row(row.name, str(row.runs), str(row.fallbacks), tasks_text)
     console.print(grouping_table)
+
+    utility_table = Table(title="Selection Strategy Utility by Task")
+    utility_table.add_column("Task", no_wrap=True)
+    utility_table.add_column("Strategy", no_wrap=True)
+    utility_table.add_column("Runs", justify="right")
+    utility_table.add_column("Fallbacks", justify="right")
+    utility_table.add_column("Mutation runs", justify="right")
+    utility_table.add_column("Total mutations", justify="right")
+    utility_table.add_column("Tool calls", justify="right")
+    utility_table.add_column("Avg candidates", justify="right")
+    utility_table.add_column("Mutation rate", justify="right")
+    utility_table.add_column("Mut/run", justify="right")
+    utility_table.add_column("Mut/tool", justify="right")
+    utility_table.add_column("No-op", justify="right")
+    if not summary.selection_utility:
+        utility_table.add_row("-", "-", "0", "0", "0", "0", "0", "-", "0.0%", "0.00", "-", "0 (0.0%)")
+    for row in summary.selection_utility:
+        utility_table.add_row(
+            row.task_name,
+            row.strategy_used,
+            str(row.runs),
+            str(row.fallback_count),
+            str(row.mutation_runs),
+            str(row.total_mutations),
+            str(row.total_tool_calls),
+            "-" if row.average_candidate_count is None else f"{row.average_candidate_count:.2f}",
+            f"{row.mutation_rate:.1%}",
+            f"{row.mutations_per_run:.2f}",
+            "-" if row.mutations_per_tool_call is None else f"{row.mutations_per_tool_call:.2f}",
+            f"{row.no_op_runs} ({row.no_op_rate:.1%})",
+        )
+    console.print(utility_table)
 
 
 def _render_stats_snapshot(
@@ -1659,12 +1649,11 @@ def admin_recent_task_runs_command(workspace_root: str | None, limit: int, json_
 def admin_task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
     """Summarize recent selection and ingest grouping strategy usage."""
     def _run(service: ManagementService) -> None:
-        payload = service.list_recent_agent_runs(limit=limit)
-        summary = _build_sampling_summary(payload)
+        summary = service.get_task_sampling_summary(limit=limit)
         if json_output:
-            click.echo(json.dumps(summary, sort_keys=True))
+            click.echo(json.dumps(summary.model_dump(), sort_keys=True))
             return
-        _render_sampling_summary(payload)
+        _render_sampling_summary(summary)
 
     _with_management_service(workspace_root, _run, workspace_id=None)
 
