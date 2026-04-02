@@ -453,6 +453,21 @@ def test_read_memory_record_service_validated_cached_hit_short_circuits_authorit
     assert ctx.retrieval_telemetry.read_calls == []
 
 
+def test_read_memory_record_service_external_compacts_large_record_and_superseded(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    read_result = _build_read_result(summary="Large authoritative record")
+    read_result.record.content = "A" * 1500
+    read_result.superseded[0].content = "B" * 900
+    read_service = ConfigurableReadService(read_result=read_result)
+    ctx = _build_context(read_cache=cache, relational_search=read_service)
+
+    response = read_memory_record_service(ctx, {"memory_id": "memory-1"})
+
+    assert response["status"] == "ok"
+    assert response["record"]["content"] == "A" * 1500
+    assert response["superseded"][0]["content"] == "B" * 900
+
+
 def test_read_memory_record_service_mismatched_token_forces_authoritative_refresh(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     cache.store_read_response(
@@ -542,6 +557,21 @@ def test_read_memory_record_service_internal_calls_bypass_validated_cache_hit_pa
     assert response["record"]["summary"] == "Fresh internal authoritative record"
     assert read_service.validation_calls == 0
     assert read_service.read_calls == 1
+
+
+def test_read_memory_record_service_internal_calls_return_full_content(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    read_result = _build_read_result(summary="Fresh internal authoritative record")
+    read_result.record.content = "A" * 1500
+    read_result.superseded[0].content = "B" * 900
+    read_service = ConfigurableReadService(read_result=read_result)
+    ctx = _build_context(read_cache=cache, relational_search=read_service)
+
+    response = read_memory_record_service(ctx, {"memory_id": "memory-1"}, caller_kind="internal")
+
+    assert response["status"] == "ok"
+    assert response["record"]["content"] == "A" * 1500
+    assert response["superseded"][0]["content"] == "B" * 900
 
 
 def test_read_memory_record_service_does_not_fallback_on_memory_not_found(tmp_path: Path) -> None:
