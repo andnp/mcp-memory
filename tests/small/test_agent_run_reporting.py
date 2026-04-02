@@ -42,6 +42,37 @@ def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:
     assert payload.ingest_audit.entry_dispositions[0].memory_id == "memory-101"
 
 
+def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None:
+    payload = build_agent_run_history_payload(
+        task_id="task-1",
+        task_name="memory-curator",
+        status="completed",
+        started_at=10.0,
+        completed_at=12.0,
+        duration_seconds=2.0,
+        error_text=None,
+        result={
+            "requested_strategy": "semantic",
+            "strategy_used": "semantic",
+            "strategy_selection_mode": "deterministic_scores",
+            "strategy_selection_reason": "selected=semantic",
+            "strategy_selection_scores": {
+                "semantic": 0.75,
+                "anomaly": 0.2,
+            },
+            "candidate_count": 8,
+        },
+        detail_level="full",
+    )
+
+    assert payload.result_metadata.requested_strategy == "semantic"
+    assert payload.result_metadata.strategy_used == "semantic"
+    assert payload.result_metadata.strategy_selection_mode == "deterministic_scores"
+    assert payload.result_metadata.strategy_selection_reason == "selected=semantic"
+    assert payload.result_metadata.strategy_selection_scores == {"semantic": 0.75, "anomaly": 0.2}
+    assert payload.result_metadata.candidate_count == 8
+
+
 def test_build_task_sampling_summary_aggregates_selection_utility_metrics() -> None:
     summary = build_task_sampling_summary(
         [

@@ -1388,6 +1388,9 @@ def test_task_recent_runs_and_sampling_summary_commands(monkeypatch, tmp_path: P
                 "merged": 1,
                 "requested_strategy": "semantic",
                 "strategy_used": "semantic",
+                "strategy_selection_mode": "deterministic_scores",
+                "strategy_selection_reason": "selected=semantic",
+                "strategy_selection_scores": {"semantic": 0.8, "anomaly": 0.2},
                 "candidate_count": 8,
                 "sampled_memory_ids": ["memory-1", "memory-2"],
             },
@@ -1406,13 +1409,16 @@ def test_task_recent_runs_and_sampling_summary_commands(monkeypatch, tmp_path: P
     finally:
         runtime.close()
 
-    recent_result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace), "--json"])
-    summary_result = runner.invoke(main, ["task", "sampling-summary", "--workspace-root", str(workspace)])
-    summary_json_result = runner.invoke(main, ["task", "sampling-summary", "--workspace-root", str(workspace), "--json"])
+    recent_result = runner.invoke(main, ["admin", "task", "recent-runs", "--workspace-root", str(workspace), "--json"])
+    summary_result = runner.invoke(main, ["admin", "task", "sampling-summary", "--workspace-root", str(workspace)])
+    summary_json_result = runner.invoke(main, ["admin", "task", "sampling-summary", "--workspace-root", str(workspace), "--json"])
 
     recent_payload = json.loads(recent_result.output)
     assert recent_result.exit_code == 0
-    assert any(run["result_metadata"]["strategy_used"] == "semantic" for run in recent_payload["runs"])
+    semantic_run = next(run for run in recent_payload["runs"] if run["result_metadata"]["strategy_used"] == "semantic")
+    assert semantic_run["result_metadata"]["strategy_selection_mode"] == "deterministic_scores"
+    assert semantic_run["result_metadata"]["strategy_selection_reason"] == "selected=semantic"
+    assert semantic_run["result_metadata"]["strategy_selection_scores"] == {"semantic": 0.8, "anomaly": 0.2}
     assert any(run["result_metadata"]["grouping_strategy_used"] == "fifo" for run in recent_payload["runs"])
     assert summary_result.exit_code == 0
     assert "Selection Strategy Usage" in summary_result.output
@@ -1574,6 +1580,9 @@ def test_task_show_returns_full_run_result_json(monkeypatch, tmp_path: Path) -> 
                 "claimed_entry_ids": [301],
                 "processed_entry_ids": [301],
                 "meaningful_actions": 1,
+                "strategy_selection_mode": "deterministic_scores",
+                "strategy_selection_reason": "selected=semantic",
+                "strategy_selection_scores": {"semantic": 0.75, "anomaly": 0.2},
                 "entry_dispositions": [
                     {
                         "entry_id": 301,
@@ -1588,12 +1597,20 @@ def test_task_show_returns_full_run_result_json(monkeypatch, tmp_path: Path) -> 
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["task", "show", "task-show-ingest", "--workspace-root", str(workspace), "--json"])
+    result = runner.invoke(main, ["admin", "task", "show", "task-show-ingest", "--workspace-root", str(workspace), "--json"])
+    human_result = runner.invoke(main, ["admin", "task", "show", "task-show-ingest", "--workspace-root", str(workspace)])
 
     payload = json.loads(result.output)
     assert result.exit_code == 0
+    assert human_result.exit_code == 0
+    assert "deterministic_scores" in human_result.output
+    assert "selected=semantic" in human_result.output
+    assert "semantic:0.75" in human_result.output
     assert payload["task"]["id"] == "task-show-ingest"
     assert payload["runs"][0]["task_id"] == "task-show-ingest"
+    assert payload["runs"][0]["result_metadata"]["strategy_selection_mode"] == "deterministic_scores"
+    assert payload["runs"][0]["result_metadata"]["strategy_selection_reason"] == "selected=semantic"
+    assert payload["runs"][0]["result_metadata"]["strategy_selection_scores"] == {"semantic": 0.75, "anomaly": 0.2}
     assert payload["runs"][0]["result"]["entry_dispositions"][0]["memory_id"] == "memory-301"
     assert payload["runs"][0]["ingest_audit"]["entry_dispositions"][0]["disposition"] == "created"
 

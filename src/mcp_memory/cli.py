@@ -856,6 +856,13 @@ def _format_run_result_metadata(metadata) -> str | None:
         parts.append(f"strategy={metadata.strategy_used}")
     if getattr(metadata, "strategy_fallback_reason", None) is not None:
         parts.append(f"strategy_fallback={metadata.strategy_fallback_reason}")
+    if getattr(metadata, "strategy_selection_mode", None) is not None:
+        parts.append(f"selector={metadata.strategy_selection_mode}")
+    if getattr(metadata, "strategy_selection_reason", None) is not None:
+        parts.append(f"selector_reason={metadata.strategy_selection_reason}")
+    selector_scores = _format_strategy_selection_scores(getattr(metadata, "strategy_selection_scores", {}), limit=2)
+    if selector_scores is not None:
+        parts.append(f"selector_scores={selector_scores}")
     if getattr(metadata, "candidate_count", None) is not None:
         parts.append(f"candidate_count={metadata.candidate_count}")
     sampled_memory_ids = getattr(metadata, "sampled_memory_ids", [])
@@ -868,6 +875,17 @@ def _format_run_result_metadata(metadata) -> str | None:
     if getattr(metadata, "group_count", None) is not None:
         parts.append(f"group_count={metadata.group_count}")
     return ", ".join(parts) if parts else None
+
+
+def _format_strategy_selection_scores(scores: dict[str, float], *, limit: int = 2) -> str | None:
+    if not scores:
+        return None
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    shown = [f"{name}:{value:.2f}" for name, value in ranked[: max(limit, 1)]]
+    remaining = len(ranked) - len(shown)
+    if remaining > 0:
+        shown.append(f"+{remaining} more")
+    return ", ".join(shown)
 
 
 def _format_ingest_audit_hint(ingest_audit) -> str | None:
@@ -918,6 +936,13 @@ def _render_recent_agent_runs_table(payload) -> None:
             selection.append(f"used={run.result_metadata.strategy_used}")
         if run.result_metadata.strategy_fallback_reason is not None:
             selection.append(f"fallback={run.result_metadata.strategy_fallback_reason}")
+        if run.result_metadata.strategy_selection_mode is not None:
+            selection.append(f"selector={run.result_metadata.strategy_selection_mode}")
+        if run.result_metadata.strategy_selection_reason is not None:
+            selection.append(f"why={run.result_metadata.strategy_selection_reason}")
+        selector_scores = _format_strategy_selection_scores(run.result_metadata.strategy_selection_scores, limit=2)
+        if selector_scores is not None:
+            selection.append(f"scores={selector_scores}")
         if run.result_metadata.candidate_count is not None:
             selection.append(f"candidates={run.result_metadata.candidate_count}")
         if run.result_metadata.requested_grouping_strategy is not None:
@@ -968,6 +993,9 @@ def _render_task_detail(payload) -> None:
         console.print(
             f"status={run.status} completed={_format_timestamp(run.completed_at)} duration={run.duration_seconds:.2f}s error={run.error_text or '-'}"
         )
+        metadata_text = _format_run_result_metadata(run.result_metadata)
+        if metadata_text is not None:
+            console.print(f"metadata={metadata_text}")
         ingest_hint = _format_ingest_audit_hint(run.ingest_audit)
         if ingest_hint is not None:
             console.print(f"ingest:\n{ingest_hint}")

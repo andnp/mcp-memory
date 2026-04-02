@@ -285,6 +285,9 @@ class RunResultMetadataPayload(BaseModel):
     requested_strategy: str | None = None
     strategy_used: str | None = None
     strategy_fallback_reason: str | None = None
+    strategy_selection_mode: str | None = None
+    strategy_selection_reason: str | None = None
+    strategy_selection_scores: dict[str, float] = Field(default_factory=dict)
     candidate_count: int | None = None
     sampled_memory_ids: list[str] = Field(default_factory=list)
     compatibility_group: str | None = None

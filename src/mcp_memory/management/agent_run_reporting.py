@@ -254,6 +254,9 @@ def extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataP
         requested_strategy=_coerce_str(result.get("requested_strategy")),
         strategy_used=_coerce_str(result.get("strategy_used")),
         strategy_fallback_reason=_coerce_str(result.get("strategy_fallback_reason")),
+        strategy_selection_mode=_coerce_str(result.get("strategy_selection_mode")),
+        strategy_selection_reason=_coerce_str(result.get("strategy_selection_reason")),
+        strategy_selection_scores=_coerce_score_mapping(result.get("strategy_selection_scores")),
         candidate_count=_coerce_int(result.get("candidate_count")),
         sampled_memory_ids=[str(item) for item in sampled_memory_ids] if isinstance(sampled_memory_ids, list) else [],
         compatibility_group=_coerce_str(result.get("compatibility_group")),
@@ -347,6 +350,20 @@ def _coerce_str_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _coerce_score_mapping(value: object) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    scores: dict[str, float] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, (int, float)):
+            scores[key] = float(item)
+    return scores
 
 
 def _coerce_ingest_entry_dispositions(value: object) -> list[IngestEntryDispositionPayload]:
