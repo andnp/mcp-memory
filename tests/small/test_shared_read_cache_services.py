@@ -1391,6 +1391,74 @@ def test_search_memory_records_service_coalesces_concurrent_identical_external_r
     assert snapshot.warmed_projection_rows == 1
 
 
+def test_shared_read_cache_wait_for_inflight_search_times_out_for_unfinished_leader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    monkeypatch.setattr(
+        "mcp_memory.storage.shared_read_cache._INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    leader = cache.begin_inflight_search(request)
+    follower = cache.begin_inflight_search(request)
+
+    assert leader.is_leader is True
+    assert follower.is_leader is False
+    with pytest.raises(TimeoutError, match="Timed out waiting for in-flight shared read-cache search"):
+        cache.wait_for_inflight_search(follower)
+
+
+def test_shared_read_cache_timeout_evicts_stale_inflight_entry_so_later_request_can_lead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="warm cache",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    monkeypatch.setattr(
+        "mcp_memory.storage.shared_read_cache._INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    original_leader = cache.begin_inflight_search(request)
+    stale_follower = cache.begin_inflight_search(request)
+
+    with pytest.raises(TimeoutError, match="Timed out waiting for in-flight shared read-cache search"):
+        cache.wait_for_inflight_search(stale_follower)
+
+    replacement_leader = cache.begin_inflight_search(request)
+    replacement_follower = cache.begin_inflight_search(request)
+    payload = {"status": "ok", "results": []}
+
+    assert replacement_leader.is_leader is True
+    assert replacement_follower.is_leader is False
+
+    cache.finish_inflight_search(replacement_leader, payload=payload)
+
+    assert cache.wait_for_inflight_search(replacement_follower) == payload
+
+    cache.finish_inflight_search(original_leader, payload={"status": "ok", "results": ["stale"]})
+    assert cache.begin_inflight_search(request).is_leader is True
+
+
 def test_search_memory_records_service_coalesced_authoritative_failure_preserves_stale_fallbacks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

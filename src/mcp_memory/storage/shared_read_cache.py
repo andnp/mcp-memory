@@ -16,6 +16,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 _CACHE_SCHEMA_VERSION = 1
 _RECENT_CACHE_METRICS_WINDOW_MINUTES = 15
+_INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS = 1.0
 _METRIC_COLUMNS = (
     "search_requests",
     "fresh_exact_search_hits",
@@ -95,6 +96,7 @@ class SharedReadCacheProjectionEntry:
 
 @dataclass
 class _SharedReadCacheInFlightSearchState:
+    created_at: float = field(default_factory=time)
     completed: Event = field(default_factory=Event)
     payload: dict[str, Any] | None = None
     error: Exception | None = None
@@ -197,7 +199,18 @@ class SharedReadCache:
         return SharedReadCacheInFlightSearch(cache_key=cache_key, is_leader=False, _state=state)
 
     def wait_for_inflight_search(self, entry: SharedReadCacheInFlightSearch) -> dict[str, Any]:
-        entry._state.completed.wait()
+        if not entry._state.completed.wait(timeout=_INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS):
+            with self._inflight_searches_lock:
+                current = self._inflight_searches.get(entry.cache_key)
+                if (
+                    current is entry._state
+                    and current.payload is None
+                    and current.error is None
+                    and not current.completed.is_set()
+                    and (time() - current.created_at) >= _INFLIGHT_SEARCH_FOLLOWER_WAIT_TIMEOUT_SECONDS
+                ):
+                    self._inflight_searches.pop(entry.cache_key, None)
+            raise TimeoutError("Timed out waiting for in-flight shared read-cache search")
         if entry._state.payload is not None:
             return entry._state.payload
         if entry._state.error is not None:
