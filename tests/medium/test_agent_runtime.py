@@ -1860,7 +1860,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 10}
+    assert queue.count_by_status() == {"pending": 9}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
     assert queue.find_open_task(CURATOR_FRONTIER_TASK_NAME, None) is None
@@ -1869,7 +1869,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
     assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is None
-    assert queue.find_open_task(TAG_NORMALIZER_TASK_NAME, None) is not None
+    assert queue.find_open_task(TAG_NORMALIZER_TASK_NAME, None) is None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
@@ -1893,7 +1893,7 @@ def test_low_yield_deterministic_tasks_use_slower_recurring_cadence() -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[TAG_NORMALIZER_TASK_NAME] == 1800.0
     assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
     assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[TAG_NORMALIZER_TASK_NAME] == 1800.0
+    assert TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
 
 def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
@@ -1901,6 +1901,7 @@ def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_task
     assert GRAPH_LINK_DISCOVERY_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
 
 @pytest.mark.asyncio
