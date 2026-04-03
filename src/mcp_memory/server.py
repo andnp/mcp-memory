@@ -79,28 +79,42 @@ class MCPServer:
     def _request_json(self, path: str, payload: dict | None):
         if self._daemon is None:
             raise RuntimeError("daemon_not_started")
+        request_payload = self._request_payload(payload)
+        return request_daemon_json(self._daemon, path, request_payload)
+
+    def _request_payload(self, payload: dict | None) -> dict | None:
         request_payload = None if payload is None else dict(payload)
         if request_payload is not None:
             if self.workspace_root is not None:
                 request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
             if self._session_id is not None:
                 request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
-        return request_daemon_json(self._daemon, path, request_payload)
+        return request_payload
 
     def _request_json_with_recovery(self, path: str, payload: dict | None):
+        max_attempts = _REQUEST_RECOVERY_RETRY_COUNT + 1
         for attempt_index in range(_REQUEST_RECOVERY_RETRY_COUNT + 1):
             try:
                 return self._request_json(path, payload)
-            except (OSError, TimeoutError):
+            except (OSError, TimeoutError, ValueError) as exc:
                 if attempt_index >= _REQUEST_RECOVERY_RETRY_COUNT:
                     raise
+                logger.warning(
+                    "Daemon request failed; refreshing daemon metadata before retry",
+                    extra={
+                        "path": path,
+                        "attempt": attempt_index + 1,
+                        "max_attempts": max_attempts,
+                        "error": str(exc),
+                    },
+                )
                 self._daemon = ensure_daemon_started(self.workspace_root, None)
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:
             return
         try:
-            self._request_json(
+            self._request_json_with_recovery(
                 f"/api/hooks/{event_name}",
                 {
                     "session_id": self._session_id,

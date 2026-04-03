@@ -65,7 +65,7 @@ def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> 
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
 
-    result = server._request_json("/internal/tools/search_memory_records", {"query": "auth"})
+    result = server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"})
 
     assert result == {"status": "ok"}
     assert captured["metadata"] is server._daemon
@@ -76,6 +76,103 @@ def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> 
         "__session_id": "session-123",
     }
     assert captured["timeout_seconds"] is None
+
+
+def test_mcp_server_request_json_refreshes_daemon_metadata_after_timeout(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    stale_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4242,
+        pid=1,
+        started_at=0.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-stale.sock",
+    )
+    fresh_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4343,
+        pid=2,
+        started_at=1.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-fresh.sock",
+    )
+    server._daemon = stale_metadata
+    server._session_id = "session-123"
+
+    request_calls: list[int] = []
+    ensure_calls: list[str | None] = []
+
+    def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        del timeout_seconds
+        request_calls.append(metadata.pid)
+        assert path == "/internal/tools/search_memory_records"
+        assert payload == {
+            "query": "auth",
+            "__workspace_root": "demo-workspace",
+            "__session_id": "session-123",
+        }
+        if metadata.pid == stale_metadata.pid:
+            raise TimeoutError("daemon_request_timed_out")
+        return {"status": "ok", "metadata_pid": metadata.pid}
+
+    def _fake_ensure_daemon_started(workspace_root, cwd=None):
+        del cwd
+        ensure_calls.append(workspace_root)
+        return fresh_metadata
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", _fake_ensure_daemon_started)
+
+    result = server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"})
+
+    assert result == {"status": "ok", "metadata_pid": fresh_metadata.pid}
+    assert request_calls == [stale_metadata.pid, fresh_metadata.pid]
+    assert ensure_calls == ["demo-workspace"]
+    assert server._daemon == fresh_metadata
+
+
+def test_mcp_server_request_json_raises_after_bounded_retries(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    initial_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4242,
+        pid=1,
+        started_at=0.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-initial.sock",
+    )
+    refreshed_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4343,
+        pid=2,
+        started_at=1.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-refreshed.sock",
+    )
+    server._daemon = initial_metadata
+
+    request_calls: list[int] = []
+    ensure_calls: list[str | None] = []
+
+    def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        del path, payload, timeout_seconds
+        request_calls.append(metadata.pid)
+        raise TimeoutError("daemon_request_timed_out")
+
+    def _fake_ensure_daemon_started(workspace_root, cwd=None):
+        del cwd
+        ensure_calls.append(workspace_root)
+        return refreshed_metadata
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", _fake_ensure_daemon_started)
+
+    with pytest.raises(TimeoutError, match="daemon_request_timed_out"):
+        server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"})
+
+    assert request_calls == [initial_metadata.pid, refreshed_metadata.pid, refreshed_metadata.pid]
+    assert ensure_calls == ["demo-workspace", "demo-workspace"]
+    assert server._daemon == refreshed_metadata
 
 
 def test_context_for_request_copies_session_id_and_workspace_root(tmp_path) -> None:
@@ -180,8 +277,13 @@ def test_mcp_server_session_hook_failure_logs_transport_health_snapshot(monkeypa
     with caplog.at_level(logging.WARNING, logger="mcp_memory.server"):
         server._send_session_hook("session-start")
 
-    assert [path for path, _payload, _timeout in calls] == ["/api/hooks/session-start", "/internal/health"]
-    assert calls[1][2] == 0.2
+    assert [path for path, _payload, _timeout in calls] == [
+        "/api/hooks/session-start",
+        "/api/hooks/session-start",
+        "/api/hooks/session-start",
+        "/internal/health",
+    ]
+    assert calls[-1][2] == 0.2
     record = caplog.records[-1]
     assert record.session_id == "session-123"
     assert record.event_name == "session-start"
