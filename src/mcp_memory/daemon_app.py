@@ -290,7 +290,7 @@ def create_daemon_app(
             if worker is not None:
                 await worker.stop(spec.config.daemon.shutdown_grace_seconds)
             runtime.close()
-            remove_metadata(metadata_path)
+            remove_metadata(metadata_path, expected_pid=os.getpid())
             runtime_lock.release()
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)

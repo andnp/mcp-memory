@@ -15,7 +15,7 @@ from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
-from mcp_memory.daemon_process import DaemonSpawnDetails, is_daemon_healthy, spawn_daemon_process
+from mcp_memory.daemon_process import DaemonSpawnDetails, is_daemon_healthy, remove_metadata, spawn_daemon_process
 
 
 pytestmark = pytest.mark.medium
@@ -106,6 +106,30 @@ def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, t
 
 def test_read_daemon_metadata_returns_none_for_missing_file(tmp_path: Path) -> None:
     assert read_daemon_metadata(tmp_path / "missing.json") is None
+
+
+def test_remove_metadata_preserves_newer_daemon_registration(tmp_path: Path) -> None:
+    metadata_path = tmp_path / "daemon-metadata.json"
+    metadata_path.write_text(
+        __import__("json").dumps(
+            DaemonMetadata(
+                host="127.0.0.1",
+                port=8123,
+                pid=222,
+                started_at=2.0,
+                status="ready",
+            ).__dict__
+        ),
+        encoding="utf-8",
+    )
+
+    removed = remove_metadata(metadata_path, expected_pid=111)
+
+    assert removed is False
+    assert metadata_path.exists()
+    preserved = read_daemon_metadata(metadata_path)
+    assert preserved is not None
+    assert preserved.pid == 222
 
 
 def test_is_process_running_treats_zombies_as_stopped(monkeypatch) -> None:

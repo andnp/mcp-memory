@@ -91,11 +91,16 @@ def write_metadata(metadata_path: Path, metadata: DaemonMetadata) -> None:
     metadata_path.write_text(json.dumps(asdict(metadata), sort_keys=True), encoding="utf-8")
 
 
-def remove_metadata(metadata_path: Path) -> None:
+def remove_metadata(metadata_path: Path, *, expected_pid: int | None = None) -> bool:
+    if expected_pid is not None:
+        current = read_daemon_metadata(metadata_path)
+        if current is not None and current.pid != expected_pid:
+            return False
     try:
         metadata_path.unlink()
     except FileNotFoundError:
-        return
+        return False
+    return True
 
 
 def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
