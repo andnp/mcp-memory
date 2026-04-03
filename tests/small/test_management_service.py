@@ -145,6 +145,8 @@ def test_management_service_task_sampling_summary_aggregates_recent_run_utility(
         run_result={
             "strategy_used": "semantic",
             "strategy_fallback_reason": "insufficient_candidates",
+            "strategy_selection_mode": "utility_priors",
+            "strategy_selection_reason": "utility prior tie-break",
             "candidate_count": 6,
             "tool_calls_executed": 4,
             "mutations": 2,
@@ -157,6 +159,8 @@ def test_management_service_task_sampling_summary_aggregates_recent_run_utility(
         completed_at=15.0,
         run_result={
             "strategy_used": "semantic",
+            "strategy_selection_mode": "deterministic_scores",
+            "strategy_selection_reason": "selected=semantic from deterministic scores",
             "candidate_count": 4,
             "tool_calls_executed": 1,
             "mutations": 0,
@@ -205,6 +209,26 @@ def test_management_service_task_sampling_summary_aggregates_recent_run_utility(
     ] == [
         ("graph-linker", "lexical", 1, 0, 1, 1, 2, 5.0, 1.0, 1.0, 0.5, 0, 0.0),
         ("memory-curator", "semantic", 2, 1, 1, 2, 5, 5.0, 0.5, 1.0, 0.4, 1, 0.5),
+    ]
+    assert [
+        (
+            row.task_name,
+            row.strategy_selection_mode,
+            row.strategy_used,
+            row.reason_family,
+            row.runs,
+            row.fallback_count,
+            row.total_mutations,
+            row.total_tool_calls,
+            row.average_candidate_count,
+            row.no_op_runs,
+            row.no_op_rate,
+        )
+        for row in summary.selector_behavior
+    ] == [
+        ("graph-linker", "unspecified", "lexical", "unknown", 1, 0, 1, 2, 5.0, 0, 0.0),
+        ("memory-curator", "deterministic_scores", "semantic", "deterministic_signals", 1, 0, 0, 1, 4.0, 1, 1.0),
+        ("memory-curator", "utility_priors", "semantic", "fallback", 1, 1, 2, 4, 6.0, 0, 0.0),
     ]
 
 

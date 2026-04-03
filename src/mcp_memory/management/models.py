@@ -408,10 +408,29 @@ class SelectionStrategyUtilityPayload(BaseModel):
     no_op_rate: float = 0.0
 
 
+class SelectorBehaviorSummaryPayload(BaseModel):
+    task_name: str
+    strategy_selection_mode: str
+    strategy_used: str
+    reason_family: str
+    runs: int = 0
+    fallback_count: int = 0
+    mutation_runs: int = 0
+    total_mutations: int = 0
+    total_tool_calls: int = 0
+    average_candidate_count: float | None = None
+    mutation_rate: float = 0.0
+    mutations_per_run: float = 0.0
+    mutations_per_tool_call: float | None = None
+    no_op_runs: int = 0
+    no_op_rate: float = 0.0
+
+
 class TaskSamplingSummaryPayload(BaseModel):
     selection: list[SamplingSummaryRowPayload] = Field(default_factory=list)
     grouping: list[SamplingSummaryRowPayload] = Field(default_factory=list)
     selection_utility: list[SelectionStrategyUtilityPayload] = Field(default_factory=list)
+    selector_behavior: list[SelectorBehaviorSummaryPayload] = Field(default_factory=list)
 
 
 class RuntimeLogPayload(BaseModel):

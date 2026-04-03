@@ -231,6 +231,7 @@ def test_admin_task_sampling_summary_uses_management_summary_helper(monkeypatch)
                 selection=[],
                 grouping=[],
                 selection_utility=[],
+                selector_behavior=[],
             )
 
     def fake_with_management_service(workspace_root: str | None, action, *, workspace_id=...) -> None:
@@ -246,7 +247,7 @@ def test_admin_task_sampling_summary_uses_management_summary_helper(monkeypatch)
     )
 
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == '{"grouping": [], "selection": [], "selection_utility": []}'
+    assert result.output.strip() == '{"grouping": [], "selection": [], "selection_utility": [], "selector_behavior": []}'
     assert captured == {
         "workspace_root": "/tmp/demo",
         "workspace_id": None,

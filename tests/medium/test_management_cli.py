@@ -1423,12 +1423,16 @@ def test_task_recent_runs_and_sampling_summary_commands(monkeypatch, tmp_path: P
     assert summary_result.exit_code == 0
     assert "Selection Strategy Usage" in summary_result.output
     assert "Ingest Grouping Strategy Usage" in summary_result.output
+    assert "Selector Behavior by Recent Runs" in summary_result.output
+    assert "deterministic_scores" in summary_result.output
     assert "semantic" in summary_result.output
     assert "fifo" in summary_result.output
     summary_payload = json.loads(summary_json_result.output)
     assert summary_json_result.exit_code == 0
     assert summary_payload["selection"][0]["name"] == "semantic"
     assert summary_payload["grouping"][0]["name"] == "fifo"
+    assert summary_payload["selector_behavior"][0]["reason_family"] == "deterministic_signals"
+    assert summary_payload["selector_behavior"][0]["strategy_selection_mode"] == "deterministic_scores"
 
 
 def test_task_recent_runs_json_preserves_ingest_audit_metadata(monkeypatch, tmp_path: Path) -> None:

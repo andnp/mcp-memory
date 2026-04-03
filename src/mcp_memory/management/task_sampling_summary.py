@@ -6,6 +6,7 @@ from typing import Iterable
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
     SamplingSummaryRowPayload,
+    SelectorBehaviorSummaryPayload,
     SelectionStrategyUtilityPayload,
     TaskSamplingSummaryPayload,
 )
@@ -17,6 +18,8 @@ UTILITY_PRIOR_MUTATIONS_PER_RUN_WEIGHT = 0.30
 UTILITY_PRIOR_MUTATIONS_PER_TOOL_CALL_WEIGHT = 0.15
 UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT = 0.20
 UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE = 2.0
+UNKNOWN_SELECTOR_MODE = "unspecified"
+UNKNOWN_SELECTOR_STRATEGY = "unknown"
 
 
 @dataclass
@@ -41,10 +44,27 @@ class _UtilityAccumulator:
     no_op_runs: int = 0
 
 
+@dataclass
+class _SelectorBehaviorAccumulator:
+    task_name: str
+    strategy_selection_mode: str
+    strategy_used: str
+    reason_family: str
+    runs: int = 0
+    fallback_count: int = 0
+    mutation_runs: int = 0
+    total_mutations: int = 0
+    total_tool_calls: int = 0
+    candidate_count_total: int = 0
+    candidate_count_observations: int = 0
+    no_op_runs: int = 0
+
+
 def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskSamplingSummaryPayload:
     selection_rows: dict[str, _UsageAccumulator] = {}
     grouping_rows: dict[str, _UsageAccumulator] = {}
     utility_rows: dict[tuple[str, str], _UtilityAccumulator] = {}
+    selector_behavior_rows: dict[tuple[str, str, str, str], _SelectorBehaviorAccumulator] = {}
 
     for run in runs:
         metadata = run.result_metadata
@@ -77,6 +97,41 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
             if metadata.candidate_count is not None:
                 utility_row.candidate_count_total += metadata.candidate_count
                 utility_row.candidate_count_observations += 1
+
+        if _has_selector_behavior_signal(metadata):
+            selector_mode = metadata.strategy_selection_mode or UNKNOWN_SELECTOR_MODE
+            strategy_used = metadata.strategy_used or UNKNOWN_SELECTOR_STRATEGY
+            selector_key = (
+                run.task_name,
+                selector_mode,
+                strategy_used,
+                _derive_selector_reason_family(metadata),
+            )
+            selector_row = selector_behavior_rows.setdefault(
+                selector_key,
+                _SelectorBehaviorAccumulator(
+                    task_name=run.task_name,
+                    strategy_selection_mode=selector_mode,
+                    strategy_used=strategy_used,
+                    reason_family=selector_key[3],
+                ),
+            )
+            selector_row.runs += 1
+            if metadata.strategy_fallback_reason is not None:
+                selector_row.fallback_count += 1
+
+            mutation_count = metadata.mutations or 0
+            tool_call_count = metadata.tool_calls_executed or 0
+            selector_row.total_mutations += mutation_count
+            selector_row.total_tool_calls += tool_call_count
+            if mutation_count > 0:
+                selector_row.mutation_runs += 1
+            else:
+                selector_row.no_op_runs += 1
+
+            if metadata.candidate_count is not None:
+                selector_row.candidate_count_total += metadata.candidate_count
+                selector_row.candidate_count_observations += 1
 
         if metadata.grouping_strategy_used is not None:
             grouping_row = grouping_rows.setdefault(
@@ -124,6 +179,35 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 no_op_rate=_safe_ratio(row.no_op_runs, row.runs) or 0.0,
             )
             for row in sorted(utility_rows.values(), key=lambda item: (item.task_name, -item.runs, item.strategy_used))
+        ],
+        selector_behavior=[
+            SelectorBehaviorSummaryPayload(
+                task_name=row.task_name,
+                strategy_selection_mode=row.strategy_selection_mode,
+                strategy_used=row.strategy_used,
+                reason_family=row.reason_family,
+                runs=row.runs,
+                fallback_count=row.fallback_count,
+                mutation_runs=row.mutation_runs,
+                total_mutations=row.total_mutations,
+                total_tool_calls=row.total_tool_calls,
+                average_candidate_count=_safe_ratio(row.candidate_count_total, row.candidate_count_observations),
+                mutation_rate=_safe_ratio(row.mutation_runs, row.runs) or 0.0,
+                mutations_per_run=_safe_ratio(row.total_mutations, row.runs) or 0.0,
+                mutations_per_tool_call=_safe_ratio(row.total_mutations, row.total_tool_calls),
+                no_op_runs=row.no_op_runs,
+                no_op_rate=_safe_ratio(row.no_op_runs, row.runs) or 0.0,
+            )
+            for row in sorted(
+                selector_behavior_rows.values(),
+                key=lambda item: (
+                    item.task_name,
+                    -item.runs,
+                    item.strategy_selection_mode,
+                    item.strategy_used,
+                    item.reason_family,
+                ),
+            )
         ],
     )
 
@@ -178,6 +262,42 @@ def _utility_prior_score(row: SelectionStrategyUtilityPayload) -> float:
 
 def _clamp01(value: float) -> float:
     return min(max(value, 0.0), 1.0)
+
+
+def _has_selector_behavior_signal(metadata) -> bool:
+    return any(
+        (
+            metadata.strategy_used is not None,
+            metadata.requested_strategy is not None,
+            metadata.strategy_selection_mode is not None,
+            metadata.strategy_selection_reason is not None,
+            metadata.strategy_fallback_reason is not None,
+        )
+    )
+
+
+def _derive_selector_reason_family(metadata) -> str:
+    if metadata.strategy_fallback_reason is not None:
+        return "fallback"
+
+    mode = (metadata.strategy_selection_mode or "").strip().lower()
+    reason = (metadata.strategy_selection_reason or "").strip().lower()
+
+    if mode == "requested_strategy" or "requested=" in reason or "requested strategy" in reason:
+        return "requested"
+    if any(token in mode for token in ("seed", "random", "roulette")) or any(
+        token in reason for token in ("seed", "random", "roulette")
+    ):
+        return "seeded_random"
+    if any(token in mode for token in ("utility", "prior")) or any(token in reason for token in ("utility", "prior")):
+        return "utility_priors"
+    if any(token in mode for token in ("deterministic", "score", "signal")) or any(
+        token in reason for token in ("deterministic", "score", "signal")
+    ):
+        return "deterministic_signals"
+    if "fallback" in reason:
+        return "fallback"
+    return "unknown"
 
 
 def _safe_ratio(numerator: int, denominator: int) -> float | None:

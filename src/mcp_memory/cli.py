@@ -1165,6 +1165,36 @@ def _render_sampling_summary(summary) -> None:
         )
     console.print(utility_table)
 
+    selector_table = Table(title="Selector Behavior by Recent Runs")
+    selector_table.add_column("Task", no_wrap=True)
+    selector_table.add_column("Selector mode", no_wrap=True)
+    selector_table.add_column("Strategy", no_wrap=True)
+    selector_table.add_column("Reason family", no_wrap=True)
+    selector_table.add_column("Runs", justify="right")
+    selector_table.add_column("Fallbacks", justify="right")
+    selector_table.add_column("Mutation runs", justify="right")
+    selector_table.add_column("Total mutations", justify="right")
+    selector_table.add_column("Tool calls", justify="right")
+    selector_table.add_column("Avg candidates", justify="right")
+    selector_table.add_column("No-op", justify="right")
+    if not summary.selector_behavior:
+        selector_table.add_row("-", "-", "-", "-", "0", "0", "0", "0", "0", "-", "0 (0.0%)")
+    for row in summary.selector_behavior:
+        selector_table.add_row(
+            row.task_name,
+            row.strategy_selection_mode,
+            row.strategy_used,
+            row.reason_family,
+            str(row.runs),
+            str(row.fallback_count),
+            str(row.mutation_runs),
+            str(row.total_mutations),
+            str(row.total_tool_calls),
+            "-" if row.average_candidate_count is None else f"{row.average_candidate_count:.2f}",
+            f"{row.no_op_runs} ({row.no_op_rate:.1%})",
+        )
+    console.print(selector_table)
+
 
 def _render_stats_snapshot(
     health,
