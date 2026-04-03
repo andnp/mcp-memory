@@ -50,6 +50,7 @@ from mcp_memory.core.agent_runtime import (
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult
+from mcp_memory.core.sampling import SamplingBatch
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.task_handlers.maintenance import (
@@ -6560,6 +6561,86 @@ async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch
         assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
         assert record.id not in provider.prompts[0]
         assert "exclude_memory_ids" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_direct_sampling_packetizes_support_records_without_claimed_review_work(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            del prompt
+            return AgenticRunResult(status="success", summary="Curator completed direct sampled maintenance via MCP tools.")
+
+    try:
+        seed = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        support = runtime.repository.create_memory(
+            title="Architecture observation",
+            content="Related architecture note for the same oversized topic.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["architecture"],
+        )
+        assert seed is not None and support is not None
+
+        def _seed_only_batch(ctx: ApplicationContext, task: TaskRecord, **kwargs) -> SamplingBatch:
+            del ctx, task, kwargs
+            return SamplingBatch(
+                requested_strategy="anomaly",
+                strategy_used="anomaly",
+                strategy_fallback_reason=None,
+                candidate_count=2,
+                records=[seed],
+            )
+
+        monkeypatch.setattr(_curator_support, "select_curator_seed_batch", _seed_only_batch)
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-direct-packetization-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=95,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            _AgenticProvider(),
+        )
+
+        assert result["summary"] == "Curator completed direct sampled maintenance via MCP tools."
+        assert result["claimed_work_item_count"] == 0
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["seed_source"] == "sampled_frontier"
+        assert result["sampled_memory_ids"] == [seed.id]
+        assert set(result["seed_memory_ids"]) == {seed.id, support.id}
+        assert result["seed_record_count"] == 2
     finally:
         runtime.close()
 

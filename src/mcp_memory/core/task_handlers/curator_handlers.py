@@ -58,6 +58,11 @@ async def handle_memory_curator_task(
         seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
         seed_records = seed_batch.records
 
+    sampled_records = seed_records
+    if claimed_review_item is None:
+        support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
+        seed_records = sampled_records + support_records
+
     work_item_metadata = work_item_result_metadata(
         family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
@@ -76,7 +81,8 @@ async def handle_memory_curator_task(
     if not seed_records:
         return sampling_payload(
             seed_batch,
-            sampled_records=seed_records,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
             extra=work_item_metadata,
             summary=None,
             tool_calls_executed=0,
@@ -123,7 +129,7 @@ async def handle_memory_curator_task(
         )
         return sampling_payload(
             seed_batch,
-            sampled_records=seed_records,
+            sampled_records=sampled_records,
             seed_records=seed_records,
             extra=work_item_metadata,
             summary=normalized_agentic["summary"],
@@ -190,7 +196,7 @@ async def handle_memory_curator_task(
     )
     return sampling_payload(
         seed_batch,
-        sampled_records=seed_records,
+        sampled_records=sampled_records,
         seed_records=seed_records,
         extra=work_item_metadata,
         summary=summary,
