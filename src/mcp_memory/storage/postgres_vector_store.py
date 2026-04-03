@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import time
 
 from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
+
+
+@dataclass(frozen=True)
+class PostgresVectorSearchCapabilities:
+    pgvector_extension_installed: bool
+    embedding_vector_column_present: bool
+
+    @property
+    def server_side_vector_search_available(self) -> bool:
+        return self.pgvector_extension_installed and self.embedding_vector_column_present
 
 
 def _coerce_float(value: object) -> float:
@@ -17,11 +28,58 @@ def _coerce_float(value: object) -> float:
     raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
+def _format_vector_literal(embedding: list[float]) -> str:
+    return "[" + ",".join(str(float(value)) for value in embedding) + "]"
+
+
 class PostgresVectorStore:
     supports_candidate_filtering = True
 
     def __init__(self, session_manager: SessionManager[DbConnectionLike] | None) -> None:
         self._sessions = session_manager
+        self._search_capabilities: PostgresVectorSearchCapabilities | None = None
+
+    def _get_search_capabilities(self) -> PostgresVectorSearchCapabilities:
+        cached = self._search_capabilities
+        if cached is not None:
+            return cached
+        if self._sessions is None:
+            capabilities = PostgresVectorSearchCapabilities(
+                pgvector_extension_installed=False,
+                embedding_vector_column_present=False,
+            )
+            self._search_capabilities = capabilities
+            return capabilities
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_extension
+                        WHERE extname = 'vector'
+                    )
+                    """
+                )
+                extension_row = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'embeddings'
+                          AND column_name = 'embedding_vector'
+                    )
+                    """
+                )
+                column_row = cursor.fetchone()
+        capabilities = PostgresVectorSearchCapabilities(
+            pgvector_extension_installed=bool(extension_row and extension_row[0]),
+            embedding_vector_column_present=bool(column_row and column_row[0]),
+        )
+        self._search_capabilities = capabilities
+        return capabilities
 
     def upsert(
         self,
@@ -34,28 +92,56 @@ class PostgresVectorStore:
     ) -> None:
         if self._sessions is None:
             return
+        normalized_embedding = [float(value) for value in embedding]
+        payload_json = json.dumps(normalized_embedding)
+        updated_at = time.time()
+        capabilities = self._get_search_capabilities()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO embeddings (
-                        source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-                    ON CONFLICT (source_kind, source_id, model_name)
-                    DO UPDATE SET
-                        workspace_id = EXCLUDED.workspace_id,
-                        embedding_json = EXCLUDED.embedding_json,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        source_kind,
-                        source_id,
-                        workspace_id,
-                        model_name,
-                        json.dumps(embedding),
-                        time.time(),
-                    ),
-                )
+                if capabilities.server_side_vector_search_available:
+                    cursor.execute(
+                        """
+                        INSERT INTO embeddings (
+                            source_kind, source_id, workspace_id, model_name, embedding_json, embedding_vector, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s::jsonb, CAST(%s AS vector), %s)
+                        ON CONFLICT (source_kind, source_id, model_name)
+                        DO UPDATE SET
+                            workspace_id = EXCLUDED.workspace_id,
+                            embedding_json = EXCLUDED.embedding_json,
+                            embedding_vector = EXCLUDED.embedding_vector,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (
+                            source_kind,
+                            source_id,
+                            workspace_id,
+                            model_name,
+                            payload_json,
+                            _format_vector_literal(normalized_embedding),
+                            updated_at,
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO embeddings (
+                            source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+                        ON CONFLICT (source_kind, source_id, model_name)
+                        DO UPDATE SET
+                            workspace_id = EXCLUDED.workspace_id,
+                            embedding_json = EXCLUDED.embedding_json,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (
+                            source_kind,
+                            source_id,
+                            workspace_id,
+                            model_name,
+                            payload_json,
+                            updated_at,
+                        ),
+                    )
             connection.commit()
 
     def get(
@@ -137,9 +223,51 @@ class PostgresVectorStore:
     ) -> list[tuple[str, float]]:
         if self._sessions is None:
             return []
+        capabilities = self._get_search_capabilities()
         normalized_candidate_ids = [candidate_id for candidate_id in (candidate_ids or []) if candidate_id]
         if candidate_ids is not None and not normalized_candidate_ids:
             return []
+        if capabilities.server_side_vector_search_available:
+            query_vector = _format_vector_literal(query_embedding)
+            query = (
+                "SELECT source_id, 1 - (embedding_vector <=> CAST(%s AS vector)) AS score "
+                "FROM embeddings WHERE source_kind = %s AND model_name = %s "
+                "AND embedding_vector IS NOT NULL"
+            )
+            params: list[object] = [query_vector, source_kind, model_name]
+            if workspace_id is not None:
+                query += " AND workspace_id = %s"
+                params.append(workspace_id)
+            if normalized_candidate_ids:
+                query += " AND source_id = ANY(%s::text[])"
+                params.append(normalized_candidate_ids)
+            query += " ORDER BY embedding_vector <=> CAST(%s AS vector) LIMIT %s"
+            params.extend((query_vector, limit))
+            fetch_started = time.perf_counter()
+            with self._sessions.open_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(query, tuple(params))
+                    rows = cursor.fetchall()
+            fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
+            scored = [(str(row[0]), _coerce_float(row[1])) for row in rows]
+            if diagnostics is not None:
+                diagnostics.update(
+                    {
+                        "backend": "postgres",
+                        "row_count": len(rows),
+                        "candidate_filter_count": len(normalized_candidate_ids),
+                        "search_mode": "server_side_pgvector",
+                        "pgvector_extension_installed": capabilities.pgvector_extension_installed,
+                        "embedding_vector_column_present": capabilities.embedding_vector_column_present,
+                        "server_side_vector_search_available": capabilities.server_side_vector_search_available,
+                        "raw_type_counts": {},
+                        "fetch_ms": round(fetch_ms, 3),
+                        "decode_ms": 0.0,
+                        "score_ms": 0.0,
+                        "sort_ms": 0.0,
+                    }
+                )
+            return scored
         query = "SELECT source_id, embedding_json FROM embeddings WHERE source_kind = %s AND model_name = %s"
         params: list[object] = [source_kind, model_name]
         if workspace_id is not None:
@@ -184,6 +312,10 @@ class PostgresVectorStore:
                     "backend": "postgres",
                     "row_count": len(rows),
                     "candidate_filter_count": len(normalized_candidate_ids),
+                    "search_mode": "client_python_fallback",
+                    "pgvector_extension_installed": capabilities.pgvector_extension_installed,
+                    "embedding_vector_column_present": capabilities.embedding_vector_column_present,
+                    "server_side_vector_search_available": capabilities.server_side_vector_search_available,
                     "raw_type_counts": raw_type_counts,
                     "fetch_ms": round(fetch_ms, 3),
                     "decode_ms": round(decode_ms, 3),

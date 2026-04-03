@@ -37,22 +37,53 @@ class PostgresRelationalMemoryRepository:
         )
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        normalized_ids = self._normalize_values(memory_ids)
+        if not normalized_ids:
+            return {}
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                memory_rows_by_id = self._memory_rows_by_id(cursor, normalized_ids)
+                if not memory_rows_by_id:
+                    return {}
+
+                existing_memory_ids = [
+                    memory_id for memory_id in normalized_ids if memory_id in memory_rows_by_id
+                ]
+                outgoing_links_by_memory_id = self._links_by_memory_id(
+                    cursor,
+                    existing_memory_ids,
+                    direction="outgoing",
+                )
+                incoming_links_by_memory_id = self._links_by_memory_id(
+                    cursor,
+                    existing_memory_ids,
+                    direction="incoming",
+                )
+                superseded_target_ids = self._normalize_values(
+                    [
+                        link.target_id
+                        for memory_id in existing_memory_ids
+                        for link in outgoing_links_by_memory_id.get(memory_id, [])
+                        if link.link_type == "SUPERSEDES"
+                    ]
+                )
+                superseded_rows_by_id = self._memory_rows_by_id(cursor, superseded_target_ids)
+
         tokens: dict[str, str] = {}
-        for memory_id in self._normalize_values(memory_ids):
-            record = self.get_memory(memory_id)
-            if record is None:
+        for memory_id in normalized_ids:
+            record_row = memory_rows_by_id.get(memory_id)
+            if record_row is None:
                 continue
-            outgoing = self.get_links(memory_id, direction="outgoing")
-            incoming = self.get_links(memory_id, direction="incoming")
+            outgoing = outgoing_links_by_memory_id.get(memory_id, [])
+            incoming = incoming_links_by_memory_id.get(memory_id, [])
             superseded_targets = [
-                target
+                self._record_from_memory_row(superseded_rows_by_id[link.target_id])
                 for link in outgoing
-                if link.link_type == "SUPERSEDES"
-                for target in [self.get_memory(link.target_id)]
-                if target is not None
+                if link.link_type == "SUPERSEDES" and link.target_id in superseded_rows_by_id
             ]
             tokens[memory_id] = build_read_cache_validation_token(
-                record=record,
+                record=self._record_from_memory_row(record_row),
                 outgoing_links=outgoing,
                 incoming_links=incoming,
                 superseded_records=superseded_targets,
@@ -836,6 +867,55 @@ class PostgresRelationalMemoryRepository:
         )
         return cursor.fetchone()
 
+    def _memory_rows_by_id(
+        self,
+        cursor: CursorLike,
+        memory_ids: list[str],
+    ) -> dict[str, tuple[object, ...]]:
+        if not memory_ids:
+            return {}
+        cursor.execute(
+            """
+            SELECT id, title, content, summary, type, status, created_at, updated_at,
+                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+            FROM memories
+            WHERE id = ANY(%s::text[])
+            """,
+            (memory_ids,),
+        )
+        return {str(row[0]): row for row in cursor.fetchall()}
+
+    def _links_by_memory_id(
+        self,
+        cursor: CursorLike,
+        memory_ids: list[str],
+        *,
+        direction: str,
+    ) -> dict[str, list[MemoryLink]]:
+        if not memory_ids:
+            return {}
+        if direction == "incoming":
+            clause = "target_id = ANY(%s::text[])"
+            grouping_index = 1
+        else:
+            clause = "source_id = ANY(%s::text[])"
+            grouping_index = 0
+        cursor.execute(
+            f"SELECT source_id, target_id, type, context FROM links WHERE {clause} ORDER BY source_id ASC, target_id ASC",
+            (memory_ids,),
+        )
+        links_by_memory_id: dict[str, list[MemoryLink]] = {}
+        for row in cursor.fetchall():
+            link = MemoryLink(
+                source_id=str(row[0]),
+                target_id=str(row[1]),
+                link_type=str(row[2]),
+                context=str(row[3]),
+            )
+            memory_id = link.target_id if grouping_index == 1 else link.source_id
+            links_by_memory_id.setdefault(memory_id, []).append(link)
+        return links_by_memory_id
+
     def _workspace_ids_by_memory_id(
         self,
         cursor: CursorLike,
@@ -944,6 +1024,25 @@ class PostgresRelationalMemoryRepository:
             metadata=self._load_metadata(row[12]),
             workspace_ids=[str(workspace_row[0]) for workspace_row in workspace_rows],
             tags=[str(tag_row[0]) for tag_row in tag_rows],
+        )
+
+    def _record_from_memory_row(self, row: tuple[object, ...]) -> RelationalMemoryRecord:
+        return RelationalMemoryRecord(
+            id=str(row[0]),
+            title=str(row[1]),
+            content=str(row[2]),
+            summary=None if row[3] is None else str(row[3]),
+            type=str(row[4]),
+            status=str(row[5]),
+            created_at=str(row[6]),
+            updated_at=str(row[7]),
+            read_count=self._coerce_int(row[8]),
+            access_score=self._coerce_float(row[9]),
+            last_accessed_at=None if row[10] is None else str(row[10]),
+            last_surfaced_at=None if row[11] is None else str(row[11]),
+            metadata=self._load_metadata(row[12]),
+            workspace_ids=[],
+            tags=[],
         )
 
     def _replace_workspace_mappings(self, cursor: CursorLike, memory_id: str, workspace_ids: list[str]) -> None:

@@ -180,6 +180,8 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         def __init__(self) -> None:
             self.schema_metadata_present = False
             self.schema_version: str | None = None
+            self.vector_extension_installed = False
+            self.embedding_vector_column_present = False
             self._result: tuple[object, ...] | None = None
 
         def __enter__(self) -> FakeCursor:
@@ -202,6 +204,11 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
                 assert int(str(params[1])) in range(1, POSTGRES_SCHEMA_VERSION + 1)
                 self.schema_metadata_present = True
                 self.schema_version = str(params[1])
+                self._result = None
+                return
+            if normalized.startswith("DO $$"):
+                if self.vector_extension_installed:
+                    self.embedding_vector_column_present = True
                 self._result = None
                 return
             self._result = None
@@ -265,6 +272,213 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         schema_metadata_present=True,
         schema_version=POSTGRES_SCHEMA_VERSION,
     )
+
+
+def test_ensure_postgres_schema_adds_optional_vector_column_when_extension_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder: dict[str, FakeCursor] = {}
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.schema_metadata_present = True
+            self.schema_version = str(POSTGRES_SCHEMA_VERSION - 1)
+            self.embedding_vector_column_present = False
+            self.optional_vector_migration_runs = 0
+            self._result: tuple[object, ...] | None = None
+
+        def __enter__(self) -> FakeCursor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def execute(self, query: str, params: tuple[object, ...] | None = None) -> None:
+            normalized = " ".join(query.split())
+            if "information_schema.tables" in normalized:
+                self._result = (self.schema_metadata_present,)
+                return
+            if normalized.startswith("SELECT value FROM schema_metadata"):
+                self._result = None if self.schema_version is None else (self.schema_version,)
+                return
+            if normalized.startswith("INSERT INTO schema_metadata"):
+                assert params is not None
+                self.schema_version = str(params[1])
+                self._result = None
+                return
+            if normalized.startswith("DO $$"):
+                self.optional_vector_migration_runs += 1
+                self.embedding_vector_column_present = True
+                self._result = None
+                return
+            self._result = None
+
+        def fetchone(self) -> tuple[object, ...] | None:
+            return self._result
+
+    class FakeConnection:
+        def __init__(self, cursor: FakeCursor) -> None:
+            self.cursor_instance = cursor
+
+        def __enter__(self) -> FakeConnection:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def cursor(self) -> FakeCursor:
+            return self.cursor_instance
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+            self.cursor = FakeCursor()
+            holder["cursor"] = self.cursor
+
+        def getconn(self) -> FakeConnection:
+            return FakeConnection(self.cursor)
+
+        def putconn(self, connection: FakeConnection) -> None:
+            del connection
+
+        def close(self) -> None:
+            return None
+
+    class FakePsycopgModule:
+        @staticmethod
+        def connect(dsn: str) -> FakeConnection:
+            assert dsn == "postgresql://memory@example.invalid/mcp_memory"
+            return FakeConnection(FakeCursor())
+
+    def fake_import_module(name: str):
+        if name == "psycopg":
+            return FakePsycopgModule()
+        if name == "psycopg_pool":
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
+
+    state = ensure_postgres_schema(
+        PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory")
+    )
+
+    assert state == StorageBootstrapState(
+        backend="postgres",
+        schema_metadata_present=True,
+        schema_version=POSTGRES_SCHEMA_VERSION,
+    )
+    assert holder["cursor"].optional_vector_migration_runs == 1
+    assert holder["cursor"].embedding_vector_column_present is True
+
+
+def test_ensure_postgres_schema_skips_optional_vector_column_when_extension_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder: dict[str, FakeCursor] = {}
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.schema_metadata_present = True
+            self.schema_version = str(POSTGRES_SCHEMA_VERSION - 1)
+            self.optional_vector_migration_runs = 0
+            self.embedding_vector_column_present = False
+            self._result: tuple[object, ...] | None = None
+
+        def __enter__(self) -> FakeCursor:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def execute(self, query: str, params: tuple[object, ...] | None = None) -> None:
+            normalized = " ".join(query.split())
+            if "information_schema.tables" in normalized:
+                self._result = (self.schema_metadata_present,)
+                return
+            if normalized.startswith("SELECT value FROM schema_metadata"):
+                self._result = None if self.schema_version is None else (self.schema_version,)
+                return
+            if normalized.startswith("INSERT INTO schema_metadata"):
+                assert params is not None
+                self.schema_version = str(params[1])
+                self._result = None
+                return
+            if normalized.startswith("DO $$"):
+                self.optional_vector_migration_runs += 1
+                self._result = None
+                return
+            self._result = None
+
+        def fetchone(self) -> tuple[object, ...] | None:
+            return self._result
+
+    class FakeConnection:
+        def __init__(self, cursor: FakeCursor) -> None:
+            self.cursor_instance = cursor
+
+        def __enter__(self) -> FakeConnection:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def cursor(self) -> FakeCursor:
+            return self.cursor_instance
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    class FakeConnectionPool:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+            self.cursor = FakeCursor()
+            holder["cursor"] = self.cursor
+
+        def getconn(self) -> FakeConnection:
+            return FakeConnection(self.cursor)
+
+        def putconn(self, connection: FakeConnection) -> None:
+            del connection
+
+        def close(self) -> None:
+            return None
+
+    class FakePsycopgModule:
+        @staticmethod
+        def connect(dsn: str) -> FakeConnection:
+            assert dsn == "postgresql://memory@example.invalid/mcp_memory"
+            return FakeConnection(FakeCursor())
+
+    def fake_import_module(name: str):
+        if name == "psycopg":
+            return FakePsycopgModule()
+        if name == "psycopg_pool":
+            return SimpleNamespace(ConnectionPool=FakeConnectionPool)
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr("mcp_memory.storage.postgres_connection.importlib.import_module", fake_import_module)
+
+    state = ensure_postgres_schema(
+        PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory")
+    )
+
+    assert state == StorageBootstrapState(
+        backend="postgres",
+        schema_metadata_present=True,
+        schema_version=POSTGRES_SCHEMA_VERSION,
+    )
+    assert holder["cursor"].optional_vector_migration_runs == 1
+    assert holder["cursor"].embedding_vector_column_present is False
 
 
 def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

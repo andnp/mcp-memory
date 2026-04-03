@@ -5,6 +5,7 @@ import json
 import pytest
 
 from mcp_memory.core.journal import _ALL_WORKSPACES
+from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
@@ -44,6 +45,9 @@ class FakePrimitiveState:
         self.work_items: list[dict[str, object]] = []
         self.embedding_repair_queue: list[dict[str, object]] = []
         self.embeddings: list[dict[str, object]] = []
+        self.pgvector_extension_installed = False
+        self.embedding_vector_column_present = False
+        self.vector_capability_query_count = 0
 
 
 class FakePrimitiveCursor:
@@ -355,7 +359,8 @@ class FakePrimitiveCursor:
                 "workspace_id": arguments[2],
                 "model_name": str(arguments[3]),
                 "embedding_json": arguments[4],
-                "updated_at": _as_float(arguments[5]),
+                "embedding_vector": None if "embedding_vector" not in normalized else str(arguments[5]),
+                "updated_at": _as_float(arguments[5] if "embedding_vector" not in normalized else arguments[6]),
             }
             if record is None:
                 self._state.embeddings.append(payload)
@@ -392,6 +397,45 @@ class FakePrimitiveCursor:
                 candidate_ids = {str(candidate_id) for candidate_id in candidate_ids_raw}
                 rows = [row for row in rows if str(row["source_id"]) in candidate_ids]
             self._result = [(row["source_id"], row["embedding_json"]) for row in rows]
+            return
+        if normalized.startswith("SELECT source_id, 1 - (embedding_vector <=> CAST(%s AS vector)) AS score FROM embeddings WHERE source_kind = %s AND model_name = %s AND embedding_vector IS NOT NULL"):
+            query_embedding = [float(value) for value in json.loads(str(arguments[0]))]
+            rows = [
+                row for row in self._state.embeddings
+                if str(row["source_kind"]) == str(arguments[1])
+                and str(row["model_name"]) == str(arguments[2])
+                and row["embedding_vector"] is not None
+            ]
+            next_argument_index = 3
+            if "workspace_id = %s" in normalized:
+                rows = [row for row in rows if row["workspace_id"] == arguments[next_argument_index]]
+                next_argument_index += 1
+            if "source_id = ANY(%s::text[])" in normalized:
+                candidate_ids_raw = arguments[next_argument_index]
+                if not isinstance(candidate_ids_raw, list | tuple):
+                    raise TypeError("expected candidate id sequence")
+                candidate_ids = {str(candidate_id) for candidate_id in candidate_ids_raw}
+                rows = [row for row in rows if str(row["source_id"]) in candidate_ids]
+                next_argument_index += 1
+            assert str(arguments[next_argument_index]) == str(arguments[0])
+            limit = _as_int(arguments[next_argument_index + 1])
+            scored_rows = [
+                (
+                    str(row["source_id"]),
+                    cosine_similarity(query_embedding, [float(value) for value in json.loads(str(row["embedding_json"]))]),
+                )
+                for row in rows
+            ]
+            scored_rows.sort(key=lambda item: item[1], reverse=True)
+            self._result = scored_rows[:limit]
+            return
+        if normalized.startswith("SELECT EXISTS ( SELECT 1 FROM pg_extension WHERE extname = 'vector' )"):
+            self._state.vector_capability_query_count += 1
+            self._result = [(self._state.pgvector_extension_installed,)]
+            return
+        if normalized.startswith("SELECT EXISTS ( SELECT 1 FROM information_schema.columns"):
+            self._state.vector_capability_query_count += 1
+            self._result = [(self._state.embedding_vector_column_present,)]
             return
         if normalized.startswith("DELETE FROM embeddings WHERE source_kind = %s AND source_id = %s"):
             before = len(self._state.embeddings)
@@ -783,4 +827,121 @@ def test_postgres_vector_store_reports_search_diagnostics() -> None:
     assert diagnostics["row_count"] == 1
     assert diagnostics["raw_type_counts"] == {"str": 1}
     assert diagnostics["candidate_filter_count"] == 0
+    assert diagnostics["search_mode"] == "client_python_fallback"
+    assert diagnostics["pgvector_extension_installed"] is False
+    assert diagnostics["embedding_vector_column_present"] is False
+    assert diagnostics["server_side_vector_search_available"] is False
     assert set(diagnostics) >= {"fetch_ms", "decode_ms", "score_ms", "sort_ms"}
+
+
+def test_postgres_vector_store_caches_server_side_vector_capability_probe() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    session_manager.state.pgvector_extension_installed = True
+    session_manager.state.embedding_vector_column_present = True
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+
+    first_diagnostics: dict[str, object] = {}
+    second_diagnostics: dict[str, object] = {}
+
+    first_ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=first_diagnostics,
+        limit=5,
+    )
+    second_ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=second_diagnostics,
+        limit=5,
+    )
+
+    assert first_ranked == [("memory-a", pytest.approx(1.0))]
+    assert second_ranked == [("memory-a", pytest.approx(1.0))]
+    assert first_diagnostics["search_mode"] == "server_side_pgvector"
+    assert first_diagnostics["server_side_vector_search_available"] is True
+    assert second_diagnostics["server_side_vector_search_available"] is True
+    assert session_manager.state.vector_capability_query_count == 2
+
+
+def test_postgres_vector_store_dual_writes_vector_column_when_capability_is_available() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    session_manager.state.pgvector_extension_installed = True
+    session_manager.state.embedding_vector_column_present = True
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id="workspace-a",
+        model_name="mini-embed",
+        embedding=[1.0, 0.25],
+    )
+
+    assert json.loads(str(session_manager.state.embeddings[0]["embedding_json"])) == [1.0, 0.25]
+    assert session_manager.state.embeddings[0]["embedding_vector"] == "[1.0,0.25]"
+
+
+def test_postgres_vector_store_uses_server_side_search_when_vector_capability_is_available() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    session_manager.state.pgvector_extension_installed = True
+    session_manager.state.embedding_vector_column_present = True
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-b",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[0.0, 1.0],
+    )
+
+    diagnostics: dict[str, object] = {}
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[0.8, 0.2],
+        diagnostics=diagnostics,
+        limit=2,
+    )
+
+    assert [memory_id for memory_id, _score in ranked] == ["memory-a", "memory-b"]
+    assert diagnostics["search_mode"] == "server_side_pgvector"
+    assert diagnostics["server_side_vector_search_available"] is True
+    assert diagnostics["raw_type_counts"] == {}
+    assert diagnostics["decode_ms"] == 0.0
+    assert diagnostics["score_ms"] == 0.0
+    assert diagnostics["sort_ms"] == 0.0
+
+
+def test_postgres_vector_store_keeps_json_only_upsert_when_vector_capability_is_unavailable() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id="workspace-a",
+        model_name="mini-embed",
+        embedding=[1.0, 0.25],
+    )
+
+    assert json.loads(str(session_manager.state.embeddings[0]["embedding_json"])) == [1.0, 0.25]
+    assert session_manager.state.embeddings[0]["embedding_vector"] is None

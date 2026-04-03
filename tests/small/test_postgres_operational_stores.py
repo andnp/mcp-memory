@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -57,6 +58,9 @@ class FakeCursor:
         normalized = " ".join(query.split())
         arguments = tuple(() if params is None else params)
         if normalized.startswith("INSERT INTO runtime_logs"):
+            data_json = arguments[6]
+            if isinstance(data_json, str):
+                data_json = json.loads(data_json)
             self._state.runtime_logs.append(
                 {
                     "id": self._state.next_log_id,
@@ -66,7 +70,7 @@ class FakeCursor:
                     "level": arguments[3],
                     "message": arguments[4],
                     "created_at": _as_float(arguments[5]),
-                    "data_json": arguments[6],
+                    "data_json": data_json,
                 }
             )
             self._state.next_log_id += 1
@@ -321,6 +325,44 @@ def test_postgres_structured_log_handler_writes_runtime_log() -> None:
     assert logs[0].source == "stdio"
     repository.close()
     handler.close()
+
+
+def test_postgres_runtime_log_repository_preserves_structured_data_payloads() -> None:
+    session_manager = FakeSessionManager()
+    repository = PostgresRuntimeLogRepository(session_manager, workspace_id="workspace-a")
+
+    repository.write_log(
+        source="memory-tool",
+        logger_name="mcp_memory.management.service",
+        level="WARNING",
+        message="Slow management.search_memories operation",
+        created_at=100.0,
+        data={
+            "tool_name": "management.search_memories",
+            "duration_ms": 2345.678,
+            "query": "project memory search",
+            "result_count": 3,
+            "extra": {
+                "workspace_id": "workspace-a",
+                "filters": ["active", "fact"],
+            },
+        },
+    )
+
+    logs = repository.list_logs(source="memory-tool", limit=10)
+
+    assert len(logs) == 1
+    assert logs[0].data == {
+        "tool_name": "management.search_memories",
+        "duration_ms": 2345.678,
+        "query": "project memory search",
+        "result_count": 3,
+        "extra": {
+            "workspace_id": "workspace-a",
+            "filters": ["active", "fact"],
+        },
+    }
+    repository.close()
 
 
 def test_postgres_runtime_log_repository_summarize_logs_aggregates_all_matching_rows() -> None:

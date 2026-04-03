@@ -232,6 +232,11 @@ class RuntimeLogRepository:
 
 
 def _decode_log_data(raw_result: object):
+    if isinstance(raw_result, dict):
+        return {
+            str(key): value
+            for key, value in raw_result.items()
+        }
     if not isinstance(raw_result, str) or not raw_result.strip():
         return {}
     try:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 8
+POSTGRES_SCHEMA_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -441,6 +441,25 @@ POSTGRES_MIGRATIONS = (
                 content = EXCLUDED.content,
                 tags_text = EXCLUDED.tags_text,
                 search_document = EXCLUDED.search_document
+            """,
+        ),
+    ),
+    PostgresMigration(
+        version=9,
+        name="add_optional_pgvector_embedding_column",
+        statements=(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM pg_extension
+                    WHERE extname = 'vector'
+                ) THEN
+                    EXECUTE 'ALTER TABLE embeddings ADD COLUMN IF NOT EXISTS embedding_vector vector';
+                END IF;
+            END
+            $$
             """,
         ),
     ),

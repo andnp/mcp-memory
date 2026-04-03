@@ -363,14 +363,16 @@ class FakeCursor:
         self._result = [(memory_id, score) for memory_id, score, _updated_at in ranked_rows[:limit]]
 
     def _select_links(self, normalized: str, arguments: SqlParams) -> None:
-        direction_key = "target_id" if "WHERE target_id = %s" in normalized else "source_id"
-        memory_id = str(arguments[0])
+        direction_key = "target_id" if "WHERE target_id" in normalized else "source_id"
+        if " = ANY(%s::text[])" in normalized:
+            memory_ids = set(self._as_str_sequence(arguments[0]))
+        else:
+            memory_ids = {str(arguments[0])}
         link_type = str(arguments[1]) if len(arguments) > 1 else None
         rows = []
         for source_id, target_id, stored_link_type in sorted(self._state.links):
-            if direction_key == "source_id" and source_id != memory_id:
-                continue
-            if direction_key == "target_id" and target_id != memory_id:
+            matched_memory_id = source_id if direction_key == "source_id" else target_id
+            if matched_memory_id not in memory_ids:
                 continue
             if link_type is not None and stored_link_type != link_type:
                 continue
@@ -1191,7 +1193,7 @@ def test_postgres_repository_best_effort_last_surfaced_flushes_on_close(
 def test_postgres_repository_read_cache_validation_tokens_are_stable_for_unchanged_data(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:
-    repository, _session_manager = postgres_repository
+    repository, session_manager = postgres_repository
 
     current = repository.create_memory(
         title="Current fact",
@@ -1217,11 +1219,28 @@ def test_postgres_repository_read_cache_validation_tokens_are_stable_for_unchang
     repository.add_link(current.id, superseded.id, "SUPERSEDES", "replacement")
     repository.add_link(incoming.id, current.id, "DEPENDS_ON", "supporting evidence")
 
+    state = session_manager.connections[0]._state
+    query_start = len(state.query_log)
     first = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
+    first_queries = state.query_log[query_start:]
     second = repository.get_read_cache_validation_tokens([current.id, "missing-memory"])
 
     assert list(first) == [current.id]
     assert second == first
+    assert len(first_queries) == 4
+    assert first_queries[0].startswith(
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(%s::text[])"
+    )
+    assert first_queries[1] == "SELECT source_id, target_id, type, context FROM links WHERE source_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
+    assert first_queries[2] == "SELECT source_id, target_id, type, context FROM links WHERE target_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
+    assert first_queries[3].startswith(
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(%s::text[])"
+    )
+    assert not any(query == "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" for query in first_queries)
+    assert not any(
+        query.startswith("SELECT tags.name FROM tags JOIN memory_tags ON memory_tags.tag_id = tags.id")
+        for query in first_queries
+    )
 
 
 def test_postgres_repository_read_cache_validation_tokens_invalidate_for_link_and_superseded_changes(
