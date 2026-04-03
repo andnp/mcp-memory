@@ -7,7 +7,7 @@ from typing import Any, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
-from mcp_memory.mcp.transport import internal_tool_services
+from mcp_memory.mcp.transport import dispatch_internal_memory_tool, internal_tool_services
 
 
 @dataclass(slots=True)
@@ -89,7 +89,7 @@ async def run_internal_tool_loop(
                 )
                 continue
 
-            result = services[name](ctx, arguments)
+            result = await _dispatch_internal_tool(ctx, name, arguments)
             executed_calls += 1
             tool_names_used.append(name)
             if result.get("status") == "ok":
@@ -125,6 +125,40 @@ async def run_internal_tool_loop(
     )
 
 
+async def _dispatch_internal_tool(
+    ctx: ApplicationContext,
+    name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    response = await dispatch_internal_memory_tool(ctx, name, arguments)
+    if not response:
+        return {"status": "error", "error": "empty_tool_response", "tool": name}
+
+    first_part = response[0]
+    text = getattr(first_part, "text", None)
+    if not isinstance(text, str):
+        return {"status": "error", "error": "invalid_tool_response", "tool": name}
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {
+            "status": "error",
+            "error": "invalid_tool_response",
+            "tool": name,
+            "detail": "tool did not return valid JSON",
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "status": "error",
+            "error": "invalid_tool_response",
+            "tool": name,
+            "detail": "tool returned a non-object payload",
+        }
+    return payload
+
+
 def _normalize_tool_calls(raw_tool_calls: object) -> list[dict[str, Any]]:
     if not isinstance(raw_tool_calls, list):
         return []
@@ -153,15 +187,15 @@ def _build_prompt(
     parts = [
         base_prompt.strip(),
         "Available internal tools:",
-        json.dumps(tool_specs, sort_keys=True),
-        "Respond with `tool_calls` JSON or final JSON.",
-        "Never claim positive actions without prior `tool_calls`. If no tools were used, report `actions_taken: 0` and a no-op summary.",
+        json.dumps(tool_specs, sort_keys=True, separators=(",", ":")),
+        "Return `tool_calls` JSON or final JSON.",
+        "Never claim positive actions without prior `tool_calls`; otherwise return `actions_taken: 0` and a no-op summary.",
     ]
     if transcript:
         parts.extend(
             [
                 "Previous tool interaction transcript:",
-                json.dumps(transcript, sort_keys=True),
+                json.dumps(transcript, sort_keys=True, separators=(",", ":")),
             ]
         )
     return "\n\n".join(parts)

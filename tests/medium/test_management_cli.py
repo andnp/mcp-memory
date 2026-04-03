@@ -19,17 +19,21 @@ pytest_plugins: list[str] = []
 
 def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None:
     runner = CliRunner()
+    opened: list[str] = []
 
     class FakeMetadata:
         base_url = "http://127.0.0.1:8123"
 
     monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
-    result = runner.invoke(main, ["dashboard", "--workspace-root", "demo"])
+    result = runner.invoke(main, ["admin", "dashboard", "open", "--workspace-root", "demo"])
 
     assert result.exit_code == 0
+    assert opened == ["http://127.0.0.1:8123/dashboard"]
     assert "Dashboard ready:" in result.output
     assert "http://127.0.0.1:8123/dashboard" in result.output
+    assert "browser_opened=True" in result.output
 
 
 def test_dashboard_command_can_open_browser(monkeypatch) -> None:
@@ -42,7 +46,7 @@ def test_dashboard_command_can_open_browser(monkeypatch) -> None:
     monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
     monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
-    result = runner.invoke(main, ["dashboard", "--open"])
+    result = runner.invoke(main, ["admin", "dashboard", "open"])
 
     assert result.exit_code == 0
     assert opened == ["http://127.0.0.1:8123/dashboard"]
@@ -159,6 +163,7 @@ def test_install_command_writes_workspace_hook_and_gemini_configs(monkeypatch, t
     result = runner.invoke(
         main,
         [
+            "admin",
             "install",
             "--tool",
             "copilot",
@@ -212,6 +217,7 @@ def test_install_command_updates_user_claude_settings_without_duplicate_hooks(mo
     first = runner.invoke(
         main,
         [
+            "admin",
             "install",
             "--tool",
             "claude",
@@ -224,6 +230,7 @@ def test_install_command_updates_user_claude_settings_without_duplicate_hooks(mo
     second = runner.invoke(
         main,
         [
+            "admin",
             "install",
             "--tool",
             "claude",
@@ -308,7 +315,7 @@ def test_logs_command_prints_runtime_logs(monkeypatch, tmp_path: Path) -> None:
 
     result = runner.invoke(
         main,
-        ["log", "show", "--workspace-root", str(workspace), "--source", "daemon", "--query", "warning"],
+        ["admin", "log", "list", "--workspace-root", str(workspace), "--source", "daemon", "--query", "warning"],
     )
 
     assert result.exit_code == 0
@@ -347,7 +354,7 @@ def test_logs_command_supports_json_output(monkeypatch, tmp_path: Path) -> None:
 
     result = runner.invoke(
         main,
-        ["log", "show", "--workspace-root", str(workspace), "--source", "stdio", "--json"],
+        ["admin", "log", "list", "--workspace-root", str(workspace), "--source", "stdio", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -385,7 +392,7 @@ def test_logs_command_reads_global_logs_across_workspaces(monkeypatch, tmp_path:
 
     result = runner.invoke(
         main,
-        ["log", "show", "--workspace-root", str(workspace_a), "--source", "daemon", "--json"],
+        ["admin", "log", "list", "--workspace-root", str(workspace_a), "--source", "daemon", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -416,7 +423,7 @@ def test_log_summary_command_prints_grouped_counts(monkeypatch, tmp_path: Path) 
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["log", "summary", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "log", "summary", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Matching logs:" in result.output
@@ -449,7 +456,7 @@ def test_task_list_command_shows_global_tasks_across_workspaces(monkeypatch, tmp
 
     result = runner.invoke(
         main,
-        ["task", "list", "--workspace-root", str(workspace_a), "--json"],
+        ["admin", "task", "list", "--workspace-root", str(workspace_a), "--json"],
     )
 
     payload = json.loads(result.output)
@@ -513,7 +520,7 @@ def test_conversation_list_command_reads_global_conversations_across_workspaces(
 
     result = runner.invoke(
         main,
-        ["conversation", "list", "--workspace-root", str(workspace_a), "--json"],
+        ["admin", "conversation", "list", "--workspace-root", str(workspace_a), "--json"],
     )
 
     payload = json.loads(result.output)
@@ -546,7 +553,7 @@ def test_log_prune_command_supports_json_output(monkeypatch, tmp_path: Path) -> 
 
     result = runner.invoke(
         main,
-        ["log", "prune", "--workspace-root", str(workspace), "--max-runtime-logs", "1", "--json"],
+        ["admin", "log", "prune", "--workspace-root", str(workspace), "--max-runtime-logs", "1", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -644,7 +651,7 @@ def test_import_markdown_command_imports_record(monkeypatch, tmp_path: Path) -> 
 
     result = runner.invoke(
         main,
-        ["import-markdown", str(markdown_file), "--workspace-root", str(workspace)],
+        ["memory", "import-markdown", str(markdown_file), "--workspace-root", str(workspace)],
     )
 
     assert result.exit_code == 0
@@ -667,6 +674,7 @@ def test_import_markdown_command_supports_multiple_paths_and_globs(monkeypatch, 
     result = runner.invoke(
         main,
         [
+            "memory",
             "import-markdown",
             str(first),
             str(workspace / "*.md"),
@@ -695,7 +703,7 @@ def test_agents_run_command_enqueues_background_agent(monkeypatch, tmp_path: Pat
 
     result = runner.invoke(
         main,
-        ["agents", "run", "sweeper", "--workspace-root", str(workspace)],
+        ["admin", "agent", "run", "sweeper", "--workspace-root", str(workspace)],
     )
 
     assert result.exit_code == 0
@@ -762,7 +770,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace), "--verbose"])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace), "--verbose"])
 
     assert result.exit_code == 0
     assert "Search Health" in result.output
@@ -793,7 +801,7 @@ def test_stats_command_default_output_is_more_compact(monkeypatch, tmp_path: Pat
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Search Health" in result.output
@@ -934,7 +942,7 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
 
     result = runner.invoke(
         main,
-        ["health", "--workspace-root", str(workspace_a), "--scope", "global", "--json"],
+        ["admin", "health", "--workspace-root", str(workspace_a), "--scope", "global", "--json"],
     )
 
     payload = json.loads(result.output)
@@ -1032,7 +1040,7 @@ def test_health_command_human_output_renders_warning_and_provider_policy_section
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["health", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "health", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Recent Warnings" in result.output
@@ -1090,7 +1098,7 @@ def test_health_command_human_output_renders_cache_section(monkeypatch) -> None:
         ),
     )
 
-    result = runner.invoke(main, ["health"])
+    result = runner.invoke(main, ["admin", "health"])
 
     assert result.exit_code == 0
     assert "Cache" in result.output
@@ -1137,7 +1145,7 @@ def test_stats_command_top_reads_show_memory_status(monkeypatch, tmp_path: Path)
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Top Read Memories" in result.output
@@ -1169,8 +1177,8 @@ def test_search_health_and_repair_commands_surface_resilience_state(monkeypatch,
     finally:
         runtime.close()
 
-    health_result = runner.invoke(main, ["search", "health", "--workspace-root", str(workspace)])
-    repair_result = runner.invoke(main, ["search", "repair", "--workspace-root", str(workspace)])
+    health_result = runner.invoke(main, ["admin", "search", "health", "--workspace-root", str(workspace)])
+    repair_result = runner.invoke(main, ["admin", "search", "repair", "--workspace-root", str(workspace)])
 
     assert health_result.exit_code == 0
     assert "Search Health" in health_result.output
@@ -1201,7 +1209,7 @@ def test_stats_command_shows_running_background_agents(monkeypatch, tmp_path: Pa
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace), "--verbose"])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace), "--verbose"])
 
     assert result.exit_code == 0
     assert "Background Agents" in result.output
@@ -1222,7 +1230,7 @@ def test_stats_command_does_not_require_daemon_start(monkeypatch, tmp_path: Path
         lambda workspace_root, cwd=None: (_ for _ in ()).throw(AssertionError("stats should not start daemon")),
     )
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
 
@@ -1255,7 +1263,7 @@ def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_pa
         runtime_a.close()
         runtime_b.close()
 
-    result = runner.invoke(main, ["stats", "--workspace-root", str(workspace_a), "--verbose"])
+    result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace_a), "--verbose"])
 
     assert result.exit_code == 0
     assert "Stats scope:" in result.output
@@ -1286,7 +1294,7 @@ def test_stats_command_watch_mode_refreshes_without_daemon_start(monkeypatch, tm
 
     result = runner.invoke(
         main,
-        ["stats", "--workspace-root", str(workspace), "--watch", "--interval", "2"],
+        ["admin", "overview", "--workspace-root", str(workspace), "--watch", "--interval", "2"],
     )
 
     assert result.exit_code == 0
@@ -1306,7 +1314,7 @@ def test_monitor_command_runs_tui(monkeypatch) -> None:
         ),
     )
 
-    result = runner.invoke(main, ["monitor", "--workspace-root", "demo", "--interval", "1.5"])
+    result = runner.invoke(main, ["admin", "monitor", "--workspace-root", "demo", "--interval", "1.5"])
 
     assert result.exit_code == 0
     assert called == {"workspace_root": "demo", "interval_seconds": 1.5}
@@ -1338,11 +1346,11 @@ def test_task_list_and_cancel_commands_show_running_task_metadata(monkeypatch, t
 
     list_result = runner.invoke(
         main,
-        ["task", "list", "--workspace-root", str(workspace), "--status", "running", "--json"],
+        ["admin", "task", "list", "--workspace-root", str(workspace), "--status", "running", "--json"],
     )
     cancel_result = runner.invoke(
         main,
-        ["task", "cancel", "cancel-cli-task", "--workspace-root", str(workspace), "--reason", "manual_cancel"],
+        ["admin", "task", "cancel", "cancel-cli-task", "--workspace-root", str(workspace), "--reason", "manual_cancel"],
     )
 
     list_payload = json.loads(list_result.output)
@@ -1497,7 +1505,7 @@ def test_task_recent_runs_json_preserves_ingest_audit_metadata(monkeypatch, tmp_
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace), "--json"])
+    result = runner.invoke(main, ["admin", "task", "recent-runs", "--workspace-root", str(workspace), "--json"])
 
     payload = json.loads(result.output)
     ingest_run = next(run for run in payload["runs"] if run["task_id"] == "recent-run-ingest-audit")
@@ -1548,7 +1556,7 @@ def test_task_recent_runs_human_output_shows_compact_ingest_hints(monkeypatch, t
     finally:
         runtime.close()
 
-    result = runner.invoke(main, ["task", "recent-runs", "--workspace-root", str(workspace)])
+    result = runner.invoke(main, ["admin", "task", "recent-runs", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
     assert "Recent Agent Runs" in result.output
@@ -1659,15 +1667,15 @@ def test_conversation_commands_render_and_return_json(monkeypatch, tmp_path: Pat
 
     list_result = runner.invoke(
         main,
-        ["conversation", "list", "--workspace-root", str(workspace), "--task-name", "deduplicator", "--json"],
+        ["admin", "conversation", "list", "--workspace-root", str(workspace), "--task-name", "deduplicator", "--json"],
     )
     show_result = runner.invoke(
         main,
-        ["conversation", "show", "req-cli-2", "--workspace-root", str(workspace)],
+        ["admin", "conversation", "show", "req-cli-2", "--workspace-root", str(workspace)],
     )
     json_result = runner.invoke(
         main,
-        ["conversation", "list", "--workspace-root", str(workspace), "--json"],
+        ["admin", "conversation", "list", "--workspace-root", str(workspace), "--json"],
     )
 
     list_payload = json.loads(list_result.output)
@@ -1723,7 +1731,7 @@ def test_conversation_list_labels_running_rows_as_heartbeat(monkeypatch, tmp_pat
 
     result = runner.invoke(
         main,
-        ["conversation", "list", "--workspace-root", str(workspace), "--status", "running"],
+        ["admin", "conversation", "list", "--workspace-root", str(workspace), "--status", "running"],
     )
 
     assert result.exit_code == 0

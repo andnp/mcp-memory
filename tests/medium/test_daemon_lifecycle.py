@@ -219,7 +219,7 @@ def test_cli_dashboard_surfaces_startup_failure_diagnostics(monkeypatch) -> None
         ),
     )
 
-    result = runner.invoke(main, ['daemon', 'dashboard'])
+    result = runner.invoke(main, ['admin', 'dashboard', 'open'])
 
     assert result.exit_code == 1
     assert 'Error:' in result.output

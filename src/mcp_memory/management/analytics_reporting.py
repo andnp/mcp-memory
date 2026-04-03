@@ -420,10 +420,12 @@ def build_nerd_metrics(
     for row in task_rows:
         result = decode_run_result(row["result_json"])
         result_metadata = extract_run_result_metadata(result)
-        premium_execution_count += result_metadata.provider_calls_used or 0
-        premium_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
-        premium_mutations += result_metadata.mutations or 0
-        premium_tool_calls += result_metadata.tool_calls_executed or 0
+        provider_calls_used = result_metadata.provider_calls_used or 0
+        premium_execution_count += provider_calls_used
+        if provider_calls_used > 0:
+            premium_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
+            premium_mutations += result_metadata.mutations or 0
+            premium_tool_calls += result_metadata.tool_calls_executed or 0
         compatible_batch_calls += result_metadata.compatible_batch_calls or 0
     for row in provider_rows:
         status = str(row["status"])

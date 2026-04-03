@@ -450,7 +450,9 @@ def test_read_memory_record_service_validated_cached_hit_short_circuits_authorit
     assert response == cached_payload
     assert read_service.validation_calls == 1
     assert read_service.read_calls == 0
-    assert ctx.retrieval_telemetry.read_calls == []
+    assert len(ctx.retrieval_telemetry.read_calls) == 1
+    assert ctx.retrieval_telemetry.read_calls[0]["caller_kind"] == "external"
+    assert ctx.retrieval_telemetry.read_calls[0]["memory_id"] == "memory-1"
 
 
 def test_read_memory_record_service_external_compacts_large_record_and_superseded(tmp_path: Path) -> None:

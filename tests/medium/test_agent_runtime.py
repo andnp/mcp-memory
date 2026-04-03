@@ -20,7 +20,6 @@ from mcp_memory.core.agent_runtime import (
     GRAPH_LINK_DISCOVERY_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
-    RECURRING_TASK_INTERVAL_SECONDS,
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
@@ -45,6 +44,7 @@ from mcp_memory.core.agent_runtime import (
     handle_taxonomist_task,
     _provider_for_task,
 )
+from mcp_memory.core.maintenance_schedule import RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult

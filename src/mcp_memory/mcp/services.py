@@ -446,6 +446,36 @@ def _record_search_invocation(
     )
 
 
+def _record_read_invocation(
+    ctx: ApplicationContext,
+    *,
+    caller_kind: str,
+    memory_id: str,
+    duration_ms: float,
+) -> None:
+    repository = _retrieval_telemetry_repository(ctx)
+    repository.record_read(
+        invocation_id=str(uuid4()),
+        caller_kind=caller_kind,
+        memory_id=memory_id,
+        duration_ms=duration_ms,
+    )
+    try:
+        repository.flush()
+    except Exception:
+        logger.debug("Read telemetry flush failed; continuing without blocking the read response", exc_info=True)
+    _log_slow_memory_tool_operation(
+        ctx,
+        tool_name="read_memory_record",
+        duration_ms=duration_ms,
+        data={
+            "caller_kind": caller_kind,
+            "memory_id": memory_id,
+            "storage_backend": ctx.storage_backend or "sqlite",
+        },
+    )
+
+
 def search_memory_records_service(
     ctx: ApplicationContext,
     arguments: dict,
@@ -639,6 +669,12 @@ def read_memory_record_service(
         caller_kind=caller_kind,
     )
     if cached_payload is not None:
+        _record_read_invocation(
+            ctx,
+            caller_kind=caller_kind,
+            memory_id=memory_id,
+            duration_ms=(perf_counter() - started_at) * 1000.0,
+        )
         return cached_payload
     try:
         result = operation.execute(memory_id)
@@ -651,21 +687,11 @@ def read_memory_record_service(
     duration_ms = (perf_counter() - started_at) * 1000.0
     if result is None:
         return {"status": "error", "error": "memory_not_found"}
-    _retrieval_telemetry_repository(ctx).record_read(
-        invocation_id=str(uuid4()),
+    _record_read_invocation(
+        ctx,
         caller_kind=caller_kind,
         memory_id=memory_id,
         duration_ms=duration_ms,
-    )
-    _log_slow_memory_tool_operation(
-        ctx,
-        tool_name="read_memory_record",
-        duration_ms=duration_ms,
-        data={
-            "caller_kind": caller_kind,
-            "memory_id": memory_id,
-            "storage_backend": ctx.storage_backend or "sqlite",
-        },
     )
 
     payload = {

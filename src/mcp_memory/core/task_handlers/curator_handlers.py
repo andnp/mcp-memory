@@ -12,7 +12,6 @@ from mcp_memory.core.task_handlers.agentic_guardrails import build_curator_guard
 from mcp_memory.core.task_handlers.campaigns import campaign_metadata, count_named_tool_calls
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     claim_work_batch,
     complete_work_item,
