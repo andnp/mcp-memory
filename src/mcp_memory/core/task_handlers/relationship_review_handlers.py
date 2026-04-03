@@ -18,6 +18,7 @@ from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_work
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     run_claimed_review_work_item,
     run_sparse_frontier_review_task,
+    work_item_result_metadata,
 )
 import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
 import mcp_memory.core.task_handlers.relationship_review_support as _relationship_review_support
@@ -124,14 +125,48 @@ async def handle_conflict_detector_task(
         if claimed_review_result is not None:
             return claimed_review_result
 
-    sampled_batch = _sample_conflict_candidates(ctx, task)
+    workspace_id = _resolve_workspace_id(ctx, task)
+    sampled_batch = _sample_conflict_candidates(ctx, task, workspace_id=workspace_id)
     candidates = sampled_batch.records
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0)
 
+    if provider is None:
+        return await _run_conflict_sparse_frontier_task(
+            ctx,
+            task=task,
+            workspace_id=workspace_id,
+            sampled_batch=sampled_batch,
+            candidates=candidates,
+        )
+
     proposed_pairs = await _relationship_proposals.propose_conflicts(ctx, candidates, provider)
     created = _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs)
-    return sampling_payload(sampled_batch, sampled_records=candidates, created=created)
+    created_work_item = None
+    seeded_work_item_count = 0
+    if _should_seed_conflict_review(proposed_pairs, candidates):
+        created_work_item, created_item = _relationship_review_support.enqueue_conflict_review_work_item(
+            ctx,
+            task=task,
+            workspace_id=workspace_id,
+            candidates=candidates,
+            strategy_used=sampled_batch.strategy_used,
+        )
+        seeded_work_item_count = 1 if created_item else 0
+
+    return sampling_payload(
+        sampled_batch,
+        sampled_records=candidates,
+        extra=work_item_result_metadata(
+            family_key=WORK_FAMILY_CONFLICT_REVIEW,
+            execution_lane="agentic",
+            seed_source="frontier_seed",
+            seed_records=candidates,
+            created_work_item=created_work_item if seeded_work_item_count else None,
+        ),
+        created=created,
+        seeded_work_item_count=seeded_work_item_count,
+    )
 
 
 async def handle_conflict_screening_task(
@@ -147,6 +182,23 @@ async def handle_conflict_screening_task(
     if len(candidates) < 2:
         return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
 
+    return await _run_conflict_sparse_frontier_task(
+        ctx,
+        task=task,
+        workspace_id=workspace_id,
+        sampled_batch=sampled_batch,
+        candidates=candidates,
+    )
+
+
+async def _run_conflict_sparse_frontier_task(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str | None,
+    sampled_batch: Any,
+    candidates: list[Any],
+) -> dict[str, Any]:
     return await run_sparse_frontier_review_task(
         ctx,
         task=task,
@@ -159,9 +211,7 @@ async def handle_conflict_screening_task(
             provider=None,
         ),
         apply_pairs=lambda proposed_pairs: _relationship_review_support.apply_conflict_proposals(ctx, proposed_pairs),
-        should_seed=lambda proposed_pairs, review_candidates: (
-            not proposed_pairs and len(review_candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES
-        ),
+        should_seed=_should_seed_conflict_review,
         enqueue_review_work_item=lambda review_candidates: _relationship_review_support.enqueue_conflict_review_work_item(
             ctx,
             task=task,
@@ -170,6 +220,10 @@ async def handle_conflict_screening_task(
             strategy_used=sampled_batch.strategy_used,
         ),
     )
+
+
+def _should_seed_conflict_review(proposed_pairs: Any, review_candidates: list[Any]) -> bool:
+    return not proposed_pairs and len(review_candidates) > _relationship_proposals.CONFLICT_DETECTOR_AI_MIN_CANDIDATES
 
 
 def _sample_graph_link_candidates(

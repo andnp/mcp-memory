@@ -9,6 +9,7 @@ import pytest
 
 from mcp_memory.core.agent_runtime import (
     AGENTIC_TASK_NAMES,
+    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
     CONFLICT_SCREENING_TASK_NAME,
     CURATOR_FRONTIER_TASK_NAME,
@@ -1859,15 +1860,15 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 14}
+    assert queue.count_by_status() == {"pending": 11}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
-    assert queue.find_open_task(CURATOR_FRONTIER_TASK_NAME, None) is not None
+    assert queue.find_open_task(CURATOR_FRONTIER_TASK_NAME, None) is None
     assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is not None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
-    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is not None
+    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
-    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is not None
+    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is None
     assert queue.find_open_task(TAG_NORMALIZER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
@@ -1884,6 +1885,45 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert curator_task is not None
     assert curator_task.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
     assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 3600.0
+
+
+def test_low_yield_deterministic_tasks_use_slower_recurring_cadence() -> None:
+    assert RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[TAG_NORMALIZER_TASK_NAME] == 1800.0
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[TAG_NORMALIZER_TASK_NAME] == 1800.0
+
+
+def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
+    assert CURATOR_FRONTIER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_does_not_schedule_follow_up_for_manual_dedup_prep_run(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+
+    task = queue.enqueue(
+        DEDUP_PREP_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="manual-dedup-prep",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+
+    worker = RuntimeTaskWorker(ctx, handlers={DEDUP_PREP_TASK_NAME: lambda context, queued_task: {"prepared": 0}}, poll_interval_seconds=0.01)
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is None
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -3412,6 +3452,71 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
         assert any(link.target_id == records[1].id and link.link_type == "CONTRADICTS" for link in outgoing)
         assert any(link.source_id == records[0].id and link.link_type == "CONTRADICTS" for link in incoming)
         assert [item.status for item in review_items] == ["completed"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_conflict_detector_seeds_agentic_review_when_direct_detection_is_sparse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        for index in range(16):
+            record = runtime.repository.create_memory(
+                title=f"isolated-conflict-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+
+        provider = FakeAIProvider(responses=[{"conflicts": []}])
+
+        result = await handle_conflict_detector_task(
+            runtime,
+            TaskRecord(
+                id="conflict-detector-inline-seed",
+                task_name=CONFLICT_DETECTOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
+
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
+        assert result["created"] == 0
+        assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "conflict_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] == 16
+        assert result["created_work_item_id"] == review_items[0].id
+        assert provider.call_count == 1
+        assert [item.status for item in review_items] == ["pending"]
+        assert len(review_items[0].payload["candidate_memory_ids"]) == 16
     finally:
         runtime.close()
 

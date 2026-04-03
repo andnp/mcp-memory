@@ -4,13 +4,15 @@ import time
 from typing import Any
 
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.maintenance_schedule import MAINTENANCE_TASK_NAMES, RECURRING_TASK_INTERVAL_SECONDS
+from mcp_memory.core.maintenance_schedule import (
+    AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES,
+    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+)
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
 
 
 AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS = 3600.0
-AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES = MAINTENANCE_TASK_NAMES
 AUTONOMOUS_MAINTENANCE_TRIGGERS = {"recurring_schedule", "recurring_follow_up"}
 
 
@@ -182,4 +184,4 @@ def _interval_seconds_from_result(task_name: str, last_result: dict[str, Any]) -
     raw_interval_seconds = last_result.get("interval_seconds")
     if isinstance(raw_interval_seconds, (int, float)) and not isinstance(raw_interval_seconds, bool):
         return float(raw_interval_seconds)
-    return RECURRING_TASK_INTERVAL_SECONDS[task_name]
+    return AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[task_name]

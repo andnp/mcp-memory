@@ -15,7 +15,11 @@ from mcp_memory.core.maintenance_idle import (
 )
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
-from mcp_memory.core.task_handlers import RECURRING_TASK_INTERVAL_SECONDS, SYSTEM1_INGEST_TASK_NAME, task_priority
+from mcp_memory.core.task_handlers import (
+    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    SYSTEM1_INGEST_TASK_NAME,
+    task_priority,
+)
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 
@@ -721,7 +725,7 @@ class RuntimeTaskWorker:
                 )
             return
 
-        interval_seconds = RECURRING_TASK_INTERVAL_SECONDS.get(task.task_name)
+        interval_seconds = AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS.get(task.task_name)
         if interval_seconds is None or terminal_task.status not in {"completed", "failed"}:
             return
 

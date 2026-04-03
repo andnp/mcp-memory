@@ -13,10 +13,12 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import (
     AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
+    should_pause_autonomous_recurring_maintenance,
     resume_paused_recurring_maintenance,
 )
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
+    CONFLICT_SCREENING_TASK_NAME,
     CURATOR_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
@@ -1011,6 +1013,67 @@ def test_resume_paused_recurring_maintenance_applies_jitter(db_manager, monkeypa
     assert resumed.available_at == pytest.approx(212.0)
     assert resumed.data["trigger"] == "recurring_resume"
     assert resumed.data["jitter_seconds"] == pytest.approx(12.0)
+
+
+def test_resume_paused_recurring_maintenance_ignores_removed_autonomous_tasks(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    paused = queue.enqueue(
+        CONFLICT_SCREENING_TASK_NAME,
+        workspace_id=None,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": 900.0,
+        },
+        available_at=0.0,
+        task_id="paused-conflict-screening",
+    )
+    assert queue.claim_next(now=10.0) is not None
+    queue.complete(
+        paused.id,
+        completed_at=20.0,
+        run_result={
+            "paused_for_idle": True,
+            "idle_seconds": AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 5.0,
+            "last_thought_at": 5.0,
+            "interval_seconds": 900.0,
+        },
+    )
+
+    assert resume_paused_recurring_maintenance(queue, now=200.0) == []
+    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
+
+
+def test_removed_frontier_and_screening_tasks_no_longer_pause_as_autonomous_recurring(db_manager) -> None:
+    journal = System1Journal(db_manager)
+    journal.record("old maintenance anchor", workspace_id="workspace-a")
+
+    task = TaskRecord(
+        id="conflict-screening-recurring",
+        task_name=CONFLICT_SCREENING_TASK_NAME,
+        data={"workspace_id": None, "trigger": "recurring_follow_up", "interval_seconds": 900.0},
+        workspace_id=None,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+    idle_state = should_pause_autonomous_recurring_maintenance(
+        task,
+        journal,
+        now=100.0 + AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 1.0,
+    )
+
+    assert idle_state is None
 
 
 @pytest.mark.asyncio

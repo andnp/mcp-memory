@@ -13,6 +13,7 @@ from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.recurring_jitter import read_recurring_jitter_seconds
 from mcp_memory.core.task_handlers import (
+    AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
     CONFLICT_SCREENING_TASK_NAME,
     CURATOR_FRONTIER_TASK_NAME,
@@ -186,7 +187,7 @@ def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
             suppression_config=None if ctx.config is None else ctx.config.ingest_suppression,
         )
 
-    for task_name, interval_seconds in RECURRING_TASK_INTERVAL_SECONDS.items():
+    for task_name, interval_seconds in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS.items():
         _ensure_recurring_task_scheduled(
             task_queue,
             journal=journal,
