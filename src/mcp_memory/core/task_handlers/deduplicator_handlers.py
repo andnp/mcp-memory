@@ -68,7 +68,7 @@ async def handle_deduplicator_task(
                     finalize_agentic_tool_tracking(ctx, task.id)
                     raise
                 complete_work_item(ctx, review_item.id)
-                normalized = prefer_deterministic_agentic_counts(
+                normalized = _prefer_deduplicator_tracked_agentic_counts(
                     _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
                     deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
                 )
@@ -118,13 +118,31 @@ async def handle_deduplicator_task(
         except Exception:
             finalize_agentic_tool_tracking(ctx, task.id)
             raise
+        normalized = _prefer_deduplicator_tracked_agentic_counts(
+            _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
+            deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
+        )
+        if _deduplicator_result_has_effective_change(normalized):
+            return sampling_payload(
+                seed_batch,
+                sampled_records=seed_records,
+                extra=normalized,
+            )
+
+        seeded_review = _seed_dedup_review_from_seed_batch(
+            ctx,
+            task=task,
+            workspace_id=workspace_id,
+            seed_batch=seed_batch,
+            seed_records=seed_records,
+            candidates=candidates,
+        )
         return sampling_payload(
             seed_batch,
             sampled_records=seed_records,
-            extra=prefer_deterministic_agentic_counts(
-                _deduplicator_support.normalize_deduplicator_agentic_result(agentic_result, seed_records),
-                deterministic_counts=finalize_agentic_tool_tracking(ctx, task.id),
-            ),
+            seed_records=seeded_review["packet_records"],
+            extra={**normalized, **seeded_review["metadata"]},
+            seeded_work_item_count=seeded_review["seeded_work_item_count"],
         )
 
     deterministic_result = await _deduplicator_merge.run_deterministic_deduplicator_pass(
@@ -135,13 +153,34 @@ async def handle_deduplicator_task(
         provider,
     )
 
+    if _deduplicator_result_has_effective_change(deterministic_result):
+        return sampling_payload(
+            seed_batch,
+            sampled_records=seed_records,
+            seed_records=seed_records,
+            merged=deterministic_result["merged"],
+            archived=deterministic_result["archived"],
+            absorbed_observations=deterministic_result["absorbed_observations"],
+        )
+
+    seeded_review = _seed_dedup_review_from_seed_batch(
+        ctx,
+        task=task,
+        workspace_id=workspace_id,
+        seed_batch=seed_batch,
+        seed_records=seed_records,
+        candidates=candidates,
+    )
+
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
-        seed_records=seed_records,
+        seed_records=seeded_review["packet_records"],
+        extra=seeded_review["metadata"],
         merged=deterministic_result["merged"],
         archived=deterministic_result["archived"],
         absorbed_observations=deterministic_result["absorbed_observations"],
+        seeded_work_item_count=seeded_review["seeded_work_item_count"],
     )
 
 
@@ -178,28 +217,20 @@ async def handle_dedup_prep_task(
             seeded_work_item_count=0,
         )
 
-    created_work_item, created = _enqueue_dedup_review_work_item(
+    seeded_review = _seed_dedup_review_from_seed_batch(
         ctx,
         task=task,
         workspace_id=workspace_id,
+        seed_batch=seed_batch,
         seed_records=seed_records,
         candidates=candidates,
-        strategy_used=seed_batch.strategy_used,
-        candidate_count=seed_batch.candidate_count,
     )
-    support_records = _deduplicator_support.select_deduplicator_support_records(seed_records, candidates)
     return sampling_payload(
         seed_batch,
         sampled_records=seed_records,
-        seed_records=seed_records + support_records,
-        extra=work_item_result_metadata(
-            family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            seed_source="frontier_seed",
-            seed_records=seed_records + support_records,
-            created_work_item=created_work_item if created else None,
-        ),
-        seeded_work_item_count=1 if created else 0,
+        seed_records=seeded_review["packet_records"],
+        extra=seeded_review["metadata"],
+        seeded_work_item_count=seeded_review["seeded_work_item_count"],
     )
 
 
@@ -245,3 +276,58 @@ def _enqueue_dedup_review_work_item(
             "packet_record_count": len(seed_records) + len(support_records),
         },
     )
+
+
+def _deduplicator_result_has_effective_change(result: dict[str, Any]) -> bool:
+    return any(
+        isinstance(result.get(metric), int) and result.get(metric, 0) > 0
+        for metric in ("merged", "archived", "absorbed_observations")
+    )
+
+
+def _prefer_deduplicator_tracked_agentic_counts(
+    result: dict[str, Any],
+    *,
+    deterministic_counts: Any,
+) -> dict[str, Any]:
+    normalized = prefer_deterministic_agentic_counts(result, deterministic_counts=deterministic_counts)
+    if int(normalized.get("tool_calls_executed", 0)) > 0:
+        return normalized
+    if int(normalized.get("mutations", 0)) > 0:
+        return normalized
+    if normalized.get("tool_names_used"):
+        return normalized
+    return result
+
+
+def _seed_dedup_review_from_seed_batch(
+    ctx: ApplicationContext,
+    *,
+    task: TaskRecord,
+    workspace_id: str | None,
+    seed_batch: Any,
+    seed_records: list[Any],
+    candidates: list[Any],
+) -> dict[str, Any]:
+    created_work_item, created = _enqueue_dedup_review_work_item(
+        ctx,
+        task=task,
+        workspace_id=workspace_id,
+        seed_records=seed_records,
+        candidates=candidates,
+        strategy_used=seed_batch.strategy_used,
+        candidate_count=seed_batch.candidate_count,
+    )
+    packet_records = seed_records + _deduplicator_support.select_deduplicator_support_records(seed_records, candidates)
+    seeded_work_item_count = 1 if created else 0
+    return {
+        "packet_records": packet_records,
+        "seeded_work_item_count": seeded_work_item_count,
+        "metadata": work_item_result_metadata(
+            family_key=WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            seed_source="frontier_seed",
+            seed_records=packet_records,
+            created_work_item=created_work_item if created else None,
+        ),
+    }

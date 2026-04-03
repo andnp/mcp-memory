@@ -4800,6 +4800,81 @@ async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_deduplicator_seeds_review_work_after_low_yield_direct_pass(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        first = runtime.repository.create_memory(
+            title="JWT rollout plan",
+            content="JWT rollout starts on Monday for client applications.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        second = runtime.repository.create_memory(
+            title="Device code expiry",
+            content="Device authorization codes expire after fifteen minutes.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        observation = runtime.repository.create_memory(
+            title="Auth rollout note",
+            content="Observed a reminder to document token issuance ownership.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="observation",
+            tags=["auth"],
+        )
+        assert first is not None and second is not None and observation is not None
+
+        result = await handle_deduplicator_task(
+            runtime,
+            TaskRecord(
+                id="deduplicator-low-yield-seeding",
+                task_name=DEDUPLICATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
+
+        review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
+
+        assert result["merged"] == 0
+        assert result["archived"] == 0
+        assert result["absorbed_observations"] == 0
+        assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "memory_dedup_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["created_work_item_id"] == review_items[0].id
+        assert [item.status for item in review_items] == ["pending"]
+        assert set(review_items[0].payload["seed_memory_ids"]) == set(result["sampled_memory_ids"])
+        packet_ids = set(review_items[0].payload["seed_memory_ids"]) | set(review_items[0].payload["support_memory_ids"])
+        assert packet_ids == set(result["seed_memory_ids"])
+        assert observation.id in packet_ids
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
