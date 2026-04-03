@@ -528,7 +528,7 @@ def _default_provider_routing_data() -> dict[str, Any]:
         "task_routes": {
             "ingest-system1": ["gemini-cheap", "copilot-mini"],
             "deduplicator": ["gemini-cheap", "copilot-mini"],
-            "memory-curator": ["gemini-strong", "copilot-strong", "gemini-cheap"],
+            "memory-curator": ["copilot-strong"],
         },
         "task_classes": {
             "ingest-system1": "cheap_agentic",
@@ -546,7 +546,7 @@ def _default_provider_routing_data() -> dict[str, Any]:
         "profile_daily_call_limits": {
             "gemini-strong": 50,
             "gemini-cheap": 100,
-            "copilot-strong": 20,
+            "copilot-strong": 40,
             "copilot-mini": 50,
         },
         "model_burst_call_limit": 2,
