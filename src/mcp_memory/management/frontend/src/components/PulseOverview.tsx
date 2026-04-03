@@ -5,6 +5,13 @@ interface PulseOverviewProps {
 }
 
 export function PulseOverview({ overview }: PulseOverviewProps) {
+  const formatPremiumUsage = (value: number) => {
+    if (Number.isInteger(value)) {
+      return value.toString();
+    }
+    return value.toFixed(2).replace(/\.00$/, '');
+  };
+
   const cards = [
     ['Memories', overview.memories.total],
     ['Memory Lines', overview.memory_metrics.total_memory_lines],
@@ -21,9 +28,13 @@ export function PulseOverview({ overview }: PulseOverviewProps) {
       {cards.map(([label, value]) => (
         <article key={label} className="metric-card">
           <p className="panel-title">{label}</p>
-          <p className="mt-1 text-xl font-semibold text-text">{value}</p>
+          <p className="mt-1 text-xl font-semibold text-text">
+            {label === 'Copilot Premium Today' ? formatPremiumUsage(value as number) : value}
+          </p>
           {label === 'Copilot Premium Today' ? (
-            <p className="mt-1 text-xs text-muted">{overview.premium_usage.copilot_premium_requests_last_day} in the last 24h</p>
+            <p className="mt-1 text-xs text-muted">
+              {formatPremiumUsage(overview.premium_usage.copilot_premium_requests_last_day)} in the last 24h
+            </p>
           ) : null}
         </article>
       ))}

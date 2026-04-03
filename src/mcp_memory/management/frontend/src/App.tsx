@@ -9,6 +9,7 @@ import { RetrievalPage } from './pages/RetrievalPage';
 import { SearchPage } from './pages/SearchPage';
 
 const NerdPage = lazy(async () => import('./pages/NerdPage').then((module) => ({ default: module.NerdPage })));
+const SelectorStatsPage = lazy(async () => import('./pages/SelectorStatsPage').then((module) => ({ default: module.SelectorStatsPage })));
 
 const navItems = [
   { to: '/', label: 'Overview', end: true },
@@ -17,6 +18,7 @@ const navItems = [
   { to: '/logs', label: 'Logs' },
   { to: '/retrieval', label: 'Retrieval' },
   { to: '/nerd', label: 'Nerd' },
+  { to: '/selector-stats', label: 'Selector Stats' },
 ];
 
 export default function App() {
@@ -51,6 +53,7 @@ export default function App() {
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/retrieval" element={<RetrievalPage />} />
           <Route path="/nerd" element={<NerdPage />} />
+          <Route path="/selector-stats" element={<SelectorStatsPage />} />
           <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
         </Routes>
       </Suspense>

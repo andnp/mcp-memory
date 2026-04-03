@@ -38,6 +38,7 @@ _REQUEST_SESSION_ID_KEY = "__session_id"
 _GLOBAL_DEFAULT_API_PATHS = {
     "overview",
     "metrics/nerd",
+    "selector-stats",
     "tasks",
     "memories",
     "memories/search",

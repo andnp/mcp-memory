@@ -610,6 +610,108 @@ export interface NerdMetricsResponse {
   provider_latency: ProviderLatencyBucket[];
 }
 
+export interface SelectorStatsSummary {
+  total_runs: number;
+  selector_signal_runs: number;
+  fresh_selector_runs: number;
+  seeded_claimed_runs: number;
+  unknown_runs: number;
+  fallback_runs: number;
+  mutation_runs: number;
+  no_op_runs: number;
+  total_mutations: number;
+  total_tool_calls: number;
+  average_candidate_count: number | null;
+}
+
+export interface SelectorClassificationBreakdown {
+  key: string;
+  label: string;
+  runs: number;
+}
+
+export interface SelectorOutcomeRow {
+  task_name: string;
+  strategy_used: string;
+  strategy_selection_mode: string;
+  reason_family: string;
+  run_classification: string;
+  runs: number;
+  fallback_count: number;
+  mutation_runs: number;
+  total_mutations: number;
+  total_tool_calls: number;
+  average_candidate_count: number | null;
+  no_op_runs: number;
+  no_op_rate: number;
+}
+
+export interface SelectorMetricSnapshot {
+  count: number;
+  min: number | null;
+  p50: number | null;
+  p90: number | null;
+  max: number | null;
+  mean: number | null;
+}
+
+export interface SelectorPopulationSnapshot {
+  count: number;
+  metrics: Record<string, SelectorMetricSnapshot>;
+  shares: Record<string, number>;
+}
+
+export interface SelectorFeatureSnapshot {
+  strategy_signals: Record<string, number>;
+  candidate_population: SelectorPopulationSnapshot;
+  selected_population: SelectorPopulationSnapshot;
+}
+
+export interface SelectorRecentDiagnostic {
+  task_id: string | null;
+  task_name: string;
+  status: string;
+  completed_at: number;
+  duration_seconds: number;
+  run_classification: string;
+  classification_reason: string;
+  requested_strategy: string | null;
+  strategy_used: string | null;
+  strategy_selection_mode: string | null;
+  strategy_selection_reason: string | null;
+  strategy_fallback_reason: string | null;
+  candidate_count: number | null;
+  claimed_work_item_count: number | null;
+  mutations: number | null;
+  tool_calls_executed: number | null;
+  strategy_selection_scores: Record<string, number>;
+  selector_feature_snapshot: SelectorFeatureSnapshot;
+  result_summary: string | null;
+}
+
+export interface SelectorFeatureRollupRow {
+  task_name: string;
+  run_classification: string;
+  runs: number;
+  snapshot_runs: number;
+  candidate_metric_means: Record<string, number>;
+  selected_metric_means: Record<string, number>;
+  candidate_share_means: Record<string, number>;
+  selected_share_means: Record<string, number>;
+  strategy_signal_means: Record<string, number>;
+}
+
+export interface SelectorStatsResponse {
+  generated_at: number;
+  window_hours: number;
+  run_limit: number;
+  summary: SelectorStatsSummary;
+  classification_breakdown: SelectorClassificationBreakdown[];
+  outcome_rows: SelectorOutcomeRow[];
+  feature_rollup_rows: SelectorFeatureRollupRow[];
+  recent_runs: SelectorRecentDiagnostic[];
+}
+
 export type NerdMetricsScope = 'global' | 'workspace';
 
 export interface CommandBarResult {
@@ -736,6 +838,17 @@ export function fetchNerdMetrics(params: {
   bucket_minutes?: number;
 } = {}): Promise<NerdMetricsResponse> {
   return requestJson<NerdMetricsResponse>(withQueryParams('/api/metrics/nerd', params), {
+    method: 'POST',
+  });
+}
+
+export function fetchSelectorStats(params: {
+  scope?: NerdMetricsScope;
+  workspace_id?: string;
+  window_hours?: number;
+  limit?: number;
+} = {}): Promise<SelectorStatsResponse> {
+  return requestJson<SelectorStatsResponse>(withQueryParams('/api/selector-stats', params), {
     method: 'POST',
   });
 }

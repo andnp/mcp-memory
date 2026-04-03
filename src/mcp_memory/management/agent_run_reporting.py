@@ -12,6 +12,9 @@ from mcp_memory.management.models import (
     IngestAuditPayload,
     IngestEntryDispositionPayload,
     RunResultMetadataPayload,
+    SelectorFeatureSnapshotPayload,
+    SelectorMetricSnapshotPayload,
+    SelectorPopulationSnapshotPayload,
 )
 
 
@@ -257,6 +260,7 @@ def extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataP
         strategy_selection_mode=_coerce_str(result.get("strategy_selection_mode")),
         strategy_selection_reason=_coerce_str(result.get("strategy_selection_reason")),
         strategy_selection_scores=_coerce_score_mapping(result.get("strategy_selection_scores")),
+        selector_feature_snapshot=_coerce_selector_feature_snapshot(result.get("selector_feature_snapshot")),
         candidate_count=_coerce_int(result.get("candidate_count")),
         sampled_memory_ids=[str(item) for item in sampled_memory_ids] if isinstance(sampled_memory_ids, list) else [],
         compatibility_group=_coerce_str(result.get("compatibility_group")),
@@ -364,6 +368,54 @@ def _coerce_score_mapping(value: object) -> dict[str, float]:
         if isinstance(item, (int, float)):
             scores[key] = float(item)
     return scores
+
+
+def _coerce_selector_feature_snapshot(value: object) -> SelectorFeatureSnapshotPayload:
+    if not isinstance(value, Mapping):
+        return SelectorFeatureSnapshotPayload()
+    return SelectorFeatureSnapshotPayload(
+        strategy_signals=_coerce_score_mapping(value.get("strategy_signals")),
+        candidate_population=_coerce_selector_population_snapshot(value.get("candidate_population")),
+        selected_population=_coerce_selector_population_snapshot(value.get("selected_population")),
+    )
+
+
+def _coerce_selector_population_snapshot(value: object) -> SelectorPopulationSnapshotPayload:
+    if not isinstance(value, Mapping):
+        return SelectorPopulationSnapshotPayload()
+    metrics: dict[str, SelectorMetricSnapshotPayload] = {}
+    raw_metrics = value.get("metrics")
+    if isinstance(raw_metrics, Mapping):
+        for key, item in raw_metrics.items():
+            if not isinstance(key, str):
+                continue
+            metrics[key] = _coerce_selector_metric_snapshot(item)
+    return SelectorPopulationSnapshotPayload(
+        count=_coerce_int(value.get("count")) or 0,
+        metrics=metrics,
+        shares=_coerce_score_mapping(value.get("shares")),
+    )
+
+
+def _coerce_selector_metric_snapshot(value: object) -> SelectorMetricSnapshotPayload:
+    if not isinstance(value, Mapping):
+        return SelectorMetricSnapshotPayload()
+    return SelectorMetricSnapshotPayload(
+        count=_coerce_int(value.get("count")) or 0,
+        min=_coerce_float_or_none(value.get("min")),
+        p50=_coerce_float_or_none(value.get("p50")),
+        p90=_coerce_float_or_none(value.get("p90")),
+        max=_coerce_float_or_none(value.get("max")),
+        mean=_coerce_float_or_none(value.get("mean")),
+    )
+
+
+def _coerce_float_or_none(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _coerce_ingest_entry_dispositions(value: object) -> list[IngestEntryDispositionPayload]:

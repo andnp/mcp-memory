@@ -25,6 +25,7 @@ from mcp_memory.management.operator_health_reporting import (
     summarize_provider_policy,
 )
 from mcp_memory.management.overview_reporting import build_overview
+from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
@@ -44,6 +45,7 @@ from mcp_memory.management.models import (
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
     RuntimeLogSummaryPayload,
+    SelectorStatsPayload,
     TaskDetailPayload,
     TaskSamplingSummaryPayload,
     TaskListPayload,
@@ -517,6 +519,32 @@ class ManagementService:
 
     def get_task_sampling_summary(self, *, limit: int = 50) -> TaskSamplingSummaryPayload:
         return build_task_sampling_summary(self.list_recent_agent_runs(limit=limit).runs)
+
+    def get_selector_stats(
+        self,
+        *,
+        scope: str | None = None,
+        workspace_id: str | None = None,
+        window_hours: int = 24,
+        limit: int = 200,
+        now: float | None = None,
+    ) -> SelectorStatsPayload:
+        effective_workspace_id = self._resolve_scoped_workspace_id(
+            scope=scope,
+            workspace_id=workspace_id,
+        )
+        runs = build_recent_agent_runs(
+            self._db_manager,
+            effective_workspace_id,
+            limit=limit,
+            detail_level="compact",
+        )
+        return build_selector_stats_payload(
+            runs,
+            window_hours=window_hours,
+            run_limit=limit,
+            now=now,
+        )
 
     def get_task_detail(self, task_id: str) -> TaskDetailPayload:
         task = self._task_queue.get_task(task_id)

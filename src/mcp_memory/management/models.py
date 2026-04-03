@@ -254,8 +254,8 @@ class JournalSummary(BaseModel):
 
 
 class PremiumUsageSummaryPayload(BaseModel):
-    copilot_premium_requests_today: int = 0
-    copilot_premium_requests_last_day: int = 0
+    copilot_premium_requests_today: float = 0.0
+    copilot_premium_requests_last_day: float = 0.0
 
 
 class MemoryMetricsPayload(BaseModel):
@@ -281,6 +281,39 @@ class QueueDiagnosticPayload(BaseModel):
     overdue_seconds: float = 0.0
 
 
+class SelectorMetricSnapshotPayload(BaseModel):
+    count: int = 0
+    min: float | None = None
+    p50: float | None = None
+    p90: float | None = None
+    max: float | None = None
+    mean: float | None = None
+
+
+class SelectorPopulationSnapshotPayload(BaseModel):
+    count: int = 0
+    metrics: dict[str, SelectorMetricSnapshotPayload] = Field(default_factory=dict)
+    shares: dict[str, float] = Field(default_factory=dict)
+
+
+class SelectorFeatureSnapshotPayload(BaseModel):
+    strategy_signals: dict[str, float] = Field(default_factory=dict)
+    candidate_population: SelectorPopulationSnapshotPayload = Field(default_factory=SelectorPopulationSnapshotPayload)
+    selected_population: SelectorPopulationSnapshotPayload = Field(default_factory=SelectorPopulationSnapshotPayload)
+
+
+class SelectorFeatureRollupRowPayload(BaseModel):
+    task_name: str
+    run_classification: str
+    runs: int = 0
+    snapshot_runs: int = 0
+    candidate_metric_means: dict[str, float] = Field(default_factory=dict)
+    selected_metric_means: dict[str, float] = Field(default_factory=dict)
+    candidate_share_means: dict[str, float] = Field(default_factory=dict)
+    selected_share_means: dict[str, float] = Field(default_factory=dict)
+    strategy_signal_means: dict[str, float] = Field(default_factory=dict)
+
+
 class RunResultMetadataPayload(BaseModel):
     requested_strategy: str | None = None
     strategy_used: str | None = None
@@ -288,6 +321,7 @@ class RunResultMetadataPayload(BaseModel):
     strategy_selection_mode: str | None = None
     strategy_selection_reason: str | None = None
     strategy_selection_scores: dict[str, float] = Field(default_factory=dict)
+    selector_feature_snapshot: SelectorFeatureSnapshotPayload = Field(default_factory=SelectorFeatureSnapshotPayload)
     candidate_count: int | None = None
     sampled_memory_ids: list[str] = Field(default_factory=list)
     compatibility_group: str | None = None
@@ -431,6 +465,75 @@ class TaskSamplingSummaryPayload(BaseModel):
     grouping: list[SamplingSummaryRowPayload] = Field(default_factory=list)
     selection_utility: list[SelectionStrategyUtilityPayload] = Field(default_factory=list)
     selector_behavior: list[SelectorBehaviorSummaryPayload] = Field(default_factory=list)
+
+
+class SelectorStatsSummaryPayload(BaseModel):
+    total_runs: int = 0
+    selector_signal_runs: int = 0
+    fresh_selector_runs: int = 0
+    seeded_claimed_runs: int = 0
+    unknown_runs: int = 0
+    fallback_runs: int = 0
+    mutation_runs: int = 0
+    no_op_runs: int = 0
+    total_mutations: int = 0
+    total_tool_calls: int = 0
+    average_candidate_count: float | None = None
+
+
+class SelectorClassificationBreakdownPayload(BaseModel):
+    key: str
+    label: str
+    runs: int = 0
+
+
+class SelectorOutcomeRowPayload(BaseModel):
+    task_name: str
+    strategy_used: str
+    strategy_selection_mode: str
+    reason_family: str
+    run_classification: str
+    runs: int = 0
+    fallback_count: int = 0
+    mutation_runs: int = 0
+    total_mutations: int = 0
+    total_tool_calls: int = 0
+    average_candidate_count: float | None = None
+    no_op_runs: int = 0
+    no_op_rate: float = 0.0
+
+
+class SelectorRecentDiagnosticPayload(BaseModel):
+    task_id: str | None = None
+    task_name: str
+    status: str
+    completed_at: float
+    duration_seconds: float
+    run_classification: str
+    classification_reason: str
+    requested_strategy: str | None = None
+    strategy_used: str | None = None
+    strategy_selection_mode: str | None = None
+    strategy_selection_reason: str | None = None
+    strategy_fallback_reason: str | None = None
+    candidate_count: int | None = None
+    claimed_work_item_count: int | None = None
+    mutations: int | None = None
+    tool_calls_executed: int | None = None
+    strategy_selection_scores: dict[str, float] = Field(default_factory=dict)
+    selector_feature_snapshot: SelectorFeatureSnapshotPayload = Field(default_factory=SelectorFeatureSnapshotPayload)
+    result_summary: str | None = None
+
+
+class SelectorStatsPayload(BaseModel):
+    generated_at: float
+    window_hours: int
+    run_limit: int
+    summary: SelectorStatsSummaryPayload = Field(default_factory=SelectorStatsSummaryPayload)
+    classification_breakdown: list[SelectorClassificationBreakdownPayload] = Field(default_factory=list)
+    outcome_rows: list[SelectorOutcomeRowPayload] = Field(default_factory=list)
+    feature_rollup_rows: list[SelectorFeatureRollupRowPayload] = Field(default_factory=list)
+    recent_runs: list[SelectorRecentDiagnosticPayload] = Field(default_factory=list)
 
 
 class RuntimeLogPayload(BaseModel):

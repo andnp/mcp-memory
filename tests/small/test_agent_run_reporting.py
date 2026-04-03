@@ -60,6 +60,23 @@ def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None
                 "semantic": 0.75,
                 "anomaly": 0.2,
             },
+            "selector_feature_snapshot": {
+                "strategy_signals": {"semantic_overlap_share": 0.81},
+                "candidate_population": {
+                    "count": 8,
+                    "metrics": {
+                        "content_chars": {"count": 8, "min": 10.0, "p50": 22.0, "p90": 40.0, "max": 50.0, "mean": 24.5},
+                    },
+                    "shares": {"never_surfaced_share": 0.5},
+                },
+                "selected_population": {
+                    "count": 3,
+                    "metrics": {
+                        "content_chars": {"count": 3, "min": 20.0, "p50": 25.0, "p90": 30.0, "max": 30.0, "mean": 25.0},
+                    },
+                    "shares": {"never_surfaced_share": 0.3333},
+                },
+            },
             "candidate_count": 8,
         },
         detail_level="full",
@@ -70,6 +87,10 @@ def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None
     assert payload.result_metadata.strategy_selection_mode == "deterministic_scores"
     assert payload.result_metadata.strategy_selection_reason == "selected=semantic"
     assert payload.result_metadata.strategy_selection_scores == {"semantic": 0.75, "anomaly": 0.2}
+    assert payload.result_metadata.selector_feature_snapshot.strategy_signals == {"semantic_overlap_share": 0.81}
+    assert payload.result_metadata.selector_feature_snapshot.candidate_population.count == 8
+    assert payload.result_metadata.selector_feature_snapshot.candidate_population.metrics["content_chars"].p50 == 22.0
+    assert payload.result_metadata.selector_feature_snapshot.selected_population.count == 3
     assert payload.result_metadata.candidate_count == 8
 
 

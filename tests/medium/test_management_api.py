@@ -1632,6 +1632,142 @@ def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp
         assert zmq_cancel["task"]["cancellation_reason"] == "zmq_cancelled"
 
 
+def test_http_selector_stats_endpoint_reports_fresh_seeded_and_unknown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.task_queue is not None
+        assert runtime.workspace_id is not None
+        fresh_task = runtime.task_queue.enqueue(
+            "memory-curator",
+            task_id="selector-fresh-1",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        seeded_task = runtime.task_queue.enqueue(
+            "memory-curator",
+            task_id="selector-seeded-1",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        unknown_task = runtime.task_queue.enqueue(
+            "graph-linker",
+            task_id="selector-unknown-1",
+            workspace_id=runtime.workspace_id,
+            available_at=0.0,
+        )
+        assert runtime.task_queue.claim_next(now=100.0) is not None
+        runtime.task_queue.complete(
+            fresh_task.id,
+            completed_at=101.0,
+            run_result={
+                "requested_strategy": "semantic",
+                "strategy_used": "semantic",
+                "strategy_selection_mode": "deterministic_scores",
+                "strategy_selection_reason": "selected=semantic from deterministic scores",
+                "strategy_selection_scores": {"semantic": 0.95, "lexical": 0.4},
+                "selector_feature_snapshot": {
+                    "strategy_signals": {"semantic_overlap_share": 0.82},
+                    "candidate_population": {
+                        "count": 6,
+                        "metrics": {
+                            "content_chars": {"count": 6, "min": 10.0, "p50": 20.0, "p90": 40.0, "max": 45.0, "mean": 23.0},
+                        },
+                        "shares": {"never_surfaced_share": 0.5},
+                    },
+                    "selected_population": {
+                        "count": 3,
+                        "metrics": {
+                            "content_chars": {"count": 3, "min": 12.0, "p50": 24.0, "p90": 36.0, "max": 36.0, "mean": 24.0},
+                        },
+                        "shares": {"never_surfaced_share": 0.3333},
+                    },
+                },
+                "candidate_count": 6,
+                "claimed_work_item_count": 0,
+                "mutations": 2,
+                "tool_calls_executed": 3,
+            },
+        )
+        assert runtime.task_queue.claim_next(now=102.0) is not None
+        runtime.task_queue.complete(
+            seeded_task.id,
+            completed_at=103.0,
+            run_result={
+                "requested_strategy": "semantic",
+                "strategy_used": "semantic",
+                "strategy_selection_mode": "utility_priors",
+                "strategy_selection_reason": "utility prior tie-break",
+                "strategy_fallback_reason": "insufficient_candidates",
+                "candidate_count": 5,
+                "claimed_work_item_count": 2,
+                "mutations": 0,
+                "tool_calls_executed": 1,
+            },
+        )
+        assert runtime.task_queue.claim_next(now=104.0) is not None
+        runtime.task_queue.complete(
+            unknown_task.id,
+            completed_at=105.0,
+            run_result={
+                "strategy_used": "lexical",
+                "candidate_count": 4,
+                "mutations": 1,
+                "tool_calls_executed": 1,
+            },
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    with TestClient(app) as client:
+        response = client.get("/api/selector-stats", params={"window_hours": 24, "now": 110.0, "limit": 3})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["window_hours"] == 24
+    assert payload["summary"]["total_runs"] == 3
+    assert payload["summary"]["fresh_selector_runs"] == 1
+    assert payload["summary"]["seeded_claimed_runs"] == 1
+    assert payload["summary"]["unknown_runs"] == 1
+    assert payload["summary"]["fallback_runs"] == 1
+    assert payload["classification_breakdown"] == [
+        {"key": "fresh_selector", "label": "Fresh selector", "runs": 1},
+        {"key": "seeded_claimed", "label": "Seeded/claimed", "runs": 1},
+        {"key": "unknown", "label": "Unknown", "runs": 1},
+    ]
+    assert len(payload["outcome_rows"]) == 3
+    assert payload["feature_rollup_rows"] == [
+        {
+            "task_name": "memory-curator",
+            "run_classification": "fresh_selector",
+            "runs": 1,
+            "snapshot_runs": 1,
+            "candidate_metric_means": {"content_chars": 23.0},
+            "selected_metric_means": {"content_chars": 24.0},
+            "candidate_share_means": {"never_surfaced_share": 0.5},
+            "selected_share_means": {"never_surfaced_share": 0.3333},
+            "strategy_signal_means": {"semantic_overlap_share": 0.82},
+        }
+    ]
+    assert payload["recent_runs"][0]["task_id"] == "selector-unknown-1"
+    assert payload["recent_runs"][0]["run_classification"] == "unknown"
+    fresh_run = next(row for row in payload["recent_runs"] if row["task_id"] == "selector-fresh-1")
+    assert fresh_run["run_classification"] == "fresh_selector"
+    assert fresh_run["strategy_selection_scores"] == {"semantic": 0.95, "lexical": 0.4}
+    assert fresh_run["selector_feature_snapshot"]["strategy_signals"] == {"semantic_overlap_share": 0.82}
+    assert fresh_run["selector_feature_snapshot"]["candidate_population"]["count"] == 6
+    seeded_run = next(row for row in payload["recent_runs"] if row["task_id"] == "selector-seeded-1")
+    assert seeded_run["run_classification"] == "seeded_claimed"
+    assert seeded_run["classification_reason"] == "claimed_work_item_count=2"
+
+
 def test_management_api_rejects_invalid_json_and_non_object_json_body(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

@@ -10,6 +10,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
+from mcp_memory.management.reporting_queries import extract_copilot_premium_requests
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
@@ -107,6 +108,59 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.maintenance_summary.family_delta_series == []
     assert nerd_metrics.agent_throughput == []
     assert nerd_metrics.provider_latency == []
+
+
+def test_extract_copilot_premium_requests_preserves_fractional_values() -> None:
+    assert extract_copilot_premium_requests(
+        response_text='{"type":"result","usage":{"premiumRequests":0.33}}',
+        parsed_json=None,
+    ) == pytest.approx(0.33)
+
+    assert extract_copilot_premium_requests(
+        response_text='{"type":"message"}\n{"type":"result","usage":{"premiumRequests":1.67}}',
+        parsed_json=None,
+    ) == pytest.approx(1.67)
+
+
+def test_management_service_overview_preserves_fractional_premium_usage(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    now = time.time()
+    db_manager.get_connection().execute(
+        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "req-fractional-premium",
+            1,
+            "workspace-a",
+            "memory-curator",
+            "task-fractional-premium",
+            "copilot-cli",
+            "Copilot CLI",
+            "claude-haiku-4.5",
+            4444,
+            "prompt",
+            '{"type":"result","usage":{"premiumRequests":0.33}}',
+            None,
+            "success",
+            None,
+            now - 30.0,
+            now - 10.0,
+            20.0,
+        ),
+    )
+    db_manager.get_connection().commit()
+
+    overview = service.get_overview()
+
+    assert overview.premium_usage.copilot_premium_requests_today == pytest.approx(0.33)
+    assert overview.premium_usage.copilot_premium_requests_last_day == pytest.approx(0.33)
 
 
 def test_management_service_task_sampling_summary_aggregates_recent_run_utility(db_manager) -> None:

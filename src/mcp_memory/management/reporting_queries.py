@@ -254,7 +254,7 @@ def list_ai_conversation_rows_since(db_manager, *, cutoff: float, upper_bound: f
     return _fetchall_rows(db_manager, query, params)
 
 
-def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, now: float | None = None) -> dict[str, int]:
+def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, now: float | None = None) -> dict[str, float]:
     if db_manager is None:
         return {
             "copilot_premium_requests_today": 0,
@@ -266,8 +266,8 @@ def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, 
     today_start = datetime.fromtimestamp(current_time, UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     query_cutoff = min(last_day_cutoff, today_start)
 
-    premium_requests_today = 0
-    premium_requests_last_day = 0
+    premium_requests_today = 0.0
+    premium_requests_last_day = 0.0
     for row in list_ai_conversation_rows_since(
         db_manager,
         cutoff=query_cutoff,
@@ -313,21 +313,21 @@ def _coerce_float(value: object) -> float:
     raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
-def extract_copilot_premium_requests(*, response_text: str | None, parsed_json: str | None) -> int:
-    premium_requests: list[int] = []
+def extract_copilot_premium_requests(*, response_text: str | None, parsed_json: str | None) -> float:
+    premium_requests: list[float] = []
     premium_requests.extend(_premium_requests_from_maybe_json(parsed_json))
     premium_requests.extend(_premium_requests_from_maybe_json(response_text))
     return max(premium_requests, default=0)
 
 
-def _premium_requests_from_maybe_json(value: str | None) -> list[int]:
+def _premium_requests_from_maybe_json(value: str | None) -> list[float]:
     if not isinstance(value, str):
         return []
     text = value.strip()
     if not text:
         return []
 
-    premium_requests: list[int] = []
+    premium_requests: list[float] = []
     parsed_text = _try_json_loads(text)
     if parsed_text is not None:
         premium_requests.extend(_collect_premium_requests(parsed_text))
@@ -349,14 +349,14 @@ def _try_json_loads(text: str) -> Any | None:
         return None
 
 
-def _collect_premium_requests(payload: Any) -> list[int]:
-    results: list[int] = []
+def _collect_premium_requests(payload: Any) -> list[float]:
+    results: list[float] = []
     if isinstance(payload, dict):
         premium_value = payload.get("premiumRequests")
         if isinstance(premium_value, bool):
             premium_value = None
         if isinstance(premium_value, (int, float)):
-            results.append(int(premium_value))
+            results.append(float(premium_value))
         for value in payload.values():
             results.extend(_collect_premium_requests(value))
     elif isinstance(payload, list):

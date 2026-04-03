@@ -108,6 +108,8 @@ def sampling_payload(
         payload["strategy_selection_reason"] = batch.strategy_selection_reason
     if batch.strategy_selection_scores is not None:
         payload["strategy_selection_scores"] = batch.strategy_selection_scores
+    if batch.selector_feature_snapshot is not None:
+        payload["selector_feature_snapshot"] = batch.selector_feature_snapshot
     if sampled_records is not None:
         payload["sampled_memory_ids"] = [record.id for record in sampled_records]
     if seed_records is not None:

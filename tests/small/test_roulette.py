@@ -122,6 +122,59 @@ def test_curator_strategy_selection_is_deterministic_and_signal_driven_without_r
     assert first.strategy_selection_scores[NEVER_SURFACED_STRATEGY] > first.strategy_selection_scores[COLD_STORAGE_STRATEGY]
     assert first.strategy_selection_reason is not None
     assert "never_surfaced_share" in first.strategy_selection_reason
+    assert first.selector_feature_snapshot is not None
+    assert first.selector_feature_snapshot["strategy_signals"]["never_surfaced_share"] == 1.0
+    assert first.selector_feature_snapshot["candidate_population"]["count"] == 2
+    assert first.selector_feature_snapshot["selected_population"]["count"] == 1
+    assert first.selector_feature_snapshot["candidate_population"]["metrics"]["content_chars"]["p50"] == 4.5
+    assert first.selector_feature_snapshot["candidate_population"]["shares"]["never_surfaced_share"] == 1.0
+
+
+def test_roulette_selector_snapshot_captures_candidate_and_selected_feature_stats() -> None:
+    candidates = [
+        _FakeRecord(
+            id="cold-large",
+            title="Cold large",
+            content="x" * 100,
+            read_count=1,
+            updated_at="2026-03-01T00:00:00+00:00",
+            last_accessed_at="2026-02-01T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="warm-small",
+            title="Warm small",
+            content="tiny",
+            read_count=9,
+            updated_at="2026-03-30T00:00:00+00:00",
+            last_accessed_at="2026-03-29T00:00:00+00:00",
+            last_surfaced_at="2026-03-28T00:00:00+00:00",
+        ),
+    ]
+
+    batch = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-snapshot",
+        candidates=candidates,
+        support_counts={"cold-large": 0, "warm-small": 3},
+        now_timestamp=1_745_280_000.0,
+    ).get_batch(
+        strategy=COLD_STORAGE_STRATEGY,
+        allowed_strategies=(COLD_STORAGE_STRATEGY,),
+        limit=1,
+    )
+
+    assert batch.selector_feature_snapshot is not None
+    snapshot = batch.selector_feature_snapshot
+    assert snapshot["strategy_signals"] == {}
+    assert snapshot["candidate_population"]["metrics"]["content_chars"]["min"] == 4.0
+    assert snapshot["candidate_population"]["metrics"]["content_chars"]["max"] == 100.0
+    assert snapshot["candidate_population"]["metrics"]["read_count"]["mean"] == 5.0
+    assert snapshot["candidate_population"]["metrics"]["support_count"]["p90"] == 3.0
+    assert snapshot["candidate_population"]["shares"]["never_accessed_share"] == 0.0
+    assert snapshot["candidate_population"]["shares"]["low_support_share"] == 0.5
+    assert snapshot["selected_population"]["count"] == 1
+    assert snapshot["selected_population"]["metrics"]["support_count"]["mean"] == 0.0
+    assert snapshot["selected_population"]["shares"]["never_surfaced_share"] == 1.0
 
 
 def test_roulette_cold_and_never_surfaced_treat_missing_timestamps_as_oldest() -> None:

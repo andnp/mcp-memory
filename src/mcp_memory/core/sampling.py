@@ -7,7 +7,7 @@ from random import Random
 import time
 import re
 from statistics import median
-from typing import Callable, Generic, Protocol, TypeVar
+from typing import Any, Callable, Generic, Protocol, TypeVar
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -104,6 +104,7 @@ class SamplingBatch(Generic[T]):
     strategy_selection_mode: str | None = None
     strategy_selection_reason: str | None = None
     strategy_selection_scores: dict[str, float] | None = None
+    selector_feature_snapshot: dict[str, Any] | None = None
 
 
 class RouletteProvider(Generic[T]):
@@ -162,20 +163,21 @@ class RouletteProvider(Generic[T]):
         selection_mode = None
         selection_reason = None
         selection_scores = None
+        selection_signals = None
         if strategy_used is None:
-            strategy_used, selection_mode, selection_reason, selection_scores = self._select_strategy(
+            strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
                 strategy_weights,
             )
         elif strategy_used not in ALL_STRATEGIES:
             fallback_reason = "unknown_requested_strategy"
-            strategy_used, selection_mode, selection_reason, selection_scores = self._select_strategy(
+            strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
                 strategy_weights,
             )
         elif strategy_used not in allowed_strategies:
             fallback_reason = "disallowed_requested_strategy"
-            strategy_used, selection_mode, selection_reason, selection_scores = self._select_strategy(
+            strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
                 strategy_weights,
             )
@@ -184,22 +186,27 @@ class RouletteProvider(Generic[T]):
             selection_reason = "requested_strategy_preserved"
 
         ranked = self._rank_candidates(strategy_used)
+        selected_records = ranked[:limit]
         return SamplingBatch(
             requested_strategy=requested_strategy,
             strategy_used=strategy_used,
             strategy_fallback_reason=fallback_reason,
             candidate_count=len(self._candidates),
-            records=ranked[:limit],
+            records=selected_records,
             strategy_selection_mode=selection_mode,
             strategy_selection_reason=selection_reason,
             strategy_selection_scores=selection_scores,
+            selector_feature_snapshot=self._build_selector_feature_snapshot(
+                selected_records,
+                strategy_signals=selection_signals,
+            ),
         )
 
     def _select_strategy(
         self,
         allowed_strategies: tuple[str, ...],
         strategy_weights: dict[str, int] | None,
-    ) -> tuple[str, str | None, str | None, dict[str, float] | None]:
+    ) -> tuple[str, str | None, str | None, dict[str, float] | None, dict[str, float] | None]:
         if self._task_name == CURATOR_TASK_NAME:
             return self._choose_curator_strategy(allowed_strategies)
         if self._task_name == DEDUPLICATOR_TASK_NAME:
@@ -217,12 +224,13 @@ class RouletteProvider(Generic[T]):
             "seeded_random",
             None,
             None,
+            None,
         )
 
     def _choose_curator_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals, applied_utility_priors = self._curator_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -234,7 +242,7 @@ class RouletteProvider(Generic[T]):
     def _choose_deduplicator_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals, applied_utility_priors = self._deduplicator_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -246,7 +254,7 @@ class RouletteProvider(Generic[T]):
     def _choose_taxonomist_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals, applied_utility_priors = self._taxonomist_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -258,7 +266,7 @@ class RouletteProvider(Generic[T]):
     def _choose_graph_linker_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals = self._graph_linker_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -270,7 +278,7 @@ class RouletteProvider(Generic[T]):
     def _choose_defragmenter_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals = self._defragmenter_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -282,7 +290,7 @@ class RouletteProvider(Generic[T]):
     def _choose_conflict_detector_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         scores, signals = self._conflict_detector_strategy_scores(allowed_strategies)
         return self._finalize_deterministic_strategy_choice(
             allowed_strategies,
@@ -298,12 +306,13 @@ class RouletteProvider(Generic[T]):
         scores: dict[str, float],
         signals: dict[str, float],
         applied_utility_priors: dict[str, float],
-    ) -> tuple[str, str, str, dict[str, float]]:
+    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
         strategy_used = min(
             allowed_strategies,
             key=lambda strategy: (-scores.get(strategy, 0.0), allowed_strategies.index(strategy), strategy),
         )
         rounded_scores = {strategy: round(scores.get(strategy, 0.0), 3) for strategy in allowed_strategies}
+        rounded_signals = {signal_name: round(signal_value, 3) for signal_name, signal_value in sorted(signals.items())}
         dominant_signals = ", ".join(
             f"{signal_name}={signal_value:.3f}"
             for signal_name, signal_value in sorted(signals.items(), key=lambda item: (-item[1], item[0]))[:3]
@@ -325,7 +334,106 @@ class RouletteProvider(Generic[T]):
             selection_mode,
             selection_reason,
             rounded_scores,
+            rounded_signals,
         )
+
+    def _build_selector_feature_snapshot(
+        self,
+        selected_records: Sequence[T],
+        *,
+        strategy_signals: dict[str, float] | None,
+    ) -> dict[str, Any]:
+        return {
+            "strategy_signals": {
+                signal_name: round(signal_value, 3)
+                for signal_name, signal_value in sorted((strategy_signals or {}).items())
+            },
+            "candidate_population": self._build_population_feature_snapshot(self._candidates),
+            "selected_population": self._build_population_feature_snapshot(selected_records),
+        }
+
+    def _build_population_feature_snapshot(self, records: Sequence[T]) -> dict[str, Any]:
+        record_list = list(records)
+        metrics: dict[str, dict[str, float | int | None]] = {}
+
+        self._add_metric_summary(
+            metrics,
+            "content_chars",
+            [float(len(item.content.strip())) for item in record_list],
+        )
+        self._add_metric_summary(
+            metrics,
+            "updated_age_seconds",
+            [age for item in record_list if (age := self._age_seconds(item.updated_at)) is not None],
+        )
+        self._add_metric_summary(
+            metrics,
+            "last_access_age_seconds",
+            [age for item in record_list if (age := self._age_seconds(item.last_accessed_at)) is not None],
+        )
+        self._add_metric_summary(
+            metrics,
+            "last_surfaced_age_seconds",
+            [age for item in record_list if (age := self._age_seconds(item.last_surfaced_at)) is not None],
+        )
+        self._add_metric_summary(metrics, "read_count", [float(item.read_count) for item in record_list])
+        self._add_metric_summary(
+            metrics,
+            "support_count",
+            [float(self._support_counts.get(item.id, 0)) for item in record_list],
+        )
+
+        return {
+            "count": len(record_list),
+            "metrics": metrics,
+            "shares": {
+                "never_surfaced_share": self._share_for_records(record_list, lambda item: item.last_surfaced_at is None),
+                "never_accessed_share": self._share_for_records(record_list, lambda item: item.last_accessed_at is None),
+                "cooldown_share": self._share_for_records(record_list, self._is_in_cooldown),
+                "low_support_share": self._share_for_records(
+                    record_list,
+                    lambda item: self._support_counts.get(item.id, 0) <= CURATOR_LOW_SUPPORT_THRESHOLD,
+                ),
+            },
+        }
+
+    def _add_metric_summary(
+        self,
+        metrics: dict[str, dict[str, float | int | None]],
+        key: str,
+        values: Sequence[float],
+    ) -> None:
+        summary = self._summarize_numeric_values(values)
+        if summary is not None:
+            metrics[key] = summary
+
+    def _summarize_numeric_values(self, values: Sequence[float]) -> dict[str, float | int | None] | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        return {
+            "count": len(ordered),
+            "min": round(ordered[0], 3),
+            "p50": round(median(ordered), 3),
+            "p90": round(_percentile(ordered, 0.9), 3),
+            "max": round(ordered[-1], 3),
+            "mean": round(sum(ordered) / len(ordered), 3),
+        }
+
+    def _age_seconds(self, value: str | None) -> float | None:
+        parsed = _parse_iso_timestamp(value)
+        if parsed is None:
+            return None
+        return max(self._now_timestamp - parsed, 0.0)
+
+    def _share_for_records(self, records: Sequence[T], predicate: Callable[[T], bool]) -> float:
+        if not records:
+            return 0.0
+        matches = 0
+        for record in records:
+            if predicate(record):
+                matches += 1
+        return round(matches / len(records), 4)
 
     def _curator_strategy_scores(
         self,
@@ -848,3 +956,10 @@ def _parse_iso_timestamp(value: str | None) -> float | None:
         return datetime.fromisoformat(value).astimezone(UTC).timestamp()
     except ValueError:
         return None
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        raise ValueError("values must be non-empty")
+    index = max(0, min(len(values) - 1, int(round((len(values) - 1) * quantile))))
+    return values[index]
