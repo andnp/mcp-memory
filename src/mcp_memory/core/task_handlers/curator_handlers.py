@@ -16,7 +16,6 @@ from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_work
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     claim_work_batch,
     complete_work_item,
-    enqueue_review_work_item,
     release_work_item,
     work_item_result_metadata,
 )
@@ -66,7 +65,7 @@ async def handle_memory_curator_task(
     work_item_metadata = work_item_result_metadata(
         family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
-        seed_source="claimed_review_work_item" if claimed_review_item is not None else "sampled_frontier",
+        seed_source="claimed_review_work_item" if claimed_review_item is not None else "direct_sampling",
         seed_records=seed_records,
         claimed_work_item=claimed_review_item,
     )
@@ -212,50 +211,6 @@ async def handle_memory_curator_task(
     )
 
 
-async def handle_curator_frontier_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
-    seed_records = seed_batch.records
-    support_records = _curator_support.select_curator_support_records(ctx, task, seed_records)
-    if not seed_records:
-        return sampling_payload(
-            seed_batch,
-            sampled_records=seed_records,
-            seed_records=seed_records,
-            seeded_work_item_count=0,
-            reason="no_seed_records",
-        )
-
-    created_work_item, created = _enqueue_curator_review_work_item(
-        ctx,
-        task=task,
-        workspace_id=workspace_id,
-        seed_records=seed_records,
-        support_records=support_records,
-        strategy_used=seed_batch.strategy_used,
-        candidate_count=seed_batch.candidate_count,
-    )
-    return sampling_payload(
-        seed_batch,
-        sampled_records=seed_records,
-        seed_records=seed_records + support_records,
-        extra=work_item_result_metadata(
-            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            seed_source="frontier_seed",
-            seed_records=seed_records + support_records,
-            created_work_item=created_work_item if created else None,
-        ),
-        seeded_work_item_count=1 if created else 0,
-    )
-
-
 def _claim_curator_review_work_batch(
     ctx: ApplicationContext,
     *,
@@ -268,32 +223,4 @@ def _claim_curator_review_work_batch(
         family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
         execution_lane=EXECUTION_LANE_AGENTIC,
         limit=limit,
-    )
-
-
-def _enqueue_curator_review_work_item(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str | None,
-    seed_records: list[Any],
-    support_records: list[Any],
-    strategy_used: str | None,
-    candidate_count: int,
-) -> tuple[Any, bool]:
-    return enqueue_review_work_item(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=workspace_id,
-        idempotency_prefix="memory_curation_review",
-        payload_memory_ids_key="seed_memory_ids",
-        memory_ids=[record.id for record in seed_records],
-        strategy_used=strategy_used,
-        candidate_count=candidate_count,
-        extra_payload={
-            "support_memory_ids": [record.id for record in support_records],
-            "packet_record_count": len(seed_records) + len(support_records),
-        },
     )
