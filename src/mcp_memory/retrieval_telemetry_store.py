@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
 
 
+type _TelemetryRow = tuple[object, ...]
+
+
 class RetrievalTelemetryRepository:
     def __init__(self, db_manager: Any = None, *, workspace_id: str | None) -> None:
         self._db_manager = db_manager
@@ -43,7 +46,7 @@ class RetrievalTelemetryRepository:
 
         event_time = time.time() if created_at is None else created_at
         result_count = len(surfaced_memory_ids)
-        rows: list[tuple[str, str | None, str, str, str | None, str | None, int | None, int | None, float, float | None]] = []
+        rows: list[_TelemetryRow] = []
         if surfaced_memory_ids:
             rows.extend(
                 (
@@ -116,7 +119,7 @@ class RetrievalTelemetryRepository:
         if self._postgres_writer is not None:
             self._postgres_writer.close()
 
-    def _write_rows(self, rows: list[tuple[object, ...]]) -> None:
+    def _write_rows(self, rows: list[_TelemetryRow]) -> None:
         if self._postgres_writer is not None:
             self._postgres_writer.write_many(rows)
             return
@@ -129,7 +132,7 @@ class RetrievalTelemetryRepository:
             and not hasattr(self._db_manager, "get_connection")
         )
 
-    def _flush_postgres_rows(self, rows: list[tuple[object, ...]]) -> None:
+    def _flush_postgres_rows(self, rows: list[_TelemetryRow]) -> None:
         assert self._db_manager is not None
         try:
             with self._db_manager.open_connection() as connection:
@@ -149,7 +152,7 @@ class RetrievalTelemetryRepository:
         except Exception as exc:  # pragma: no cover - best-effort Postgres telemetry path
             logger.debug("Skipping retrieval telemetry write due to noncritical Postgres failure: %s", exc)
 
-    def _best_effort_sqlite_write(self, rows: list[tuple[object, ...]]) -> None:
+    def _best_effort_sqlite_write(self, rows: list[_TelemetryRow]) -> None:
         assert self._db_manager is not None
         conn = self._db_manager.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
         try:

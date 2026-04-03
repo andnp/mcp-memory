@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Generic, Protocol, TypeVar
+from collections.abc import Sequence
+from typing import Generic, Protocol, Self, TypeVar
 
 
 ConnectionT_co = TypeVar("ConnectionT_co", covariant=True)
@@ -8,13 +9,13 @@ ConnectionT = TypeVar("ConnectionT")
 
 
 class CursorLike(Protocol):
-    def __enter__(self) -> CursorLike: ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(self, exc_type, exc, tb) -> bool | None: ...
 
     def execute(self, query: str, params: tuple[object, ...] | None = None) -> object: ...
 
-    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> object: ...
+    def executemany(self, query: str, rows: Sequence[tuple[object, ...]]) -> object: ...
 
     def fetchone(self) -> tuple[object, ...] | None: ...
 
@@ -46,7 +47,7 @@ class ConnectionLease(Protocol, Generic[ConnectionT_co]):
 
 
 class SessionManager(Protocol, Generic[ConnectionT_co]):
-    def __enter__(self) -> SessionManager[ConnectionT_co]: ...
+    def __enter__(self) -> Self: ...
 
     def __exit__(self, exc_type, exc, tb) -> bool | None: ...
 

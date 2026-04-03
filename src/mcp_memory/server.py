@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import cast
 from uuid import uuid4
 
 from mcp.server import Server
@@ -34,7 +35,7 @@ class MCPServer:
     ):
         self.workspace_root = workspace_root
         self.server = Server(server_name)
-        self._daemon = None
+        self._daemon: object | None = None
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
         self._setup_handlers()
@@ -43,13 +44,17 @@ class MCPServer:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
             payload = await asyncio.to_thread(self._request_json_with_recovery, self._tool_path_prefix, None)
+            tools = payload.get("tools")
+            if not isinstance(tools, list):
+                raise ValueError("daemon_response_missing_tools")
             return [
                 Tool(
-                    name=tool["name"],
-                    description=tool["description"],
-                    inputSchema=tool["inputSchema"],
+                    name=str(tool["name"]),
+                    description=cast(str | None, tool.get("description")),
+                    inputSchema=cast(dict[str, object], tool["inputSchema"]),
                 )
-                for tool in payload["tools"]
+                for tool in tools
+                if isinstance(tool, dict)
             ]
 
         @self.server.call_tool()
@@ -59,7 +64,14 @@ class MCPServer:
                 f"{self._tool_path_prefix}/{name}",
                 arguments,
             )
-            return [TextContent(type=item["type"], text=item["text"]) for item in payload["contents"]]
+            contents = payload.get("contents")
+            if not isinstance(contents, list):
+                raise ValueError("daemon_response_missing_contents")
+            return [
+                TextContent(type="text", text=str(item["text"]))
+                for item in contents
+                if isinstance(item, dict)
+            ]
 
     async def run(self) -> None:
         logger.info("Initializing MCP Memory Server proxy...")
@@ -76,11 +88,14 @@ class MCPServer:
         finally:
             await asyncio.to_thread(self._send_session_hook, "session-end")
 
-    def _request_json(self, path: str, payload: dict | None):
+    def _request_json(self, path: str, payload: dict | None) -> dict[str, object]:
         if self._daemon is None:
             raise RuntimeError("daemon_not_started")
         request_payload = self._request_payload(payload)
-        return request_daemon_json(self._daemon, path, request_payload)
+        response = request_daemon_json(self._daemon, path, request_payload)
+        if not isinstance(response, dict):
+            raise ValueError("daemon_response_must_be_object")
+        return cast(dict[str, object], response)
 
     def _request_payload(self, payload: dict | None) -> dict | None:
         request_payload = None if payload is None else dict(payload)
@@ -91,7 +106,7 @@ class MCPServer:
                 request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
         return request_payload
 
-    def _request_json_with_recovery(self, path: str, payload: dict | None):
+    def _request_json_with_recovery(self, path: str, payload: dict | None) -> dict[str, object]:
         max_attempts = _REQUEST_RECOVERY_RETRY_COUNT + 1
         for attempt_index in range(_REQUEST_RECOVERY_RETRY_COUNT + 1):
             try:
@@ -109,6 +124,7 @@ class MCPServer:
                     },
                 )
                 self._daemon = ensure_daemon_started(self.workspace_root, None)
+        raise RuntimeError("daemon_request_retries_exhausted")
 
     def _send_session_hook(self, event_name: str) -> None:
         if self._session_id is None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from mcp_memory.management.models import SelectorFeatureSnapshotPayload
 from mcp_memory.management.models import AgentRunHistoryPayload, RunResultMetadataPayload
 from mcp_memory.management.selector_stats_reporting import (
     FRESH_SELECTOR,
@@ -50,7 +51,11 @@ def _run(
             claimed_work_item_count=claimed_work_item_count,
             mutations=mutations,
             tool_calls_executed=tool_calls_executed,
-            selector_feature_snapshot=selector_feature_snapshot or {},
+            selector_feature_snapshot=(
+                SelectorFeatureSnapshotPayload.model_validate(selector_feature_snapshot)
+                if selector_feature_snapshot is not None
+                else SelectorFeatureSnapshotPayload()
+            ),
         ),
     )
 

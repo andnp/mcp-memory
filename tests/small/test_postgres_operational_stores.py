@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import logging
 
@@ -178,9 +179,9 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[object, ...]]:
         return list(self._result)
 
-    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+    def executemany(self, query: str, rows: Sequence[tuple[object, ...]]) -> None:
         for row in rows:
-            self.execute(query, row)
+            self.execute(query, tuple(row))
 
     def close(self) -> None:
         return None

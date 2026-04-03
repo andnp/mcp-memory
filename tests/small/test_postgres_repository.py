@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypeAlias
@@ -173,9 +174,9 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[object, ...]]:
         return list(self._result)
 
-    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+    def executemany(self, query: str, rows: Sequence[tuple[object, ...]]) -> None:
         for row in rows:
-            self.execute(query, row)
+            self.execute(query, tuple(row))
 
     def _insert_memory(self, arguments: SqlParams) -> None:
         memory_id = str(arguments[0])

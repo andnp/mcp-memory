@@ -203,7 +203,8 @@ class SharedReadCache:
             with self._inflight_searches_lock:
                 current = self._inflight_searches.get(entry.cache_key)
                 if (
-                    current is entry._state
+                    current is not None
+                    and current is entry._state
                     and current.payload is None
                     and current.error is None
                     and not current.completed.is_set()

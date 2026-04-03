@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 
 import pytest
@@ -254,6 +255,10 @@ class FakeCursor:
             self._result = [(len(rows),)]
             return
         raise AssertionError(f"Unhandled query: {normalized}")
+
+    def executemany(self, query: str, rows: Sequence[tuple[object, ...]]) -> None:
+        for row in rows:
+            self.execute(query, tuple(row))
 
     def fetchone(self) -> tuple[object, ...] | None:
         return None if not self._result else self._result[0]

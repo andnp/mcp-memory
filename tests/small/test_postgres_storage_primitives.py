@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 
 import pytest
@@ -427,7 +428,10 @@ class FakePrimitiveCursor:
                 for row in rows
             ]
             scored_rows.sort(key=lambda item: item[1], reverse=True)
-            self._result = scored_rows[:limit]
+            self._result = [
+                (source_id, score)
+                for source_id, score in scored_rows[:limit]
+            ]
             return
         if normalized.startswith("SELECT EXISTS ( SELECT 1 FROM pg_extension WHERE extname = 'vector' )"):
             self._state.vector_capability_query_count += 1
@@ -451,6 +455,10 @@ class FakePrimitiveCursor:
             self.rowcount = before - len(rows)
             return
         raise AssertionError(f"Unhandled query: {normalized}")
+
+    def executemany(self, query: str, rows: Sequence[tuple[object, ...]]) -> None:
+        for row in rows:
+            self.execute(query, tuple(row))
 
     def fetchone(self) -> tuple[object, ...] | None:
         return None if not self._result else self._result[0]

@@ -273,7 +273,7 @@ class PostgresRuntimeLogRepository:
     def _flush_log_batch(self, batch: list[_PendingRuntimeLog]) -> None:
         if self._sessions is None or not batch:
             return
-        rows = [
+        rows: list[tuple[object, ...]] = [
             (
                 item.workspace_id,
                 item.source,
