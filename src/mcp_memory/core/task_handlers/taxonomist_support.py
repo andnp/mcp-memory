@@ -252,6 +252,47 @@ def enqueue_taxonomist_enrichment_work_item(
     )
 
 
+def normalize_candidate_tags(
+    ctx: ApplicationContext,
+    record: Any,
+    *,
+    normalize_tag_values,
+) -> tuple[Any, bool]:
+    repository = getattr(ctx, "repository", None)
+    if repository is None:
+        return record, False
+    normalized_tags = normalize_tag_values(record.tags)
+    if normalized_tags == record.tags:
+        return record, False
+    refreshed = repository.update_memory(record.id, tags=normalized_tags)
+    if refreshed is None:
+        return record, False
+    return refreshed, True
+
+
+def inline_normalize_taxonomist_candidates(
+    ctx: ApplicationContext,
+    candidates: list[Any],
+    *,
+    normalize_tag_values,
+) -> tuple[list[Any], list[Any], int]:
+    normalized_candidates: list[Any] = []
+    untagged_candidates: list[Any] = []
+    updated = 0
+    for record in candidates:
+        refreshed_record, was_updated = normalize_candidate_tags(
+            ctx,
+            record,
+            normalize_tag_values=normalize_tag_values,
+        )
+        if was_updated:
+            updated += 1
+        normalized_candidates.append(refreshed_record)
+        if not refreshed_record.tags:
+            untagged_candidates.append(refreshed_record)
+    return normalized_candidates, untagged_candidates, updated
+
+
 def needs_tag_normalization(tags: list[str], normalize_tag_values) -> bool:
     normalized_tags = normalize_tag_values(tags)
     return bool(tags) and normalized_tags != tags
@@ -406,6 +447,7 @@ def build_taxonomist_result(
     *,
     sampled_records: list[Any],
     updated: int,
+    inline_normalized_count: int = 0,
     provider_call_budget: int,
     provider_calls_used: int,
     provider_deferred_reason_code: str | None,
@@ -424,6 +466,7 @@ def build_taxonomist_result(
 ) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "updated": updated,
+        "inline_normalized_count": inline_normalized_count,
         "provider_calls_used": provider_calls_used,
         "provider_call_budget": provider_call_budget,
         "provider_deferred_reason_code": provider_deferred_reason_code,

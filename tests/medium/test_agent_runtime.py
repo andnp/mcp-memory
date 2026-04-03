@@ -3942,6 +3942,76 @@ async def test_taxonomist_uses_provider_for_untagged_records(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_taxonomist_inline_normalizes_sampled_tags_before_seeding_and_provider_tagging(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        messy = runtime.repository.create_memory(
+            title="Messy tagged fact",
+            content="A fact with alias tags that only need deterministic cleanup.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["Tests", "Authn"],
+        )
+        collapses_to_untagged = runtime.repository.create_memory(
+            title="Whitespace tags fact",
+            content="A fact whose tags collapse to empty after normalization.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=[" ", "   "],
+        )
+        assert messy is not None and collapses_to_untagged is not None
+
+        provider = FakeAIProvider(responses=[{"tags": ["Architecture"]}])
+        result = await handle_taxonomist_task(
+            runtime,
+            TaskRecord(
+                id="taxonomist-inline-normalization-task",
+                task_name=TAXONOMIST_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        updated_messy = runtime.repository.get_memory(messy.id)
+        updated_collapsed = runtime.repository.get_memory(collapses_to_untagged.id)
+        work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
+
+        assert provider.call_count == 1
+        assert result["inline_normalized_count"] == 1
+        assert result["updated"] == 2
+        assert result["claimed_work_item_count"] == 1
+        assert updated_messy is not None and updated_messy.tags == ["auth", "testing"]
+        assert updated_collapsed is not None and updated_collapsed.tags == ["architecture"]
+        assert [item.status for item in work_items] == ["completed"]
+        assert work_items[0].payload == {"memory_id": collapses_to_untagged.id, "workspace_id": runtime.workspace_id}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_taxonomist_agentic_provider_uses_work_item_lifecycle_tools(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -4288,7 +4358,7 @@ async def test_taxonomist_agentic_provider_can_drain_multiple_work_batches_in_on
         assert result["campaign_origin_family"] == "memory_tagging"
         assert result["campaign_family_keys"] == ["memory_tagging", "graph_link_review", "conflict_review"]
         assert result["campaign_continuation_supported"] is True
-        assert result["tool_calls_executed"] == 7
+        assert result["tool_calls_executed"] == 9
         assert result["mutations"] == 6
         assert result["compatible_batch_calls"] == 0
         assert result["work_item_batch_limit"] == 2
@@ -4534,13 +4604,17 @@ async def test_taxonomist_limits_provider_calls_per_run_to_burst_budget(monkeypa
         assert runtime.config is not None
         expected_budget = min(runtime.config.provider_routing.model_burst_call_limit, 2)
         assert result["updated"] == expected_budget
+        assert result["inline_normalized_count"] == 0
         assert result["provider_calls_used"] == expected_budget
         assert result["provider_call_budget"] == expected_budget
         assert result["claimed_work_item_count"] == expected_budget
         assert provider.call_count == expected_budget
-        assert updated_first is not None and updated_first.tags == ["auth", "testing"]
-        expected_second_tags = ["architecture"] if expected_budget > 1 else []
-        assert updated_second is not None and updated_second.tags == expected_second_tags
+        assert updated_first is not None and updated_second is not None
+        tagged_sets = sorted([updated_first.tags, updated_second.tags])
+        expected_tagged_sets = sorted(
+            [["auth", "testing"], ["architecture"]] if expected_budget > 1 else [[], ["auth", "testing"]]
+        )
+        assert tagged_sets == expected_tagged_sets
         assert runtime.work_items is not None
         work_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
         assert len(work_items) == 2

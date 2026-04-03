@@ -44,15 +44,20 @@ async def handle_taxonomist_task(
         all_candidates,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
-    candidates = sampled_batch.records
+    sampled_candidates = sampled_batch.records
+    candidates, untagged_candidates, inline_normalized_count = _taxonomist_support.inline_normalize_taxonomist_candidates(
+        ctx,
+        sampled_candidates,
+        normalize_tag_values=normalize_tag_values,
+    )
     provider_call_budget = _taxonomist_support.provider_call_budget(ctx, provider)
-    untagged_candidates = [record for record in candidates if not normalize_tag_values(record.tags)]
 
     if not untagged_candidates:
         return _taxonomist_support.build_taxonomist_result(
             sampled_batch,
             sampled_records=candidates,
-            updated=0,
+            updated=inline_normalized_count,
+            inline_normalized_count=inline_normalized_count,
             provider_call_budget=provider_call_budget,
             provider_calls_used=0,
             provider_deferred_reason_code=None,
@@ -73,7 +78,8 @@ async def handle_taxonomist_task(
             return _taxonomist_support.build_taxonomist_result(
                 sampled_batch,
                 sampled_records=candidates,
-                updated=0,
+                updated=inline_normalized_count,
+                inline_normalized_count=inline_normalized_count,
                 provider_call_budget=provider_call_budget,
                 provider_calls_used=0,
                 provider_deferred_reason_code=None,
@@ -95,7 +101,8 @@ async def handle_taxonomist_task(
         return _taxonomist_support.build_taxonomist_result(
             sampled_batch,
             sampled_records=candidates,
-            updated=agentic_result["updated"],
+            updated=inline_normalized_count + agentic_result["updated"],
+            inline_normalized_count=inline_normalized_count,
             provider_call_budget=provider_call_budget,
             provider_calls_used=agentic_result["provider_calls_used"],
             provider_deferred_reason_code=agentic_result["provider_deferred_reason_code"],
@@ -122,7 +129,8 @@ async def handle_taxonomist_task(
     return _taxonomist_support.build_taxonomist_result(
         sampled_batch,
         sampled_records=candidates,
-        updated=json_result["updated"],
+        updated=inline_normalized_count + json_result["updated"],
+        inline_normalized_count=inline_normalized_count,
         provider_call_budget=provider_call_budget,
         provider_calls_used=json_result["provider_calls_used"],
         provider_deferred_reason_code=json_result["provider_deferred_reason_code"],
@@ -183,12 +191,13 @@ async def handle_tag_normalizer_task(
             finalized_work_item_ids.add(work_item.id)
             continue
 
-        normalized_tags = normalize_tag_values(record.tags)
-        if normalized_tags != record.tags:
-            refreshed = ctx.repository.update_memory(record.id, tags=normalized_tags)
-            if refreshed is not None:
-                updated += 1
-                record = refreshed
+        record, was_updated = _taxonomist_support.normalize_candidate_tags(
+            ctx,
+            record,
+            normalize_tag_values=normalize_tag_values,
+        )
+        if was_updated:
+            updated += 1
 
         if not record.tags:
             _, created = _taxonomist_support.enqueue_taxonomist_enrichment_work_item(
