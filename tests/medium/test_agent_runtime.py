@@ -1860,11 +1860,11 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 11}
+    assert queue.count_by_status() == {"pending": 10}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
     assert queue.find_open_task(CURATOR_FRONTIER_TASK_NAME, None) is None
-    assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is not None
+    assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
     assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
@@ -1898,6 +1898,7 @@ def test_low_yield_deterministic_tasks_use_slower_recurring_cadence() -> None:
 
 def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
     assert CURATOR_FRONTIER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert GRAPH_LINK_DISCOVERY_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
@@ -2953,6 +2954,75 @@ async def test_graph_linker_skips_provider_when_fallback_is_sufficient(monkeypat
 
         assert result["created"] >= 2
         assert provider.call_count == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_graph_linker_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    try:
+        for index in range(13):
+            record = runtime.repository.create_memory(
+                title=f"isolated-topic-{index}",
+                content=f"body-{index}",
+                workspace_ids=[runtime.workspace_id or "global"],
+                memory_type="fact",
+                tags=[f"tag-{index}"],
+            )
+            assert record is not None
+
+        provider = FakeAIProvider(
+            responses=[
+                {"links": []}
+            ]
+        )
+
+        result = await handle_graph_linker_task(
+            runtime,
+            TaskRecord(
+                id="graph-linker-task",
+                task_name=GRAPH_LINKER_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        review_items = runtime.work_items.list_items(family_key="graph_link_review", limit=5)
+
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
+        assert result["created"] == 0
+        assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "graph_link_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["seed_record_count"] == 13
+        assert provider.call_count == 1
+        assert [item.status for item in review_items] == ["pending"]
+        assert result["created_work_item_id"] == review_items[0].id
+        assert len(review_items[0].payload["candidate_memory_ids"]) == 13
     finally:
         runtime.close()
 
