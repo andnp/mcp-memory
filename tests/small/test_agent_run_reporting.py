@@ -1,5 +1,9 @@
-from mcp_memory.management.agent_run_reporting import build_agent_run_history_payload, decode_run_result
-from mcp_memory.management.models import AgentRunHistoryPayload, RunResultMetadataPayload
+from mcp_memory.management.agent_run_reporting import (
+    build_agent_run_history_payload,
+    decode_run_result,
+    extract_run_result_metadata,
+)
+from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
 
 
@@ -92,6 +96,53 @@ def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None
     assert payload.result_metadata.selector_feature_snapshot.candidate_population.metrics["content_chars"].p50 == 22.0
     assert payload.result_metadata.selector_feature_snapshot.selected_population.count == 3
     assert payload.result_metadata.candidate_count == 8
+
+
+def test_extract_run_result_metadata_builds_structured_mutation_outcome_from_legacy_delta_keys() -> None:
+    metadata = extract_run_result_metadata(
+        {
+            "created": 1,
+            "merged": 2,
+            "updated": 3,
+            "archived": 4,
+            "degraded": 5,
+            "restored": 6,
+        }
+    )
+
+    assert metadata.mutation_outcome == MutationOutcomePayload(
+        created=1,
+        merged=2,
+        updated=3,
+        archived=4,
+        degraded=5,
+        restored=6,
+    )
+    assert metadata.mutations == 21
+
+
+def test_extract_run_result_metadata_preserves_flat_mutations_without_structured_deltas() -> None:
+    metadata = extract_run_result_metadata({"mutations": 7})
+
+    assert metadata.mutations == 7
+    assert metadata.mutation_outcome == MutationOutcomePayload()
+
+
+def test_extract_run_result_metadata_preserves_premium_execution_ratios_with_derived_mutations() -> None:
+    metadata = extract_run_result_metadata(
+        {
+            "created": 2,
+            "updated": 4,
+            "provider_calls_used": 3,
+            "claimed_work_item_count": 9,
+            "tool_calls_executed": 12,
+        }
+    )
+
+    assert metadata.mutations == 6
+    assert metadata.mutations_per_premium_execution == 2.0
+    assert metadata.work_items_per_premium_execution == 3.0
+    assert metadata.tool_calls_per_premium_execution == 4.0
 
 
 def test_build_task_sampling_summary_aggregates_selection_utility_metrics() -> None:

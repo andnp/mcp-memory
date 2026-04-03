@@ -11,10 +11,21 @@ from mcp_memory.management.models import (
     AgentRunPayload,
     IngestAuditPayload,
     IngestEntryDispositionPayload,
+    MutationOutcomePayload,
     RunResultMetadataPayload,
     SelectorFeatureSnapshotPayload,
     SelectorMetricSnapshotPayload,
     SelectorPopulationSnapshotPayload,
+)
+
+
+_MUTATION_OUTCOME_KEYS: tuple[str, ...] = (
+    "created",
+    "merged",
+    "updated",
+    "archived",
+    "degraded",
+    "restored",
 )
 
 
@@ -252,7 +263,10 @@ def extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataP
     claimed_work_item_count = _coerce_int(result.get("claimed_work_item_count"))
     provider_calls_used = _coerce_int(result.get("provider_calls_used"))
     tool_calls_executed = _coerce_int(result.get("tool_calls_executed"))
+    mutation_outcome = _extract_mutation_outcome(result)
     mutations = _coerce_int(result.get("mutations"))
+    if mutations is None:
+        mutations = _sum_mutation_outcome(mutation_outcome)
     return RunResultMetadataPayload(
         requested_strategy=_coerce_str(result.get("requested_strategy")),
         strategy_used=_coerce_str(result.get("strategy_used")),
@@ -268,6 +282,7 @@ def extract_run_result_metadata(result: dict[str, object]) -> RunResultMetadataP
         provider_calls_used=provider_calls_used,
         tool_calls_executed=tool_calls_executed,
         mutations=mutations,
+        mutation_outcome=mutation_outcome,
         work_item_batch_limit=_coerce_int(result.get("work_item_batch_limit")),
         max_batches_per_run=_coerce_int(result.get("max_batches_per_run")),
         requested_grouping_strategy=_coerce_str(result.get("requested_grouping_strategy")),
@@ -342,6 +357,17 @@ def _coerce_int(value: object) -> int | None:
 
 def _coerce_bool(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _extract_mutation_outcome(result: dict[str, object]) -> MutationOutcomePayload:
+    return MutationOutcomePayload(**{key: _coerce_int(result.get(key)) for key in _MUTATION_OUTCOME_KEYS})
+
+
+def _sum_mutation_outcome(mutation_outcome: MutationOutcomePayload) -> int | None:
+    values = [value for value in mutation_outcome.model_dump().values() if value is not None]
+    if not values:
+        return None
+    return sum(values)
 
 
 def _ratio_or_none(numerator: int | None, denominator: int | None) -> float | None:

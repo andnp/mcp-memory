@@ -314,6 +314,15 @@ class SelectorFeatureRollupRowPayload(BaseModel):
     strategy_signal_means: dict[str, float] = Field(default_factory=dict)
 
 
+class MutationOutcomePayload(BaseModel):
+    created: int | None = None
+    merged: int | None = None
+    updated: int | None = None
+    archived: int | None = None
+    degraded: int | None = None
+    restored: int | None = None
+
+
 class RunResultMetadataPayload(BaseModel):
     requested_strategy: str | None = None
     strategy_used: str | None = None
@@ -329,6 +338,7 @@ class RunResultMetadataPayload(BaseModel):
     provider_calls_used: int | None = None
     tool_calls_executed: int | None = None
     mutations: int | None = None
+    mutation_outcome: MutationOutcomePayload = Field(default_factory=MutationOutcomePayload)
     work_item_batch_limit: int | None = None
     max_batches_per_run: int | None = None
     requested_grouping_strategy: str | None = None
