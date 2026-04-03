@@ -16,7 +16,7 @@ from mcp_memory.core.sampling import (
     SamplingBatch,
 )
 from mcp_memory.core.task_handlers.campaigns import campaign_family_keys
-from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
+from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME, DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
@@ -204,9 +204,33 @@ def select_curator_seed_batch(
             records=[],
         )
 
+    sampling_task = TaskRecord(
+        id=task.id,
+        task_name=CURATOR_TASK_NAME,
+        data=dict(task.data),
+        workspace_id=task.workspace_id,
+        status=task.status,
+        priority=task.priority,
+        retries_count=task.retries_count,
+        max_retries=task.max_retries,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        available_at=task.available_at,
+        claimed_at=task.claimed_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        last_error=task.last_error,
+        execution_epoch=task.execution_epoch,
+        subprocess_pid=task.subprocess_pid,
+        active_request_id=task.active_request_id,
+        cancellation_requested_at=task.cancellation_requested_at,
+        cancelled_at=task.cancelled_at,
+        cancellation_reason=task.cancellation_reason,
+        cancelled_by=task.cancelled_by,
+    )
     sampled_batch = sample_maintenance_candidates(
         ctx,
-        task,
+        sampling_task,
         candidates,
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,

@@ -79,6 +79,7 @@ async def handle_defragmenter_task(
         allowed_strategies=DEFRAGMENTER_ALLOWED_STRATEGIES,
         strategy_weights=DEFRAGMENTER_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+        support_counts=_build_support_counts(ctx, all_candidates),
     )
     candidates = sampled_batch.records
     groups = _defragmenter_support.collect_defragment_groups(candidates)

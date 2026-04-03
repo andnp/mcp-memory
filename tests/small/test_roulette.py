@@ -7,8 +7,10 @@ import pytest
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
+    CONFLICT_FRONTIER_STRATEGY,
     COLD_STORAGE_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
+    GRAPH_BRIDGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
     RouletteProvider,
@@ -377,6 +379,88 @@ def test_taxonomist_explicit_requested_strategy_still_wins_when_valid() -> None:
     assert batch.strategy_used == BOUNDED_NOISE_STRATEGY
     assert batch.strategy_fallback_reason is None
     assert batch.strategy_selection_mode == "requested_strategy"
+
+
+def test_graph_linker_prefers_graph_bridge_for_low_support_adjacent_clusters() -> None:
+    candidates = [
+        _FakeRecord(id="a", title="Alpha service", content="alpha dependency latency service"),
+        _FakeRecord(id="b", title="Alpha client", content="alpha dependency client latency"),
+        _FakeRecord(id="c", title="Gamma topic", content="gamma unrelated topic"),
+    ]
+
+    batch = RouletteProvider(
+        task_name="graph-linker",
+        task_id="task-bridge",
+        candidates=candidates,
+        support_counts={"a": 0, "b": 0, "c": 4},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, GRAPH_BRIDGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used == GRAPH_BRIDGE_STRATEGY
+    assert batch.strategy_selection_mode == "deterministic_scores"
+    assert batch.strategy_selection_reason is not None
+    assert "low_support_adjacent_share" in batch.strategy_selection_reason
+
+
+def test_defragmenter_prefers_orphan_low_support_for_thin_low_support_records() -> None:
+    candidates = [
+        _FakeRecord(id="a", title="Auth note", content="auth cleanup note"),
+        _FakeRecord(id="b", title="Auth follow-up", content="auth cleanup follow up"),
+        _FakeRecord(id="c", title="Large stable doc", content="stable " * 200, read_count=9),
+    ]
+
+    batch = RouletteProvider(
+        task_name="defragmenter",
+        task_id="task-defrag",
+        candidates=candidates,
+        support_counts={"a": 0, "b": 0, "c": 3},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(COLD_STORAGE_STRATEGY, SEMANTIC_STRATEGY, ORPHAN_LOW_SUPPORT_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used == ORPHAN_LOW_SUPPORT_STRATEGY
+    assert batch.strategy_selection_mode == "deterministic_scores"
+    assert batch.strategy_selection_reason is not None
+    assert "low_support_share" in batch.strategy_selection_reason
+
+
+def test_conflict_detector_uses_deterministic_signal_scoring_without_request() -> None:
+    candidates = [
+        _FakeRecord(
+            id="a",
+            title="Feature flag enabled",
+            content="feature flag enabled by default for rollout",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="b",
+            title="Feature flag disabled",
+            content="feature flag disabled by default for rollout",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+        ),
+        _FakeRecord(
+            id="c",
+            title="Billing note",
+            content="billing reminder for invoices",
+            last_surfaced_at="2026-03-20T00:00:00+00:00",
+        ),
+    ]
+
+    batch = RouletteProvider(task_name="conflict-detector", task_id="task-conflict", candidates=candidates).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, CONFLICT_FRONTIER_STRATEGY, NEVER_SURFACED_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used in {SEMANTIC_STRATEGY, CONFLICT_FRONTIER_STRATEGY}
+    assert batch.strategy_selection_mode == "deterministic_scores"
+    assert batch.strategy_selection_reason is not None
+    assert "conflict_frontier_share" in batch.strategy_selection_reason
 
 
 def test_deduplicator_prefers_semantic_when_overlap_signal_dominates() -> None:

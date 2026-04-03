@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
+from mcp_memory.core.task_handlers.constants import (
+    CONFLICT_DETECTOR_TASK_NAME,
+    DEFAULT_AGENT_SCAN_LIMIT,
+    GRAPH_LINKER_TASK_NAME,
+)
 from mcp_memory.core.task_handlers.maintenance_framework import (
     sample_maintenance_candidates,
     sampling_payload,
+    support_counts_for_candidates,
 )
 from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
 from mcp_memory.core.task_handlers.maintenance_work_items import (
@@ -176,6 +182,7 @@ def _sample_graph_link_candidates(
         ctx,
         task,
         workspace_id=workspace_id,
+        canonical_task_name=GRAPH_LINKER_TASK_NAME,
         allowed_types=None,
         allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
         strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
@@ -192,6 +199,7 @@ def _sample_conflict_candidates(
         ctx,
         task,
         workspace_id=workspace_id,
+        canonical_task_name=CONFLICT_DETECTOR_TASK_NAME,
         allowed_types={"fact", "plan"},
         allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
         strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
@@ -203,6 +211,7 @@ def _sample_relationship_review_candidates(
     task: TaskRecord,
     *,
     workspace_id: str | None,
+    canonical_task_name: str,
     allowed_types: set[str] | None,
     allowed_strategies: tuple[str, ...],
     strategy_weights: dict[str, int],
@@ -216,11 +225,13 @@ def _sample_relationship_review_candidates(
     )
     if allowed_types is not None:
         all_candidates = [record for record in all_candidates if record.type in allowed_types]
+    sampling_task = task if task.task_name == canonical_task_name else replace(task, task_name=canonical_task_name)
     return sample_maintenance_candidates(
         ctx,
-        task,
+        sampling_task,
         all_candidates,
         allowed_strategies=allowed_strategies,
         strategy_weights=strategy_weights,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
+        support_counts=support_counts_for_candidates(ctx, all_candidates),
     )

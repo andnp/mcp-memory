@@ -2962,6 +2962,9 @@ async def test_graph_link_discovery_seeds_agentic_review_when_fallback_is_sparse
 
         review_items = runtime.work_items.list_items(family_key="graph_link_review", limit=5)
 
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
         assert result["created"] == 0
         assert result["seeded_work_item_count"] == 1
         assert result["work_item_family"] == "graph_link_review"
@@ -3295,6 +3298,9 @@ async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(m
 
         review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
 
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
         assert result["created"] == 0
         assert result["seeded_work_item_count"] == 1
         assert result["work_item_family"] == "conflict_review"
@@ -3638,6 +3644,9 @@ async def test_defragmenter_skips_provider_for_small_groups(monkeypatch, tmp_pat
         )
         assert result["created"] == 1
         assert provider.call_count == 0
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
         assert reflections[0].title in {"Reflection: Short note one", "Reflection: Short note two"}
     finally:
         runtime.close()
@@ -3754,6 +3763,9 @@ async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_r
         )
 
         updated = runtime.repository.get_memory(record.id)
+        assert result["strategy_selection_mode"] == "deterministic_scores"
+        assert result["strategy_selection_reason"] is not None
+        assert result["strategy_selection_scores"] is not None
         assert result["updated"] == 1
         assert updated is not None and updated.tags == ["auth", "testing"]
         assert result["seeded_enrichment_count"] == 1

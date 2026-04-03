@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from inspect import isawaitable
 import time
 from typing import Any
@@ -14,13 +15,15 @@ from mcp_memory.core.sampling import (
     BOUNDED_NOISE_STRATEGY,
     COLD_STORAGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
+    SamplingBatch,
 )
+from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_handlers.campaigns import (
     campaign_family_keys,
     campaign_metadata,
     count_named_tool_calls_from_stats,
 )
-from mcp_memory.core.task_handlers.maintenance_framework import SamplingBatch, sampling_payload
+from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates, sampling_payload
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
     COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
@@ -44,6 +47,24 @@ TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET = 1
 TAXONOMIST_DEFAULT_WORK_ITEM_BATCH_LIMIT = 5
 TAXONOMIST_DEFAULT_MAX_BATCHES_PER_RUN = 4
 TAXONOMIST_WORK_ITEM_PRECHECK_LIMIT = 64
+
+
+def select_taxonomist_sampling_batch(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    candidates: list[Any],
+    *,
+    limit: int,
+) -> SamplingBatch:
+    sampling_task = task if task.task_name == TAXONOMIST_TASK_NAME else replace(task, task_name=TAXONOMIST_TASK_NAME)
+    return sample_maintenance_candidates(
+        ctx,
+        sampling_task,
+        candidates,
+        allowed_strategies=TAXONOMIST_ALLOWED_STRATEGIES,
+        strategy_weights=TAXONOMIST_STRATEGY_WEIGHTS,
+        limit=limit,
+    )
 
 
 def provider_call_budget(ctx: ApplicationContext, provider: Any) -> int:

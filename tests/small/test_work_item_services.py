@@ -3,8 +3,11 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, TAXONOMIST_TASK_NAME
+from mcp_memory.core.sampling import ANOMALY_STRATEGY, NEVER_SURFACED_STRATEGY
+from mcp_memory.core.task_handlers import CURATOR_FRONTIER_TASK_NAME, CURATOR_TASK_NAME, TAXONOMIST_TASK_NAME
+from mcp_memory.core.task_handlers.curator_handlers import handle_curator_frontier_task
 from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.transport import internal_tool_services
 from mcp_memory.relational.repository import RelationalMemoryRepository
@@ -40,6 +43,29 @@ def _start_running_task(ctx: ApplicationContext, *, task_name: str, task_id: str
     claimed = ctx.task_queue.claim_next(now=0.0)
     assert claimed is not None
     assert claimed.id == task_id
+
+
+def _curator_frontier_task(*, strategy: str | None = None) -> TaskRecord:
+    task_data = {"workspace_id": "workspace-a"}
+    if strategy is not None:
+        task_data["strategy"] = strategy
+    return TaskRecord(
+        id="curator-frontier-task",
+        task_name=CURATOR_FRONTIER_TASK_NAME,
+        data=task_data,
+        workspace_id="workspace-a",
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
 
 
 def test_internal_get_work_batch_claims_family_specific_work_items(db_manager) -> None:
@@ -208,6 +234,54 @@ def test_internal_get_next_curator_batch_uses_running_task_scope_for_global_task
 
     assert payload["status"] == "ok"
     assert remote.id in [record["id"] for record in payload["records"]]
+
+
+@pytest.mark.asyncio
+async def test_curator_frontier_uses_deterministic_curator_selector_metadata(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    assert ctx.repository is not None
+    first = ctx.repository.create_memory(
+        title="Alpha one",
+        content="alpha",
+        memory_type="fact",
+        workspace_ids=["workspace-a"],
+        tags=["alpha"],
+    )
+    second = ctx.repository.create_memory(
+        title="Zeta two",
+        content="beta",
+        memory_type="fact",
+        workspace_ids=["workspace-a"],
+        tags=["beta"],
+    )
+
+    payload = await handle_curator_frontier_task(ctx, _curator_frontier_task())
+
+    assert first is not None and second is not None
+    assert payload["strategy_used"] == NEVER_SURFACED_STRATEGY
+    assert payload["strategy_selection_mode"] == "deterministic_scores"
+    assert "strategy_selection_reason" in payload
+    assert payload["strategy_selection_scores"][NEVER_SURFACED_STRATEGY] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_curator_frontier_preserves_explicit_requested_strategy(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    assert ctx.repository is not None
+    created = ctx.repository.create_memory(
+        title="Oversized cleanup candidate",
+        content="x" * 1800,
+        memory_type="fact",
+        workspace_ids=["workspace-a"],
+        tags=["oversized"],
+    )
+
+    payload = await handle_curator_frontier_task(ctx, _curator_frontier_task(strategy=ANOMALY_STRATEGY))
+
+    assert created is not None
+    assert payload["requested_strategy"] == ANOMALY_STRATEGY
+    assert payload["strategy_used"] == ANOMALY_STRATEGY
+    assert payload["strategy_selection_mode"] == "requested_strategy"
 
 
 def test_internal_work_item_lifecycle_tools_heartbeat_complete_and_reclaim_expired_leases(db_manager) -> None:

@@ -10,7 +10,6 @@ from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     reset_agentic_tool_tracking,
 )
 from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
-from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates
 from mcp_memory.core.task_handlers.maintenance_housekeeping import _resolve_workspace_id
 from mcp_memory.core.task_handlers.maintenance_normalization import (
     coerce_text_summary,
@@ -39,12 +38,10 @@ async def handle_taxonomist_task(
         workspace_id=workspace_id,
         limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
     )
-    sampled_batch = sample_maintenance_candidates(
+    sampled_batch = _taxonomist_support.select_taxonomist_sampling_batch(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=_taxonomist_support.TAXONOMIST_ALLOWED_STRATEGIES,
-        strategy_weights=_taxonomist_support.TAXONOMIST_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
@@ -146,12 +143,10 @@ async def handle_tag_normalizer_task(
         workspace_id=workspace_id,
         limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
     )
-    sampled_batch = sample_maintenance_candidates(
+    sampled_batch = _taxonomist_support.select_taxonomist_sampling_batch(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=_taxonomist_support.TAXONOMIST_ALLOWED_STRATEGIES,
-        strategy_weights=_taxonomist_support.TAXONOMIST_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
     )
     candidates = sampled_batch.records
