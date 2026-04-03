@@ -374,7 +374,7 @@ class PostgresRelationalMemoryRepository:
             params.append(status)
 
         query = (
-            "SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at, "
+            "SELECT id, title, content, summary, type, status, created_at, updated_at, "
             "read_count, access_score, last_accessed_at, last_surfaced_at, metadata "
             "FROM memories "
         )
@@ -389,7 +389,32 @@ class PostgresRelationalMemoryRepository:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
-                return [self._hydrate_record(cursor, row) for row in rows]
+
+                memory_ids = [str(row[0]) for row in rows]
+                workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(cursor, memory_ids)
+                tags_by_memory_id = self._tags_by_memory_id(cursor, memory_ids)
+
+        records_by_id: dict[str, RelationalMemoryRecord] = {}
+        for row in rows:
+            memory_id = str(row[0])
+            records_by_id[memory_id] = RelationalMemoryRecord(
+                id=memory_id,
+                title=str(row[1]),
+                content=str(row[2]),
+                summary=None if row[3] is None else str(row[3]),
+                type=str(row[4]),
+                status=str(row[5]),
+                created_at=str(row[6]),
+                updated_at=str(row[7]),
+                read_count=self._coerce_int(row[8]),
+                access_score=self._coerce_float(row[9]),
+                last_accessed_at=None if row[10] is None else str(row[10]),
+                last_surfaced_at=None if row[11] is None else str(row[11]),
+                metadata=self._load_metadata(row[12]),
+                workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
+                tags=tags_by_memory_id.get(memory_id, []),
+            )
+        return [records_by_id[memory_id] for memory_id in memory_ids if memory_id in records_by_id]
 
     def list_memory_ids(
         self,
@@ -412,7 +437,7 @@ class PostgresRelationalMemoryRepository:
             clauses.append("memories.status = %s")
             params.append(status)
 
-        query = "SELECT DISTINCT memories.id FROM memories "
+        query = "SELECT memories.id FROM memories "
         if joins:
             query += " ".join(joins) + " "
         if clauses:

@@ -1161,7 +1161,16 @@ class RelationalMemorySearchService:
                 skip_semantic_scoring=keyword_only_bounded,
                 strategy="keyword-only-bounded" if keyword_only_bounded else ("speculative-bounded" if speculative else "bounded"),
             )
-        return SemanticCandidatePool(candidates=self._repository.list_memories(status=status, limit=500))
+        global_candidate_ids = self._repository.list_memory_ids(status=status, limit=500)
+        return SemanticCandidatePool(
+            candidates=self._repository.get_searchable_memories(
+                global_candidate_ids,
+                status=status,
+                include_superseded=True,
+            ),
+            candidate_ids=global_candidate_ids,
+            strategy="global",
+        )
 
     def _get_ranking_candidates_with_optional_diagnostics(
         self,

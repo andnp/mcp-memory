@@ -1249,8 +1249,67 @@ def test_search_memories_preserves_global_semantic_search_for_nontechnical_singl
         debug=True,
     )
 
-    assert call_modes == ["global"]
+    assert call_modes == ["bounded"]
     assert diagnostics.semantic_candidate_strategy == "global"
+
+
+def test_search_memories_global_semantic_pool_uses_id_listing_instead_of_list_memories(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_FakeEmbedder(),
+        vector_store=_CandidateFilteringVectorStore(),
+    )
+
+    for index in range(12):
+        record = repository.create_memory(
+            title=f"Operational incident note {index:02d}",
+            content="Observed timeout while servicing the live memory search request.",
+            summary=f"Operational incident summary {index:02d}.",
+            memory_type="fact",
+            workspace_ids=["workspace-alpha"],
+            tags=["incident"],
+        )
+        assert record is not None
+
+    observed_list_memory_ids_calls: list[tuple[str | None, str | None, str | None, int]] = []
+    original_list_memory_ids = repository.list_memory_ids
+
+    def _fail_list_memories(*_args, **_kwargs):
+        raise AssertionError("global semantic pool should source IDs via list_memory_ids, not list_memories")
+
+    def _record_list_memory_ids(*, workspace_id=None, memory_type=None, status=None, limit=100):
+        observed_list_memory_ids_calls.append((workspace_id, memory_type, status, limit))
+        return original_list_memory_ids(
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            limit=limit,
+        )
+
+    def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
+        _ = candidates, limit
+        candidate_ids = candidate_ids or [candidate.id for candidate in candidates]
+        return {
+            memory_id: 1.0 - (rank * 0.01)
+            for rank, memory_id in enumerate(candidate_ids)
+        }
+
+    monkeypatch.setattr(repository, "list_memories", _fail_list_memories)
+    monkeypatch.setattr(repository, "list_memory_ids", _record_list_memory_ids)
+    monkeypatch.setattr(service, "_semantic_scores", _semantic_scores)
+
+    results, diagnostics = service.search_memories_with_diagnostics(
+        "timeout",
+        workspace_id="workspace-alpha",
+        limit=5,
+        debug=True,
+    )
+
+    assert results
+    assert diagnostics.semantic_candidate_strategy == "global"
+    assert (None, None, None, 500) in observed_list_memory_ids_calls
 
 
 def test_search_memories_preserves_global_semantic_search_when_technical_single_token_keyword_support_is_insufficient(db_manager, monkeypatch) -> None:
@@ -1293,7 +1352,7 @@ def test_search_memories_preserves_global_semantic_search_when_technical_single_
         debug=True,
     )
 
-    assert call_modes == ["global"]
+    assert call_modes == ["bounded"]
     assert diagnostics.semantic_candidate_strategy == "global"
 
 
@@ -1505,7 +1564,7 @@ def test_search_memories_broadens_to_candidate_filtered_fallback_semantic_scores
     assert semantic_only is not None
 
     fallback_cap = _strong_keyword_bounded_candidate_cap(3)
-    expected_fallback_ids = [record.id for record in repository.list_memories(limit=fallback_cap)]
+    expected_fallback_ids = repository.list_memory_ids(limit=fallback_cap)
     assert fallback_cap == 20
     assert fallback_cap < 500
     assert semantic_only.id in expected_fallback_ids

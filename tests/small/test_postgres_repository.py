@@ -61,7 +61,7 @@ class FakeCursor:
             "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY("
         ):
             self._select_memories_by_ids(arguments)
-        elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,"):
+        elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,") and "FROM memories WHERE id = %s" in normalized:
             self._select_memory(arguments)
         elif normalized.startswith("UPDATE memories SET"):
             self._update_memory(normalized, arguments)
@@ -120,9 +120,9 @@ class FakeCursor:
                 )
                 rows.extend((memory_id, tag_name) for tag_name in tag_names)
             self._result = rows
-        elif normalized.startswith("SELECT DISTINCT memories.id FROM memories"):
+        elif normalized.startswith("SELECT memories.id FROM memories"):
             self._select_memory_ids(normalized, arguments)
-        elif normalized.startswith("SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at,"):
+        elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,"):
             self._select_memories(normalized, arguments)
         elif normalized.startswith("SELECT DISTINCT memories.id,"):
             self._search_keyword_memory_ids(normalized, arguments)
@@ -941,6 +941,53 @@ def test_postgres_repository_list_memory_ids_matches_list_memories_ordering_and_
     assert observed_ids == [record.id for record in expected] == [newest.id, oldest.id]
 
 
+def test_postgres_repository_list_memories_batches_workspace_and_tag_hydration(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+
+    primary = repository.create_memory(
+        title="Primary fact",
+        content="Primary fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-beta", "workspace-alpha"],
+        tags=["beta", "alpha"],
+    )
+    secondary = repository.create_memory(
+        title="Secondary fact",
+        content="Secondary fact content.",
+        memory_type="fact",
+        status="active",
+        workspace_ids=["workspace-gamma"],
+        tags=["gamma"],
+    )
+    assert primary is not None and secondary is not None
+
+    state = session_manager.connections[0]._state
+    query_start = len(state.query_log)
+
+    listed = repository.list_memories(status="active", limit=10)
+
+    queries = state.query_log[query_start:]
+    assert len(queries) == 3
+    assert queries[0].startswith(
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories"
+    )
+    assert queries[1] == "SELECT memory_id, workspace_id FROM memory_workspaces WHERE memory_id = ANY(%s::text[]) ORDER BY memory_id ASC, workspace_id ASC"
+    assert queries[2] == "SELECT memory_tags.memory_id, tags.name FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id WHERE memory_tags.memory_id = ANY(%s::text[]) ORDER BY memory_tags.memory_id ASC, tags.name ASC"
+    assert not any(query == "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" for query in queries)
+    assert not any(
+        query.startswith("SELECT tags.name FROM tags JOIN memory_tags ON memory_tags.tag_id = tags.id")
+        for query in queries
+    )
+
+    assert [record.id for record in listed] == [secondary.id, primary.id]
+    hydrated_primary = next(record for record in listed if record.id == primary.id)
+    assert hydrated_primary.workspace_ids == ["workspace-alpha", "workspace-beta"]
+    assert hydrated_primary.tags == ["alpha", "beta"]
+
+
 def test_postgres_repository_ranking_candidates_aggregate_without_join_fanout_inflation(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:
@@ -1451,7 +1498,7 @@ def test_postgres_search_service_keeps_global_semantic_fallback_when_lexical_hit
 
     assert results
     assert semantic_match.id in {result.memory_id for result in results}
-    assert vector_store.last_candidate_ids is None
+    assert set(vector_store.last_candidate_ids or []) == {weak_lexical.id, semantic_match.id}
 
 
 def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculative_bounded_search(
@@ -1490,7 +1537,7 @@ def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculat
         tags=["auth"],
     )
     assert semantic_only is not None
-    expected_fallback_ids = [record.id for record in repository.list_memories(limit=500)]
+    expected_fallback_ids = repository.list_memory_ids(limit=500)
 
     for record in lexical_records:
         vector_store.upsert(
