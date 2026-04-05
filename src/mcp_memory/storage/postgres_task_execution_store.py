@@ -97,24 +97,50 @@ class PostgresTaskExecutionAttemptRepository:
                         ),
                     )
                 else:
-                    updated = existing if existing.completed_at is not None else _StoredAttempt(
-                        id=existing.id,
-                        task_id=existing.task_id,
-                        execution_epoch=existing.execution_epoch,
-                        workspace_id=existing.workspace_id or self._workspace_id,
-                        task_name=existing.task_name or task_name,
-                        request_id=request_id or existing.request_id,
-                        subprocess_pid=subprocess_pid if subprocess_pid is not None else existing.subprocess_pid,
-                        provider_key=existing.provider_key or provider_key,
-                        provider_name=existing.provider_name or provider_name,
-                        model_name=existing.model_name or model_name,
-                        status=status,
-                        started_at=min(existing.started_at, now),
-                        last_heartbeat_at=max(existing.last_heartbeat_at or now, now),
-                        completed_at=existing.completed_at,
-                        error_text=existing.error_text,
-                        termination_reason=existing.termination_reason,
-                    )
+                    if existing.completed_at is None:
+                        updated = _StoredAttempt(
+                            id=existing.id,
+                            task_id=existing.task_id,
+                            execution_epoch=existing.execution_epoch,
+                            workspace_id=existing.workspace_id or self._workspace_id,
+                            task_name=existing.task_name or task_name,
+                            request_id=request_id or existing.request_id,
+                            subprocess_pid=subprocess_pid if subprocess_pid is not None else existing.subprocess_pid,
+                            provider_key=existing.provider_key or provider_key,
+                            provider_name=existing.provider_name or provider_name,
+                            model_name=existing.model_name or model_name,
+                            status=status,
+                            started_at=min(existing.started_at, now),
+                            last_heartbeat_at=max(existing.last_heartbeat_at or now, now),
+                            completed_at=None,
+                            error_text=None,
+                            termination_reason=None,
+                        )
+                    elif _should_reopen_terminal_attempt(
+                        existing,
+                        request_id=request_id,
+                        subprocess_pid=subprocess_pid,
+                    ):
+                        updated = _StoredAttempt(
+                            id=existing.id,
+                            task_id=existing.task_id,
+                            execution_epoch=existing.execution_epoch,
+                            workspace_id=existing.workspace_id or self._workspace_id,
+                            task_name=existing.task_name or task_name,
+                            request_id=request_id,
+                            subprocess_pid=subprocess_pid,
+                            provider_key=existing.provider_key or provider_key,
+                            provider_name=existing.provider_name or provider_name,
+                            model_name=existing.model_name or model_name,
+                            status=status,
+                            started_at=now,
+                            last_heartbeat_at=now,
+                            completed_at=None,
+                            error_text=None,
+                            termination_reason=None,
+                        )
+                    else:
+                        updated = existing
                     self._update_attempt_row(cursor, updated)
             connection.commit()
         return self.get_attempt(task_id=task_id, execution_epoch=execution_epoch)
@@ -338,3 +364,18 @@ class PostgresTaskExecutionAttemptRepository:
             error_text=attempt.error_text,
             termination_reason=attempt.termination_reason,
         )
+
+
+def _should_reopen_terminal_attempt(
+    existing: _StoredAttempt,
+    *,
+    request_id: str | None,
+    subprocess_pid: int | None,
+) -> bool:
+    if existing.completed_at is None:
+        return False
+    if request_id is not None and existing.request_id is not None:
+        return request_id != existing.request_id
+    if subprocess_pid is not None and existing.subprocess_pid is not None:
+        return subprocess_pid != existing.subprocess_pid
+    return True

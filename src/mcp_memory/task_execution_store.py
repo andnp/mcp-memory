@@ -49,9 +49,21 @@ class TaskExecutionAttemptRepository:
         if self._db_manager is None:
             raise ValueError("task_execution_attempts_not_initialized")
         now = time.time() if started_at is None else started_at
+        reopen_terminal_attempt = """
+            task_execution_attempts.completed_at IS NOT NULL
+            AND CASE
+                WHEN excluded.request_id IS NOT NULL
+                    AND task_execution_attempts.request_id IS NOT NULL
+                THEN excluded.request_id IS NOT task_execution_attempts.request_id
+                WHEN excluded.subprocess_pid IS NOT NULL
+                    AND task_execution_attempts.subprocess_pid IS NOT NULL
+                THEN excluded.subprocess_pid IS NOT task_execution_attempts.subprocess_pid
+                ELSE 1
+            END
+        """
         conn = self._db_manager.get_connection()
         conn.execute(
-            """
+            f"""
             INSERT INTO task_execution_attempts (
                 task_id,
                 execution_epoch,
@@ -72,22 +84,60 @@ class TaskExecutionAttemptRepository:
             ON CONFLICT(task_id, execution_epoch) DO UPDATE SET
                 workspace_id = COALESCE(excluded.workspace_id, task_execution_attempts.workspace_id),
                 task_name = COALESCE(excluded.task_name, task_execution_attempts.task_name),
-                request_id = COALESCE(excluded.request_id, task_execution_attempts.request_id),
-                subprocess_pid = COALESCE(excluded.subprocess_pid, task_execution_attempts.subprocess_pid),
+                request_id = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN COALESCE(
+                        excluded.request_id,
+                        task_execution_attempts.request_id
+                    )
+                    WHEN {reopen_terminal_attempt} THEN excluded.request_id
+                    ELSE task_execution_attempts.request_id
+                END,
+                subprocess_pid = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN COALESCE(
+                        excluded.subprocess_pid,
+                        task_execution_attempts.subprocess_pid
+                    )
+                    WHEN {reopen_terminal_attempt} THEN excluded.subprocess_pid
+                    ELSE task_execution_attempts.subprocess_pid
+                END,
                 provider_key = COALESCE(excluded.provider_key, task_execution_attempts.provider_key),
                 provider_name = COALESCE(excluded.provider_name, task_execution_attempts.provider_name),
                 model_name = COALESCE(excluded.model_name, task_execution_attempts.model_name),
                 status = CASE
                     WHEN task_execution_attempts.completed_at IS NULL THEN excluded.status
+                    WHEN {reopen_terminal_attempt} THEN excluded.status
                     ELSE task_execution_attempts.status
                 END,
-                started_at = MIN(task_execution_attempts.started_at, excluded.started_at),
+                started_at = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN MIN(
+                        task_execution_attempts.started_at,
+                        excluded.started_at
+                    )
+                    WHEN {reopen_terminal_attempt} THEN excluded.started_at
+                    ELSE task_execution_attempts.started_at
+                END,
                 last_heartbeat_at = CASE
                     WHEN task_execution_attempts.completed_at IS NULL THEN MAX(
                         COALESCE(task_execution_attempts.last_heartbeat_at, excluded.last_heartbeat_at),
                         excluded.last_heartbeat_at
                     )
+                    WHEN {reopen_terminal_attempt} THEN excluded.last_heartbeat_at
                     ELSE task_execution_attempts.last_heartbeat_at
+                END,
+                completed_at = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN NULL
+                    WHEN {reopen_terminal_attempt} THEN NULL
+                    ELSE task_execution_attempts.completed_at
+                END,
+                error_text = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN NULL
+                    WHEN {reopen_terminal_attempt} THEN NULL
+                    ELSE task_execution_attempts.error_text
+                END,
+                termination_reason = CASE
+                    WHEN task_execution_attempts.completed_at IS NULL THEN NULL
+                    WHEN {reopen_terminal_attempt} THEN NULL
+                    ELSE task_execution_attempts.termination_reason
                 END
             """,
             (

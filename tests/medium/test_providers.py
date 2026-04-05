@@ -1059,6 +1059,91 @@ async def test_instrumented_provider_records_attempt_telemetry_after_recovery_te
 
 
 @pytest.mark.asyncio
+async def test_instrumented_provider_reopens_attempt_for_later_provider_call_in_same_execution_epoch(
+    db_manager,
+) -> None:
+    call_count = 0
+
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            nonlocal call_count
+            assert self._observer is not None
+            call_count += 1
+            call_number = call_count
+            started_at = 10.0 if call_number == 1 else 20.0
+            completed_at = 12.0 if call_number == 1 else 24.0
+            subprocess_pid = 1111 if call_number == 1 else 2222
+            self._observer(
+                {
+                    "event": "started",
+                    "attempt": 1,
+                    "prompt": prompt,
+                    "subprocess_pid": subprocess_pid,
+                    "started_at": started_at,
+                }
+            )
+            self._observer(
+                {
+                    "event": "finished",
+                    "attempt": 1,
+                    "status": "success",
+                    "prompt": prompt,
+                    "subprocess_pid": subprocess_pid,
+                    "raw_text": json.dumps({"call": call_number}),
+                    "parsed": {"call": call_number},
+                    "error": None,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "duration_seconds": completed_at - started_at,
+                }
+            )
+            return {"call": call_number}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        task_execution_attempts=attempt_repository,
+    ).with_usage_context(
+        task_name="ingest-system1",
+        task_id="task-multi-call",
+        execution_epoch=3,
+        workspace_id="workspace-a",
+    )
+
+    first_result = await provider.ask("first provider call")
+    second_result = await provider.ask("second provider call")
+
+    latest_usage = db_manager.get_connection().execute(
+        "SELECT request_id FROM provider_usage WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        ("task-multi-call",),
+    ).fetchone()
+    attempt = attempt_repository.get_attempt(task_id="task-multi-call", execution_epoch=3)
+
+    assert first_result == {"call": 1}
+    assert second_result == {"call": 2}
+    assert latest_usage is not None
+    assert attempt.request_id == latest_usage["request_id"]
+    assert attempt.subprocess_pid == 2222
+    assert attempt.status == "success"
+    assert attempt.started_at == pytest.approx(20.0)
+    assert attempt.last_heartbeat_at == pytest.approx(24.0)
+    assert attempt.completed_at == pytest.approx(24.0)
+    assert attempt.error_text is None
+    assert attempt.termination_reason is None
+
+
+@pytest.mark.asyncio
 async def test_instrumented_provider_finalizes_running_conversation_on_success_without_finished_event(db_manager) -> None:
     class _Provider:
         def __init__(self, observer=None) -> None:

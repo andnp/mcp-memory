@@ -144,3 +144,116 @@ def test_task_execution_attempt_repository_requires_existing_attempt_for_updates
 
     with pytest.raises(ValueError, match="missing-task@3"):
         repository.finish_attempt(task_id="missing-task", execution_epoch=3, status="error", completed_at=11.0)
+
+
+@pytest.mark.small
+def test_task_execution_attempt_repository_reopens_terminal_attempt_for_new_provider_call(db_manager) -> None:
+    repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+
+    repository.start_attempt(
+        task_id="task-2",
+        execution_epoch=7,
+        task_name="ingest-system1",
+        request_id="req-1",
+        subprocess_pid=1111,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-2.5-pro",
+        started_at=10.0,
+    )
+    repository.finish_attempt(
+        task_id="task-2",
+        execution_epoch=7,
+        status="error",
+        completed_at=12.0,
+        request_id="req-1",
+        subprocess_pid=1111,
+        error_text="Provider subprocess 1111 exited unexpectedly",
+        termination_reason="provider_exited",
+    )
+
+    reopened = repository.start_attempt(
+        task_id="task-2",
+        execution_epoch=7,
+        task_name="ingest-system1",
+        request_id="req-2",
+        subprocess_pid=2222,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-2.5-pro",
+        started_at=20.0,
+    )
+
+    assert reopened.request_id == "req-2"
+    assert reopened.subprocess_pid == 2222
+    assert reopened.status == "running"
+    assert reopened.started_at == 20.0
+    assert reopened.last_heartbeat_at == 20.0
+    assert reopened.completed_at is None
+    assert reopened.error_text is None
+    assert reopened.termination_reason is None
+
+    completed = repository.finish_attempt(
+        task_id="task-2",
+        execution_epoch=7,
+        status="success",
+        completed_at=24.0,
+        request_id="req-2",
+        subprocess_pid=2222,
+    )
+
+    assert completed.request_id == "req-2"
+    assert completed.subprocess_pid == 2222
+    assert completed.status == "success"
+    assert completed.started_at == 20.0
+    assert completed.last_heartbeat_at == 24.0
+    assert completed.completed_at == 24.0
+
+
+@pytest.mark.small
+def test_task_execution_attempt_repository_ignores_duplicate_late_start_for_same_provider_call(db_manager) -> None:
+    repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+
+    repository.start_attempt(
+        task_id="task-3",
+        execution_epoch=8,
+        task_name="ingest-system1",
+        request_id="req-1",
+        subprocess_pid=1111,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-2.5-pro",
+        started_at=10.0,
+    )
+    finished = repository.finish_attempt(
+        task_id="task-3",
+        execution_epoch=8,
+        status="error",
+        completed_at=12.0,
+        request_id="req-1",
+        subprocess_pid=1111,
+        error_text="Provider subprocess 1111 exited unexpectedly",
+        termination_reason="provider_exited",
+    )
+
+    duplicate_start = repository.start_attempt(
+        task_id="task-3",
+        execution_epoch=8,
+        task_name="ingest-system1",
+        request_id="req-1",
+        subprocess_pid=1111,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-2.5-pro",
+        started_at=20.0,
+    )
+
+    assert duplicate_start.id == finished.id
+    assert duplicate_start.request_id == "req-1"
+    assert duplicate_start.subprocess_pid == 1111
+    assert duplicate_start.status == "error"
+    assert duplicate_start.started_at == 10.0
+    assert duplicate_start.last_heartbeat_at == 12.0
+    assert duplicate_start.completed_at == 12.0
+    assert duplicate_start.error_text == "Provider subprocess 1111 exited unexpectedly"
+    assert duplicate_start.termination_reason == "provider_exited"
