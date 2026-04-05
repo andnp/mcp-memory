@@ -292,6 +292,7 @@ def create_daemon_app(
         return HTMLResponse(app.state.routes.service.load_dashboard_html())
 
     @app.get("/assets/{asset_path:path}")
+    @app.get("/dashboard/assets/{asset_path:path}")
     async def dashboard_asset(asset_path: str):
         await _record_http_activity(app)
         resolved = app.state.routes.service.resolve_dashboard_asset_path(asset_path)

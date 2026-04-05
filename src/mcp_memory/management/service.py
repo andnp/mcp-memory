@@ -834,7 +834,7 @@ class ManagementService:
 
     def load_dashboard_html(self):
         html_path = self._dashboard_dist_path if self._dashboard_dist_path.exists() else self._dashboard_static_path
-        return html_path.read_text(encoding="utf-8")
+        return _ensure_dashboard_base_href(html_path.read_text(encoding="utf-8"))
 
     def resolve_dashboard_asset_path(self, asset_path: str) -> Path | None:
         if not asset_path.strip() or not self._dashboard_asset_root.exists():
@@ -877,6 +877,14 @@ def _terminate_process(pid: int) -> bool:
         ),
     )
     return termination.signal_sent
+
+
+def _ensure_dashboard_base_href(html: str) -> str:
+    if "<base " in html:
+        return html
+    if "</head>" not in html:
+        return html
+    return html.replace("</head>", '    <base href="/dashboard/">\n  </head>', 1)
 
 
 def _is_process_alive(pid: int) -> bool:

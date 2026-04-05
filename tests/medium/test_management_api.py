@@ -6,10 +6,12 @@ import logging
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from datetime import UTC, datetime
 import json
+import re
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urljoin, urlparse
 
 
 from typing import Any, cast
@@ -842,15 +844,36 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     with TestClient(app) as client:
         dashboard = client.get("/dashboard")
         search_dashboard = client.get("/dashboard/search")
+        memory_dashboard = client.get("/dashboard/memory/http-dashboard-fact")
+        asset_match = re.search(r'(?:src|href)="(?P<asset_ref>(?:\./)?assets/[^"]+)"', dashboard.text)
+        base_match = re.search(r'<base href="(?P<base>[^"]+)"', memory_dashboard.text)
         overview = client.get("/api/overview")
         search = client.post("/api/memories/search", json={"query": "command center", "limit": 5})
         record_thought = client.post("/api/record-thought", json={"content": "dogfood the react shell"})
         overview_after = client.get("/api/overview")
         missing_asset = client.get("/assets/missing.js")
+        nested_asset = None if asset_match is None else client.get(f"/dashboard/{asset_match.group('asset_ref').lstrip('./')}")
+        nested_asset_request_path = None
+        if asset_match is not None:
+            asset_base_url = urljoin(
+                "http://testserver/dashboard/memory/http-dashboard-fact",
+                "" if base_match is None else base_match.group("base"),
+            )
+            nested_asset_request_path = urlparse(urljoin(asset_base_url, asset_match.group("asset_ref"))).path
+        deep_link_asset = None if nested_asset_request_path is None else client.get(nested_asset_request_path)
 
     assert dashboard.status_code == 200
     assert search_dashboard.status_code == 200
+    assert memory_dashboard.status_code == 200
     assert "MCP Memory Dashboard" in dashboard.text or "Memory Command Center" in dashboard.text
+    assert asset_match is not None
+    assert base_match is not None
+    assert nested_asset is not None
+    assert nested_asset.status_code == 200
+    assert nested_asset_request_path is not None
+    assert nested_asset_request_path.startswith("/dashboard/assets/")
+    assert deep_link_asset is not None
+    assert deep_link_asset.status_code == 200
     assert overview.status_code == 200
     assert overview.json()["memories"]["total"] >= 1
     assert overview.json()["premium_usage"]["copilot_premium_requests_today"] == 0
@@ -1245,7 +1268,11 @@ async def test_daemon_zmq_api_record_thought_fast_path_ignores_saturated_request
 
     routes = SimpleNamespace(
         service=SimpleNamespace(
-            record_thought=lambda content: {"status": "recorded", "content": content},
+            record_thought=lambda content, workspace_id=None: {
+                "status": "recorded",
+                "content": content,
+                "workspace_id": workspace_id,
+            },
         )
     )
     server = DaemonZmqServer(
@@ -1290,7 +1317,11 @@ async def test_daemon_zmq_api_record_thought_fast_path_ignores_saturated_request
         request_elapsed = time.monotonic() - request_started_at
 
         assert blocking_request.done() is False
-        assert response == {"status": "recorded", "content": "fast api thought"}
+        assert response == {
+            "status": "recorded",
+            "content": "fast api thought",
+            "workspace_id": None,
+        }
         assert request_elapsed < 0.2
 
         release_blocking_request.set()

@@ -182,6 +182,9 @@ export function SelectorStatsPage() {
   const [selectedScope, setSelectedScope] = useState<NerdMetricsScope>('global');
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
   const selectedWindowConfig = SELECTOR_WINDOW_OPTIONS[selectedWindow];
+  const metricKindByKey = Object.fromEntries(
+    SNAPSHOT_METRIC_ORDER.map((metric) => [metric.key, metric.kind]),
+  ) as Record<string, 'number' | 'age'>;
 
   const workspaceOptionsQuery = useQuery({
     queryKey: ['selector-stats', 'workspace-options', selectedWindow],
@@ -246,10 +249,6 @@ export function SelectorStatsPage() {
   }
 
   const { summary, classification_breakdown, outcome_rows, feature_rollup_rows, recent_runs } = selectorQuery.data;
-  const metricKindByKey = useMemo(
-    () => Object.fromEntries(SNAPSHOT_METRIC_ORDER.map((metric) => [metric.key, metric.kind])),
-    [],
-  );
   const hasActivity = summary.total_runs > 0;
 
   return (
