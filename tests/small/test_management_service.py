@@ -730,6 +730,32 @@ def test_management_service_nerd_metrics_accepts_global_and_workspace_overrides(
     assert [item.provider_key for item in workspace_override_metrics.provider_latency] == ["copilot-mini"]
 
 
+def test_management_service_resolve_scoped_workspace_id_preserves_service_scoped_default_semantics(db_manager) -> None:
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=RelationalMemoryRepository(db_manager),
+        task_queue=SQLiteTaskQueue(db_manager),
+    )
+
+    assert service._resolve_scoped_workspace_id(scope=None, workspace_id=None) == "workspace-a"
+    assert service._resolve_scoped_workspace_id(scope="global", workspace_id=None) is None
+    assert service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None) == "workspace-a"
+    assert service._resolve_scoped_workspace_id(scope="workspace", workspace_id="workspace-b") == "workspace-b"
+
+
+def test_management_service_resolve_scoped_workspace_id_requires_workspace_context_for_workspace_scope(db_manager) -> None:
+    service = _build_management_service(
+        db_manager,
+        workspace_id=None,
+        repository=RelationalMemoryRepository(db_manager),
+        task_queue=SQLiteTaskQueue(db_manager),
+    )
+
+    with pytest.raises(ValueError, match="workspace_id_required_for_workspace_scope"):
+        service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None)
+
+
 def test_management_service_nerd_metrics_composition_distributions_and_timelines(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

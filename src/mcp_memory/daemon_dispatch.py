@@ -3,27 +3,14 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlsplit
 
+from mcp_memory.management.scope_policy import resolve_workspace_id_for_policy, scope_policy_for_endpoint
+
 
 _DEFAULT_LIST_LIMIT = 20
 _DEFAULT_LOG_LIMIT = 50
 _MAX_LIST_LIMIT = 200
 _MEMORY_DETAIL_PATH_RE = re.compile(r"^/api/memories/(?P<memory_id>[^/]+)$")
 _TASK_CANCEL_PATH_RE = re.compile(r"^/api/admin/tasks/(?P<task_id>[^/]+)/cancel$")
-_GLOBAL_ONLY_ENDPOINTS = frozenset({
-    "/api/health",
-    "/api/overview",
-})
-_GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS = frozenset({
-    "/api/metrics/nerd",
-    "/api/selector-stats",
-    "/api/tasks",
-    "/api/memories",
-    "/api/memories/search",
-    "/api/logs",
-    "/api/logs/summary",
-    "/api/ai-conversations",
-    "/api/admin/logs/prune",
-})
 
 
 def dispatch_management_request(routes, metadata, path: str, payload: dict[str, object]) -> dict:
@@ -210,21 +197,11 @@ def normalize_request(path: str, payload: dict | None) -> tuple[str, dict[str, o
 
 
 def _resolve_endpoint_workspace_id(routes, path: str, payload: dict[str, object]) -> str | None:
-    if path in _GLOBAL_ONLY_ENDPOINTS:
-        return None
-    if path in _GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS:
-        workspace_id = optional_str(payload, "workspace_id")
-        if workspace_id is not None:
-            return workspace_id
-        scope = optional_str(payload, "scope")
-        if scope is None or scope == "global":
-            return None
-        if scope == "workspace":
-            return routes.service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None)
-        raise ValueError("scope_must_be_global_or_workspace")
-    return routes.service._resolve_scoped_workspace_id(
+    return resolve_workspace_id_for_policy(
+        scope_policy_for_endpoint(path),
         scope=optional_str(payload, "scope"),
         workspace_id=optional_str(payload, "workspace_id"),
+        current_workspace_id=routes.service.workspace_id,
     )
 
 

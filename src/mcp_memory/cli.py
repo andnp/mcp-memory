@@ -30,6 +30,7 @@ from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
 from mcp_memory.installer import install_integrations, load_hook_payload, safe_forward_hook_event
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
+from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.service import ManagementService
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
@@ -683,11 +684,15 @@ def _resolve_operator_workspace_filter(
     scope: str,
     workspace_id: str | None,
 ) -> str | None:
+    explicit_workspace_id = None
     if workspace_id is not None and workspace_id.strip():
-        return workspace_id.strip()
-    if scope == "global":
-        return None
-    return service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None)
+        explicit_workspace_id = workspace_id.strip()
+    return resolve_workspace_id_for_policy(
+        ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE,
+        scope=scope,
+        workspace_id=explicit_workspace_id,
+        current_workspace_id=service.workspace_id,
+    )
 
 
 def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:

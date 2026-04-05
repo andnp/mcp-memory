@@ -25,6 +25,7 @@ from mcp_memory.management.operator_health_reporting import (
     summarize_provider_policy,
 )
 from mcp_memory.management.overview_reporting import build_overview
+from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.models import (
@@ -137,6 +138,10 @@ class ManagementService:
     @property
     def dashboard_static_root(self) -> Path:
         return self._dashboard_static_root
+
+    @property
+    def workspace_id(self) -> str | None:
+        return self._workspace_id
 
     def get_health(self):
         embedder_status = build_embedding_status(self._embedder)
@@ -609,17 +614,12 @@ class ManagementService:
         scope: str | None,
         workspace_id: str | None,
     ) -> str | None:
-        if workspace_id is not None:
-            return workspace_id
-        if scope is None:
-            return self._workspace_id
-        if scope == "global":
-            return None
-        if scope == "workspace":
-            if self._workspace_id is None:
-                raise ValueError("workspace_id_required_for_workspace_scope")
-            return self._workspace_id
-        raise ValueError("scope_must_be_global_or_workspace")
+        return resolve_workspace_id_for_policy(
+            ScopePolicyKind.SERVICE_SCOPED_DEFAULT,
+            scope=scope,
+            workspace_id=workspace_id,
+            current_workspace_id=self._workspace_id,
+        )
 
     def record_thought(self, content: str) -> dict[str, object]:
         if self._journal.journal is None:
