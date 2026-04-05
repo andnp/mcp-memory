@@ -119,7 +119,6 @@ def summarize_provider_policy(
 def build_operator_health_snapshot_payload(
     *,
     generated_at: float,
-    workspace_id: str | None,
     log_window_minutes: int,
     conversation_window_hours: int,
     health,
@@ -149,8 +148,6 @@ def build_operator_health_snapshot_payload(
     )
     return OperatorHealthSnapshotPayload(
         generated_at=generated_at,
-        scope="global" if workspace_id is None else "workspace",
-        workspace_id=workspace_id,
         status="warn" if alerts else "ok",
         alerts=alerts,
         health=health,

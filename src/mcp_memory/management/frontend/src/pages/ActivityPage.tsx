@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import type { ManagementScope } from '../lib/api';
 import { fetchAIConversations, fetchOverview } from '../lib/api';
 
 function formatTimestamp(timestamp: number): string {
@@ -8,6 +9,23 @@ function formatTimestamp(timestamp: number): string {
 }
 
 export function ActivityPage() {
+  const [conversationScope, setConversationScope] = useState<'global' | 'workspace'>('global');
+  const [conversationWorkspaceId, setConversationWorkspaceId] = useState('');
+  const conversationFilters = useMemo(
+    (): {
+      limit: number;
+      scope?: ManagementScope;
+      workspace_id?: string;
+    } => ({
+      limit: 25,
+      scope: conversationScope === 'workspace' ? 'workspace' : undefined,
+      workspace_id:
+        conversationScope === 'workspace'
+          ? (conversationWorkspaceId.trim() || undefined)
+          : undefined,
+    }),
+    [conversationScope, conversationWorkspaceId],
+  );
   const overviewQuery = useQuery({
     queryKey: ['overview'],
     queryFn: fetchOverview,
@@ -15,8 +33,8 @@ export function ActivityPage() {
     refetchOnWindowFocus: false,
   });
   const conversationsQuery = useQuery({
-    queryKey: ['ai-conversations'],
-    queryFn: () => fetchAIConversations(10),
+    queryKey: ['ai-conversations', conversationFilters],
+    queryFn: () => fetchAIConversations(conversationFilters),
     refetchInterval: 15000,
     refetchOnWindowFocus: false,
   });
@@ -64,15 +82,35 @@ export function ActivityPage() {
     <div className="space-y-6">
       <section className="panel p-4">
         <p className="panel-title">Activity</p>
-        <h2 className="mt-1 text-lg font-semibold text-text">Recent agent runs and AI traces</h2>
-        <div className="mt-3 max-w-md">
+        <h2 className="mt-1 text-lg font-semibold text-text">Recent global runs and task-related AI traces</h2>
+        <div className="mt-3 grid gap-2 lg:grid-cols-3">
           <input
             value={taskFilter}
             onChange={(event) => setTaskFilter(event.target.value)}
             className="w-full rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent"
             placeholder="Filter by task name"
           />
+          <select
+            value={conversationScope}
+            onChange={(event) => setConversationScope(event.target.value as 'global' | 'workspace')}
+            className="rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent"
+          >
+            <option value="global">global conversations</option>
+            <option value="workspace">current workspace conversations</option>
+          </select>
+          <input
+            value={conversationWorkspaceId}
+            onChange={(event) => setConversationWorkspaceId(event.target.value)}
+            className="w-full rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent"
+            placeholder="optional workspace-id override"
+          />
         </div>
+        <p className="mt-2 text-xs text-muted">
+          Workspace ID override only applies when workspace scope is selected.
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          Conversation rows below are related to the selected run by <code>task_name</code>. They are not guaranteed to be the exact request(s) from that specific run.
+        </p>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
@@ -143,8 +181,9 @@ export function ActivityPage() {
 
           <section className="table-shell">
             <div className="border-b border-border px-4 py-4">
-              <p className="panel-title">Related AI conversations</p>
+              <p className="panel-title">Task-name related AI conversations</p>
               <h2 className="mt-2 text-lg font-semibold text-text">Prompt/response audit surface</h2>
+              <p className="mt-2 text-sm text-muted">Matched by task name only, with optional workspace narrowing.</p>
             </div>
             <table>
               <thead>
@@ -156,11 +195,12 @@ export function ActivityPage() {
                 </tr>
               </thead>
               <tbody>
-                {relatedConversations.map((conversation) => (
+                {relatedConversations.length ? relatedConversations.map((conversation) => (
                   <tr key={conversation.id}>
                     <td>
                       <div className="max-w-[12rem] truncate" title={conversation.task_name ?? '-'}>{conversation.task_name ?? '-'}</div>
                       <div className="mt-1 text-[10px] text-muted">request {conversation.request_id}</div>
+                      <div className="mt-1 text-[10px] text-muted">workspace {conversation.workspace_id ?? 'global'}</div>
                     </td>
                     <td>
                       <div className="truncate" title={conversation.provider_name}>{conversation.provider_name}</div>
@@ -182,7 +222,11 @@ export function ActivityPage() {
                       {conversation.error_text ? <div className="mt-1.5 max-w-[24rem] truncate text-[10px] text-danger" title={conversation.error_text}>{conversation.error_text}</div> : null}
                     </td>
                   </tr>
-                ))}
+                )) : (
+                  <tr>
+                    <td colSpan={4} className="text-muted">No task-name related conversations found for the current filters.</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </section>

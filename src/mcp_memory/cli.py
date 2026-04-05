@@ -408,7 +408,7 @@ def _show_stats_command(workspace_root: str | None, watch: bool, interval: float
     )
 
 
-def _show_operator_health_snapshot(workspace_root: str | None, scope: str, json_output: bool) -> None:
+def _show_operator_health_snapshot(workspace_root: str | None, json_output: bool) -> None:
     def _run(service: ManagementService) -> None:
         payload = service.get_operator_health_snapshot()
         if json_output:
@@ -416,11 +416,7 @@ def _show_operator_health_snapshot(workspace_root: str | None, scope: str, json_
             return
         _render_operator_health_snapshot(payload)
 
-    _with_management_service(
-        workspace_root,
-        _run,
-        workspace_id=None if scope == "global" else ...,
-    )
+    _with_management_service(workspace_root, _run, workspace_id=None)
 
 
 def _import_markdown_files(
@@ -593,6 +589,8 @@ def _render_log_summary(payload) -> None:
 
 def _show_logs(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     limit: int,
     level: str | None,
     logger_name: str | None,
@@ -603,7 +601,9 @@ def _show_logs(
     json_output: bool,
 ) -> None:
     def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
         payload = service.list_logs(
+            workspace_id=effective_workspace_id,
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -622,6 +622,8 @@ def _show_logs(
 
 def _summarize_logs(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     level: str | None,
     logger_name: str | None,
     source: str | None,
@@ -631,7 +633,9 @@ def _summarize_logs(
     json_output: bool,
 ) -> None:
     def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
         payload = service.summarize_logs(
+            workspace_id=effective_workspace_id,
             level=None if level is None else level.upper(),
             logger_name=logger_name,
             source=source,
@@ -649,12 +653,16 @@ def _summarize_logs(
 
 def _prune_logs(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     max_runtime_logs: int | None,
     max_log_age_days: int | None,
     json_output: bool,
 ) -> None:
     def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
         payload = service.prune_logs(
+            workspace_id=effective_workspace_id,
             max_runtime_logs=max_runtime_logs,
             max_log_age_days=max_log_age_days,
         )
@@ -667,6 +675,19 @@ def _prune_logs(
         )
 
     _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+def _resolve_operator_workspace_filter(
+    service: ManagementService,
+    *,
+    scope: str,
+    workspace_id: str | None,
+) -> str | None:
+    if workspace_id is not None and workspace_id.strip():
+        return workspace_id.strip()
+    if scope == "global":
+        return None
+    return service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None)
 
 
 def _render_memory_metrics_table(overview, journal_counts: dict[str, int]) -> None:
@@ -1205,8 +1226,7 @@ def _render_stats_snapshot(
     watch: bool,
     interval_seconds: float,
 ) -> None:
-    console.print(f"[bold]Workspace:[/] {health.workspace_id}")
-    console.print("[bold]Stats scope:[/] global")
+    console.print("[bold]Stats:[/] global")
     console.print(f"[bold]Database:[/] {health.db_path}")
     if watch:
         console.print(f"[dim]Watching every {interval_seconds:.1f}s — press Ctrl+C to stop[/]")
@@ -1233,12 +1253,11 @@ def _show_stats(
     interval_seconds: float,
     verbose: bool,
 ) -> None:
-    workspace_service = _build_management_service(runtime)
     global_service = _build_management_service(runtime, workspace_id=None)
 
     try:
         while True:
-            health = workspace_service.get_health()
+            health = global_service.get_health()
             overview = global_service.get_overview()
             journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
 
@@ -1309,7 +1328,7 @@ def _render_ai_conversation_table(payload) -> None:
         table.add_row(
             conversation.request_id,
             str(conversation.attempt),
-            conversation.task_name or "-",
+            f"{conversation.task_name or '-'}\n{conversation.workspace_id or 'global'}",
             "-" if conversation.subprocess_pid is None else str(conversation.subprocess_pid),
             conversation.status,
             f"{conversation.duration_seconds:.2f}s",
@@ -1319,9 +1338,8 @@ def _render_ai_conversation_table(payload) -> None:
 
 
 def _render_operator_health_snapshot(payload) -> None:
-    console.print(f"[bold]Operator Health Snapshot:[/] status={payload.status} scope={payload.scope}")
+    console.print(f"[bold]Operator Health Snapshot:[/] status={payload.status}")
     console.print(f"[bold]Generated:[/] {_format_timestamp(payload.generated_at)}")
-    console.print(f"[bold]Workspace context:[/] {payload.workspace_id or 'global'}")
     console.print(f"[bold]Alerts:[/] {', '.join(payload.alerts) if payload.alerts else 'none'}")
 
     runtime_table = Table(title="Runtime")
@@ -1593,6 +1611,14 @@ def admin_task_group() -> None:
 
 @admin_log_group.command(name="list")
 @workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Read logs across the shared runtime or only the active workspace context.",
+)
+@click.option("--workspace-id", help="Explicit workspace ID override for log filtering")
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
 @click.option(
     "--level",
@@ -1607,6 +1633,8 @@ def admin_task_group() -> None:
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def admin_logs(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     limit: int,
     level: str | None,
     logger_name: str | None,
@@ -1617,11 +1645,19 @@ def admin_logs(
     json_output: bool,
 ) -> None:
     """Print recent structured runtime logs from SQLite."""
-    _show_logs(workspace_root, limit, level, logger_name, source, query, after, before, json_output)
+    _show_logs(workspace_root, scope, workspace_id, limit, level, logger_name, source, query, after, before, json_output)
 
 
 @admin_log_group.command(name="summary")
 @workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Summarize logs across the shared runtime or only the active workspace context.",
+)
+@click.option("--workspace-id", help="Explicit workspace ID override for log filtering")
 @click.option(
     "--level",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
@@ -1635,6 +1671,8 @@ def admin_logs(
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
 def admin_log_summary(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     level: str | None,
     logger_name: str | None,
     source: str | None,
@@ -1644,22 +1682,32 @@ def admin_log_summary(
     json_output: bool,
 ) -> None:
     """Print aggregated runtime log counts."""
-    _summarize_logs(workspace_root, level, logger_name, source, query, after, before, json_output)
+    _summarize_logs(workspace_root, scope, workspace_id, level, logger_name, source, query, after, before, json_output)
 
 
 @admin_log_group.command(name="prune")
 @workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Prune logs across the shared runtime or only the active workspace context.",
+)
+@click.option("--workspace-id", help="Explicit workspace ID override for log pruning")
 @click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
 @click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
 def admin_log_prune(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     max_runtime_logs: int | None,
     max_log_age_days: int | None,
     json_output: bool,
 ) -> None:
     """Prune runtime logs using explicit or configured retention limits."""
-    _prune_logs(workspace_root, max_runtime_logs, max_log_age_days, json_output)
+    _prune_logs(workspace_root, scope, workspace_id, max_runtime_logs, max_log_age_days, json_output)
 
 
 @admin_group.command(name="install")
@@ -1795,12 +1843,22 @@ def admin_show_task_command(task_id: str, workspace_root: str | None, json_outpu
 
 @admin_conversation_group.command(name="list")
 @workspace_root_option
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Read conversations across the shared runtime or only the active workspace context.",
+)
+@click.option("--workspace-id", help="Explicit workspace ID override for conversation filtering")
 @click.option("--task-name", help="Filter by task name")
 @click.option("--status", help="Filter by conversation status")
 @click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of conversation rows to print")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
 def list_conversations_command(
     workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
     task_name: str | None,
     status: str | None,
     limit: int,
@@ -1808,7 +1866,9 @@ def list_conversations_command(
 ) -> None:
     """List recorded AI conversations."""
     def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
         payload = service.list_ai_conversations(
+            workspace_id=effective_workspace_id,
             task_name=task_name,
             status=status,
             limit=limit,
@@ -1824,11 +1884,26 @@ def list_conversations_command(
 @admin_conversation_group.command(name="show")
 @workspace_root_option
 @click.argument("request_id")
+@click.option(
+    "--scope",
+    type=click.Choice(["global", "workspace"]),
+    default="global",
+    show_default=True,
+    help="Read matching conversation attempts across the shared runtime or only the active workspace context.",
+)
+@click.option("--workspace-id", help="Explicit workspace ID override for conversation filtering")
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def show_conversation_command(request_id: str, workspace_root: str | None, json_output: bool) -> None:
+def show_conversation_command(
+    request_id: str,
+    workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
+    json_output: bool,
+) -> None:
     """Show all recorded attempts for one AI request ID."""
     def _run(service: ManagementService) -> None:
-        payload = service.list_ai_conversations(request_id=request_id, limit=200)
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
+        payload = service.list_ai_conversations(workspace_id=effective_workspace_id, request_id=request_id, limit=200)
         if json_output:
             click.echo(json.dumps(payload.model_dump(), sort_keys=True))
             return
@@ -1920,17 +1995,10 @@ def admin_overview_command(workspace_root: str | None, watch: bool, interval: fl
 
 @admin_group.command(name="health")
 @workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Inspect the whole shared runtime or only the active workspace context.",
-)
 @click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def admin_health_command(workspace_root: str | None, scope: str, json_output: bool) -> None:
+def admin_health_command(workspace_root: str | None, json_output: bool) -> None:
     """Print an AI-friendly operator health snapshot."""
-    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, scope, json_output))
+    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, json_output))
 
 
 @admin_group.command(name="monitor")

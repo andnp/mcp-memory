@@ -9,6 +9,21 @@ _DEFAULT_LOG_LIMIT = 50
 _MAX_LIST_LIMIT = 200
 _MEMORY_DETAIL_PATH_RE = re.compile(r"^/api/memories/(?P<memory_id>[^/]+)$")
 _TASK_CANCEL_PATH_RE = re.compile(r"^/api/admin/tasks/(?P<task_id>[^/]+)/cancel$")
+_GLOBAL_ONLY_ENDPOINTS = frozenset({
+    "/api/health",
+    "/api/overview",
+})
+_GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS = frozenset({
+    "/api/metrics/nerd",
+    "/api/selector-stats",
+    "/api/tasks",
+    "/api/memories",
+    "/api/memories/search",
+    "/api/logs",
+    "/api/logs/summary",
+    "/api/ai-conversations",
+    "/api/admin/logs/prune",
+})
 
 
 def dispatch_management_request(routes, metadata, path: str, payload: dict[str, object]) -> dict:
@@ -22,28 +37,27 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
         response["transport"] = metadata.transport
         return response
     if path == "/api/overview":
-        return routes.service.get_overview(
-            scope=optional_str(payload, "scope"),
-            workspace_id=optional_str(payload, "workspace_id"),
-        ).model_dump()
+        return routes.service.get_overview().model_dump()
     if path == "/api/metrics/nerd":
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.get_nerd_metrics(
-            scope=optional_str(payload, "scope"),
-            workspace_id=optional_str(payload, "workspace_id"),
+            scope="global" if effective_workspace_id is None else None,
+            workspace_id=effective_workspace_id,
             window_hours=optional_int(payload, "window_hours", default=24, minimum=1, maximum=24 * 30) or 24,
             bucket_minutes=optional_int(payload, "bucket_minutes", default=60, minimum=1, maximum=24 * 60) or 60,
             now=optional_float(payload, "now"),
         ).model_dump()
     if path == "/api/selector-stats":
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.get_selector_stats(
-            scope=optional_str(payload, "scope"),
-            workspace_id=optional_str(payload, "workspace_id"),
+            scope="global" if effective_workspace_id is None else None,
+            workspace_id=effective_workspace_id,
             window_hours=optional_int(payload, "window_hours", default=24, minimum=1, maximum=24 * 30) or 24,
             limit=optional_int(payload, "limit", default=200, minimum=1, maximum=500) or 200,
             now=optional_float(payload, "now"),
         ).model_dump()
     if path == "/api/tasks":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.list_tasks(
             status=optional_str(payload, "status"),
             workspace_id=effective_workspace_id,
@@ -56,7 +70,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             )
         )
     if path == "/api/memories":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.list_memories(
             workspace_id=effective_workspace_id,
             memory_type=optional_str(payload, "memory_type"),
@@ -64,7 +78,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/memories/search":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.search_memories(
             query=required_str(payload, "query"),
             workspace_id=effective_workspace_id,
@@ -75,7 +89,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             debug=bool_value(payload, "debug", default=False),
         ).model_dump()
     if path == "/api/logs":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.list_logs(
             workspace_id=effective_workspace_id,
             level=optional_str(payload, "level"),
@@ -87,7 +101,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/logs/summary":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.summarize_logs(
             workspace_id=effective_workspace_id,
             level=optional_str(payload, "level"),
@@ -98,7 +112,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             before=optional_float(payload, "before"),
         ).model_dump()
     if path == "/api/ai-conversations":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.list_ai_conversations(
             workspace_id=effective_workspace_id,
             request_id=optional_str(payload, "request_id"),
@@ -118,7 +132,7 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             )
         }
     if path == "/api/admin/logs/prune":
-        effective_workspace_id = _resolve_scoped_workspace_id(routes, payload)
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.prune_logs(
             workspace_id=effective_workspace_id,
             max_runtime_logs=optional_int(payload, "max_runtime_logs"),
@@ -195,7 +209,19 @@ def normalize_request(path: str, payload: dict | None) -> tuple[str, dict[str, o
     return split.path or path, request_payload
 
 
-def _resolve_scoped_workspace_id(routes, payload: dict[str, object]) -> str | None:
+def _resolve_endpoint_workspace_id(routes, path: str, payload: dict[str, object]) -> str | None:
+    if path in _GLOBAL_ONLY_ENDPOINTS:
+        return None
+    if path in _GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS:
+        workspace_id = optional_str(payload, "workspace_id")
+        if workspace_id is not None:
+            return workspace_id
+        scope = optional_str(payload, "scope")
+        if scope is None or scope == "global":
+            return None
+        if scope == "workspace":
+            return routes.service._resolve_scoped_workspace_id(scope="workspace", workspace_id=None)
+        raise ValueError("scope_must_be_global_or_workspace")
     return routes.service._resolve_scoped_workspace_id(
         scope=optional_str(payload, "scope"),
         workspace_id=optional_str(payload, "workspace_id"),

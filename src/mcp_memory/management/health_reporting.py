@@ -76,12 +76,11 @@ def build_search_health(relational_search) -> SearchHealthPayload:
 
 def build_execution_attempt_health(
     db_manager,
-    workspace_id: str | None,
     *,
     stale_after_seconds: float = 60.0,
     now: float | None = None,
 ) -> ExecutionAttemptHealthPayload:
-    rows = fetch_running_task_attempt_rows(db_manager, workspace_id)
+    rows = fetch_running_task_attempt_rows(db_manager)
     if not rows:
         return ExecutionAttemptHealthPayload(stale_after_seconds=stale_after_seconds)
 

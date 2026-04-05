@@ -913,7 +913,7 @@ async def test_is_daemon_healthy_stays_true_while_sync_management_request_runs(t
             return {"status": "ok"}
 
     class _RoutesService:
-        def get_overview(self, *, scope: str | None = None, workspace_id: str | None = None) -> _OverviewPayload:
+        def get_overview(self) -> _OverviewPayload:
             overview_started.set()
             release_overview.wait(timeout=5.0)
             return _OverviewPayload()

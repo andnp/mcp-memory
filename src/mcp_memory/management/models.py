@@ -125,7 +125,6 @@ class TransportDiagnosticsPayload(BaseModel):
 class HealthPayload(BaseModel):
     status: str
     storage_backend: str | None = None
-    workspace_id: str | None = None
     workspace_root: str | None = None
     memory_path: str | None = None
     db_path: str | None = None
@@ -192,8 +191,6 @@ class MemoryToolLatencyPayload(BaseModel):
 
 class OperatorHealthSnapshotPayload(BaseModel):
     generated_at: float
-    scope: str
-    workspace_id: str | None = None
     status: str = "ok"
     alerts: list[str] = Field(default_factory=list)
     health: HealthPayload

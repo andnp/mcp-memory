@@ -101,7 +101,6 @@ class MemoryMonitorApp(App):
         self.query_one("#summary", Static).update(
             "\n".join(
                 [
-                    f"[bold]Workspace:[/] {health.workspace_id}    [bold]Scope:[/] global",
                     f"[bold]Database:[/] {health.db_path}",
                     (
                         f"[bold]Refreshed:[/] {_format_timestamp(datetime.now().timestamp())}    "
@@ -163,9 +162,8 @@ def _build_management_service(runtime, workspace_id: str | None | object = ...) 
 
 
 def _fetch_monitor_snapshot(runtime):
-    workspace_service = _build_management_service(runtime)
     global_service = _build_management_service(runtime, workspace_id=None)
-    health = workspace_service.get_health()
+    health = global_service.get_health()
     overview = global_service.get_overview()
     journal_counts = {} if runtime.journal is None else runtime.journal.count_by_status()
     tasks_payload = global_service.list_tasks(limit=20)

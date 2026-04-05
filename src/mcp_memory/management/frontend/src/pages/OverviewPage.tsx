@@ -92,6 +92,14 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
+      <section className="panel p-4">
+        <p className="panel-title">Operator pulse</p>
+        <h1 className="mt-1 text-lg font-semibold text-text">Global command-center overview</h1>
+        <p className="mt-2 text-sm text-muted">
+          This overview is always global across the shared runtime. Use Activity, Logs, Nerd Metrics, and Selector Stats when you need workspace-level narrowing.
+        </p>
+      </section>
+
       <div className={`rounded-xl border border-border bg-panel/80 px-3 py-2 text-xs shadow-panel ${pulseTone}`}>
         Status: {pulseStatus}
         {pulseDetails ? <span className="text-muted"> · {pulseDetails}</span> : null}
@@ -108,7 +116,7 @@ export function OverviewPage() {
 
       {overviewQuery.isError ? (
         <section className="panel p-6 text-danger">
-          Failed to load the daemon overview. This page expects the management API to be reachable at <code>/api</code>.
+          Failed to load the global operator pulse. This page expects the management API to be reachable at <code>/api</code>.
         </section>
       ) : overviewQuery.data ? (
         <>
@@ -118,7 +126,7 @@ export function OverviewPage() {
             <div className="table-shell">
               <div className="border-b border-border px-4 py-4">
                 <p className="panel-title">Background agents</p>
-                <h2 className="mt-2 text-lg font-semibold text-text">Current pulse</h2>
+                <h2 className="mt-2 text-lg font-semibold text-text">Global operator pulse</h2>
               </div>
               <table>
                 <thead>

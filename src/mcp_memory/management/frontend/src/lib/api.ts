@@ -174,6 +174,7 @@ export interface MemoryDetailResponse {
 export interface AIConversation {
   id: number;
   request_id: string;
+  workspace_id: string | null;
   task_name: string | null;
   task_id: string | null;
   provider_name: string;
@@ -712,7 +713,8 @@ export interface SelectorStatsResponse {
   recent_runs: SelectorRecentDiagnostic[];
 }
 
-export type NerdMetricsScope = 'global' | 'workspace';
+export type ManagementScope = 'global' | 'workspace';
+export type NerdMetricsScope = ManagementScope;
 
 export interface CommandBarResult {
   status?: string;
@@ -799,10 +801,15 @@ export function runAllAgents(): Promise<CommandBarResult> {
   });
 }
 
-export function fetchAIConversations(limit = 12): Promise<AIConversationListResponse> {
-  return requestJson<AIConversationListResponse>('/api/ai-conversations', {
+export function fetchAIConversations(params: {
+  limit?: number;
+  task_name?: string;
+  status?: string;
+  scope?: ManagementScope;
+  workspace_id?: string;
+} = {}): Promise<AIConversationListResponse> {
+  return requestJson<AIConversationListResponse>(withQueryParams('/api/ai-conversations', params), {
     method: 'POST',
-    body: JSON.stringify({ limit }),
   });
 }
 
@@ -812,10 +819,11 @@ export function fetchLogs(params: {
   q?: string;
   source?: string;
   logger_name?: string;
+  scope?: ManagementScope;
+  workspace_id?: string;
 } = {}): Promise<{ logs: RecentLog[] }> {
-  return requestJson<{ logs: RecentLog[] }>('/api/logs', {
+  return requestJson<{ logs: RecentLog[] }>(withQueryParams('/api/logs', params), {
     method: 'POST',
-    body: JSON.stringify(params),
   });
 }
 
@@ -824,10 +832,11 @@ export function fetchLogSummary(params: {
   q?: string;
   source?: string;
   logger_name?: string;
+  scope?: ManagementScope;
+  workspace_id?: string;
 } = {}): Promise<RuntimeLogSummaryResponse> {
-  return requestJson<RuntimeLogSummaryResponse>('/api/logs/summary', {
+  return requestJson<RuntimeLogSummaryResponse>(withQueryParams('/api/logs/summary', params), {
     method: 'POST',
-    body: JSON.stringify(params),
   });
 }
 

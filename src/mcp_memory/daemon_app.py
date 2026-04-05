@@ -35,18 +35,6 @@ _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
-_GLOBAL_DEFAULT_API_PATHS = {
-    "overview",
-    "metrics/nerd",
-    "selector-stats",
-    "tasks",
-    "memories",
-    "memories/search",
-    "logs",
-    "logs/summary",
-    "ai-conversations",
-    "admin/logs/prune",
-}
 
 
 def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
@@ -315,8 +303,6 @@ def create_daemon_app(
     async def dashboard_api(api_path: str, request: Request):
         await _record_http_activity(app)
         payload = await _payload_from_http_request(request)
-        if api_path in _GLOBAL_DEFAULT_API_PATHS and "scope" not in payload and "workspace_id" not in payload:
-            payload["scope"] = "global"
         try:
             result = await asyncio.to_thread(
                 dispatch_management_request,

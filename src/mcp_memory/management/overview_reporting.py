@@ -108,7 +108,6 @@ def build_overview(
     task_queue,
     runtime_info,
     db_manager,
-    workspace_id: str | None,
     provider_usage_repo,
     runtime_logs_repo,
     embedder,
@@ -118,23 +117,23 @@ def build_overview(
     failed_limit: int = 10,
 ) -> OverviewPayload:
     records = [] if memory_queries is None else memory_queries.list_memories(
-        workspace_id=workspace_id,
+        workspace_id=None,
         limit=recent_limit,
     )
     top_read_records = [] if repository is None else repository.list_most_read_memories(
-        workspace_id=workspace_id,
+        workspace_id=None,
         limit=10,
     )
-    by_type, by_status, total_memories = build_memory_counts(db_manager, workspace_id)
+    by_type, by_status, total_memories = build_memory_counts(db_manager, None)
     recent_records = [compact_memory_record_payload(record) for record in records]
     top_read_payloads = [compact_memory_record_payload(record) for record in top_read_records]
     top_read_active_payloads = [payload for payload in top_read_payloads if payload.status == "active"]
-    task_counts = build_task_counts(db_manager, workspace_id)
+    task_counts = build_task_counts(db_manager, None)
     failed_tasks = [
         task_payload(task)
         for task in task_queue.list_tasks(
             status="failed",
-            workspace_id=workspace_id,
+            workspace_id=None,
             limit=failed_limit,
         )
     ]
@@ -143,13 +142,13 @@ def build_overview(
     if sqlite_path is not None and sqlite_path.exists():
         sqlite_bytes = sqlite_path.stat().st_size
 
-    memory_metrics = build_memory_metrics(db_manager, workspace_id, task_queue)
+    memory_metrics = build_memory_metrics(db_manager, None, task_queue)
     premium_usage = PremiumUsageSummaryPayload(
-        **summarize_copilot_premium_requests(db_manager, workspace_id=workspace_id)
+        **summarize_copilot_premium_requests(db_manager, workspace_id=None)
     )
-    agent_runs = build_agent_runs(task_queue, workspace_id)
-    provider_usage = build_provider_usage(provider_usage_repo, workspace_id)
-    recent_agent_runs = build_recent_agent_runs(db_manager, workspace_id, limit=20)
+    agent_runs = build_agent_runs(task_queue, None)
+    provider_usage = build_provider_usage(provider_usage_repo, None)
+    recent_agent_runs = build_recent_agent_runs(db_manager, None, limit=20)
     recent_logs = [
         RuntimeLogPayload(
             id=record.id,
@@ -160,7 +159,7 @@ def build_overview(
             message=record.message,
             data=record.data,
         )
-        for record in runtime_logs_repo.list_logs(limit=10)
+        for record in runtime_logs_repo.list_logs(workspace_id=None, limit=10)
     ]
 
     return OverviewPayload(
@@ -168,10 +167,10 @@ def build_overview(
         embeddings=build_embedding_status(embedder),
         search=build_search_health(relational_search),
         cache=cache,
-        execution_attempts=build_execution_attempt_health(db_manager, workspace_id),
+        execution_attempts=build_execution_attempt_health(db_manager),
         memory_metrics=memory_metrics,
         premium_usage=premium_usage,
-        queue_diagnostics=build_queue_diagnostics(task_queue, workspace_id),
+        queue_diagnostics=build_queue_diagnostics(task_queue, None),
         agent_runs=agent_runs,
         provider_usage=provider_usage,
         recent_agent_runs=recent_agent_runs,

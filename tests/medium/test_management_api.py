@@ -314,7 +314,6 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         dashboard = app.state.routes.service.load_dashboard_html()
 
         assert health["status"] == "ready"
-        assert health["workspace_id"] == seed_runtime.workspace_id
         assert health["workspace_root"] == str(workspace)
         assert "embeddings" in health
         assert "backend" in health["embeddings"]
@@ -324,12 +323,12 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert health["transport_diagnostics"]["recent_queue_wait_max_ms"] >= 0.0
         assert "execution_attempts" in health
         assert health["execution_attempts"]["running_task_count"] >= 0
-        assert overview["memories"]["total"] == 2
+        assert overview["memories"]["total"] == 3
         assert overview["embeddings"]["model_name"] is not None
         assert overview["search"]["semantic_enabled"] is True
         assert "execution_attempts" in overview
         assert overview["execution_attempts"]["missing_attempt_count"] >= 0
-        assert overview["memory_metrics"]["total_memories"] == 2
+        assert overview["memory_metrics"]["total_memories"] == 3
         assert overview["queue_diagnostics"]
         assert all(item["pending_state"] in {"scheduled", "runnable"} for item in overview["queue_diagnostics"])
         assert any(item["task_name"] in {"project-manager", "summarize-memory"} for item in overview["queue_diagnostics"])
@@ -372,7 +371,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert any(stat["key"] == "work_items_per_premium_execution" and stat["value"] == 3.0 for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "mutations_per_premium_execution" and stat["value"] == 4.0 for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "tool_calls_per_premium_execution" and stat["value"] == 6.0 for stat in nerd_metrics["stats"])
-        assert nerd_metrics["graph_topology"]["total_memories"] == 2
+        assert nerd_metrics["graph_topology"]["total_memories"] == 3
         assert nerd_metrics["graph_topology"]["total_links"] == 1
         assert nerd_metrics["graph_topology"]["link_type_counts"] == {"SUPERSEDES": 1}
         assert global_nerd_metrics["graph_topology"]["total_memories"] == 3
@@ -384,18 +383,19 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert workspace_override_nerd_metrics["composition"]["by_workspace"] == [
             {"key": "workspace-b", "label": "workspace-b", "count": 1}
         ]
-        assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 1
+        assert nerd_metrics["memory_lifecycle"]["by_status"]["active"] == 2
         assert nerd_metrics["memory_lifecycle"]["by_status"]["stale"] == 1
-        assert nerd_metrics["memory_lifecycle"]["by_type"]["plan"] == 2
-        assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 1
+        assert nerd_metrics["memory_lifecycle"]["by_type"] == {"fact": 1, "plan": 2}
+        assert nerd_metrics["memory_lifecycle"]["cold_memory_count"] == 2
         assert nerd_metrics["composition"]["by_workspace"] == [
-            {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2}
+            {"key": seed_runtime.workspace_id, "label": seed_runtime.workspace_id, "count": 2},
+            {"key": "workspace-b", "label": "workspace-b", "count": 1},
         ]
-        assert {item["key"] for item in nerd_metrics["composition"]["by_tag"]} == {"api", "dashboard"}
-        assert {item["key"] for item in nerd_metrics["composition"]["by_content_tag"]} == {"api", "dashboard"}
+        assert {item["key"] for item in nerd_metrics["composition"]["by_tag"]} == {"api", "dashboard", "foreign-tag"}
+        assert {item["key"] for item in nerd_metrics["composition"]["by_content_tag"]} == {"api", "dashboard", "foreign-tag"}
         assert nerd_metrics["composition"]["by_provenance_tag"] == []
         assert nerd_metrics["composition"]["by_status"] == [
-            {"key": "active", "label": "active", "count": 1},
+            {"key": "active", "label": "active", "count": 2},
             {"key": "stale", "label": "stale", "count": 1},
         ]
         assert [bucket["key"] for bucket in nerd_metrics["distributions"]["created_age_buckets"]] == [
@@ -903,13 +903,13 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
     app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
     with TestClient(app) as client:
         global_overview = client.get("/api/overview")
-        workspace_overview = client.get("/api/overview", params={"scope": "workspace"})
+        ignored_scoped_overview = client.get("/api/overview", params={"scope": "workspace", "workspace_id": runtime_b.workspace_id})
 
     assert global_overview.status_code == 200
-    assert workspace_overview.status_code == 200
+    assert ignored_scoped_overview.status_code == 200
     assert global_overview.json()["memories"]["total"] == 3
     assert global_overview.json()["memory_metrics"]["total_memories"] == 3
-    assert workspace_overview.json()["memories"]["total"] == 2
+    assert ignored_scoped_overview.json()["memories"]["total"] == 3
 
 
 def test_http_operator_lists_default_to_global_scope(monkeypatch, tmp_path: Path) -> None:

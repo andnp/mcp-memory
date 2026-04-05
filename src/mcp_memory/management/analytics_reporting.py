@@ -471,7 +471,6 @@ def build_nerd_metrics(
     )
     execution_attempt_health = build_execution_attempt_health(
         db_manager,
-        workspace_id,
         stale_after_seconds=60.0,
         now=generated_at,
     )

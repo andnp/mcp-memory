@@ -143,7 +143,6 @@ class ManagementService:
         return HealthPayload(
             status="ok",
             storage_backend=self._storage_backend,
-            workspace_id=self._runtime_info.workspace_id,
             workspace_root=str(self._runtime_info.workspace_root) if self._runtime_info.workspace_root is not None else None,
             memory_path=str(self._runtime_info.memory_path) if self._runtime_info.memory_path is not None else None,
             db_path=str(self._runtime_info.db_path) if self._runtime_info.db_path is not None else None,
@@ -154,7 +153,7 @@ class ManagementService:
             search=build_search_health(self._relational_search),
             cache=self._build_cache_health(),
             transport_diagnostics=self._build_transport_diagnostics(),
-            execution_attempts=build_execution_attempt_health(self._db_manager, self._workspace_id),
+            execution_attempts=build_execution_attempt_health(self._db_manager),
         )
 
     def _build_transport_diagnostics(self) -> TransportDiagnosticsPayload:
@@ -232,10 +231,15 @@ class ManagementService:
         conversations_after = generated_at - (max(conversation_window_hours, 0) * 3600)
 
         health = self.get_health()
-        log_summary = self.summarize_logs(after=logs_after)
-        recent_errors = self.list_logs(level="ERROR", after=logs_after, limit=recent_error_limit).logs
-        recent_warnings = self.list_logs(level="WARNING", after=logs_after, limit=recent_warning_limit).logs
-        recent_run_rows = self.list_recent_agent_runs(limit=max(recent_run_limit * 5, recent_run_limit), detail_level="compact").runs
+        log_summary = self.summarize_logs(workspace_id=None, after=logs_after)
+        recent_errors = self.list_logs(workspace_id=None, level="ERROR", after=logs_after, limit=recent_error_limit).logs
+        recent_warnings = self.list_logs(workspace_id=None, level="WARNING", after=logs_after, limit=recent_warning_limit).logs
+        recent_run_rows = build_recent_agent_runs(
+            self._db_manager,
+            None,
+            limit=max(recent_run_limit * 5, recent_run_limit),
+            detail_level="compact",
+        )
         recent_runs = recent_run_rows[:recent_run_limit]
         recent_run_status_counts = dict(sorted(Counter(run.status for run in recent_runs).items()))
         recent_failures = [run for run in recent_run_rows if run.status == "failed"][:recent_run_limit]
@@ -243,31 +247,40 @@ class ManagementService:
         conversation_counts = count_recent_conversation_statuses(
             self._provider_usage,
             after=conversations_after,
-            workspace_id=self._workspace_id,
+            workspace_id=None,
         )
-        recent_conversations = self.list_ai_conversations(limit=conversation_limit).conversations
-        recent_memories = self.list_memories(workspace_id=self._workspace_id, limit=recent_memory_limit).records
-        tool_latency = self._summarize_memory_tool_latency(window_minutes=log_window_minutes)
-        provider_policy = self._summarize_provider_policy(window_minutes=log_window_minutes)
+        recent_conversations = self.list_ai_conversations(workspace_id=None, limit=conversation_limit).conversations
+        recent_memories = self.list_memories(workspace_id=None, limit=recent_memory_limit).records
+        tool_latency = summarize_memory_tool_latency(
+            self._db_manager,
+            workspace_id=None,
+            window_minutes=log_window_minutes,
+            slow_threshold_ms=_SLOW_MEMORY_TOOL_WARNING_MS,
+        )
+        provider_policy = summarize_provider_policy(
+            self._db_manager,
+            provider_usage_repo=self._provider_usage,
+            workspace_id=None,
+            window_minutes=log_window_minutes,
+        )
         updated_last_15_minutes = count_recent_memory_updates(
             self._repository,
             cutoff=datetime.now(UTC) - timedelta(minutes=15),
-            workspace_id=self._workspace_id,
+            workspace_id=None,
         )
         updated_last_hour = count_recent_memory_updates(
             self._repository,
             cutoff=datetime.now(UTC) - timedelta(minutes=60),
-            workspace_id=self._workspace_id,
+            workspace_id=None,
         )
         updated_last_day = count_recent_memory_updates(
             self._repository,
             cutoff=datetime.now(UTC) - timedelta(minutes=24 * 60),
-            workspace_id=self._workspace_id,
+            workspace_id=None,
         )
 
         return build_operator_health_snapshot_payload(
             generated_at=generated_at,
-            workspace_id=self._workspace_id,
             log_window_minutes=log_window_minutes,
             conversation_window_hours=conversation_window_hours,
             health=health,
@@ -291,22 +304,15 @@ class ManagementService:
     def get_overview(
         self,
         *,
-        scope: str | None = None,
-        workspace_id: str | None = None,
         recent_limit: int = 10,
         failed_limit: int = 10,
     ):
-        effective_workspace_id = self._resolve_scoped_workspace_id(
-            scope=scope,
-            workspace_id=workspace_id,
-        )
         return build_overview(
             memory_queries=self._memory_queries,
             repository=self._repository,
             task_queue=self._task_queue,
             runtime_info=self._runtime_info,
             db_manager=self._db_manager,
-            workspace_id=effective_workspace_id,
             provider_usage_repo=self._provider_usage,
             runtime_logs_repo=self._runtime_logs,
             embedder=self._embedder,

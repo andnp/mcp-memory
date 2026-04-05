@@ -447,7 +447,7 @@ def test_management_service_uses_postgres_runtime_log_repository_for_postgres_ba
 
     monkeypatch.setattr(
         "mcp_memory.management.service.build_execution_attempt_health",
-        lambda db_manager, workspace_id: ExecutionAttemptHealthPayload(),
+        lambda db_manager: ExecutionAttemptHealthPayload(),
     )
 
     db_manager = SimpleNamespace(db_path=None)
@@ -525,7 +525,7 @@ def test_operator_health_snapshot_includes_memory_tool_latency_summary(db_manage
     assert metrics["read"].avg_duration_ms == 35.0
 
 
-def test_management_service_overview_respects_workspace_and_global_scopes(db_manager) -> None:
+def test_management_service_overview_is_global_even_from_workspace_context(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
 
@@ -641,12 +641,12 @@ def test_management_service_overview_respects_workspace_and_global_scopes(db_man
     scoped_nerd = scoped_service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
     global_nerd = global_service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
 
-    assert scoped_overview.memories.total == 1
-    assert scoped_overview.memory_metrics.total_memories == 1
-    assert scoped_overview.premium_usage.copilot_premium_requests_today == 3
-    assert scoped_overview.premium_usage.copilot_premium_requests_last_day == 3
-    assert [record.title for record in scoped_overview.recent_memories] == ["Workspace A fact"]
-    assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli"}
+    assert scoped_overview.memories.total == 2
+    assert scoped_overview.memory_metrics.total_memories == 2
+    assert scoped_overview.premium_usage.copilot_premium_requests_today == 8
+    assert scoped_overview.premium_usage.copilot_premium_requests_last_day == 8
+    assert {record.title for record in scoped_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
+    assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
     assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
     assert [item.task_id for item in scoped_nerd.maintenance.events] == [task_a.id]
     assert [item.key for item in scoped_nerd.growth_dynamics.workspace_contribution_share] == ["workspace-a"]
@@ -1612,7 +1612,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.provider_usage[0].skips_last_day == 1
     assert overview.provider_usage[0].top_skip_reason_last_day == "provider_quota_exhausted"
     assert overview.provider_usage[0].active_admission_reason == "provider_quota_exhausted"
-    assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli"}
+    assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli", "copilot-mini"}
     assert overview.tasks.failed_count == 1
     deduplicator = next(agent for agent in overview.agent_runs if agent.task_name == "deduplicator")
     assert deduplicator.last_result_metadata.strategy_used == "semantic"
@@ -1638,7 +1638,6 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert detail.superseded[0]["id"] == secondary.id
     assert overview.failed_tasks[0]["status"] == "failed"
     assert health.runtime_active is True
-    assert health.workspace_id == "workspace-a"
     assert health.search.background_repair_enabled is True
     assert health.search.background_repair_wait_seconds == 5.0
     assert health.search.queued_repair_backlog_count == 0
@@ -1938,7 +1937,6 @@ def test_management_service_operator_health_snapshot_aggregates_recent_signals(d
         recent_memory_limit=5,
     )
 
-    assert snapshot.scope == "global"
     assert snapshot.status == "warn"
     assert "recent_error_logs" in snapshot.alerts
     assert "recent_task_retries" in snapshot.alerts
@@ -2069,6 +2067,106 @@ def test_management_service_operator_health_snapshot_applies_conversation_and_me
     assert snapshot.memory_activity.updated_last_15_minutes == 1
     assert snapshot.memory_activity.updated_last_hour == 2
     assert snapshot.memory_activity.updated_last_day == 3
+
+
+def test_management_service_operator_health_snapshot_ignores_service_workspace_scope(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    now = time.time()
+
+    repository.create_memory(
+        title="Workspace A recent memory",
+        content="Updated recently in workspace A.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        updated_at=datetime.now(UTC).isoformat(),
+    )
+    repository.create_memory(
+        title="Workspace B recent memory",
+        content="Updated recently in workspace B.",
+        workspace_ids=["workspace-b"],
+        memory_type="fact",
+        updated_at=datetime.now(UTC).isoformat(),
+    )
+
+    db_manager.get_connection().executemany(
+        "INSERT INTO runtime_logs (workspace_id, source, logger_name, level, message, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("workspace-a", "daemon", "mcp_memory.tests", "ERROR", "workspace-a error", now - 5.0, "{}"),
+            ("workspace-b", "daemon", "mcp_memory.tests", "ERROR", "workspace-b error", now - 4.0, "{}"),
+        ],
+    )
+
+    task_a = task_queue.enqueue(
+        "graph-linker",
+        task_id="snapshot-workspace-a",
+        workspace_id="workspace-a",
+        available_at=0.0,
+    )
+    task_b = task_queue.enqueue(
+        "graph-linker",
+        task_id="snapshot-workspace-b",
+        workspace_id="workspace-b",
+        available_at=0.0,
+    )
+    assert task_queue.claim_next(now=10.0) is not None
+    task_queue.complete(task_a.id, completed_at=11.0, run_result={"updated": 1})
+    assert task_queue.claim_next(now=12.0) is not None
+    task_queue.complete(task_b.id, completed_at=13.0, run_result={"updated": 1})
+
+    provider_usage.record_conversation(
+        request_id="workspace-a-conversation",
+        attempt=1,
+        task_name="graph-linker",
+        task_id=task_a.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=111,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="success",
+        error_text=None,
+        started_at=now - 60.0,
+        completed_at=now - 50.0,
+    )
+    provider_usage.record_conversation(
+        request_id="workspace-b-conversation",
+        attempt=1,
+        task_name="graph-linker",
+        task_id=task_b.id,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        subprocess_pid=222,
+        prompt_text="prompt",
+        response_text="response",
+        parsed=None,
+        status="error",
+        error_text="timeout",
+        started_at=now - 40.0,
+        completed_at=now - 30.0,
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    snapshot = service.get_operator_health_snapshot(recent_run_limit=10, conversation_limit=10, recent_memory_limit=10)
+
+    assert snapshot.logs.by_level == {"ERROR": 2}
+    assert {run.task_id for run in snapshot.tasks.recent} == {task_a.id, task_b.id}
+    assert snapshot.conversations.by_status == {"error": 1, "success": 1}
+    assert {record.title for record in snapshot.memory_activity.recent} == {
+        "Workspace A recent memory",
+        "Workspace B recent memory",
+    }
 
 
 def test_management_service_can_record_thought_into_journal(db_manager) -> None:

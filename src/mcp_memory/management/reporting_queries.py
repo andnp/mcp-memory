@@ -94,7 +94,7 @@ def fetch_task_count_rows(db_manager, workspace_id: str | None):
     return _fetchall_rows(db_manager, query, params)
 
 
-def fetch_running_task_attempt_rows(db_manager, workspace_id: str | None):
+def fetch_running_task_attempt_rows(db_manager):
     if db_manager is None:
         return []
     query = (
@@ -106,13 +106,8 @@ def fetch_running_task_attempt_rows(db_manager, workspace_id: str | None):
         "ON attempt.task_id = tasks.id AND attempt.execution_epoch = tasks.execution_epoch "
         "WHERE tasks.status = 'running'"
     )
-    params: list[object] = []
-
-    if workspace_id is not None:
-        query += " AND tasks.workspace_id = ?"
-        params.append(workspace_id)
     query += " ORDER BY tasks.updated_at DESC, tasks.id DESC"
-    return _fetchall_rows(db_manager, query, params)
+    return _fetchall_rows(db_manager, query)
 
 
 def fetch_memory_metrics_row(db_manager, workspace_id: str | None):

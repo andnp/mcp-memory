@@ -86,7 +86,8 @@ async def test_memory_monitor_app_renders_runtime_snapshot(monkeypatch, tmp_path
             log_table = app.query_one("#recent-logs", DataTable)
             top_reads_table = app.query_one("#top-read-memories", DataTable)
 
-            assert runtime.workspace_id in str(summary.content)
+            assert "Scope" not in str(summary.content)
+            assert "Workspace" not in str(summary.content)
             assert agent_table.row_count >= 1
             assert provider_table.row_count >= 1
             assert task_table.row_count >= 1

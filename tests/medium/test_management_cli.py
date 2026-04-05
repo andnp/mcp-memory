@@ -773,7 +773,7 @@ def test_stats_command_prints_memory_and_agent_metrics(monkeypatch, tmp_path: Pa
     result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace), "--verbose"])
 
     assert result.exit_code == 0
-    assert "Search Health" in result.output
+    assert "Stats: global" in result.output
     assert "Execution Attempts" in result.output
     assert "Embedding Repair Backlog" in result.output
     assert "Memory Metrics" in result.output
@@ -942,13 +942,13 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
 
     result = runner.invoke(
         main,
-        ["admin", "health", "--workspace-root", str(workspace_a), "--scope", "global", "--json"],
+        ["admin", "health", "--workspace-root", str(workspace_a), "--json"],
     )
 
     payload = json.loads(result.output)
     assert result.exit_code == 0
-    assert payload["scope"] == "global"
     assert payload["status"] == "warn"
+    assert "scope" not in payload
     assert "recent_error_logs" in payload["alerts"]
     assert "recent_task_retries" in payload["alerts"]
     assert "provider_policy_churn" in payload["alerts"]
@@ -964,6 +964,15 @@ def test_health_command_supports_global_json_snapshot(monkeypatch, tmp_path: Pat
     assert provider_policy_stats["provider_policy_route_exhaustion_count"] == 1.0
     assert provider_policy_stats["provider_policy_admission_skip_count"] == 1.0
     assert any(item["title"] == "CLI health memory" for item in payload["memory_activity"]["recent"])
+
+
+def test_health_command_help_omits_workspace_scope_flag() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["admin", "health", "--help"])
+
+    assert result.exit_code == 0
+    assert "--scope" not in result.output
 
 
 def test_health_command_human_output_renders_warning_and_provider_policy_sections(monkeypatch, tmp_path: Path) -> None:
@@ -1043,6 +1052,8 @@ def test_health_command_human_output_renders_warning_and_provider_policy_section
     result = runner.invoke(main, ["admin", "health", "--workspace-root", str(workspace)])
 
     assert result.exit_code == 0
+    assert "scope=" not in result.output
+    assert "Workspace context:" not in result.output
     assert "Recent Warnings" in result.output
     assert "Provider Policy Churn" in result.output
     assert "Recent retried task runs" in result.output
@@ -1054,7 +1065,6 @@ def test_health_command_human_output_renders_cache_section(monkeypatch) -> None:
 
     snapshot = OperatorHealthSnapshotPayload(
         generated_at=100.0,
-        scope="global",
         health=HealthPayload(
             status="ok",
             storage_backend="postgres",
@@ -1266,8 +1276,7 @@ def test_stats_command_aggregates_globally_across_workspaces(monkeypatch, tmp_pa
     result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace_a), "--verbose"])
 
     assert result.exit_code == 0
-    assert "Stats scope:" in result.output
-    assert "global" in result.output
+    assert "Stats: global" in result.output
     assert "defragmenter" in result.output
     assert "lines_compressed=7" in result.output
 
