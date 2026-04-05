@@ -78,6 +78,27 @@ export function ActivityPage() {
     return conversations.filter((conversation) => conversation.task_name === selectedRun.task_name);
   }, [conversationsQuery.data?.conversations, selectedRun]);
 
+  let runsState = 'Loading recent agent runs…';
+  if (overviewQuery.isError) {
+    runsState = 'Unable to load recent agent runs.';
+  } else if (overviewQuery.isSuccess) {
+    runsState = taskFilter.trim() ? 'No runs match the current task filter.' : 'No recent agent runs yet.';
+  }
+
+  let selectedRunState = 'Loading recent runs…';
+  if (overviewQuery.isError) {
+    selectedRunState = 'Recent runs failed to load.';
+  } else if (overviewQuery.isSuccess) {
+    selectedRunState = taskFilter.trim() ? 'No runs match the current filter.' : 'No recent agent runs yet.';
+  }
+
+  let conversationsState = 'Loading task-name related conversations…';
+  if (conversationsQuery.isError) {
+    conversationsState = 'Unable to load task-name related conversations.';
+  } else if (conversationsQuery.isSuccess) {
+    conversationsState = 'No task-name related conversations found for the current filters.';
+  }
+
   return (
     <div className="space-y-6">
       <section className="panel p-4">
@@ -129,7 +150,7 @@ export function ActivityPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRuns.map((run, index) => {
+              {filteredRuns.length ? filteredRuns.map((run, index) => {
                 const runKey = `${run.task_name}-${run.completed_at}-${index}`;
                 const isSelected = selectedRun?.task_name === run.task_name && selectedRun.completed_at === run.completed_at;
                 return (
@@ -139,7 +160,11 @@ export function ActivityPage() {
                   <td>{formatTimestamp(run.completed_at)}</td>
                   <td>{run.duration_seconds.toFixed(2)}s</td>
                 </tr>
-              );})}
+              );}) : (
+                <tr>
+                  <td colSpan={4} className="text-muted">{runsState}</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -175,7 +200,7 @@ export function ActivityPage() {
                 </div>
               </div>
             ) : (
-              <p className="mt-4 text-sm text-muted">No runs match the current filter.</p>
+              <p className="mt-4 text-sm text-muted">{selectedRunState}</p>
             )}
           </section>
 
@@ -224,7 +249,7 @@ export function ActivityPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={4} className="text-muted">No task-name related conversations found for the current filters.</td>
+                    <td colSpan={4} className="text-muted">{conversationsState}</td>
                   </tr>
                 )}
               </tbody>

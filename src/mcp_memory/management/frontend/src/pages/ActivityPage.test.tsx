@@ -80,4 +80,44 @@ describe('ActivityPage', () => {
       expect(request?.searchParams.get('workspace_id')).toBe('workspace-789');
     });
   });
+
+  it('shows an explicit empty state when there are no recent runs yet', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/overview') {
+        return createJsonResponse({ recent_agent_runs: [] });
+      }
+      if (url.pathname === '/api/ai-conversations') {
+        return createJsonResponse({ conversations: [] });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQueryClient(<ActivityPage />);
+
+    await waitFor(() => expect(screen.getAllByText('No recent agent runs yet.').length).toBeGreaterThan(0));
+  });
+
+  it('shows an explicit error state when conversation loading fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/overview') {
+        return createJsonResponse({ recent_agent_runs: [] });
+      }
+      if (url.pathname === '/api/ai-conversations') {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: 'boom' }),
+        } as Response;
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQueryClient(<ActivityPage />);
+
+    await waitFor(() => expect(screen.getByText('Unable to load task-name related conversations.')).toBeInTheDocument());
+  });
 });
