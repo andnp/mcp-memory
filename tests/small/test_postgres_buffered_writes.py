@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from typing import cast
+import sqlite3
 
 import pytest
 
@@ -204,6 +205,71 @@ class _TelemetrySessionManager:
         return None
 
 
+class _BlockingSqliteTelemetryState:
+    def __init__(self) -> None:
+        self.rows: list[tuple[object, ...]] = []
+
+
+class _BlockingSqliteTelemetryConnection:
+    def __init__(self, state: _BlockingSqliteTelemetryState, *, seen_write: threading.Event, release_writes: threading.Event) -> None:
+        self._state = state
+        self._seen_write = seen_write
+        self._release_writes = release_writes
+
+    def __enter__(self) -> _BlockingSqliteTelemetryConnection:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        self._seen_write.set()
+        self._release_writes.wait(timeout=1.0)
+        self._state.rows.extend(tuple(row) for row in rows)
+
+    def close(self) -> None:
+        return None
+
+
+class _BlockingSqliteTelemetryManager:
+    def __init__(self) -> None:
+        self.state = _BlockingSqliteTelemetryState()
+        self.seen_write = threading.Event()
+        self.release_writes = threading.Event()
+
+    def open_connection(self, *, timeout_seconds: float | None = None) -> _BlockingSqliteTelemetryConnection:
+        return _BlockingSqliteTelemetryConnection(
+            self.state,
+            seen_write=self.seen_write,
+            release_writes=self.release_writes,
+        )
+
+    def get_connection(self) -> None:
+        return None
+
+
+class _LockedSqliteTelemetryConnection:
+    def __enter__(self) -> _LockedSqliteTelemetryConnection:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    def close(self) -> None:
+        return None
+
+
+class _LockedSqliteTelemetryManager:
+    def open_connection(self, *, timeout_seconds: float | None = None) -> _LockedSqliteTelemetryConnection:
+        return _LockedSqliteTelemetryConnection()
+
+    def get_connection(self) -> None:
+        return None
+
+
 def test_postgres_runtime_log_repository_write_is_buffered_until_flush() -> None:
     session_manager = _BlockingRuntimeLogSessionManager()
     repository = PostgresRuntimeLogRepository(
@@ -261,3 +327,61 @@ def test_postgres_retrieval_telemetry_flushes_buffered_rows_on_close() -> None:
 
     assert len(session_manager.state.rows) == 3
     assert [row[3] for row in session_manager.state.rows] == ["search", "search", "read"]
+
+
+def test_sqlite_retrieval_telemetry_is_buffered_until_flush() -> None:
+    db_manager = _BlockingSqliteTelemetryManager()
+    repository = RetrievalTelemetryRepository(
+        cast(object, db_manager),
+        workspace_id="workspace-a",
+    )
+
+    try:
+        repository.record_search(
+            invocation_id="search-1",
+            caller_kind="external",
+            query="buffered sqlite telemetry",
+            surfaced_memory_ids=["memory-1", "memory-2"],
+            duration_ms=12.0,
+            created_at=100.0,
+        )
+        repository.record_read(
+            invocation_id="read-1",
+            caller_kind="external",
+            memory_id="memory-1",
+            duration_ms=3.0,
+            created_at=101.0,
+        )
+
+        assert db_manager.seen_write.wait(timeout=1.0) is True
+        assert db_manager.state.rows == []
+
+        db_manager.release_writes.set()
+        repository.flush()
+
+        assert len(db_manager.state.rows) == 3
+        assert [row[3] for row in db_manager.state.rows] == ["search", "search", "read"]
+    finally:
+        db_manager.release_writes.set()
+        repository.close()
+
+
+def test_sqlite_retrieval_telemetry_ignores_locked_writes_on_flush() -> None:
+    repository = RetrievalTelemetryRepository(
+        cast(object, _LockedSqliteTelemetryManager()),
+        workspace_id="workspace-a",
+    )
+
+    try:
+        repository.record_search(
+            invocation_id="search-1",
+            caller_kind="external",
+            query="locked sqlite telemetry",
+            surfaced_memory_ids=["memory-1"],
+            duration_ms=12.0,
+            created_at=100.0,
+        )
+
+        repository.flush()
+    finally:
+        repository.close()

@@ -123,6 +123,10 @@ class ManagementService:
         self._repository = ctx.repository
         self._provider_usage = ctx.provider_usage or _build_default_provider_usage(ctx)
         self._runtime_logs = ctx.runtime_logs or _build_default_runtime_logs(ctx)
+        self._retrieval_telemetry = ctx.retrieval_telemetry
+        if self._retrieval_telemetry is None:
+            self._retrieval_telemetry = RetrievalTelemetryRepository(self._db_manager, workspace_id=self._workspace_id)
+            ctx.retrieval_telemetry = self._retrieval_telemetry
         self._read_cache = getattr(ctx, "read_cache", None)
         self._embedder = ctx.embedder
         self._relational_search = ctx.relational_search
@@ -673,7 +677,7 @@ class ManagementService:
             debug=debug,
         )
         duration_ms = (perf_counter() - started_at) * 1000.0
-        RetrievalTelemetryRepository(self._db_manager, workspace_id=self._workspace_id).record_search(
+        self._retrieval_telemetry.record_search(
             invocation_id=str(uuid4()),
             caller_kind="operator",
             query=query,

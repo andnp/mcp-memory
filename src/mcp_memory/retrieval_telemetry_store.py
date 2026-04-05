@@ -19,11 +19,11 @@ class RetrievalTelemetryRepository:
     def __init__(self, db_manager: Any = None, *, workspace_id: str | None) -> None:
         self._db_manager = db_manager
         self._workspace_id = workspace_id
-        self._postgres_writer = (
+        self._writer = (
             None
-            if not self._uses_postgres_sessions()
+            if not self._supports_buffered_writes()
             else BufferedWriter[tuple[object, ...]](
-                self._flush_postgres_rows,
+                self._flush_rows,
                 name="retrieval-telemetry",
                 low_watermark=1,
                 high_watermark=256,
@@ -112,18 +112,21 @@ class RetrievalTelemetryRepository:
         )
 
     def flush(self) -> None:
-        if self._postgres_writer is not None:
-            self._postgres_writer.flush()
+        if self._writer is not None:
+            self._writer.flush()
 
     def close(self) -> None:
-        if self._postgres_writer is not None:
-            self._postgres_writer.close()
+        if self._writer is not None:
+            self._writer.close()
 
     def _write_rows(self, rows: list[_TelemetryRow]) -> None:
-        if self._postgres_writer is not None:
-            self._postgres_writer.write_many(rows)
+        if self._writer is not None:
+            self._writer.write_many(rows)
             return
         self._best_effort_sqlite_write(rows)
+
+    def _supports_buffered_writes(self) -> bool:
+        return bool(self._db_manager is not None and hasattr(self._db_manager, "open_connection"))
 
     def _uses_postgres_sessions(self) -> bool:
         return bool(
@@ -131,6 +134,12 @@ class RetrievalTelemetryRepository:
             and hasattr(self._db_manager, "open_connection")
             and not hasattr(self._db_manager, "get_connection")
         )
+
+    def _flush_rows(self, rows: list[_TelemetryRow]) -> None:
+        if self._uses_postgres_sessions():
+            self._flush_postgres_rows(rows)
+            return
+        self._best_effort_sqlite_write(rows)
 
     def _flush_postgres_rows(self, rows: list[_TelemetryRow]) -> None:
         assert self._db_manager is not None
