@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.maintenance_schedule import LEGACY_MAINTENANCE_TASK_NAME_ALIASES
 from mcp_memory.core.maintenance_idle import should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
@@ -54,9 +55,6 @@ logger = logging.getLogger(__name__)
 
 AGENTIC_TASK_NAMES = set(DEFAULT_AGENTIC_TASK_NAMES)
 DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS = 300.0
-_LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
-_LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
-_LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
 _LEGACY_WRAPPER_HANDLER_EXPORTS = (
     handle_conflict_screening_task,
     handle_dedup_prep_task,
@@ -90,9 +88,7 @@ def build_runtime_task_worker(
         PROJECT_MANAGER_TASK_NAME,
         FACT_CHECKER_TASK_NAME,
         SWEEPER_TASK_NAME,
-        _LEGACY_CONFLICT_SCREENING_TASK_NAME,
-        _LEGACY_DEDUP_PREP_TASK_NAME,
-        _LEGACY_TAG_NORMALIZER_TASK_NAME,
+        *LEGACY_MAINTENANCE_TASK_NAME_ALIASES,
     }
     missing_handlers = sorted(expected_handlers - set(handlers))
     if missing_handlers:
@@ -129,6 +125,20 @@ def build_default_task_handlers(
             return task
         return replace(task, task_name=canonical_task_name)
 
+    canonical_trio_runtime_handlers = {
+        CONFLICT_DETECTOR_TASK_NAME: handle_conflict_detector_task,
+        DEDUPLICATOR_TASK_NAME: handle_deduplicator_task,
+        TAXONOMIST_TASK_NAME: handle_taxonomist_task,
+    }
+
+    legacy_handler_specs = {
+        legacy_task_name: (
+            canonical_task_name,
+            canonical_trio_runtime_handlers[canonical_task_name],
+        )
+        for legacy_task_name, canonical_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES.items()
+    }
+
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(ctx, SYSTEM1_INGEST_TASK_NAME, task)),
         SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(ctx, SUMMARIZE_MEMORY_TASK_NAME, task)),
@@ -143,21 +153,16 @@ def build_default_task_handlers(
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,
         SWEEPER_TASK_NAME: handle_sweeper_task,
-        _LEGACY_CONFLICT_SCREENING_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(
-            ctx,
-            canonicalized(task, CONFLICT_DETECTOR_TASK_NAME),
-            None,
-        ),
-        _LEGACY_DEDUP_PREP_TASK_NAME: lambda ctx, task: handle_deduplicator_task(
-            ctx,
-            canonicalized(task, DEDUPLICATOR_TASK_NAME),
-            None,
-        ),
-        _LEGACY_TAG_NORMALIZER_TASK_NAME: lambda ctx, task: handle_taxonomist_task(
-            ctx,
-            canonicalized(task, TAXONOMIST_TASK_NAME),
-            None,
-        ),
+        **{
+            legacy_task_name: (
+                lambda ctx, task, canonical_task_name=canonical_task_name, handler=handler: handler(
+                    ctx,
+                    canonicalized(task, canonical_task_name),
+                    None,
+                )
+            )
+            for legacy_task_name, (canonical_task_name, handler) in legacy_handler_specs.items()
+        },
     }
 
 

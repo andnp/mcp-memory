@@ -41,7 +41,7 @@ from mcp_memory.core.agent_runtime import (
     handle_taxonomist_task,
     _provider_for_task,
 )
-from mcp_memory.core.maintenance_schedule import RECURRING_TASK_INTERVAL_SECONDS
+from mcp_memory.core.maintenance_schedule import LEGACY_MAINTENANCE_TASK_NAME_ALIASES, RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult
@@ -1957,71 +1957,31 @@ async def test_build_runtime_task_worker_dispatches_legacy_wrapper_names_to_cano
 
     worker = build_runtime_task_worker(ctx)
 
-    await worker._handlers[LEGACY_CONFLICT_SCREENING_TASK_NAME](
-        ctx,
-        TaskRecord(
-            id="legacy-conflict",
-            task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
-            data={},
-            workspace_id=None,
-            status="running",
-            priority=100,
-            retries_count=0,
-            max_retries=3,
-            created_at=0.0,
-            updated_at=0.0,
-            available_at=0.0,
-            claimed_at=0.0,
-            started_at=0.0,
-            completed_at=None,
-            last_error=None,
-        ),
-    )
-    await worker._handlers[LEGACY_DEDUP_PREP_TASK_NAME](
-        ctx,
-        TaskRecord(
-            id="legacy-dedup",
-            task_name=LEGACY_DEDUP_PREP_TASK_NAME,
-            data={},
-            workspace_id=None,
-            status="running",
-            priority=100,
-            retries_count=0,
-            max_retries=3,
-            created_at=0.0,
-            updated_at=0.0,
-            available_at=0.0,
-            claimed_at=0.0,
-            started_at=0.0,
-            completed_at=None,
-            last_error=None,
-        ),
-    )
-    await worker._handlers[LEGACY_TAG_NORMALIZER_TASK_NAME](
-        ctx,
-        TaskRecord(
-            id="legacy-tag-normalizer",
-            task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
-            data={},
-            workspace_id=None,
-            status="running",
-            priority=100,
-            retries_count=0,
-            max_retries=3,
-            created_at=0.0,
-            updated_at=0.0,
-            available_at=0.0,
-            claimed_at=0.0,
-            started_at=0.0,
-            completed_at=None,
-            last_error=None,
-        ),
-    )
+    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES:
+        await worker._handlers[legacy_task_name](
+            ctx,
+            TaskRecord(
+                id=f"legacy:{legacy_task_name}",
+                task_name=legacy_task_name,
+                data={},
+                workspace_id=None,
+                status="running",
+                priority=100,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+        )
 
     assert calls == [
-        (CONFLICT_DETECTOR_TASK_NAME, "legacy-conflict", None),
-        (DEDUPLICATOR_TASK_NAME, "legacy-dedup", None),
-        (TAXONOMIST_TASK_NAME, "legacy-tag-normalizer", None),
+        (canonical_task_name, f"legacy:{legacy_task_name}", None)
+        for legacy_task_name, canonical_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES.items()
     ]
 
 
