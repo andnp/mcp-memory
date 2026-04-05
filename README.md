@@ -362,6 +362,32 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    - verify that the thought becomes searchable and readable through the MCP client
    - run `uv run mcp-memory admin overview` and confirm the task/memory metrics look sane
 
+## Local verification
+
+For normal local iteration, use this fast ladder:
+
+```bash
+uv run ruff check .
+uv run pyright
+uv run pytest tests/small/
+```
+
+These checks are always safe to run locally and do not require Docker or a running Postgres instance.
+
+Widen deliberately when the change touches broader integration surfaces:
+
+- `uv run pytest tests/medium/` for in-process integration work, especially storage integration and management/API behavior
+- `uv run pytest tests/large/` for end-to-end flows, daemon lifecycle, and other full-runtime paths
+
+Some DB-backed `tests/medium/` / `tests/large/` targets require Docker-backed Postgres fixtures. If your local target is configured to use the pgvector-backed image, pre-pull it first so fixture setup does not fail opaquely:
+
+```bash
+docker pull pgvector/pgvector:pg17
+docker run --rm -d --name mcp-memory-test-pgvector -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=password -p 5432:5432 pgvector/pgvector:pg17
+```
+
+The repo's shared-mode operator quick start in `compose.postgres.yml` is separate from these test fixtures and uses the normal `postgres:17` image.
+
 ## Backup
 
 In SQLite mode, back up the local data directory periodically:

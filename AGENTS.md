@@ -54,7 +54,15 @@ uv run pytest tests/large/
 Guidance:
 
 - Use `tests/small/` by default while iterating.
+- The fastest default local verification ladder is:
+  1. `uv run ruff check .`
+  2. `uv run pyright`
+  3. `uv run pytest tests/small/`
+- These three checks are always safe to run locally and do not require Docker or a running Postgres instance.
 - Expand to `tests/medium/` or `tests/large/` only when the change justifies it.
+- Widen to `tests/medium/` or `tests/large/` when you change storage integration, daemon lifecycle, MCP/tool wiring, management API behavior, or end-to-end flows.
+- Some DB-backed `tests/medium/` / `tests/large/` targets require Docker and local Postgres fixtures. If a target is configured to use the pgvector-backed image, make sure `pgvector/pgvector:pg17` is available locally before running it.
+- To warm that image ahead of time, run `docker pull pgvector/pgvector:pg17`. If you want a reusable local container for manual DB verification, start one with `docker run --rm -d --name mcp-memory-test-pgvector -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=password -p 5432:5432 pgvector/pgvector:pg17`.
 - If you change daemon lifecycle, MCP tool wiring, management API behavior, or end-to-end flows, do not stop at linting alone.
 - Do **not** run `ruff format` in this repo. If you need auto-fixes, use `uv run ruff check --fix`.
 
