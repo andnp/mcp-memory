@@ -109,6 +109,15 @@ def _resolve_log_workspace_id(
     return cast(str | None | _AllWorkspacesSentinel, workspace_id)
 
 
+def _resolve_service_workspace_id(
+    service_workspace_id: str | None,
+    workspace_id: str | None | object,
+) -> str | None:
+    if workspace_id is _USE_SERVICE_WORKSPACE:
+        return service_workspace_id
+    return cast(str | None, workspace_id)
+
+
 class ManagementService:
     def __init__(self, ctx: ApplicationContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
@@ -625,13 +634,19 @@ class ManagementService:
             current_workspace_id=self._workspace_id,
         )
 
-    def record_thought(self, content: str) -> dict[str, object]:
+    def record_thought(
+        self,
+        content: str,
+        *,
+        workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
+    ) -> dict[str, object]:
         if self._journal.journal is None:
             raise ValueError("journal_not_initialized")
+        effective_workspace_id = _resolve_service_workspace_id(self._workspace_id, workspace_id)
         return RecordThoughtOperation(
             self._journal.journal,
             self._task_queue.task_queue,
-            self._runtime_info.workspace_id,
+            effective_workspace_id,
         ).execute(content)
 
     def list_memories(

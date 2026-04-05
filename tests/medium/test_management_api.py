@@ -1636,6 +1636,45 @@ def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp
         assert zmq_cancel["task"]["cancellation_reason"] == "zmq_cancelled"
 
 
+def test_http_record_thought_allows_workspace_root_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir(parents=True)
+    workspace_b.mkdir(parents=True)
+
+    runtime_a = create_runtime(workspace_root_override=None, cwd=workspace_a)
+    runtime_b = create_runtime(workspace_root_override=None, cwd=workspace_b)
+    try:
+        assert runtime_a.workspace_id is not None
+        assert runtime_b.workspace_id is not None
+    finally:
+        runtime_a.close()
+        runtime_b.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/record-thought",
+            json={
+                "content": "attribute this to workspace b",
+                "workspace_root": str(workspace_b),
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "recorded"
+        assert response.json()["entry"]["workspace_id"] == runtime_b.workspace_id
+
+        pending_a = app.state.routes.ctx.journal.get_pending(workspace_id=runtime_a.workspace_id)
+        pending_b = app.state.routes.ctx.journal.get_pending(workspace_id=runtime_b.workspace_id)
+
+    assert pending_a == []
+    assert [entry.content for entry in pending_b] == ["attribute this to workspace b"]
+
+
 def test_http_selector_stats_endpoint_reports_fresh_seeded_and_unknown(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlsplit
 
+from mcp_memory.config import resolve_workspace_id
 from mcp_memory.management.scope_policy import resolve_workspace_id_for_policy, scope_policy_for_endpoint
 
 
@@ -51,10 +52,13 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/record-thought":
+        workspace_id = optional_str(payload, "workspace_id")
+        if workspace_id is None:
+            workspace_root = _request_workspace_root(payload)
+            if workspace_root is not None:
+                workspace_id = resolve_workspace_id(workspace_root=workspace_root)
         return serialize_payload(
-            routes.service.record_thought(
-                required_str(payload, "content"),
-            )
+            routes.service.record_thought(required_str(payload, "content"), workspace_id=workspace_id)
         )
     if path == "/api/memories":
         effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
@@ -203,6 +207,10 @@ def _resolve_endpoint_workspace_id(routes, path: str, payload: dict[str, object]
         workspace_id=optional_str(payload, "workspace_id"),
         current_workspace_id=routes.service.workspace_id,
     )
+
+
+def _request_workspace_root(payload: dict[str, object]) -> str | None:
+    return optional_str(payload, "workspace_root") or optional_str(payload, "__workspace_root")
 
 
 def optional_str(payload: dict[str, object], key: str) -> str | None:

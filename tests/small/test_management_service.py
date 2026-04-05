@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 import logging
@@ -2215,6 +2216,34 @@ def test_management_service_can_record_thought_into_journal(db_manager) -> None:
     assert payload["status"] == "recorded"
     pending = journal.get_pending(workspace_id="workspace-a")
     assert [entry.content for entry in pending] == ["remember the command bar"]
+
+
+def test_management_service_record_thought_uses_effective_service_workspace_not_boot_runtime_info(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    journal = System1Journal(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    ctx = ApplicationContext(
+        workspace_id="workspace-request",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        journal=journal,
+        repository=repository,
+        task_queue=task_queue,
+    )
+    service = ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    monkeypatch.setattr(service, "_runtime_info", replace(service._runtime_info, workspace_id="workspace-boot"))
+
+    payload = service.record_thought("remember the request workspace")
+    entry = payload["entry"]
+
+    assert payload["status"] == "recorded"
+    assert isinstance(entry, dict)
+    assert entry["workspace_id"] == "workspace-request"
+    assert [entry.content for entry in journal.get_pending(workspace_id="workspace-request")] == [
+        "remember the request workspace"
+    ]
+    assert journal.get_pending(workspace_id="workspace-boot") == []
 
 
 def test_terminate_process_escalates_to_sigkill_when_sigterm_does_not_exit(monkeypatch) -> None:
