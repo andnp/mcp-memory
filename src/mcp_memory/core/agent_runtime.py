@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 import logging
 import time
 from typing import Any
@@ -15,9 +16,7 @@ from mcp_memory.core.recurring_jitter import read_recurring_jitter_seconds
 from mcp_memory.core.task_handlers import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
-    CONFLICT_SCREENING_TASK_NAME,
     CURATOR_TASK_NAME,
-    DEDUP_PREP_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     EMBEDDING_REPAIR_TASK_NAME,
@@ -28,7 +27,6 @@ from mcp_memory.core.task_handlers import (
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
-    TAG_NORMALIZER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
     handle_defragmenter_task,
     handle_embedding_repair_task,
@@ -56,6 +54,14 @@ logger = logging.getLogger(__name__)
 
 AGENTIC_TASK_NAMES = set(DEFAULT_AGENTIC_TASK_NAMES)
 DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS = 300.0
+_LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
+_LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
+_LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
+_LEGACY_WRAPPER_HANDLER_EXPORTS = (
+    handle_conflict_screening_task,
+    handle_dedup_prep_task,
+    handle_tag_normalizer_task,
+)
 
 
 def build_runtime_task_worker(
@@ -76,10 +82,7 @@ def build_runtime_task_worker(
         EMBEDDING_REPAIR_TASK_NAME,
         GRAPH_LINK_DISCOVERY_TASK_NAME,
         GRAPH_LINKER_TASK_NAME,
-        CONFLICT_SCREENING_TASK_NAME,
         CONFLICT_DETECTOR_TASK_NAME,
-        DEDUP_PREP_TASK_NAME,
-        TAG_NORMALIZER_TASK_NAME,
         DEFRAGMENTER_TASK_NAME,
         DEDUPLICATOR_TASK_NAME,
         TAXONOMIST_TASK_NAME,
@@ -87,6 +90,9 @@ def build_runtime_task_worker(
         PROJECT_MANAGER_TASK_NAME,
         FACT_CHECKER_TASK_NAME,
         SWEEPER_TASK_NAME,
+        _LEGACY_CONFLICT_SCREENING_TASK_NAME,
+        _LEGACY_DEDUP_PREP_TASK_NAME,
+        _LEGACY_TAG_NORMALIZER_TASK_NAME,
     }
     missing_handlers = sorted(expected_handlers - set(handlers))
     if missing_handlers:
@@ -118,16 +124,18 @@ def build_default_task_handlers(
         inputs = provider_selection_inputs or _provider_selection_inputs_from_context(ctx)
         return _provider_for_task_inputs(inputs, provider, agentic_provider, task_name, task)
 
+    def canonicalized(task: TaskRecord, canonical_task_name: str) -> TaskRecord:
+        if task.task_name == canonical_task_name:
+            return task
+        return replace(task, task_name=canonical_task_name)
+
     return {
         SYSTEM1_INGEST_TASK_NAME: lambda ctx, task: handle_ingest_system1_task(ctx, task, scoped(ctx, SYSTEM1_INGEST_TASK_NAME, task)),
         SUMMARIZE_MEMORY_TASK_NAME: lambda ctx, task: handle_summarize_memory_task(ctx, task, scoped(ctx, SUMMARIZE_MEMORY_TASK_NAME, task)),
         EMBEDDING_REPAIR_TASK_NAME: handle_embedding_repair_task,
         GRAPH_LINK_DISCOVERY_TASK_NAME: lambda ctx, task: handle_graph_link_discovery_task(ctx, task),
         GRAPH_LINKER_TASK_NAME: lambda ctx, task: handle_graph_linker_task(ctx, task, scoped(ctx, GRAPH_LINKER_TASK_NAME, task)),
-        CONFLICT_SCREENING_TASK_NAME: lambda ctx, task: handle_conflict_screening_task(ctx, task),
         CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(ctx, task, scoped(ctx, CONFLICT_DETECTOR_TASK_NAME, task)),
-        DEDUP_PREP_TASK_NAME: lambda ctx, task: handle_dedup_prep_task(ctx, task),
-        TAG_NORMALIZER_TASK_NAME: lambda ctx, task: handle_tag_normalizer_task(ctx, task),
         DEFRAGMENTER_TASK_NAME: lambda ctx, task: handle_defragmenter_task(ctx, task, scoped(ctx, DEFRAGMENTER_TASK_NAME, task)),
         DEDUPLICATOR_TASK_NAME: lambda ctx, task: handle_deduplicator_task(ctx, task, scoped(ctx, DEDUPLICATOR_TASK_NAME, task)),
         TAXONOMIST_TASK_NAME: lambda ctx, task: handle_taxonomist_task(ctx, task, scoped(ctx, TAXONOMIST_TASK_NAME, task)),
@@ -135,6 +143,21 @@ def build_default_task_handlers(
         PROJECT_MANAGER_TASK_NAME: handle_project_manager_task,
         FACT_CHECKER_TASK_NAME: handle_fact_checker_task,
         SWEEPER_TASK_NAME: handle_sweeper_task,
+        _LEGACY_CONFLICT_SCREENING_TASK_NAME: lambda ctx, task: handle_conflict_detector_task(
+            ctx,
+            canonicalized(task, CONFLICT_DETECTOR_TASK_NAME),
+            None,
+        ),
+        _LEGACY_DEDUP_PREP_TASK_NAME: lambda ctx, task: handle_deduplicator_task(
+            ctx,
+            canonicalized(task, DEDUPLICATOR_TASK_NAME),
+            None,
+        ),
+        _LEGACY_TAG_NORMALIZER_TASK_NAME: lambda ctx, task: handle_taxonomist_task(
+            ctx,
+            canonicalized(task, TAXONOMIST_TASK_NAME),
+            None,
+        ),
     }
 
 

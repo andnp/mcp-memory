@@ -11,9 +11,7 @@ from mcp_memory.core.agent_runtime import (
     AGENTIC_TASK_NAMES,
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     CONFLICT_DETECTOR_TASK_NAME,
-    CONFLICT_SCREENING_TASK_NAME,
     CURATOR_TASK_NAME,
-    DEDUP_PREP_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
@@ -23,7 +21,6 @@ from mcp_memory.core.agent_runtime import (
     SUMMARIZE_MEMORY_TASK_NAME,
     SWEEPER_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
-    TAG_NORMALIZER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
     bootstrap_background_tasks,
     build_runtime_task_worker,
@@ -80,6 +77,11 @@ from tests.sdk.providers import FakeAIProvider
 
 
 pytestmark = pytest.mark.medium
+
+
+LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
+LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
+LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
 
 
 def test_normalize_ingest_agentic_result_preserves_rich_final_json_contract() -> None:
@@ -1864,10 +1866,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
     assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
-    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
-    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is None
-    assert queue.find_open_task(TAG_NORMALIZER_TASK_NAME, None) is None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
     assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
     assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
@@ -1885,29 +1884,36 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 3600.0
 
 
-def test_low_yield_deterministic_tasks_use_slower_recurring_cadence() -> None:
+def test_low_yield_maintenance_tasks_use_the_updated_recurring_cadence() -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
     assert RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
-    assert RECURRING_TASK_INTERVAL_SECONDS[TAG_NORMALIZER_TASK_NAME] == 1800.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[CONFLICT_DETECTOR_TASK_NAME] == 21600.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[DEDUPLICATOR_TASK_NAME] == 21600.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[TAXONOMIST_TASK_NAME] == 7200.0
     assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
     assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
-    assert TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[CONFLICT_DETECTOR_TASK_NAME] == 21600.0
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[DEDUPLICATOR_TASK_NAME] == 21600.0
+    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[TAXONOMIST_TASK_NAME] == 7200.0
 
 
 def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
     assert GRAPH_LINK_DISCOVERY_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
-    assert CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
-    assert DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
-    assert TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_CONFLICT_SCREENING_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_DEDUP_PREP_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
+    assert LEGACY_TAG_NORMALIZER_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_does_not_schedule_follow_up_for_manual_dedup_prep_run(db_manager) -> None:
+async def test_runtime_task_worker_keeps_legacy_manual_dedup_prep_rows_runnable_without_follow_up(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
 
     task = queue.enqueue(
-        DEDUP_PREP_TASK_NAME,
+        LEGACY_DEDUP_PREP_TASK_NAME,
         workspace_id=None,
         data={"workspace_id": None},
         available_at=0.0,
@@ -1916,13 +1922,107 @@ async def test_runtime_task_worker_does_not_schedule_follow_up_for_manual_dedup_
     claimed = queue.claim_next(now=100.0)
     assert claimed is not None
 
-    worker = RuntimeTaskWorker(ctx, handlers={DEDUP_PREP_TASK_NAME: lambda context, queued_task: {"prepared": 0}}, poll_interval_seconds=0.01)
+    worker = build_runtime_task_worker(ctx)
 
     await worker._process_task(claimed)  # noqa: SLF001
 
     completed = queue.get_task(task.id)
     assert completed.status == "completed"
-    assert queue.find_open_task(DEDUP_PREP_TASK_NAME, None) is None
+    assert queue.find_open_task(LEGACY_DEDUP_PREP_TASK_NAME, None) is None
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_task_worker_dispatches_legacy_wrapper_names_to_canonical_handlers(db_manager, monkeypatch) -> None:
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=SQLiteTaskQueue(db_manager))
+    calls: list[tuple[str, str, object | None]] = []
+
+    async def fake_conflict_detector(runtime_ctx, task, provider=None):
+        del runtime_ctx
+        calls.append((task.task_name, task.id, provider))
+        return {"handled": task.task_name}
+
+    async def fake_deduplicator(runtime_ctx, task, provider=None):
+        del runtime_ctx
+        calls.append((task.task_name, task.id, provider))
+        return {"handled": task.task_name}
+
+    async def fake_taxonomist(runtime_ctx, task, provider=None):
+        del runtime_ctx
+        calls.append((task.task_name, task.id, provider))
+        return {"handled": task.task_name}
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_conflict_detector_task", fake_conflict_detector)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_deduplicator_task", fake_deduplicator)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_taxonomist_task", fake_taxonomist)
+
+    worker = build_runtime_task_worker(ctx)
+
+    await worker._handlers[LEGACY_CONFLICT_SCREENING_TASK_NAME](
+        ctx,
+        TaskRecord(
+            id="legacy-conflict",
+            task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
+            data={},
+            workspace_id=None,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        ),
+    )
+    await worker._handlers[LEGACY_DEDUP_PREP_TASK_NAME](
+        ctx,
+        TaskRecord(
+            id="legacy-dedup",
+            task_name=LEGACY_DEDUP_PREP_TASK_NAME,
+            data={},
+            workspace_id=None,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        ),
+    )
+    await worker._handlers[LEGACY_TAG_NORMALIZER_TASK_NAME](
+        ctx,
+        TaskRecord(
+            id="legacy-tag-normalizer",
+            task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
+            data={},
+            workspace_id=None,
+            status="running",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=0.0,
+            started_at=0.0,
+            completed_at=None,
+            last_error=None,
+        ),
+    )
+
+    assert calls == [
+        (CONFLICT_DETECTOR_TASK_NAME, "legacy-conflict", None),
+        (DEDUPLICATOR_TASK_NAME, "legacy-dedup", None),
+        (TAXONOMIST_TASK_NAME, "legacy-tag-normalizer", None),
+    ]
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
@@ -3387,7 +3487,7 @@ async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(m
             runtime,
             TaskRecord(
                 id="conflict-screening-task",
-                task_name=CONFLICT_SCREENING_TASK_NAME,
+                task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3450,7 +3550,7 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
             runtime,
             TaskRecord(
                 id="conflict-screening-review-seed",
-                task_name=CONFLICT_SCREENING_TASK_NAME,
+                task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3718,7 +3818,7 @@ async def test_defragmenter_and_tag_normalizer_update_memory_state(monkeypatch, 
             runtime,
             TaskRecord(
             id="tag-normalizer-task",
-            task_name=TAG_NORMALIZER_TASK_NAME,
+            task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id, "strategy": "never-surfaced"},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3918,7 +4018,7 @@ async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_r
             runtime,
             TaskRecord(
                 id="tag-normalizer-deterministic-task",
-                task_name=TAG_NORMALIZER_TASK_NAME,
+                task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -4908,7 +5008,7 @@ async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path)
             runtime,
             TaskRecord(
                 id="dedup-prep-task",
-                task_name=DEDUP_PREP_TASK_NAME,
+                task_name=LEGACY_DEDUP_PREP_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -5048,7 +5148,7 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
             runtime,
             TaskRecord(
                 id="dedup-prep-review-seed",
-                task_name=DEDUP_PREP_TASK_NAME,
+                task_name=LEGACY_DEDUP_PREP_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
                 workspace_id=runtime.workspace_id,
                 status="running",

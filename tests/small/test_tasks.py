@@ -18,7 +18,6 @@ from mcp_memory.core.maintenance_idle import (
 )
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
-    CONFLICT_SCREENING_TASK_NAME,
     CURATOR_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
@@ -35,6 +34,9 @@ from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
 
 pytestmark = pytest.mark.small
+
+
+LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
 
 
 def test_sqlite_task_queue_enqueue_and_claim_order(db_manager) -> None:
@@ -1019,7 +1021,7 @@ def test_resume_paused_recurring_maintenance_ignores_removed_autonomous_tasks(db
     queue = SQLiteTaskQueue(db_manager)
 
     paused = queue.enqueue(
-        CONFLICT_SCREENING_TASK_NAME,
+        LEGACY_CONFLICT_SCREENING_TASK_NAME,
         workspace_id=None,
         data={
             "workspace_id": None,
@@ -1042,7 +1044,7 @@ def test_resume_paused_recurring_maintenance_ignores_removed_autonomous_tasks(db
     )
 
     assert resume_paused_recurring_maintenance(queue, now=200.0) == []
-    assert queue.find_open_task(CONFLICT_SCREENING_TASK_NAME, None) is None
+    assert queue.find_open_task(LEGACY_CONFLICT_SCREENING_TASK_NAME, None) is None
 
 
 def test_removed_frontier_and_screening_tasks_no_longer_pause_as_autonomous_recurring(db_manager) -> None:
@@ -1051,7 +1053,7 @@ def test_removed_frontier_and_screening_tasks_no_longer_pause_as_autonomous_recu
 
     task = TaskRecord(
         id="conflict-screening-recurring",
-        task_name=CONFLICT_SCREENING_TASK_NAME,
+        task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
         data={"workspace_id": None, "trigger": "recurring_follow_up", "interval_seconds": 900.0},
         workspace_id=None,
         status="running",
