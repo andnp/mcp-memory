@@ -162,25 +162,20 @@ export function RetrievalPage() {
     });
   }, [retrievalQuery.data]);
 
-  if (retrievalQuery.isPending) {
-    return <section className="panel p-4 text-xs text-muted">Loading retrieval telemetry…</section>;
-  }
-  if (retrievalQuery.isError || !retrievalQuery.data) {
-    const message = retrievalQuery.error instanceof ApiError && retrievalQuery.error.status === 404
+  const retrieval = retrievalQuery.data?.retrieval;
+  const retrievalErrorMessage = !retrievalQuery.isPending && (retrievalQuery.isError || !retrieval)
+    ? (retrievalQuery.error instanceof ApiError && retrievalQuery.error.status === 404
       ? 'Unable to load retrieval metrics because the running daemon does not know about the updated nerd metrics payload yet. Restart the daemon, then refresh this page.'
-      : 'Unable to load retrieval metrics.';
-    return <section className="panel p-4 text-xs text-danger">{message}</section>;
-  }
-
-  const retrieval = retrievalQuery.data.retrieval;
-  const summaryCards = [
+      : 'Unable to load retrieval metrics.')
+    : null;
+  const summaryCards = retrieval ? [
     { key: 'search-invocations', label: 'Search invocations', value: retrieval.summary.search_invocations },
     { key: 'search-hits', label: 'Search hits', value: retrieval.summary.search_hits },
     { key: 'zero-result', label: 'Zero-result searches', value: retrieval.summary.zero_result_searches },
     { key: 'read-events', label: 'Read events', value: retrieval.summary.read_events },
     { key: 'unique-search', label: 'Unique searched memories', value: retrieval.summary.unique_search_memories },
     { key: 'unique-read', label: 'Unique read memories', value: retrieval.summary.unique_read_memories },
-  ];
+  ] : [];
 
   return (
     <div className="space-y-6">
@@ -225,17 +220,25 @@ export function RetrievalPage() {
           </div>
         </div>
 
-        <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-          {summaryCards.map((stat) => (
-            <article key={stat.key} className="metric-card">
-              <p className="panel-title">{stat.label}</p>
-              <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(stat.value)}</p>
-            </article>
-          ))}
-        </section>
+        {retrievalQuery.isPending ? (
+          <section className="panel p-4 text-xs text-muted">Loading retrieval telemetry…</section>
+        ) : retrievalErrorMessage ? (
+          <section className="panel p-4 text-xs text-danger">{retrievalErrorMessage}</section>
+        ) : (
+          <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+            {summaryCards.map((stat) => (
+              <article key={stat.key} className="metric-card">
+                <p className="panel-title">{stat.label}</p>
+                <p className="mt-1 text-lg font-semibold text-text">{formatStatValue(stat.value)}</p>
+              </article>
+            ))}
+          </section>
+        )}
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      {retrieval ? (
+        <>
+          <section className="grid gap-4 xl:grid-cols-2">
         <section className="panel p-3">
           <p className="panel-title">Search → read funnel</p>
           <h3 className="mt-1 text-base font-semibold text-text">How often surfaced search hits become actual reads</h3>
@@ -329,7 +332,7 @@ export function RetrievalPage() {
         </section>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+          <section className="grid gap-4 xl:grid-cols-2">
         <section className="table-shell">
           <div className="border-b border-border px-3 py-2">
             <p className="panel-title">Zero-result diagnostics</p>
@@ -398,7 +401,7 @@ export function RetrievalPage() {
         </section>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+          <section className="grid gap-4 xl:grid-cols-2">
         <section className="table-shell">
           <div className="border-b border-border px-3 py-2">
             <p className="panel-title">Top reads</p>
@@ -470,7 +473,7 @@ export function RetrievalPage() {
         </section>
       </section>
 
-      <section className="table-shell">
+          <section className="table-shell">
         <div className="border-b border-border px-3 py-2">
           <p className="panel-title">Tag hotspots</p>
           <h3 className="mt-1 text-base font-semibold text-text">Top 25 tags by combined retrieval traffic</h3>
@@ -501,7 +504,7 @@ export function RetrievalPage() {
         </table>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+          <section className="grid gap-4 xl:grid-cols-2">
         <section className="panel p-3">
           <p className="panel-title">Tag search timelines</p>
           <h3 className="mt-1 text-base font-semibold text-text">Top 10 tags by search-result appearances</h3>
@@ -515,7 +518,9 @@ export function RetrievalPage() {
           <p className="mt-1 text-[11px] text-muted">Same window, same scope, but counting explicit record reads instead of search surfaces.</p>
           <div className="mt-3">{readTagTimelineChart ? <PlotFigure chart={readTagTimelineChart} /> : <p className="text-xs text-muted">No read-tag timeline data yet.</p>}</div>
         </section>
-      </section>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }

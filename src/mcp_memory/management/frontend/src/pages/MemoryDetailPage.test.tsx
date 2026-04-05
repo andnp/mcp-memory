@@ -84,4 +84,46 @@ describe('MemoryDetailPage', () => {
     expect(screen.getByRole('link', { name: 'Legacy memory' })).toHaveAttribute('href', '/memory/memory-789');
     expect(screen.getByText('ext:README.md')).toBeInTheDocument();
   });
+
+  it('renders an explicit empty relationships row when no incoming or outgoing links exist', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/memories/memory-empty') {
+        return createJsonResponse({
+          record: {
+            id: 'memory-empty',
+            title: 'Lonely memory',
+            content: 'Still valid',
+            summary: null,
+            type: 'fact',
+            status: 'active',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-02T00:00:00Z',
+            workspace_ids: ['workspace-a'],
+            tags: [],
+            metadata: {},
+          },
+          relationships: {
+            incoming: [],
+            outgoing: [],
+          },
+          superseded: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQueryClient(
+      <MemoryRouter initialEntries={['/memory/memory-empty']}>
+        <Routes>
+          <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Lonely memory')).toBeInTheDocument());
+
+    expect(screen.getByText('No incoming or outgoing links.')).toBeInTheDocument();
+  });
 });

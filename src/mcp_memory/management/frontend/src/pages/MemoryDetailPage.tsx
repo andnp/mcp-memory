@@ -32,6 +32,10 @@ export function MemoryDetailPage() {
   }
 
   const { record, relationships, superseded } = detailQuery.data;
+  const relationshipRows = [
+    ...relationships.incoming.map((link) => ({ direction: 'incoming', ...link })),
+    ...relationships.outgoing.map((link) => ({ direction: 'outgoing', ...link })),
+  ];
 
   return (
     <div className="space-y-6">
@@ -63,7 +67,7 @@ export function MemoryDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {[...relationships.incoming.map((link) => ({ direction: 'incoming', ...link })), ...relationships.outgoing.map((link) => ({ direction: 'outgoing', ...link }))].map((link, index) => (
+              {relationshipRows.length ? relationshipRows.map((link, index) => (
                 <tr key={`${link.direction}-${link.source_id}-${link.target_id}-${index}`}>
                   <td>{link.direction}</td>
                   <td>{link.link_type}</td>
@@ -71,7 +75,11 @@ export function MemoryDetailPage() {
                   <td>{renderMemoryReference(link.target_id)}</td>
                   <td>{link.context || '-'}</td>
                 </tr>
-              ))}
+              )) : (
+                <tr>
+                  <td colSpan={5} className="text-muted">No incoming or outgoing links.</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
