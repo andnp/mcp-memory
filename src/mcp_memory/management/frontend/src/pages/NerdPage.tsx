@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Plot from '@observablehq/plot';
 import { Link } from 'react-router-dom';
@@ -12,6 +12,7 @@ import {
   type NerdMetricsScope,
   type ShareSeries,
 } from '../lib/api';
+import { WorkspaceScopeSelector } from '../components/WorkspaceScopeSelector';
 
 function PlotFigure({ chart }: { chart: HTMLElement | SVGElement | null }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -359,8 +360,7 @@ export function NerdPage() {
     setSelectedQualitySignal(qualityDrilldownSignals[0].key);
   }, [qualityDrilldownSignals, selectedQualitySignal]);
 
-  function handleWorkspaceChange(event: ChangeEvent<HTMLSelectElement>) {
-    const workspaceId = event.target.value;
+  function handleWorkspaceChange(workspaceId: string) {
     if (!workspaceId) {
       setSelectedScope('global');
       setSelectedWorkspaceId('');
@@ -808,37 +808,15 @@ export function NerdPage() {
               })}
             </section>
 
-            <section className="panel flex items-center gap-2 p-1">
-              <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">Scope</span>
-              <button
-                type="button"
-                onClick={() => setSelectedScope('global')}
-                className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${selectedScope === 'global'
-                  ? 'border-accent bg-accent text-ink'
-                  : 'border-border bg-transparent text-muted hover:border-accent hover:text-text'
-                }`}
-              >
-                Global
-              </button>
-              <label className="flex items-center">
-                <span className="sr-only">Workspace scope</span>
-                <select
-                  value={selectedScope === 'workspace' ? selectedWorkspaceId : ''}
-                  onChange={handleWorkspaceChange}
-                  disabled={workspaceOptionsQuery.isPending || workspaceOptions.length === 0}
-                  className="rounded-full border border-border bg-transparent px-3 py-1 text-[11px] font-medium text-text outline-none transition hover:border-accent disabled:cursor-not-allowed disabled:text-muted"
-                >
-                  <option value="">
-                    {workspaceOptionsQuery.isPending ? 'Loading workspaces…' : 'Workspace…'}
-                  </option>
-                  {workspaceOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </section>
+            <WorkspaceScopeSelector
+              selectedScope={selectedScope}
+              selectedWorkspaceId={selectedWorkspaceId}
+              workspaceOptions={workspaceOptions}
+              workspaceOptionsPending={workspaceOptionsQuery.isPending}
+              workspaceOptionsError={workspaceOptionsQuery.isError}
+              onSelectGlobal={() => setSelectedScope('global')}
+              onSelectWorkspace={handleWorkspaceChange}
+            />
           </div>
         </div>
 
