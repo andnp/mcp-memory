@@ -1,7 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
 import { fetchMemoryDetail } from '../lib/api';
+
+function renderMemoryReference(memoryId: string, label?: string | null) {
+  const resolvedLabel = (label ?? memoryId) || '-';
+  if (!memoryId || memoryId.startsWith('ext:')) {
+    return <span>{resolvedLabel}</span>;
+  }
+
+  return (
+    <Link className="text-accent hover:underline" to={`/memory/${memoryId}`} title={memoryId}>
+      {resolvedLabel}
+    </Link>
+  );
+}
 
 export function MemoryDetailPage() {
   const { memoryId = '' } = useParams();
@@ -54,8 +67,8 @@ export function MemoryDetailPage() {
                 <tr key={`${link.direction}-${link.source_id}-${link.target_id}-${index}`}>
                   <td>{link.direction}</td>
                   <td>{link.link_type}</td>
-                  <td>{link.source_id}</td>
-                  <td>{link.target_id}</td>
+                  <td>{renderMemoryReference(link.source_id)}</td>
+                  <td>{renderMemoryReference(link.target_id)}</td>
                   <td>{link.context || '-'}</td>
                 </tr>
               ))}
@@ -78,7 +91,7 @@ export function MemoryDetailPage() {
             <tbody>
               {superseded.length ? superseded.map((item) => (
                 <tr key={item.id}>
-                  <td>{item.title}</td>
+                  <td>{renderMemoryReference(item.id, item.title)}</td>
                   <td>{item.type}</td>
                 </tr>
               )) : (

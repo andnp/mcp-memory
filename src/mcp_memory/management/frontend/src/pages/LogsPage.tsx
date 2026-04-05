@@ -44,6 +44,21 @@ export function LogsPage() {
     refetchInterval: 15000,
     refetchOnWindowFocus: false,
   });
+  const logs = logsQuery.data?.logs ?? [];
+
+  let summaryText = 'Loading log summary…';
+  if (summaryQuery.isError) {
+    summaryText = 'Unable to load log summary.';
+  } else if (summaryQuery.data) {
+    summaryText = `global by default; add workspace narrowing when you need it. workspace-id override only applies when workspace scope is selected. matching=${summaryQuery.data.total} · levels=${Object.entries(summaryQuery.data.by_level).map(([name, count]) => `${name}:${count}`).join(' • ') || 'none'}`;
+  }
+
+  let tableState = 'Loading logs…';
+  if (logsQuery.isError) {
+    tableState = 'Unable to load logs.';
+  } else if (logsQuery.isSuccess && logs.length === 0) {
+    tableState = 'No matching logs.';
+  }
 
   return (
     <div className="space-y-6">
@@ -68,7 +83,7 @@ export function LogsPage() {
           <input value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent" placeholder="optional workspace-id override" />
         </div>
         <p className="mt-2 text-xs text-muted">
-          global by default; add workspace narrowing when you need it. workspace-id override only applies when workspace scope is selected. matching={summaryQuery.data?.total ?? 0} · levels={Object.entries(summaryQuery.data?.by_level ?? {}).map(([name, count]) => `${name}:${count}`).join(' • ') || 'none'}
+          {summaryText}
         </p>
       </section>
 
@@ -83,7 +98,7 @@ export function LogsPage() {
             </tr>
           </thead>
           <tbody>
-            {logsQuery.data?.logs.map((entry) => (
+            {logs.length ? logs.map((entry) => (
               <tr key={entry.id}>
                 <td>{formatTimestamp(entry.created_at)}</td>
                 <td>{entry.level}</td>
@@ -93,7 +108,11 @@ export function LogsPage() {
                 </td>
                 <td className="max-w-[34rem] truncate" title={entry.message}>{entry.message}</td>
               </tr>
-            ))}
+            )) : (
+              <tr>
+                <td colSpan={4} className="text-muted">{tableState}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>

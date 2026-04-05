@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LogsPage } from './LogsPage';
 import { renderWithQueryClient } from '../test/utils';
@@ -7,6 +7,7 @@ import { renderWithQueryClient } from '../test/utils';
 function createJsonResponse(payload: unknown): Response {
   return {
     ok: true,
+    json: async () => payload,
   } as Response;
 }
 
@@ -86,5 +87,46 @@ describe('LogsPage', () => {
     const summaryRequest = getRequests(fetchMock, '/api/logs/summary').at(-1);
     expect(summaryRequest?.searchParams.get('scope')).toBe('workspace');
     expect(summaryRequest?.searchParams.get('workspace_id')).toBe('workspace-456');
+  });
+
+  it('shows explicit empty-state copy after a successful logs load with no rows', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/logs/summary') {
+        return createJsonResponse({ total: 0, by_level: {}, by_source: {} });
+      }
+      if (url.pathname === '/api/logs') {
+        return createJsonResponse({ logs: [] });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQueryClient(<LogsPage />);
+
+    await waitFor(() => expect(screen.getByText('No matching logs.')).toBeInTheDocument());
+    expect(screen.getByText(/matching=0/i)).toBeInTheDocument();
+  });
+
+  it('shows explicit error-state copy when the logs request fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/logs/summary') {
+        return createJsonResponse({ total: 0, by_level: {}, by_source: {} });
+      }
+      if (url.pathname === '/api/logs') {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: 'boom' }),
+        } as Response;
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithQueryClient(<LogsPage />);
+
+    await waitFor(() => expect(screen.getByText('Unable to load logs.')).toBeInTheDocument());
   });
 });
