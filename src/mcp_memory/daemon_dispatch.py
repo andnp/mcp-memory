@@ -65,10 +65,10 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
     if path == "/api/memories/search":
-        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
+        search_workspace_context_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.search_memories(
             query=required_str(payload, "query"),
-            workspace_id=effective_workspace_id,
+            workspace_id=search_workspace_context_id,
             memory_type=optional_str(payload, "memory_type"),
             status=optional_str(payload, "status"),
             include_superseded=bool_value(payload, "include_superseded", default=False),

@@ -54,6 +54,30 @@ def test_global_default_filterable_policy_preserves_precedence(
     ) == expected
 
 
+@pytest.mark.parametrize(
+    ("scope", "workspace_id", "current_workspace_id", "expected"),
+    [
+        (None, None, "workspace-a", None),
+        ("global", None, "workspace-a", None),
+        ("workspace", None, "workspace-a", "workspace-a"),
+        ("workspace", "workspace-b", "workspace-a", "workspace-b"),
+        ("global", "workspace-b", "workspace-a", "workspace-b"),
+    ],
+)
+def test_global_default_ranking_context_policy_preserves_precedence(
+    scope: str | None,
+    workspace_id: str | None,
+    current_workspace_id: str | None,
+    expected: str | None,
+) -> None:
+    assert resolve_workspace_id_for_policy(
+        ScopePolicyKind.GLOBAL_DEFAULT_RANKING_CONTEXT,
+        scope=scope,
+        workspace_id=workspace_id,
+        current_workspace_id=current_workspace_id,
+    ) == expected
+
+
 def test_global_default_filterable_policy_rejects_invalid_scope() -> None:
     with pytest.raises(ValueError, match="scope_must_be_global_or_workspace"):
         resolve_workspace_id_for_policy(
@@ -68,6 +92,16 @@ def test_global_default_filterable_policy_requires_current_workspace_for_workspa
     with pytest.raises(ValueError, match="workspace_id_required_for_workspace_scope"):
         resolve_workspace_id_for_policy(
             ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE,
+            scope="workspace",
+            workspace_id=None,
+            current_workspace_id=None,
+        )
+
+
+def test_global_default_ranking_context_policy_requires_current_workspace_for_workspace_scope() -> None:
+    with pytest.raises(ValueError, match="workspace_id_required_for_workspace_scope"):
+        resolve_workspace_id_for_policy(
+            ScopePolicyKind.GLOBAL_DEFAULT_RANKING_CONTEXT,
             scope="workspace",
             workspace_id=None,
             current_workspace_id=None,
@@ -111,7 +145,7 @@ def test_service_scoped_default_policy_requires_current_workspace_for_workspace_
 def test_scope_policy_for_endpoint_matches_current_management_contract() -> None:
     assert scope_policy_for_endpoint("/api/health") is ScopePolicyKind.GLOBAL_ONLY
     assert scope_policy_for_endpoint("/api/overview") is ScopePolicyKind.GLOBAL_ONLY
-    assert scope_policy_for_endpoint("/api/memories/search") is ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE
+    assert scope_policy_for_endpoint("/api/memories/search") is ScopePolicyKind.GLOBAL_DEFAULT_RANKING_CONTEXT
     assert scope_policy_for_endpoint("/api/logs") is ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE
     assert scope_policy_for_endpoint("/api/admin/search/repair") is ScopePolicyKind.SERVICE_SCOPED_DEFAULT
 

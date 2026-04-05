@@ -912,7 +912,10 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
     assert ignored_scoped_overview.json()["memories"]["total"] == 3
 
 
-def test_http_operator_lists_default_to_global_scope(monkeypatch, tmp_path: Path) -> None:
+def test_http_operator_lists_default_to_global_scope_and_search_uses_workspace_ranking_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -1021,6 +1024,7 @@ def test_http_operator_lists_default_to_global_scope(monkeypatch, tmp_path: Path
     assert global_search.status_code == 200
     assert {record["title"] for record in global_search.json()["results"]} == {"Workspace A API fact", "Workspace B API fact"}
     workspace_results = workspace_search.json()["results"]
+    # Search remains global; workspace scope only supplies ranking context for the active workspace.
     assert {record["title"] for record in workspace_results} == {"Workspace A API fact", "Workspace B API fact"}
     assert workspace_results[0]["title"] == "Workspace A API fact"
     workspace_a_result = next(record for record in workspace_results if record["title"] == "Workspace A API fact")

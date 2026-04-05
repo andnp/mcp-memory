@@ -6,6 +6,7 @@ from enum import Enum
 class ScopePolicyKind(str, Enum):
     GLOBAL_ONLY = "global_only"
     GLOBAL_DEFAULT_FILTERABLE = "global_default_filterable"
+    GLOBAL_DEFAULT_RANKING_CONTEXT = "global_default_ranking_context"
     SERVICE_SCOPED_DEFAULT = "service_scoped_default"
 
 
@@ -19,17 +20,22 @@ GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS = frozenset({
     "/api/selector-stats",
     "/api/tasks",
     "/api/memories",
-    "/api/memories/search",
     "/api/logs",
     "/api/logs/summary",
     "/api/ai-conversations",
     "/api/admin/logs/prune",
 })
 
+GLOBAL_DEFAULT_RANKING_CONTEXT_ENDPOINTS = frozenset({
+    "/api/memories/search",
+})
+
 
 def scope_policy_for_endpoint(path: str) -> ScopePolicyKind:
     if path in GLOBAL_ONLY_ENDPOINTS:
         return ScopePolicyKind.GLOBAL_ONLY
+    if path in GLOBAL_DEFAULT_RANKING_CONTEXT_ENDPOINTS:
+        return ScopePolicyKind.GLOBAL_DEFAULT_RANKING_CONTEXT
     if path in GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS:
         return ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE
     return ScopePolicyKind.SERVICE_SCOPED_DEFAULT
@@ -48,7 +54,10 @@ def resolve_workspace_id_for_policy(
     if workspace_id is not None:
         return workspace_id
 
-    if policy is ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE:
+    if policy in {
+        ScopePolicyKind.GLOBAL_DEFAULT_FILTERABLE,
+        ScopePolicyKind.GLOBAL_DEFAULT_RANKING_CONTEXT,
+    }:
         if scope is None or scope == "global":
             return None
         if scope == "workspace":
