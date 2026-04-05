@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { NavLink, Route, Routes } from 'react-router-dom';
+import { Link, NavLink, Route, Routes } from 'react-router-dom';
 
 import { ActivityPage } from './pages/ActivityPage';
 import { LogsPage } from './pages/LogsPage';
@@ -20,6 +20,24 @@ const navItems = [
   { to: '/nerd', label: 'Nerd' },
   { to: '/selector-stats', label: 'Selector Stats' },
 ];
+
+function NotFoundPage() {
+  return (
+    <section className="panel p-4">
+      <p className="panel-title">Not found</p>
+      <h2 className="mt-1 text-lg font-semibold text-text">That dashboard page doesn&apos;t exist.</h2>
+      <p className="mt-2 text-xs text-muted">
+        The link may be stale, misspelled, or from an older build. Head back to the overview and we&apos;ll pretend this never happened.
+      </p>
+      <Link
+        to="/"
+        className="mt-4 inline-flex rounded-lg border border-accent bg-accent px-3 py-2 text-xs font-semibold text-ink"
+      >
+        Go to overview
+      </Link>
+    </section>
+  );
+}
 
 export default function App() {
   return (
@@ -55,6 +73,7 @@ export default function App() {
           <Route path="/nerd" element={<NerdPage />} />
           <Route path="/selector-stats" element={<SelectorStatsPage />} />
           <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>
     </main>

@@ -842,9 +842,11 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
 
     app = create_daemon_app(workspace_root_override=None, cwd=workspace)
     with TestClient(app) as client:
+        root_redirect = client.get("/", follow_redirects=False)
         dashboard = client.get("/dashboard")
         search_dashboard = client.get("/dashboard/search")
         memory_dashboard = client.get("/dashboard/memory/http-dashboard-fact")
+        missing_dashboard = client.get("/dashboard/totally-not-a-real-route")
         asset_match = re.search(r'(?:src|href)="(?P<asset_ref>(?:\./)?assets/[^"]+)"', dashboard.text)
         base_match = re.search(r'<base href="(?P<base>[^"]+)"', memory_dashboard.text)
         overview = client.get("/api/overview")
@@ -862,9 +864,13 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
             nested_asset_request_path = urlparse(urljoin(asset_base_url, asset_match.group("asset_ref"))).path
         deep_link_asset = None if nested_asset_request_path is None else client.get(nested_asset_request_path)
 
+    assert root_redirect.status_code == 307
+    assert root_redirect.headers["location"] == "/dashboard"
     assert dashboard.status_code == 200
     assert search_dashboard.status_code == 200
     assert memory_dashboard.status_code == 200
+    assert missing_dashboard.status_code == 200
+    assert '<div id="root"></div>' in missing_dashboard.text
     assert "MCP Memory Dashboard" in dashboard.text or "Memory Command Center" in dashboard.text
     assert asset_match is not None
     assert base_match is not None

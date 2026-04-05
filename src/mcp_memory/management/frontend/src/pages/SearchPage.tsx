@@ -6,9 +6,32 @@ import { searchMemories } from '../lib/api';
 
 export function SearchPage() {
   const [query, setQuery] = useState('');
+  const [lastSubmittedQuery, setLastSubmittedQuery] = useState('');
   const searchMutation = useMutation({
     mutationFn: searchMemories,
   });
+
+  const trimmedQuery = query.trim();
+  const results = searchMutation.data?.results ?? [];
+
+  function submitSearch() {
+    if (!trimmedQuery) {
+      return;
+    }
+    setLastSubmittedQuery(trimmedQuery);
+    searchMutation.mutate({ query: trimmedQuery, limit: 12 });
+  }
+
+  let emptyState = 'Run a search to explore the memory graph.';
+  if (searchMutation.isPending) {
+    emptyState = 'Searching…';
+  } else if (searchMutation.isError) {
+    emptyState = 'Search failed. Try again in a moment.';
+  } else if (searchMutation.isSuccess && results.length === 0) {
+    emptyState = lastSubmittedQuery
+      ? `No memories matched “${lastSubmittedQuery}”.`
+      : 'No memories matched that search.';
+  }
 
   return (
     <section className="space-y-6">
@@ -20,8 +43,8 @@ export function SearchPage() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && query.trim()) {
-                searchMutation.mutate({ query: query.trim(), limit: 12 });
+              if (event.key === 'Enter') {
+                submitSearch();
               }
             }}
             className="w-full rounded-lg border border-border bg-ink px-3 py-2 text-xs text-text outline-none focus:border-accent"
@@ -30,7 +53,7 @@ export function SearchPage() {
           <button
             type="button"
             className="rounded-lg border border-accent bg-accent px-3 py-2 text-xs font-semibold text-ink"
-            onClick={() => query.trim() && searchMutation.mutate({ query: query.trim(), limit: 12 })}
+            onClick={submitSearch}
           >
             Search
           </button>
@@ -52,7 +75,7 @@ export function SearchPage() {
             </tr>
           </thead>
           <tbody>
-            {searchMutation.data?.results.length ? searchMutation.data.results.map((result) => (
+            {results.length ? results.map((result) => (
               <tr key={result.memory_id}>
                 <td>{result.score.toFixed(3)}</td>
                 <td>
@@ -66,7 +89,7 @@ export function SearchPage() {
             )) : (
               <tr>
                 <td colSpan={4} className="text-muted">
-                  {searchMutation.isPending ? 'Searching…' : 'Run a search to explore the memory graph.'}
+                  {emptyState}
                 </td>
               </tr>
             )}

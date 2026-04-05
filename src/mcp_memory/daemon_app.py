@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_backup_dir, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
@@ -284,7 +284,11 @@ def create_daemon_app(
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/")
+    async def dashboard_root() -> RedirectResponse:
+        await _record_http_activity(app)
+        return RedirectResponse(url="/dashboard", status_code=307)
+
     @app.get("/dashboard", response_class=HTMLResponse)
     @app.get("/dashboard/{dashboard_path:path}", response_class=HTMLResponse)
     async def dashboard_html(dashboard_path: str = "") -> HTMLResponse:
