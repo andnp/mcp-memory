@@ -38,6 +38,85 @@ def test_resolve_daemon_request_timeout_seconds_preserves_default_and_explicit_o
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/memories/search", timeout_seconds=7.5) == 7.5
 
 
+def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> None:
+    daemon_transport = _daemon_transport_module()
+
+    created_contexts: list[FakeContext] = []
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.linger: int | None = None
+            self.rcvtimeo: int | None = None
+            self.sndtimeo: int | None = None
+            self.connected_to: str | None = None
+            self.sent_payloads: list[dict[str, object | None]] = []
+            self.closed_with: int | None = None
+
+        def connect(self, endpoint: str) -> None:
+            self.connected_to = endpoint
+
+        def send_json(self, payload: dict[str, object | None]) -> None:
+            self.sent_payloads.append(payload)
+
+        def recv_json(self) -> dict[str, str]:
+            return {"status": "ok"}
+
+        def close(self, linger: int) -> None:
+            self.closed_with = linger
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.socket_instances: list[FakeSocket] = []
+            self.terminated = False
+
+        def socket(self, socket_type: int) -> FakeSocket:
+            assert socket_type == daemon_transport.zmq.DEALER
+            socket = FakeSocket()
+            self.socket_instances.append(socket)
+            return socket
+
+        def term(self) -> None:
+            self.terminated = True
+
+    def _fake_context_factory() -> FakeContext:
+        context = FakeContext()
+        created_contexts.append(context)
+        return context
+
+    monkeypatch.setattr("mcp_memory.daemon_transport.zmq.Context", _fake_context_factory)
+
+    first = daemon_transport._request_zmq_json("/tmp/daemon.sock", "/internal/health", None, timeout_seconds=0.5)
+    second = daemon_transport._request_zmq_json(
+        "/tmp/daemon.sock",
+        "/internal/tools/search_memory_records",
+        {"query": "auth"},
+        timeout_seconds=0.25,
+    )
+
+    assert first == {"status": "ok"}
+    assert second == {"status": "ok"}
+    assert len(created_contexts) == 2
+    assert created_contexts[0] is not created_contexts[1]
+
+    first_socket = created_contexts[0].socket_instances[0]
+    second_socket = created_contexts[1].socket_instances[0]
+
+    assert first_socket.connected_to == "ipc:///tmp/daemon.sock"
+    assert second_socket.connected_to == "ipc:///tmp/daemon.sock"
+    assert first_socket.linger == 0
+    assert second_socket.linger == 0
+    assert first_socket.rcvtimeo == 500
+    assert first_socket.sndtimeo == 500
+    assert second_socket.rcvtimeo == 250
+    assert second_socket.sndtimeo == 250
+    assert first_socket.sent_payloads == [{"path": "/internal/health", "payload": None}]
+    assert second_socket.sent_payloads == [{"path": "/internal/tools/search_memory_records", "payload": {"query": "auth"}}]
+    assert first_socket.closed_with == 0
+    assert second_socket.closed_with == 0
+    assert created_contexts[0].terminated is True
+    assert created_contexts[1].terminated is True
+
+
 def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> None:
     """Verify proxy requests preserve deterministic routing metadata.
 

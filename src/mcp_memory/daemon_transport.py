@@ -140,21 +140,24 @@ def remove_daemon_socket(socket_path: str | Path) -> None:
 
 
 def _request_zmq_json(socket_path: str, path: str, payload: dict | None, *, timeout_seconds: float):
-    context = zmq.Context.instance()
-    socket = context.socket(zmq.DEALER)
-    socket.linger = 0
-    timeout_ms = max(int(timeout_seconds * 1000), 1)
-    socket.rcvtimeo = timeout_ms
-    socket.sndtimeo = timeout_ms
-    socket.connect(_socket_endpoint(socket_path))
+    context = zmq.Context()
     try:
+        socket = context.socket(zmq.DEALER)
+        socket.linger = 0
+        timeout_ms = max(int(timeout_seconds * 1000), 1)
+        socket.rcvtimeo = timeout_ms
+        socket.sndtimeo = timeout_ms
+        socket.connect(_socket_endpoint(socket_path))
         try:
-            socket.send_json({"path": path, "payload": payload})
-            response = socket.recv_json()
-        except zmq.error.Again as exc:
-            raise TimeoutError("daemon_request_timed_out") from exc
+            try:
+                socket.send_json({"path": path, "payload": payload})
+                response = socket.recv_json()
+            except zmq.error.Again as exc:
+                raise TimeoutError("daemon_request_timed_out") from exc
+        finally:
+            socket.close(0)
     finally:
-        socket.close(0)
+        context.term()
     if not isinstance(response, dict):
         raise ValueError("daemon_response_must_be_object")
     return response
