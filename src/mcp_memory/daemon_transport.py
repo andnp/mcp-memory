@@ -102,9 +102,13 @@ class DaemonTransportDiagnosticsSnapshot:
     recent_execution_max_ms: float = 0.0
     active_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
     recent_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
-
-
-def request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds: float | None = None):
+def request_daemon_json(
+    metadata,
+    path: str,
+    payload: dict | None,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
     socket_path = getattr(metadata, "socket_path", None)
     transport = getattr(metadata, "transport", "zmq")
     if transport not in {"zmq", "hybrid"}:
@@ -139,7 +143,13 @@ def remove_daemon_socket(socket_path: str | Path) -> None:
     _remove_stale_socket(Path(socket_path))
 
 
-def _request_zmq_json(socket_path: str, path: str, payload: dict | None, *, timeout_seconds: float):
+def _request_zmq_json(
+    socket_path: str,
+    path: str,
+    payload: dict | None,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
     context = zmq.Context()
     try:
         socket = context.socket(zmq.DEALER)
@@ -160,7 +170,7 @@ def _request_zmq_json(socket_path: str, path: str, payload: dict | None, *, time
         context.term()
     if not isinstance(response, dict):
         raise ValueError("daemon_response_must_be_object")
-    return response
+    return cast(dict[str, Any], response)
 
 
 class DaemonZmqServer:

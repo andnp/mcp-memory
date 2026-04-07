@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from mcp.server import Server
@@ -152,7 +152,7 @@ class MCPServer:
                 },
             )
 
-    def _probe_transport_health_snapshot(self) -> dict[str, object] | None:
+    def _probe_transport_health_snapshot(self) -> dict[str, Any] | None:
         if self._daemon is None:
             return None
         try:

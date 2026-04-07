@@ -42,7 +42,7 @@ async def _request_json(
     payload: dict | None = None,
     *,
     timeout_seconds: float = 5,
-) -> dict:
+) -> dict[str, Any]:
     return await asyncio.to_thread(
         request_daemon_json,
         metadata,

@@ -5,6 +5,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,7 @@ from mcp_memory.mcp.runtime import create_runtime
 pytestmark = pytest.mark.large
 
 
-def _decode_tool_response(payload: dict) -> dict:
+def _decode_tool_response(payload: dict[str, Any]) -> dict[str, Any]:
     return json.loads(payload["contents"][0]["text"])
 
 
