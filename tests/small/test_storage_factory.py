@@ -282,7 +282,7 @@ def test_ensure_postgres_schema_adds_optional_vector_column_when_extension_is_av
     class FakeCursor:
         def __init__(self) -> None:
             self.schema_metadata_present = True
-            self.schema_version = str(POSTGRES_SCHEMA_VERSION - 1)
+            self.schema_version = "8"
             self.embedding_vector_column_present = False
             self.optional_vector_migration_runs = 0
             self._result: tuple[object, ...] | None = None
@@ -386,7 +386,7 @@ def test_ensure_postgres_schema_skips_optional_vector_column_when_extension_is_u
     class FakeCursor:
         def __init__(self) -> None:
             self.schema_metadata_present = True
-            self.schema_version = str(POSTGRES_SCHEMA_VERSION - 1)
+            self.schema_version = "8"
             self.optional_vector_migration_runs = 0
             self.embedding_vector_column_present = False
             self._result: tuple[object, ...] | None = None

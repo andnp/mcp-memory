@@ -110,22 +110,20 @@ def test_admin_health_forwards_to_existing_operator_health_helper(monkeypatch) -
     runner = CliRunner()
     captured: dict[str, object] = {}
 
-    def fake_show_operator_health_snapshot(workspace_root: str | None, scope: str, json_output: bool) -> None:
+    def fake_show_operator_health_snapshot(workspace_root: str | None, json_output: bool) -> None:
         captured["workspace_root"] = workspace_root
-        captured["scope"] = scope
         captured["json_output"] = json_output
 
     monkeypatch.setattr("mcp_memory.cli._show_operator_health_snapshot", fake_show_operator_health_snapshot)
 
     result = runner.invoke(
         main,
-        ["admin", "health", "--workspace-root", "/tmp/demo", "--scope", "workspace", "--json"],
+        ["admin", "health", "--workspace-root", "/tmp/demo", "--json"],
     )
 
     assert result.exit_code == 0, result.output
     assert captured == {
         "workspace_root": "/tmp/demo",
-        "scope": "workspace",
         "json_output": True,
     }
 
@@ -314,14 +312,18 @@ def test_admin_conversation_list_forwards_to_existing_conversation_implementatio
             return {"conversations": []}
 
     class _FakeService:
+        workspace_id: str | None = None
+
         def list_ai_conversations(
             self,
             *,
+            workspace_id: str | None = None,
             task_name: str | None = None,
             status: str | None = None,
             limit: int,
             request_id: str | None = None,
         ) -> _FakePayload:
+            captured["service_workspace_id"] = workspace_id
             captured["task_name"] = task_name
             captured["status"] = status
             captured["limit"] = limit
@@ -357,6 +359,7 @@ def test_admin_conversation_list_forwards_to_existing_conversation_implementatio
     assert captured == {
         "workspace_root": "/tmp/demo",
         "workspace_id": None,
+        "service_workspace_id": None,
         "task_name": "curator",
         "status": "completed",
         "limit": 7,
@@ -376,14 +379,18 @@ def test_admin_conversation_show_forwards_to_existing_conversation_implementatio
             return {"conversations": []}
 
     class _FakeService:
+        workspace_id: str | None = None
+
         def list_ai_conversations(
             self,
             *,
+            workspace_id: str | None = None,
             task_name: str | None = None,
             status: str | None = None,
             limit: int,
             request_id: str | None = None,
         ) -> _FakePayload:
+            captured["service_workspace_id"] = workspace_id
             captured["task_name"] = task_name
             captured["status"] = status
             captured["limit"] = limit
@@ -406,6 +413,7 @@ def test_admin_conversation_show_forwards_to_existing_conversation_implementatio
     assert captured == {
         "workspace_root": "/tmp/demo",
         "workspace_id": None,
+        "service_workspace_id": None,
         "task_name": None,
         "status": None,
         "limit": 200,
@@ -800,6 +808,8 @@ def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> Non
 
     def fake_show_logs(
         workspace_root: str | None,
+        scope: str,
+        workspace_id: str | None,
         limit: int,
         level: str | None,
         logger_name: str | None,
@@ -810,6 +820,8 @@ def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> Non
         json_output: bool,
     ) -> None:
         captured["workspace_root"] = workspace_root
+        captured["scope"] = scope
+        captured["workspace_id"] = workspace_id
         captured["limit"] = limit
         captured["level"] = level
         captured["logger_name"] = logger_name
@@ -850,6 +862,8 @@ def test_admin_log_list_forwards_to_existing_log_list_helper(monkeypatch) -> Non
     assert result.exit_code == 0, result.output
     assert captured == {
         "workspace_root": "/tmp/demo",
+        "scope": "global",
+        "workspace_id": None,
         "limit": 5,
         "level": "WARNING",
         "logger_name": "demo.logger",
@@ -867,6 +881,8 @@ def test_admin_log_summary_forwards_to_existing_log_summary_helper(monkeypatch) 
 
     def fake_summarize_logs(
         workspace_root: str | None,
+        scope: str,
+        workspace_id: str | None,
         level: str | None,
         logger_name: str | None,
         source: str | None,
@@ -876,6 +892,8 @@ def test_admin_log_summary_forwards_to_existing_log_summary_helper(monkeypatch) 
         json_output: bool,
     ) -> None:
         captured["workspace_root"] = workspace_root
+        captured["scope"] = scope
+        captured["workspace_id"] = workspace_id
         captured["level"] = level
         captured["logger_name"] = logger_name
         captured["source"] = source
@@ -913,6 +931,8 @@ def test_admin_log_summary_forwards_to_existing_log_summary_helper(monkeypatch) 
     assert result.exit_code == 0, result.output
     assert captured == {
         "workspace_root": "/tmp/demo",
+        "scope": "global",
+        "workspace_id": None,
         "level": "ERROR",
         "logger_name": "demo.logger",
         "source": "daemon",
@@ -929,11 +949,15 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
 
     def fake_prune_logs(
         workspace_root: str | None,
+        scope: str,
+        workspace_id: str | None,
         max_runtime_logs: int | None,
         max_log_age_days: int | None,
         json_output: bool,
     ) -> None:
         captured["workspace_root"] = workspace_root
+        captured["scope"] = scope
+        captured["workspace_id"] = workspace_id
         captured["max_runtime_logs"] = max_runtime_logs
         captured["max_log_age_days"] = max_log_age_days
         captured["json_output"] = json_output
@@ -948,6 +972,8 @@ def test_admin_log_prune_forwards_to_existing_log_prune_helper(monkeypatch) -> N
     assert result.exit_code == 0, result.output
     assert captured == {
         "workspace_root": "/tmp/demo",
+        "scope": "global",
+        "workspace_id": None,
         "max_runtime_logs": 11,
         "max_log_age_days": 12,
         "json_output": True,
