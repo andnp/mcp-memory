@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
@@ -17,9 +17,18 @@ from mcp_memory.utils.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+_MCP_MEMORY_TORCH_NUM_THREADS_ENV = "MCP_MEMORY_TORCH_NUM_THREADS"
+_MCP_MEMORY_TORCH_INTEROP_THREADS_ENV = "MCP_MEMORY_TORCH_INTEROP_THREADS"
+_DEFAULT_TORCH_NUM_THREADS = 4
+_DEFAULT_TORCH_INTEROP_THREADS = 1
+_TORCH_THREAD_CAP_INITIALIZED = False
+_TORCH_THREAD_CAP_LOCK = threading.Lock()
+
 
 class Embedder(Protocol):
-    model_name: str
+    @property
+    def model_name(self) -> str:
+        ...
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         ...
@@ -40,16 +49,27 @@ class EmbedderStatus:
     model_name: str
     backend: str
     model_cached: bool
+    configured_model_name: str | None = None
 
 
 class SentenceTransformerEmbedder:
     def __init__(self, config: EmbeddingsConfig) -> None:
-        self.model_name = config.model
+        self._configured_model_name = config.model
         self._batch_size = config.batch_size
         self._model: Any | None = None
         self._use_fallback = False
         self._fallback = HashingEmbedder(model_name=f"hash:{config.model}")
         self._load_lock = threading.Lock()
+
+    @property
+    def model_name(self) -> str:
+        if self._use_fallback:
+            return self._fallback.model_name
+        return self._configured_model_name
+
+    @property
+    def configured_model_name(self) -> str:
+        return self._configured_model_name
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -72,7 +92,8 @@ class SentenceTransformerEmbedder:
         return EmbedderStatus(
             model_name=self.model_name,
             backend="fallback" if self._use_fallback else "sentence-transformer",
-            model_cached=_is_model_cached_locally(self.model_name),
+            model_cached=_is_model_cached_locally(self._configured_model_name),
+            configured_model_name=self._configured_model_name,
         )
 
     def _ensure_model_loaded(self, *, allow_download: bool) -> bool:
@@ -98,14 +119,14 @@ class SentenceTransformerEmbedder:
             return True
 
     def _load_model(self, *, allow_download: bool) -> Any | None:
-        cached_locally = _is_model_cached_locally(self.model_name)
+        cached_locally = _is_model_cached_locally(self._configured_model_name)
         if cached_locally:
-            model = _load_sentence_transformer(self.model_name, local_files_only=True)
+            model = _load_sentence_transformer(self._configured_model_name, local_files_only=True)
             if model is not None:
                 return model
         if not allow_download:
             return None
-        return _load_sentence_transformer(self.model_name, local_files_only=False)
+        return _load_sentence_transformer(self._configured_model_name, local_files_only=False)
 
 
 class HashingEmbedder:
@@ -286,6 +307,11 @@ def build_embedder(config: EmbeddingsConfig) -> Embedder | None:
     return SentenceTransformerEmbedder(config)
 
 
+def is_fallback_embedding_model(model_name: str) -> bool:
+    normalized_model_name = model_name.strip().lower()
+    return normalized_model_name.startswith("hash:") or normalized_model_name == "hashing-local"
+
+
 def describe_embedder(embedder: Any) -> EmbedderStatus | None:
     if embedder is None:
         return None
@@ -301,12 +327,14 @@ def describe_embedder(embedder: Any) -> EmbedderStatus | None:
         model_name=model_name,
         backend=type(embedder).__name__,
         model_cached=False,
+        configured_model_name=getattr(embedder, "configured_model_name", None),
     )
 
 
 def _load_sentence_transformer(model_name: str, *, local_files_only: bool) -> Any | None:
     if local_files_only and not _is_model_cached_locally(model_name):
         return None
+    _cap_torch_threads_before_sentence_transformer_load()
     try:
         from huggingface_hub import snapshot_download
         from sentence_transformers import SentenceTransformer
@@ -317,6 +345,74 @@ def _load_sentence_transformer(model_name: str, *, local_files_only: bool) -> An
         mode = "cached" if local_files_only else "download"
         logger.warning("Failed to load %s embedding model %s: %s", mode, model_name, exc)
         return None
+
+
+def _cap_torch_threads_before_sentence_transformer_load() -> None:
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    global _TORCH_THREAD_CAP_INITIALIZED
+    if _TORCH_THREAD_CAP_INITIALIZED:
+        return
+
+    with _TORCH_THREAD_CAP_LOCK:
+        if _TORCH_THREAD_CAP_INITIALIZED:
+            return
+        _TORCH_THREAD_CAP_INITIALIZED = True
+
+        try:
+            import torch
+        except ImportError:
+            return
+
+        _cap_torch_thread_count(
+            current_threads=torch.get_num_threads(),
+            desired_threads=_read_torch_thread_cap_from_env(
+                _MCP_MEMORY_TORCH_NUM_THREADS_ENV,
+                _DEFAULT_TORCH_NUM_THREADS,
+            ),
+            set_threads=torch.set_num_threads,
+        )
+
+        try:
+            current_interop_threads = torch.get_num_interop_threads()
+        except RuntimeError:
+            return
+
+        try:
+            _cap_torch_thread_count(
+                current_threads=current_interop_threads,
+                desired_threads=_read_torch_thread_cap_from_env(
+                    _MCP_MEMORY_TORCH_INTEROP_THREADS_ENV,
+                    _DEFAULT_TORCH_INTEROP_THREADS,
+                ),
+                set_threads=torch.set_num_interop_threads,
+            )
+        except RuntimeError:
+            return
+
+
+def _cap_torch_thread_count(
+    *,
+    current_threads: int,
+    desired_threads: int,
+    set_threads: Callable[[int], None],
+) -> None:
+    if current_threads <= desired_threads:
+        return
+    set_threads(desired_threads)
+
+
+def _read_torch_thread_cap_from_env(env_name: str, default: int) -> int:
+    raw_value = os.getenv(env_name)
+    if raw_value is None:
+        return default
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return default
+    if parsed_value < 1:
+        return default
+    return parsed_value
 
 
 def _is_model_cached_locally(model_name: str) -> bool:

@@ -28,6 +28,37 @@ class DaemonSpawnDetails:
     process: _PollableProcess
 
 
+@dataclass(frozen=True)
+class DaemonHealthAssessment:
+    healthy: bool
+    reason: str
+    retryable: bool
+    timeout_seconds: float
+    attempts: int = 1
+    error_type: str | None = None
+    error_text: str | None = None
+    live_status: str | None = None
+    live_daemon_scope: str | None = None
+    live_socket_path: str | None = None
+
+    @property
+    def summary(self) -> str:
+        details: list[str] = [self.reason]
+        if self.error_type:
+            details.append(f"error_type={self.error_type}")
+        if self.error_text:
+            details.append(f"error={self.error_text}")
+        if self.live_status:
+            details.append(f"live_status={self.live_status}")
+        if self.live_daemon_scope:
+            details.append(f"live_daemon_scope={self.live_daemon_scope}")
+        if self.live_socket_path:
+            details.append(f"live_socket_path={self.live_socket_path}")
+        details.append(f"retryable={self.retryable}")
+        details.append(f"timeout_seconds={self.timeout_seconds}")
+        return " ".join(details)
+
+
 def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
     if not metadata_path.exists():
         return None
@@ -103,25 +134,113 @@ def remove_metadata(metadata_path: Path, *, expected_pid: int | None = None) -> 
     return True
 
 
-def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
+def assess_daemon_health(
+    metadata: DaemonMetadata,
+    *,
+    timeout_seconds: float = 3.0,
+) -> DaemonHealthAssessment:
     expected_socket_path = metadata.socket_path.strip() if isinstance(metadata.socket_path, str) else None
     if metadata.transport in {"zmq", "hybrid"} and not expected_socket_path:
-        return False
+        return DaemonHealthAssessment(
+            healthy=False,
+            reason="metadata_missing_socket_path",
+            retryable=False,
+            timeout_seconds=timeout_seconds,
+        )
     try:
-        payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=3)
-        if payload.get("daemon_scope", "global") != metadata.daemon_scope:
-            return False
-        if payload.get("status") != "ready":
-            return False
+        payload = request_daemon_json(metadata, "/internal/health", None, timeout_seconds=timeout_seconds)
+        live_daemon_scope = payload.get("daemon_scope", "global")
+        live_status = payload.get("status")
+        live_socket_path = payload.get("socket_path")
+        if live_daemon_scope != metadata.daemon_scope:
+            return DaemonHealthAssessment(
+                healthy=False,
+                reason="daemon_scope_mismatch",
+                retryable=False,
+                timeout_seconds=timeout_seconds,
+                live_status=live_status if isinstance(live_status, str) else None,
+                live_daemon_scope=live_daemon_scope if isinstance(live_daemon_scope, str) else None,
+                live_socket_path=live_socket_path if isinstance(live_socket_path, str) else None,
+            )
+        if live_status != "ready":
+            return DaemonHealthAssessment(
+                healthy=False,
+                reason="daemon_not_ready",
+                retryable=True,
+                timeout_seconds=timeout_seconds,
+                live_status=live_status if isinstance(live_status, str) else None,
+                live_daemon_scope=live_daemon_scope if isinstance(live_daemon_scope, str) else None,
+                live_socket_path=live_socket_path if isinstance(live_socket_path, str) else None,
+            )
         if metadata.transport in {"zmq", "hybrid"}:
-            live_socket_path = payload.get("socket_path")
             if not isinstance(live_socket_path, str) or not live_socket_path.strip():
-                return False
+                return DaemonHealthAssessment(
+                    healthy=False,
+                    reason="live_socket_path_missing",
+                    retryable=True,
+                    timeout_seconds=timeout_seconds,
+                    live_status=live_status if isinstance(live_status, str) else None,
+                    live_daemon_scope=live_daemon_scope if isinstance(live_daemon_scope, str) else None,
+                )
             if live_socket_path != expected_socket_path:
-                return False
-        return True
-    except (OSError, TimeoutError, json.JSONDecodeError, ValueError):
-        return False
+                return DaemonHealthAssessment(
+                    healthy=False,
+                    reason="socket_path_mismatch",
+                    retryable=False,
+                    timeout_seconds=timeout_seconds,
+                    live_status=live_status if isinstance(live_status, str) else None,
+                    live_daemon_scope=live_daemon_scope if isinstance(live_daemon_scope, str) else None,
+                    live_socket_path=live_socket_path,
+                )
+        return DaemonHealthAssessment(
+            healthy=True,
+            reason="healthy",
+            retryable=False,
+            timeout_seconds=timeout_seconds,
+            live_status=live_status if isinstance(live_status, str) else None,
+            live_daemon_scope=live_daemon_scope if isinstance(live_daemon_scope, str) else None,
+            live_socket_path=live_socket_path if isinstance(live_socket_path, str) else None,
+        )
+    except TimeoutError as exc:
+        return DaemonHealthAssessment(
+            healthy=False,
+            reason="health_probe_timeout",
+            retryable=True,
+            timeout_seconds=timeout_seconds,
+            error_type=type(exc).__name__,
+            error_text=str(exc),
+        )
+    except OSError as exc:
+        return DaemonHealthAssessment(
+            healthy=False,
+            reason="health_probe_os_error",
+            retryable=True,
+            timeout_seconds=timeout_seconds,
+            error_type=type(exc).__name__,
+            error_text=str(exc),
+        )
+    except json.JSONDecodeError as exc:
+        return DaemonHealthAssessment(
+            healthy=False,
+            reason="health_probe_invalid_json",
+            retryable=True,
+            timeout_seconds=timeout_seconds,
+            error_type=type(exc).__name__,
+            error_text=str(exc),
+        )
+    except ValueError as exc:
+        return DaemonHealthAssessment(
+            healthy=False,
+            reason="health_probe_invalid_payload",
+            retryable=True,
+            timeout_seconds=timeout_seconds,
+            error_type=type(exc).__name__,
+            error_text=str(exc),
+        )
+
+
+def is_daemon_healthy(metadata: DaemonMetadata) -> bool:
+    return assess_daemon_health(metadata).healthy
 
 
 def _normalize_metadata_payload(payload: dict[str, object]) -> dict[str, object]:

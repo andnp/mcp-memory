@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import time
+from typing import Any
 
-from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity
+from mcp_memory.embedding_integrity_event_store import (
+    EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
+    EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
+)
+from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity, is_fallback_embedding_model
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -16,6 +25,13 @@ class PostgresVectorSearchCapabilities:
     @property
     def server_side_vector_search_available(self) -> bool:
         return self.pgvector_extension_installed and self.embedding_vector_column_present
+
+
+@dataclass(frozen=True)
+class PostgresEmbeddingWritePolicyState:
+    fallback_persistence_policy: str = "blocked"
+    blocked_fallback_write_count: int = 0
+    last_blocked_fallback_model_name: str | None = None
 
 
 def _coerce_float(value: object) -> float:
@@ -32,12 +48,65 @@ def _format_vector_literal(embedding: list[float]) -> str:
     return "[" + ",".join(str(float(value)) for value in embedding) + "]"
 
 
+def _decode_embedding_payload(embedding_raw: object) -> list[float]:
+    if isinstance(embedding_raw, str):
+        embedding = list(json.loads(embedding_raw))
+    elif isinstance(embedding_raw, list | tuple):
+        embedding = list(embedding_raw)
+    else:
+        raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
+    return [float(value) for value in embedding]
+
+
 class PostgresVectorStore:
     supports_candidate_filtering = True
 
-    def __init__(self, session_manager: SessionManager[DbConnectionLike] | None) -> None:
+    def __init__(
+        self,
+        session_manager: SessionManager[DbConnectionLike] | None,
+        *,
+        event_repository=None,
+    ) -> None:
         self._sessions = session_manager
+        self._event_repository = event_repository
         self._search_capabilities: PostgresVectorSearchCapabilities | None = None
+        self._blocked_fallback_write_count = 0
+        self._last_blocked_fallback_model_name: str | None = None
+
+    def get_write_policy_state(self) -> PostgresEmbeddingWritePolicyState:
+        return PostgresEmbeddingWritePolicyState(
+            blocked_fallback_write_count=self._blocked_fallback_write_count,
+            last_blocked_fallback_model_name=self._last_blocked_fallback_model_name,
+        )
+
+    def _raise_for_blocked_fallback_embedding_write(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        model_name: str,
+    ) -> None:
+        self._blocked_fallback_write_count += 1
+        self._last_blocked_fallback_model_name = model_name
+        logger.warning(
+            "Blocked fallback/hash embedding write in Postgres/shared mode for %s:%s model=%s",
+            source_kind,
+            source_id,
+            model_name,
+        )
+        self._record_integrity_event(
+            event_kind=EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
+            model_name=model_name,
+            source_kind=source_kind,
+            source_id=source_id,
+            details={
+                "reason": "fallback_embedding_persistence_blocked",
+            },
+        )
+        raise ValueError(
+            "Fallback/hash embeddings cannot be persisted in Postgres/shared mode; "
+            f"blocked model_name {model_name!r}"
+        )
 
     def _get_search_capabilities(self) -> PostgresVectorSearchCapabilities:
         cached = self._search_capabilities
@@ -81,6 +150,173 @@ class PostgresVectorStore:
         self._search_capabilities = capabilities
         return capabilities
 
+    def _read_model_dimensions(
+        self,
+        cursor,
+        *,
+        model_name: str,
+    ) -> set[int]:
+        cursor.execute(
+            """
+            SELECT DISTINCT jsonb_array_length(embedding_json)
+            FROM embeddings
+            WHERE model_name = %s
+              AND jsonb_typeof(embedding_json) = 'array'
+            """,
+            (model_name,),
+        )
+        return {
+            int(row[0])
+            for row in cursor.fetchall()
+            if row and row[0] is not None
+        }
+
+    def scan_integrity(
+        self,
+        *,
+        active_model_name: str | None = None,
+        expected_dimension: int | None = None,
+    ) -> dict[str, Any]:
+        if self._sessions is None:
+            return {
+                "scanned_row_count": 0,
+                "invalid_row_count": 0,
+                "mixed_dimension_group_count": 0,
+                "mixed_dimension_groups": [],
+                "invalid_rows": [],
+                "active_model_name": active_model_name,
+                "active_model_row_count": 0,
+                "active_model_rows": [],
+            }
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT source_kind, source_id, workspace_id, model_name,
+                           CASE
+                               WHEN jsonb_typeof(embedding_json) = 'array'
+                               THEN jsonb_array_length(embedding_json)
+                               ELSE NULL
+                           END AS embedding_dimension,
+                           jsonb_typeof(embedding_json) AS payload_type,
+                           updated_at
+                    FROM embeddings
+                    ORDER BY model_name ASC, source_kind ASC, source_id ASC
+                    """
+                )
+                rows = cursor.fetchall()
+
+        active_rows: list[dict[str, Any]] = []
+        invalid_rows: list[dict[str, Any]] = []
+        rows_by_model: dict[str, list[dict[str, Any]]] = {}
+
+        for row in rows:
+            source_kind = str(row[0])
+            source_id = str(row[1])
+            workspace_id = None if row[2] is None else str(row[2])
+            model_name = str(row[3])
+            dimension = int(row[4]) if isinstance(row[4], int | float | str) else None
+            payload_type = None if row[5] is None else str(row[5])
+            updated_at = _coerce_float(row[6])
+
+            issues: list[str] = []
+            if payload_type != "array":
+                issues.append("invalid_payload_type")
+            elif dimension is None or dimension < 1:
+                issues.append("invalid_dimension")
+            elif model_name == active_model_name and expected_dimension is not None and dimension != expected_dimension:
+                issues.append("dimension_mismatch")
+
+            row_summary: dict[str, Any] = {
+                "source_kind": source_kind,
+                "source_id": source_id,
+                "workspace_id": workspace_id,
+                "model_name": model_name,
+                "dimension": dimension,
+                "payload_type": payload_type,
+                "updated_at": updated_at,
+                "issues": issues,
+            }
+            rows_by_model.setdefault(model_name, []).append(row_summary)
+            if model_name == active_model_name:
+                active_rows.append(row_summary)
+            if issues:
+                invalid_rows.append(row_summary)
+
+        mixed_dimension_groups: list[dict[str, Any]] = []
+        for model_name, model_rows in rows_by_model.items():
+            dimensions = sorted(
+                {
+                    int(row["dimension"])
+                    for row in model_rows
+                    if isinstance(row.get("dimension"), int)
+                }
+            )
+            if len(dimensions) <= 1:
+                continue
+            source_kind_counts: dict[str, int] = {}
+            for row in model_rows:
+                source_kind = str(row["source_kind"])
+                source_kind_counts[source_kind] = source_kind_counts.get(source_kind, 0) + 1
+            mixed_dimension_groups.append(
+                {
+                    "model_name": model_name,
+                    "dimensions": dimensions,
+                    "row_count": len(model_rows),
+                    "source_kind_counts": source_kind_counts,
+                }
+            )
+
+        summary = {
+            "scanned_row_count": len(rows),
+            "invalid_row_count": len(invalid_rows),
+            "mixed_dimension_group_count": len(mixed_dimension_groups),
+            "mixed_dimension_groups": mixed_dimension_groups,
+            "invalid_rows": invalid_rows,
+            "active_model_name": active_model_name,
+            "active_model_row_count": len(active_rows),
+            "active_model_rows": active_rows,
+        }
+        self._record_integrity_event(
+            event_kind=EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
+            model_name=active_model_name,
+            scanned_row_count=int(summary["scanned_row_count"]),
+            invalid_row_count=int(summary["invalid_row_count"]),
+            mixed_dimension_group_count=int(summary["mixed_dimension_group_count"]),
+            details={
+                "active_model_name": active_model_name,
+                "expected_dimension": expected_dimension,
+                "active_model_row_count": int(summary["active_model_row_count"]),
+            },
+        )
+        return summary
+
+    def _record_integrity_event(
+        self,
+        *,
+        event_kind: str,
+        model_name: str | None = None,
+        source_kind: str | None = None,
+        source_id: str | None = None,
+        scanned_row_count: int | None = None,
+        invalid_row_count: int | None = None,
+        mixed_dimension_group_count: int | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        if self._event_repository is None:
+            return
+        self._event_repository.record_event(
+            event_kind=event_kind,
+            model_name=model_name,
+            source_kind=source_kind,
+            source_id=source_id,
+            scanned_row_count=scanned_row_count,
+            invalid_row_count=invalid_row_count,
+            mixed_dimension_group_count=mixed_dimension_group_count,
+            details=details,
+        )
+
     def upsert(
         self,
         *,
@@ -90,6 +326,12 @@ class PostgresVectorStore:
         model_name: str,
         embedding: list[float],
     ) -> None:
+        if is_fallback_embedding_model(model_name):
+            self._raise_for_blocked_fallback_embedding_write(
+                source_kind=source_kind,
+                source_id=source_id,
+                model_name=model_name,
+            )
         if self._sessions is None:
             return
         normalized_embedding = [float(value) for value in embedding]
@@ -98,6 +340,19 @@ class PostgresVectorStore:
         capabilities = self._get_search_capabilities()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
+                stored_dimensions = self._read_model_dimensions(cursor, model_name=model_name)
+                current_dimension = len(normalized_embedding)
+                if len(stored_dimensions) > 1:
+                    raise ValueError(
+                        "Refusing to upsert embedding for model_name "
+                        f"{model_name!r}: existing rows already have mixed dimensions {sorted(stored_dimensions)}"
+                    )
+                if stored_dimensions and current_dimension not in stored_dimensions:
+                    raise ValueError(
+                        "Refusing to upsert embedding for model_name "
+                        f"{model_name!r}: existing dimension {next(iter(stored_dimensions))} "
+                        f"does not match new dimension {current_dimension}"
+                    )
                 if capabilities.server_side_vector_search_available:
                     cursor.execute(
                         """
@@ -166,19 +421,12 @@ class PostgresVectorStore:
                 row = cursor.fetchone()
         if row is None:
             return None
-        embedding_raw = row[4]
-        if isinstance(embedding_raw, str):
-            embedding = list(json.loads(embedding_raw))
-        elif isinstance(embedding_raw, list | tuple):
-            embedding = list(embedding_raw)
-        else:
-            raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
         return EmbeddingRecord(
             source_kind=str(row[0]),
             source_id=str(row[1]),
             workspace_id=None if row[2] is None else str(row[2]),
             model_name=str(row[3]),
-            embedding=[float(value) for value in embedding],
+            embedding=_decode_embedding_payload(row[4]),
             updated_at=_coerce_float(row[5]),
         )
 
@@ -227,14 +475,17 @@ class PostgresVectorStore:
         normalized_candidate_ids = [candidate_id for candidate_id in (candidate_ids or []) if candidate_id]
         if candidate_ids is not None and not normalized_candidate_ids:
             return []
+        query_dimension = len(query_embedding)
         if capabilities.server_side_vector_search_available:
             query_vector = _format_vector_literal(query_embedding)
             query = (
                 "SELECT source_id, 1 - (embedding_vector <=> CAST(%s AS vector)) AS score "
                 "FROM embeddings WHERE source_kind = %s AND model_name = %s "
-                "AND embedding_vector IS NOT NULL"
+                "AND embedding_vector IS NOT NULL "
+                "AND jsonb_typeof(embedding_json) = 'array' "
+                "AND jsonb_array_length(embedding_json) = %s"
             )
-            params: list[object] = [query_vector, source_kind, model_name]
+            params: list[object] = [query_vector, source_kind, model_name, query_dimension]
             if workspace_id is not None:
                 query += " AND workspace_id = %s"
                 params.append(workspace_id)
@@ -256,6 +507,8 @@ class PostgresVectorStore:
                         "backend": "postgres",
                         "row_count": len(rows),
                         "candidate_filter_count": len(normalized_candidate_ids),
+                        "query_dimension": query_dimension,
+                        "dimension_filter_applied": True,
                         "search_mode": "server_side_pgvector",
                         "pgvector_extension_installed": capabilities.pgvector_extension_installed,
                         "embedding_vector_column_present": capabilities.embedding_vector_column_present,
@@ -285,17 +538,16 @@ class PostgresVectorStore:
         raw_type_counts: dict[str, int] = {}
         decode_started = time.perf_counter()
         decoded_rows: list[tuple[str, list[float]]] = []
+        skipped_dimension_mismatch_count = 0
         for row in rows:
             embedding_raw = row[1]
             raw_type_name = type(embedding_raw).__name__
             raw_type_counts[raw_type_name] = raw_type_counts.get(raw_type_name, 0) + 1
-            if isinstance(embedding_raw, str):
-                embedding = list(json.loads(embedding_raw))
-            elif isinstance(embedding_raw, list | tuple):
-                embedding = list(embedding_raw)
-            else:
-                raise TypeError(f"Unexpected Postgres embedding payload type: {type(embedding_raw)!r}")
-            decoded_rows.append((str(row[0]), [float(value) for value in embedding]))
+            embedding = _decode_embedding_payload(embedding_raw)
+            if len(embedding) != query_dimension:
+                skipped_dimension_mismatch_count += 1
+                continue
+            decoded_rows.append((str(row[0]), embedding))
         decode_ms = (time.perf_counter() - decode_started) * 1000.0
         scored: list[tuple[str, float]] = []
         score_started = time.perf_counter()
@@ -311,7 +563,11 @@ class PostgresVectorStore:
                 {
                     "backend": "postgres",
                     "row_count": len(rows),
+                    "compatible_row_count": len(decoded_rows),
                     "candidate_filter_count": len(normalized_candidate_ids),
+                    "query_dimension": query_dimension,
+                    "dimension_filter_applied": False,
+                    "skipped_dimension_mismatch_count": skipped_dimension_mismatch_count,
                     "search_mode": "client_python_fallback",
                     "pgvector_extension_installed": capabilities.pgvector_extension_installed,
                     "embedding_vector_column_present": capabilities.embedding_vector_column_present,

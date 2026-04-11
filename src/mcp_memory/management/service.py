@@ -16,6 +16,7 @@ from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
+from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
@@ -34,6 +35,8 @@ from mcp_memory.management.models import (
     AIConversationPayload,
     CacheHealthPayload,
     CacheMetricsPayload,
+    EmbeddingIntegrityEventSnapshotPayload,
+    EmbeddingIntegrityEventSummaryPayload,
     HealthPayload,
     MemoryListPayload,
     MemoryDetailPayload,
@@ -67,6 +70,7 @@ from mcp_memory.serialization import (
     task_payload,
 )
 from mcp_memory.storage.noop import NoopProviderUsageRepository
+from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 
 
@@ -98,6 +102,24 @@ def _build_default_runtime_logs(ctx: ApplicationContext):
         workspace_id=ctx.workspace_id,
         config=config,
     )
+
+
+def _build_default_embedding_integrity_events(ctx: ApplicationContext):
+    if ctx.db_manager is None:
+        return None
+    if hasattr(ctx.db_manager, "get_connection"):
+        return EmbeddingIntegrityEventRepository(
+            ctx.db_manager,
+            workspace_id=None,
+        )
+    if (ctx.storage_backend or "sqlite") == "postgres":
+        if not hasattr(ctx.db_manager, "open_connection"):
+            return None
+        return PostgresEmbeddingIntegrityEventRepository(
+            ctx.db_manager,
+            workspace_id=None,
+        )
+    return None
 
 
 def _resolve_log_workspace_id(
@@ -132,12 +154,17 @@ class ManagementService:
         self._repository = ctx.repository
         self._provider_usage = ctx.provider_usage or _build_default_provider_usage(ctx)
         self._runtime_logs = ctx.runtime_logs or _build_default_runtime_logs(ctx)
+        self._embedding_integrity_events = ctx.embedding_integrity_events
+        if self._embedding_integrity_events is None:
+            self._embedding_integrity_events = _build_default_embedding_integrity_events(ctx)
+            ctx.embedding_integrity_events = self._embedding_integrity_events
         self._retrieval_telemetry = ctx.retrieval_telemetry
         if self._retrieval_telemetry is None:
             self._retrieval_telemetry = RetrievalTelemetryRepository(self._db_manager, workspace_id=self._workspace_id)
             ctx.retrieval_telemetry = self._retrieval_telemetry
         self._read_cache = getattr(ctx, "read_cache", None)
         self._embedder = ctx.embedder
+        self._vector_store = getattr(ctx, "vector_store", None)
         self._relational_search = ctx.relational_search
         self._config = ctx.config
         self._ai_json_provider = getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
@@ -157,7 +184,13 @@ class ManagementService:
         return self._workspace_id
 
     def get_health(self):
-        embedder_status = build_embedding_status(self._embedder)
+        embedding_integrity_summary = self._embedding_integrity_summary(workspace_id=None)
+        embedder_status = build_embedding_status(
+            self._embedder,
+            storage_backend=self._storage_backend,
+            vector_store=self._vector_store,
+            integrity_event_summary=embedding_integrity_summary,
+        )
         return HealthPayload(
             status="ok",
             storage_backend=self._storage_backend,
@@ -334,10 +367,25 @@ class ManagementService:
             provider_usage_repo=self._provider_usage,
             runtime_logs_repo=self._runtime_logs,
             embedder=self._embedder,
+            storage_backend=self._storage_backend,
+            vector_store=self._vector_store,
             relational_search=self._relational_search,
             cache=self._build_cache_health(),
+            embedding_integrity_summary=self._embedding_integrity_summary(workspace_id=None),
             recent_limit=recent_limit,
             failed_limit=failed_limit,
+        )
+
+    def _embedding_integrity_summary(self, *, workspace_id: str | None) -> EmbeddingIntegrityEventSummaryPayload:
+        repository = self._embedding_integrity_events
+        if repository is None:
+            return EmbeddingIntegrityEventSummaryPayload()
+        summary = repository.summarize_events(workspace_id=workspace_id)
+        return EmbeddingIntegrityEventSummaryPayload(
+            total=summary.total,
+            by_kind=summary.by_kind,
+            last_scan=_embedding_integrity_snapshot_payload(summary.last_scan),
+            last_blocked_fallback_write=_embedding_integrity_snapshot_payload(summary.last_blocked_fallback_write),
         )
 
     def repair_search_index(self) -> dict[str, int | bool | str | None]:
@@ -897,3 +945,17 @@ def _is_process_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _embedding_integrity_snapshot_payload(record) -> EmbeddingIntegrityEventSnapshotPayload | None:
+    if record is None:
+        return None
+    return EmbeddingIntegrityEventSnapshotPayload(
+        created_at=record.created_at,
+        model_name=record.model_name,
+        source_kind=record.source_kind,
+        source_id=record.source_id,
+        scanned_row_count=record.scanned_row_count,
+        invalid_row_count=record.invalid_row_count,
+        mixed_dimension_group_count=record.mixed_dimension_group_count,
+    )

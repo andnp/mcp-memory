@@ -10,12 +10,13 @@ from mcp_memory.config import Config, StorageCacheMode
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
+from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
 from mcp_memory.management.reporting_queries import extract_copilot_premium_requests
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
-from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.embeddings import EmbedderStatus, SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
@@ -305,6 +306,244 @@ def test_management_service_health_reports_storage_backend(db_manager) -> None:
     health = service.get_health()
 
     assert health.storage_backend == "sqlite"
+
+
+def test_build_embedding_status_surfaces_blocked_fallback_persistence_policy_for_postgres() -> None:
+    payload = build_embedding_status(
+        SimpleNamespace(
+            status=lambda: EmbedderStatus(
+                model_name="hash:sentence-transformers/all-MiniLM-L6-v2",
+                configured_model_name="sentence-transformers/all-MiniLM-L6-v2",
+                backend="fallback",
+                model_cached=False,
+            )
+        ),
+        storage_backend="postgres",
+        vector_store=SimpleNamespace(
+            get_write_policy_state=lambda: SimpleNamespace(
+                fallback_persistence_policy="blocked",
+                blocked_fallback_write_count=2,
+                last_blocked_fallback_model_name="hash:sentence-transformers/all-MiniLM-L6-v2",
+            )
+        ),
+    )
+
+    assert payload.model_name == "hash:sentence-transformers/all-MiniLM-L6-v2"
+    assert payload.configured_model_name == "sentence-transformers/all-MiniLM-L6-v2"
+    assert payload.backend == "fallback"
+    assert payload.fallback_persistence_policy == "blocked"
+    assert payload.blocked_fallback_write_count == 2
+    assert payload.last_blocked_fallback_model_name == "hash:sentence-transformers/all-MiniLM-L6-v2"
+
+
+def test_management_service_health_and_overview_surface_embedding_write_policy(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    fake_embedder = SimpleNamespace(
+        status=lambda: EmbedderStatus(
+            model_name="hash:sentence-transformers/all-MiniLM-L6-v2",
+            configured_model_name="sentence-transformers/all-MiniLM-L6-v2",
+            backend="fallback",
+            model_cached=False,
+        )
+    )
+    fake_vector_store = SimpleNamespace(
+        get_write_policy_state=lambda: SimpleNamespace(
+            fallback_persistence_policy="blocked",
+            blocked_fallback_write_count=3,
+            last_blocked_fallback_model_name="hash:sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
+    service = ManagementService(
+        ApplicationContext(
+            workspace_id="workspace-a",
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+            provider_usage=SimpleNamespace(
+                summarize_usage=lambda workspace_id=None: [],
+                list_conversations=lambda **kwargs: [],
+            ),
+            runtime_logs=SimpleNamespace(list_logs=lambda **kwargs: []),
+            storage_backend="postgres",
+            embedder=fake_embedder,
+            vector_store=fake_vector_store,
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+    overview = service.get_overview()
+
+    assert health.embeddings.configured_model_name == "sentence-transformers/all-MiniLM-L6-v2"
+    assert health.embeddings.fallback_persistence_policy == "blocked"
+    assert health.embeddings.blocked_fallback_write_count == 3
+    assert health.embeddings.last_blocked_fallback_model_name == "hash:sentence-transformers/all-MiniLM-L6-v2"
+    assert overview.embeddings.fallback_persistence_policy == "blocked"
+    assert overview.embeddings.blocked_fallback_write_count == 3
+
+
+def test_management_service_surfaces_persisted_embedding_integrity_event_summary(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    db_manager.get_connection().executemany(
+        """
+        INSERT INTO embedding_integrity_events (
+            workspace_id, event_kind, model_name, source_kind, source_id,
+            scanned_row_count, invalid_row_count, mixed_dimension_group_count,
+            details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "workspace-a",
+                "integrity_scan_summary",
+                "mini-embed",
+                None,
+                None,
+                5,
+                2,
+                1,
+                '{"expected_dimension":2}',
+                100.0,
+            ),
+            (
+                "workspace-a",
+                "blocked_fallback_write",
+                "hash:sentence-transformers/all-MiniLM-L6-v2",
+                "memory",
+                "memory-a",
+                None,
+                None,
+                None,
+                '{"reason":"fallback_embedding_persistence_blocked"}',
+                101.0,
+            ),
+            (
+                "workspace-b",
+                "blocked_fallback_write",
+                "hash:other-model",
+                "memory",
+                "memory-b",
+                None,
+                None,
+                None,
+                '{}',
+                102.0,
+            ),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    health = service.get_health()
+    overview = service.get_overview()
+
+    assert health.embeddings.integrity_events.total == 3
+    assert health.embeddings.integrity_events.by_kind == {
+        "blocked_fallback_write": 2,
+        "integrity_scan_summary": 1,
+    }
+    assert health.embeddings.integrity_events.last_scan is not None
+    assert health.embeddings.integrity_events.last_scan.model_name == "mini-embed"
+    assert health.embeddings.integrity_events.last_scan.scanned_row_count == 5
+    assert health.embeddings.integrity_events.last_scan.invalid_row_count == 2
+    assert health.embeddings.integrity_events.last_scan.mixed_dimension_group_count == 1
+    assert health.embeddings.integrity_events.last_blocked_fallback_write is not None
+    assert health.embeddings.integrity_events.last_blocked_fallback_write.model_name == "hash:other-model"
+    assert health.embeddings.integrity_events.last_blocked_fallback_write.source_id == "memory-b"
+
+    assert overview.embeddings.integrity_events.total == 3
+    assert overview.embeddings.integrity_events.by_kind == {
+        "blocked_fallback_write": 2,
+        "integrity_scan_summary": 1,
+    }
+    assert overview.embeddings.integrity_events.last_blocked_fallback_write is not None
+    assert overview.embeddings.integrity_events.last_blocked_fallback_write.model_name == "hash:other-model"
+    assert overview.embeddings.integrity_events.last_blocked_fallback_write.source_id == "memory-b"
+
+
+def test_management_service_health_uses_global_embedding_integrity_summary_even_with_workspace_context(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    db_manager.get_connection().executemany(
+        """
+        INSERT INTO embedding_integrity_events (
+            workspace_id, event_kind, model_name, source_kind, source_id,
+            scanned_row_count, invalid_row_count, mixed_dimension_group_count,
+            details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                None,
+                "integrity_scan_summary",
+                "mini-embed",
+                None,
+                None,
+                5,
+                2,
+                1,
+                '{"expected_dimension":2}',
+                100.0,
+            ),
+            (
+                None,
+                "blocked_fallback_write",
+                "hash:sentence-transformers/all-MiniLM-L6-v2",
+                "memory",
+                "memory-a",
+                None,
+                None,
+                None,
+                '{"reason":"fallback_embedding_persistence_blocked"}',
+                101.0,
+            ),
+            (
+                None,
+                "blocked_fallback_write",
+                "hash:other-model",
+                "memory",
+                "memory-b",
+                None,
+                None,
+                None,
+                '{}',
+                102.0,
+            ),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    health = service.get_health()
+    overview = service.get_overview()
+
+    assert health.embeddings.integrity_events.total == 3
+    assert health.embeddings.integrity_events.by_kind == {
+        "blocked_fallback_write": 2,
+        "integrity_scan_summary": 1,
+    }
+    assert health.embeddings.integrity_events.last_blocked_fallback_write is not None
+    assert health.embeddings.integrity_events.last_blocked_fallback_write.model_name == "hash:other-model"
+    assert health.embeddings.integrity_events.last_blocked_fallback_write.source_id == "memory-b"
+    assert overview.embeddings.integrity_events.total == 3
+    assert overview.embeddings.integrity_events.by_kind == health.embeddings.integrity_events.by_kind
+    assert overview.embeddings.integrity_events.last_blocked_fallback_write is not None
+    assert overview.embeddings.integrity_events.last_blocked_fallback_write.model_name == "hash:other-model"
 
 
 @pytest.mark.parametrize(

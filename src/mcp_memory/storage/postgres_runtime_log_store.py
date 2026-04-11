@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
+import threading
 import time
 
 from mcp_memory.config import LoggingConfig, PostgresStorageConfig
@@ -77,6 +78,8 @@ class PostgresRuntimeLogRepository:
         self._workspace_id = workspace_id
         self._config = config if config is not None else LoggingConfig()
         self._last_retention_at = 0.0
+        self._closed = False
+        self._state_lock = threading.Lock()
         self._writer = BufferedWriter[_PendingRuntimeLog](
             self._flush_log_batch,
             name="postgres-runtime-logs",
@@ -101,23 +104,33 @@ class PostgresRuntimeLogRepository:
     ) -> None:
         if self._sessions is None:
             return
-        self._writer.write(
-            _PendingRuntimeLog(
-                workspace_id=self._workspace_id,
-                source=source,
-                logger_name=logger_name,
-                level=level,
-                message=message,
-                created_at=created_at,
-                data_json=json.dumps(data, sort_keys=True),
+        with self._state_lock:
+            if self._closed:
+                return
+            self._writer.write(
+                _PendingRuntimeLog(
+                    workspace_id=self._workspace_id,
+                    source=source,
+                    logger_name=logger_name,
+                    level=level,
+                    message=message,
+                    created_at=created_at,
+                    data_json=json.dumps(data, sort_keys=True),
+                )
             )
-        )
         self.apply_retention_policy(now=created_at)
 
     def flush(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
         self._writer.flush()
 
     def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
         self._writer.close()
 
     def list_logs(
@@ -321,8 +334,11 @@ class PostgresStructuredLogHandler(logging.Handler):
             workspace_id=workspace_id,
         )
         self._source = source
+        self._closed = False
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._closed:
+            return
         try:
             from mcp_memory.runtime_logging import _build_log_data
 
@@ -339,6 +355,7 @@ class PostgresStructuredLogHandler(logging.Handler):
 
     def close(self) -> None:
         try:
+            self._closed = True
             self._repository.close()
             if self._owns_session_manager:
                 self._session_manager.close()

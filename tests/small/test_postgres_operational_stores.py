@@ -287,6 +287,15 @@ class FakeSessionManager:
         return None
 
 
+class InspectablePostgresStructuredLogHandler(PostgresStructuredLogHandler):
+    def __init__(self, *, session_manager: FakeSessionManager, workspace_id: str | None, source: str = "runtime") -> None:
+        super().__init__(session_manager=session_manager, workspace_id=workspace_id, source=source)
+        self.error_records: list[logging.LogRecord] = []
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        self.error_records.append(record)
+
+
 def test_postgres_runtime_log_repository_prunes_by_age_and_count() -> None:
     session_manager = FakeSessionManager()
     repository = PostgresRuntimeLogRepository(
@@ -325,6 +334,68 @@ def test_postgres_structured_log_handler_writes_runtime_log() -> None:
     assert logs[0].message == "hello world"
     assert logs[0].source == "stdio"
     repository.close()
+    handler.close()
+
+
+def test_postgres_structured_log_handler_emit_after_close_is_noop() -> None:
+    session_manager = FakeSessionManager()
+    handler = InspectablePostgresStructuredLogHandler(
+        session_manager=session_manager,
+        workspace_id="workspace-a",
+        source="stdio",
+    )
+    record = logging.LogRecord(
+        name="mcp_memory.server",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="late log",
+        args=(),
+        exc_info=None,
+    )
+
+    handler.close()
+    handler.emit(record)
+
+    assert handler.error_records == []
+    assert session_manager.state.runtime_logs == []
+
+
+def test_postgres_structured_log_handler_preserves_active_error_handling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_manager = FakeSessionManager()
+    handler = InspectablePostgresStructuredLogHandler(
+        session_manager=session_manager,
+        workspace_id="workspace-a",
+        source="stdio",
+    )
+    record = logging.LogRecord(
+        name="mcp_memory.server",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="boom",
+        args=(),
+        exc_info=None,
+    )
+
+    def raise_write_log(
+        *,
+        source: str,
+        logger_name: str,
+        level: str,
+        message: str,
+        created_at: float,
+        data: dict[str, object],
+    ) -> None:
+        raise RuntimeError("repository write failed")
+
+    monkeypatch.setattr(handler._repository, "write_log", raise_write_log)
+
+    handler.emit(record)
+
+    assert handler.error_records == [record]
     handler.close()
 
 

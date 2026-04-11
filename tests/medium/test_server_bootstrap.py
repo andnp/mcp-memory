@@ -1,9 +1,13 @@
+import asyncio
 import json
+import threading
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
+from mcp import types
 from mcp.types import TextContent
 
 from mcp_memory.cli import main
@@ -322,6 +326,429 @@ def test_mcp_server_tool_requests_raise_after_exhausting_retry_budget(monkeypatc
             {"content": "retry budget exhausted", "__workspace_root": "demo-workspace"},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_list_tools_times_out_when_sync_request_stalls(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    stall = threading.Event()
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        stall.wait(0.05)
+        return {"tools": []}
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+
+    handler = server.server.request_handlers[types.ListToolsRequest]
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await handler(types.ListToolsRequest())
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_call_tool_times_out_when_sync_request_stalls(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    stall = threading.Event()
+    server.server._tool_cache["record_thought"] = types.Tool(
+        name="record_thought",
+        description="Record a thought.",
+        inputSchema={"type": "object"},
+    )
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        stall.wait(0.05)
+        return {"contents": []}
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+
+    handler = server.server.request_handlers[types.CallToolRequest]
+    result = await handler(
+        types.CallToolRequest(
+            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
+        )
+    )
+    result_root = cast(types.CallToolResult, result.root)
+    result_content = cast(TextContent, result_root.content[0])
+
+    assert result_root.isError is True
+    assert result_content.text == "mcp_client_request_timed_out"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_client_timeout_clears_cached_daemon_and_schedules_recovery(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    request_stall = threading.Event()
+    recovery_started = threading.Event()
+    allow_recovery = threading.Event()
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def blocking_recovery(workspace_root: str | None, cwd=None):
+        recovery_started.set()
+        allow_recovery.wait(1)
+        return object()
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", blocking_recovery)
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert server._daemon is None
+    assert server._daemon_recovery_task is not None
+    assert await asyncio.to_thread(recovery_started.wait, 1)
+
+    allow_recovery.set()
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_repeated_client_timeouts_do_not_spawn_duplicate_recovery_tasks(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    request_stall = threading.Event()
+    recovery_started = threading.Event()
+    allow_recovery = threading.Event()
+    recovery_call_count = 0
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def blocking_recovery(workspace_root: str | None, cwd=None):
+        nonlocal recovery_call_count
+        recovery_call_count += 1
+        recovery_started.set()
+        allow_recovery.wait(1)
+        return object()
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", blocking_recovery)
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert await asyncio.to_thread(recovery_started.wait, 1)
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert recovery_call_count == 1
+
+    allow_recovery.set()
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_successful_background_recovery_updates_cached_daemon(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    request_stall = threading.Event()
+    refreshed_daemon = object()
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def successful_recovery(workspace_root: str | None, cwd=None):
+        return refreshed_daemon
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", successful_recovery)
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+    assert server._daemon is refreshed_daemon
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_successful_request_resets_consecutive_client_timeout_state(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    request_stall = threading.Event()
+    recovered_daemon = object()
+    request_count = 0
+
+    def sometimes_blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            request_stall.wait(0.05)
+        return {"tools": []}
+
+    def successful_recovery(workspace_root: str | None, cwd=None):
+        return recovered_daemon
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", sometimes_blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", successful_recovery)
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+    assert server._consecutive_client_timeout_failures == 1
+
+    payload = await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert payload == {"tools": []}
+    assert server._consecutive_client_timeout_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_sync_timeout_does_not_count_as_client_timeout(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    daemon = object()
+
+    def timed_out_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        raise TimeoutError("daemon_request_timed_out")
+
+    monkeypatch.setattr(server, "_request_json_with_recovery", timed_out_request)
+
+    server._daemon = daemon
+
+    with pytest.raises(TimeoutError, match="daemon_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert server._daemon is daemon
+    assert server._consecutive_client_timeout_failures == 0
+    assert server._daemon_recovery_task is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_restart(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    request_stall = threading.Event()
+    ensure_calls: list[tuple[str | None, None]] = []
+    stop_calls: list[tuple[str | None, None]] = []
+    refreshed_daemons = [object(), object()]
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def successful_recovery(workspace_root: str | None, cwd=None):
+        ensure_calls.append((workspace_root, cwd))
+        return refreshed_daemons[len(ensure_calls) - 1]
+
+    def successful_stop(workspace_root: str | None, cwd=None):
+        stop_calls.append((workspace_root, cwd))
+        return None
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", successful_recovery)
+    monkeypatch.setattr("mcp_memory.server.stop_daemon", successful_stop)
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+    assert ensure_calls == [("demo-workspace", None)]
+    assert stop_calls == []
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
+
+    assert stop_calls == [("demo-workspace", None)]
+    assert ensure_calls == [
+        ("demo-workspace", None),
+        ("demo-workspace", None),
+    ]
+    assert server._daemon is refreshed_daemons[-1]
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts_after_current_attempt(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    request_stall = threading.Event()
+    first_recovery_started = threading.Event()
+    allow_first_recovery = threading.Event()
+    second_recovery_started = threading.Event()
+    allow_second_recovery = threading.Event()
+    stop_called = threading.Event()
+    ensure_calls: list[tuple[str | None, None]] = []
+    stop_calls: list[tuple[str | None, None]] = []
+    recovered_daemons = [object(), object()]
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def staged_recovery(workspace_root: str | None, cwd=None):
+        ensure_calls.append((workspace_root, cwd))
+        if len(ensure_calls) == 1:
+            first_recovery_started.set()
+            allow_first_recovery.wait(1)
+        else:
+            second_recovery_started.set()
+            allow_second_recovery.wait(1)
+        return recovered_daemons[len(ensure_calls) - 1]
+
+    def successful_stop(workspace_root: str | None, cwd=None):
+        stop_calls.append((workspace_root, cwd))
+        stop_called.set()
+        return None
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", staged_recovery)
+    monkeypatch.setattr("mcp_memory.server.stop_daemon", successful_stop)
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert await asyncio.to_thread(first_recovery_started.wait, 1)
+    first_recovery_task = server._daemon_recovery_task
+
+    server._daemon = object()
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert server._daemon_recovery_task is first_recovery_task
+
+    allow_first_recovery.set()
+    assert await asyncio.to_thread(stop_called.wait, 1)
+    assert await asyncio.to_thread(second_recovery_started.wait, 1)
+
+    allow_second_recovery.set()
+    await asyncio.wait_for(cast(asyncio.Task[None], first_recovery_task), timeout=1)
+
+    assert stop_calls == [("demo-workspace", None)]
+    assert ensure_calls == [
+        ("demo-workspace", None),
+        ("demo-workspace", None),
+    ]
+    assert server._daemon is recovered_daemons[-1]
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_failed_background_recovery_logs_warning(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    request_stall = threading.Event()
+
+    def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        request_stall.wait(0.05)
+        return {"tools": []}
+
+    def failing_recovery(workspace_root: str | None, cwd=None):
+        raise RuntimeError(f"recovery failed for {workspace_root}")
+
+    monkeypatch.setattr(
+        "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", failing_recovery)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+            await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+        while server._daemon_recovery_task is not None:
+            await asyncio.sleep(0)
+
+    assert server._daemon is None
+    assert "Background daemon metadata recovery failed after client timeout" in caplog.text
+    warning_record = next(
+        record
+        for record in caplog.records
+        if record.message == "Background daemon metadata recovery failed after client timeout"
+    )
+    assert warning_record.__dict__["workspace_root"] == "demo-workspace"
+    assert warning_record.__dict__["error"] == "recovery failed for demo-workspace"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_tool_handlers_succeed_with_client_timeout_wrapper(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+
+    def fake_request(path: str, payload: dict | None) -> dict[str, object]:
+        if path == "/internal/tools":
+            assert payload is None
+            return {
+                "tools": [
+                    {
+                        "name": "record_thought",
+                        "description": "Record a durable memory.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"content": {"type": "string"}},
+                            "required": ["content"],
+                        },
+                    }
+                ]
+            }
+        assert path == "/internal/tools/record_thought"
+        assert payload == {"content": "auth"}
+        return {"contents": [{"text": '{"status": "recorded"}'}]}
+
+    monkeypatch.setattr(server, "_request_json_with_recovery", fake_request)
+
+    list_tools_handler = server.server.request_handlers[types.ListToolsRequest]
+    list_result = await list_tools_handler(types.ListToolsRequest())
+    list_result_root = cast(types.ListToolsResult, list_result.root)
+
+    assert [tool.name for tool in list_result_root.tools] == ["record_thought"]
+    assert list_result_root.tools[0].description == "Record a durable memory."
+
+    call_tool_handler = server.server.request_handlers[types.CallToolRequest]
+    call_result = await call_tool_handler(
+        types.CallToolRequest(
+            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
+        )
+    )
+    call_result_root = cast(types.CallToolResult, call_result.root)
+    call_result_content = cast(TextContent, call_result_root.content[0])
+
+    assert call_result_root.isError is False
+    assert call_result_content.text == '{"status": "recorded"}'
 
 
 @pytest.mark.asyncio

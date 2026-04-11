@@ -78,7 +78,6 @@ class RuntimeTaskWorker:
 
     async def stop(self, grace_period_seconds: float) -> None:
         self._stop_event.set()
-        await asyncio.to_thread(self._request_shutdown_cancellation_for_running_tasks)
         runner = self._runner
         reconciliation_runner = self._reconciliation_runner
         active_runners = [task for task in (runner, reconciliation_runner) if task is not None]
@@ -97,22 +96,6 @@ class RuntimeTaskWorker:
         finally:
             self._runner = None
             self._reconciliation_runner = None
-
-    def _request_shutdown_cancellation_for_running_tasks(self) -> None:
-        task_queue = getattr(self._ctx, "task_queue", None)
-        if task_queue is None:
-            return
-        for task in task_queue.list_tasks(status="running", workspace_id=None, limit=200):
-            if task.cancellation_requested_at is not None:
-                continue
-            try:
-                task_queue.request_cancel(
-                    task.id,
-                    cancelled_by="daemon",
-                    reason="daemon_shutdown",
-                )
-            except ValueError:
-                continue
 
     async def _run_loop(self) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -410,6 +393,19 @@ class RuntimeTaskWorker:
                     execution_epoch=task.execution_epoch,
                 )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, cancelled_task)
+            elif self._stop_event.is_set():
+                retried_task = await asyncio.to_thread(
+                    task_queue.retry_running_task,
+                    task.id,
+                    "Task interrupted during daemon shutdown; retrying",
+                    None,
+                    task.execution_epoch,
+                )
+                await asyncio.to_thread(
+                    self._reconcile_retryable_interruption,
+                    retried_task,
+                    termination_reason="daemon_shutdown_retry",
+                )
             else:
                 failed_task = await asyncio.to_thread(
                     task_queue.fail_permanently,
@@ -568,18 +564,53 @@ class RuntimeTaskWorker:
         self._release_task_work_items(task)
         self._release_task_embedding_repairs(task)
 
+    def _reconcile_retryable_interruption(self, task: TaskRecord, *, termination_reason: str) -> None:
+        self._finish_task_execution_attempt(
+            task,
+            status="error",
+            error_text=task.last_error,
+            termination_reason=termination_reason,
+        )
+        self._provider_usage.reconcile_running_task_conversations(
+            task_id=task.id,
+            status="error",
+            error_text=task.last_error,
+            reason_category="recovery",
+            reason_code=termination_reason,
+            completed_at=task.updated_at,
+        )
+        self._release_task_work_items(task)
+        self._release_task_embedding_repairs(task)
+
     def _reconcile_task_execution_attempt(self, task: TaskRecord) -> None:
-        attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
-        if attempt_repository is None or task.status not in {"completed", "failed", "cancelled"}:
+        if task.status not in {"completed", "failed", "cancelled"}:
             return
         attempt_status = "success" if task.status == "completed" else "cancelled" if task.status == "cancelled" else "error"
         error_text = None if task.status == "completed" else task.last_error
         termination_reason = None if task.status == "completed" else f"task_{task.status}"
+        self._finish_task_execution_attempt(
+            task,
+            status=attempt_status,
+            error_text=error_text,
+            termination_reason=termination_reason,
+        )
+
+    def _finish_task_execution_attempt(
+        self,
+        task: TaskRecord,
+        *,
+        status: str,
+        error_text: str | None,
+        termination_reason: str | None,
+    ) -> None:
+        attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
+        if attempt_repository is None:
+            return
         try:
             attempt_repository.finish_attempt(
                 task_id=task.id,
                 execution_epoch=task.execution_epoch,
-                status=attempt_status,
+                status=status,
                 completed_at=task.completed_at or task.updated_at,
                 error_text=error_text,
                 termination_reason=termination_reason,

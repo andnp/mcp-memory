@@ -1809,7 +1809,7 @@ async def test_runtime_task_worker_finalizes_requested_cancellation_on_cancelled
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_requests_shutdown_cancellation_for_running_tasks(db_manager) -> None:
+async def test_runtime_task_worker_requeues_running_tasks_interrupted_by_shutdown(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
     task = queue.enqueue(
@@ -1846,11 +1846,113 @@ async def test_runtime_task_worker_requests_shutdown_cancellation_for_running_ta
         released.set()
 
     task_after_stop = queue.get_task(task.id)
+    task_runs = queue.list_task_runs(task_id=task.id)
 
     assert cancelled.is_set()
-    assert task_after_stop.status == "cancelled"
-    assert task_after_stop.cancellation_reason == "daemon_shutdown"
-    assert task_after_stop.cancelled_by == "daemon"
+    assert task_after_stop.status == "pending"
+    assert task_after_stop.cancellation_reason is None
+    assert task_after_stop.cancelled_by is None
+    assert task_after_stop.last_error == "Task interrupted during daemon shutdown; retrying"
+    assert [task_run.status for task_run in task_runs] == ["retry"]
+    assert task_runs[0].result == {"retry_reason": "Task interrupted during daemon shutdown; retrying"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_requeues_shutdown_interruption_and_reconciles_attempts_and_conversations(
+    db_manager,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+        provider_usage=provider_usage,
+        workspace_id="workspace-a",
+    )
+    task = queue.enqueue(
+        "shutdown-me-with-provider",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="shutdown-me-with-provider",
+    )
+
+    started = asyncio.Event()
+    released = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_handler(_ctx: ApplicationContext, queued_task: TaskRecord) -> None:
+        queue.set_running_process(
+            queued_task.id,
+            subprocess_pid=9999,
+            request_id="req-shutdown-retry",
+            updated_at=2.0,
+            execution_epoch=queued_task.execution_epoch,
+        )
+        attempt_repository.start_attempt(
+            task_id=queued_task.id,
+            execution_epoch=queued_task.execution_epoch,
+            task_name=queued_task.task_name,
+            request_id="req-shutdown-retry",
+            subprocess_pid=9999,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            started_at=2.0,
+        )
+        provider_usage.record_conversation(
+            request_id="req-shutdown-retry",
+            attempt=1,
+            task_name=queued_task.task_name,
+            task_id=queued_task.id,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=9999,
+            prompt_text="do work",
+            response_text="",
+            parsed=None,
+            status="running",
+            error_text=None,
+            started_at=2.0,
+            completed_at=2.0,
+        )
+        started.set()
+        try:
+            await released.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"shutdown-me-with-provider": blocking_handler},
+        poll_interval_seconds=0.01,
+        abandoned_recovery_interval_seconds=30.0,
+    )
+
+    await worker.start()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await worker.stop(0.05)
+    finally:
+        released.set()
+
+    task_after_stop = queue.get_task(task.id)
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+    conversation = provider_usage.get_conversation("req-shutdown-retry")[0]
+
+    assert cancelled.is_set()
+    assert task_after_stop.status == "pending"
+    assert task_after_stop.last_error == "Task interrupted during daemon shutdown; retrying"
+    assert attempt.status == "error"
+    assert attempt.termination_reason == "daemon_shutdown_retry"
+    assert attempt.error_text == "Task interrupted during daemon shutdown; retrying"
+    assert conversation.status == "error"
+    assert conversation.reason_category == "recovery"
+    assert conversation.reason_code == "daemon_shutdown_retry"
+    assert conversation.error_text == "Task interrupted during daemon shutdown; retrying"
 
 
 @pytest.mark.asyncio

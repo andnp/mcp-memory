@@ -4,7 +4,12 @@ import mcp_memory.core.tasks as task_queue_module
 import time
 
 from mcp_memory.embeddings import describe_embedder
-from mcp_memory.management.models import EmbeddingStatusPayload, ExecutionAttemptHealthPayload, SearchHealthPayload
+from mcp_memory.management.models import (
+    EmbeddingIntegrityEventSummaryPayload,
+    EmbeddingStatusPayload,
+    ExecutionAttemptHealthPayload,
+    SearchHealthPayload,
+)
 from mcp_memory.management.reporting_queries import fetch_running_task_attempt_rows
 
 
@@ -34,15 +39,43 @@ def _coerce_int(value: object) -> int:
     raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
 
 
-def build_embedding_status(embedder) -> EmbeddingStatusPayload:
+def build_embedding_status(
+    embedder,
+    *,
+    storage_backend: str | None = None,
+    vector_store=None,
+    integrity_event_summary: EmbeddingIntegrityEventSummaryPayload | None = None,
+) -> EmbeddingStatusPayload:
+    fallback_persistence_policy = "blocked" if (storage_backend or "sqlite") == "postgres" else "allowed"
     status = describe_embedder(embedder)
     if status is None:
-        return EmbeddingStatusPayload()
-    return EmbeddingStatusPayload(
-        model_name=status.model_name,
-        backend=status.backend,
-        model_cached=status.model_cached,
-    )
+        payload = EmbeddingStatusPayload(fallback_persistence_policy=fallback_persistence_policy)
+    else:
+        payload = EmbeddingStatusPayload(
+            model_name=status.model_name,
+            configured_model_name=status.configured_model_name,
+            backend=status.backend,
+            model_cached=status.model_cached,
+            fallback_persistence_policy=fallback_persistence_policy,
+        )
+
+    get_write_policy_state = getattr(vector_store, "get_write_policy_state", None)
+    if callable(get_write_policy_state):
+        policy_state = get_write_policy_state()
+        payload.fallback_persistence_policy = getattr(
+            policy_state,
+            "fallback_persistence_policy",
+            payload.fallback_persistence_policy,
+        )
+        payload.blocked_fallback_write_count = int(getattr(policy_state, "blocked_fallback_write_count", 0))
+        payload.last_blocked_fallback_model_name = getattr(
+            policy_state,
+            "last_blocked_fallback_model_name",
+            None,
+        )
+    if integrity_event_summary is not None:
+        payload.integrity_events = integrity_event_summary
+    return payload
 
 
 def build_search_health(relational_search) -> SearchHealthPayload:

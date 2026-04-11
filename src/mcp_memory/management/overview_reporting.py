@@ -5,6 +5,7 @@ from mcp_memory.management.agent_run_reporting import build_agent_runs, build_re
 from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.models import (
     CacheHealthPayload,
+    EmbeddingIntegrityEventSummaryPayload,
     JournalSummary,
     MemoryMetricsPayload,
     OverviewCounts,
@@ -111,8 +112,11 @@ def build_overview(
     provider_usage_repo,
     runtime_logs_repo,
     embedder,
+    storage_backend: str | None,
+    vector_store,
     relational_search,
     cache: CacheHealthPayload,
+    embedding_integrity_summary: EmbeddingIntegrityEventSummaryPayload | None = None,
     recent_limit: int = 10,
     failed_limit: int = 10,
 ) -> OverviewPayload:
@@ -164,7 +168,12 @@ def build_overview(
 
     return OverviewPayload(
         memories=OverviewCounts(total=total_memories, by_type=by_type, by_status=by_status),
-        embeddings=build_embedding_status(embedder),
+        embeddings=build_embedding_status(
+            embedder,
+            storage_backend=storage_backend,
+            vector_store=vector_store,
+            integrity_event_summary=embedding_integrity_summary,
+        ),
         search=build_search_health(relational_search),
         cache=cache,
         execution_attempts=build_execution_attempt_health(db_manager),

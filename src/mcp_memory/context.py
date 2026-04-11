@@ -29,6 +29,7 @@ class ApplicationContext:
     runtime_logs: Any = None
     retrieval_telemetry: Any = None
     provider_policy_events: Any = None
+    embedding_integrity_events: Any = None
     task_execution_attempts: Any = None
     work_items: Any = None
     embedding_repair_queue: Any = None
@@ -38,7 +39,13 @@ class ApplicationContext:
     internal_tool_call_tracker: Any = None
 
     def close(self) -> None:
-        for resource in (self.read_cache, self.retrieval_telemetry, self.runtime_logs, self.repository):
+        for resource in (
+            self.read_cache,
+            self.retrieval_telemetry,
+            self.runtime_logs,
+            self.embedding_integrity_events,
+            self.repository,
+        ):
             close_method = getattr(resource, "close", None)
             if callable(close_method):
                 close_method()

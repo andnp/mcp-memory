@@ -15,7 +15,7 @@ from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 from mcp_memory.cli import main
 from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.daemon import DaemonMetadata, DaemonStopResult, ensure_daemon_started, read_daemon_metadata, stop_daemon
-from mcp_memory.daemon_process import DaemonSpawnDetails, is_daemon_healthy, remove_metadata, spawn_daemon_process
+from mcp_memory.daemon_process import DaemonHealthAssessment, DaemonSpawnDetails, assess_daemon_health, is_daemon_healthy, remove_metadata, spawn_daemon_process
 
 
 pytestmark = pytest.mark.medium
@@ -51,7 +51,15 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
     metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
 
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
-    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._assess_daemon_health",
+        lambda current, timeout_seconds=3.0: DaemonHealthAssessment(
+            healthy=True,
+            reason="healthy",
+            retryable=False,
+            timeout_seconds=timeout_seconds,
+        ),
+    )
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")))
 
     current = ensure_daemon_started()
@@ -95,7 +103,15 @@ def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, t
     monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon.FilesystemLock", _FakeLock)
     monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
-    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._assess_daemon_health",
+        lambda current, timeout_seconds=3.0: DaemonHealthAssessment(
+            healthy=True,
+            reason="healthy",
+            retryable=False,
+            timeout_seconds=timeout_seconds,
+        ),
+    )
 
     current = ensure_daemon_started()
 
@@ -700,6 +716,17 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
         "mcp_memory.daemon._read_daemon_metadata",
         lambda path: metadata if not spawned and metadata_path.exists() else fresh_metadata,
     )
+    monkeypatch.setattr(
+        "mcp_memory.daemon._assess_daemon_health",
+        lambda current, timeout_seconds=3.0: DaemonHealthAssessment(
+            healthy=False,
+            reason="health_probe_timeout",
+            retryable=False,
+            timeout_seconds=timeout_seconds,
+            error_type="TimeoutError",
+            error_text="daemon_request_timed_out",
+        ),
+    )
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: current.pid == fresh_metadata.pid)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
@@ -850,6 +877,146 @@ def test_is_daemon_healthy_requires_socket_path_for_zmq(monkeypatch) -> None:
     )
 
     assert is_daemon_healthy(metadata) is False
+
+
+def test_assess_daemon_health_reports_probe_failure_details(monkeypatch, tmp_path: Path) -> None:
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8129,
+        pid=9876,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon.sock"),
+    )
+
+    monkeypatch.setattr(
+        "mcp_memory.daemon_process.request_daemon_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("daemon_request_timed_out")),
+    )
+
+    assessment = assess_daemon_health(metadata, timeout_seconds=1.25)
+
+    assert assessment.healthy is False
+    assert assessment.reason == "health_probe_timeout"
+    assert assessment.retryable is True
+    assert assessment.timeout_seconds == pytest.approx(1.25)
+    assert assessment.error_type == "TimeoutError"
+    assert assessment.error_text == "daemon_request_timed_out"
+
+
+def test_ensure_daemon_started_does_not_kill_daemon_after_single_retryable_probe_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
+    config.daemon.healthcheck_interval_seconds = 0.01
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-start",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8125,
+        pid=5678,
+        started_at=1.0,
+        status="ready",
+        transport="zmq",
+        socket_path=str(tmp_path / "daemon.sock"),
+    )
+    assessments = iter(
+        [
+            DaemonHealthAssessment(
+                healthy=False,
+                reason="health_probe_timeout",
+                retryable=True,
+                timeout_seconds=3.0,
+                error_type="TimeoutError",
+                error_text="daemon_request_timed_out",
+            ),
+            DaemonHealthAssessment(
+                healthy=True,
+                reason="healthy",
+                retryable=False,
+                timeout_seconds=3.0,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: True)
+    monkeypatch.setattr("mcp_memory.daemon._assess_daemon_health", lambda current, timeout_seconds=3.0: next(assessments))
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._terminate_daemon_process",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("existing daemon should not be killed after a single retryable failure")),
+    )
+    monkeypatch.setattr(
+        "mcp_memory.daemon._spawn_daemon_process",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("healthy daemon should be reused")),
+    )
+
+    current = ensure_daemon_started()
+
+    assert current.pid == metadata.pid
+
+
+def test_ensure_daemon_started_skips_health_probe_for_stale_metadata_pid(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    config = Config()
+    config.daemon.port = 4242
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-start",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    stale_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8125,
+        pid=5678,
+        started_at=1.0,
+        status="ready",
+    )
+    fresh_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=9001,
+        pid=6789,
+        started_at=2.0,
+        status="ready",
+    )
+    spawned: list[tuple[Path, str, int]] = []
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._read_daemon_metadata",
+        lambda path: stale_metadata if not spawned else fresh_metadata,
+    )
+    monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: pid == fresh_metadata.pid)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._assess_daemon_health",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("stale metadata should be rejected before health probing")),
+    )
+    monkeypatch.setattr("mcp_memory.daemon.remove_metadata", lambda path: None)
+    monkeypatch.setattr("mcp_memory.daemon._terminate_orphaned_daemon_processes", lambda **kwargs: None)
+    monkeypatch.setattr("mcp_memory.daemon._cleanup_stale_daemon_socket", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._spawn_daemon_process",
+        lambda workspace_root, host, port: spawned.append((workspace_root, host, port)),
+    )
+    monotonic_values = iter([0.0, 0.1, 0.2, 0.3])
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+    monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: current.pid == fresh_metadata.pid)
+
+    current = ensure_daemon_started()
+
+    assert current.pid == fresh_metadata.pid
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
 @pytest.mark.asyncio

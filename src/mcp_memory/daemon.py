@@ -7,6 +7,7 @@ import shlex
 import signal
 import time
 from dataclasses import dataclass
+from dataclasses import replace
 
 from mcp_memory.config import (
     GLOBAL_DAEMON_IDENTITY,
@@ -19,7 +20,9 @@ from mcp_memory.daemon_app import create_daemon_app
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.daemon_process import (
+    DaemonHealthAssessment,
     DaemonSpawnDetails,
+    assess_daemon_health as _assess_daemon_health,
     find_free_port as _find_free_port,
     is_daemon_healthy as _is_daemon_healthy,
     remove_metadata,
@@ -36,6 +39,7 @@ from mcp_memory.process_termination import wait_for_process_exit as _shared_wait
 
 
 logger = logging.getLogger(__name__)
+_UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -67,16 +71,29 @@ def ensure_daemon_started(
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
+    probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
+    health_confirmation_timeout_seconds = max(
+        min(timeout_seconds / _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS, 0.25),
+        spec.config.daemon.healthcheck_interval_seconds,
+    )
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
         existing = _read_daemon_metadata(metadata_path)
-        if existing is not None and _is_daemon_healthy(existing):
+        existing_process_running = existing is not None and _is_process_running(existing.pid)
+        existing_health = None
+        if existing is not None and existing_process_running:
+            existing_health = _confirm_daemon_health(
+                existing,
+                confirmation_attempts=_UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+                retry_delay_seconds=spec.config.daemon.healthcheck_interval_seconds,
+                timeout_seconds=health_confirmation_timeout_seconds,
+            )
+        if existing is not None and existing_health is not None and existing_health.healthy:
             logger.info("Reusing healthy global daemon: pid=%s endpoint=%s", existing.pid, existing.transport_endpoint)
             return existing
 
-        probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
         cleanup_deadline = time.monotonic() + timeout_seconds
-        if existing is None or not _is_process_running(existing.pid):
+        if existing is None or not existing_process_running:
             if existing is not None:
                 logger.warning("Removing stale global daemon metadata: pid=%s", existing.pid)
                 remove_metadata(metadata_path)
@@ -91,7 +108,14 @@ def ensure_daemon_started(
                 reason="owner_missing_before_spawn",
             )
         elif existing is not None:
-            logger.warning("Stopping unhealthy global daemon before recovery: pid=%s", existing.pid)
+            assessment = existing_health or _assess_daemon_health(existing)
+            logger.warning(
+                "Stopping unhealthy global daemon before recovery: pid=%s endpoint=%s attempts=%s assessment=%s",
+                existing.pid,
+                existing.transport_endpoint,
+                assessment.attempts,
+                assessment.summary,
+            )
             _terminate_daemon_process(
                 existing.pid,
                 deadline=cleanup_deadline,
@@ -179,6 +203,26 @@ def ensure_daemon_started(
 
 def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
     return _read_daemon_metadata(metadata_path)
+
+
+def _confirm_daemon_health(
+    metadata: DaemonMetadata,
+    *,
+    confirmation_attempts: int,
+    retry_delay_seconds: float,
+    timeout_seconds: float,
+) -> DaemonHealthAssessment:
+    attempts = max(confirmation_attempts, 1)
+    latest = _assess_daemon_health(metadata, timeout_seconds=timeout_seconds)
+    if latest.healthy or attempts == 1 or not latest.retryable:
+        return replace(latest, attempts=1)
+
+    for attempt_index in range(1, attempts):
+        time.sleep(retry_delay_seconds)
+        latest = _assess_daemon_health(metadata, timeout_seconds=timeout_seconds)
+        if latest.healthy or not latest.retryable:
+            return replace(latest, attempts=attempt_index + 1)
+    return replace(latest, attempts=attempts)
 
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 9
+POSTGRES_SCHEMA_VERSION = 10
 
 
 @dataclass(frozen=True)
@@ -461,6 +461,30 @@ POSTGRES_MIGRATIONS = (
             END
             $$
             """,
+        ),
+    ),
+    PostgresMigration(
+        version=10,
+        name="add_embedding_integrity_events",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_integrity_events (
+                id BIGSERIAL PRIMARY KEY,
+                workspace_id TEXT,
+                event_kind TEXT NOT NULL,
+                model_name TEXT,
+                source_kind TEXT,
+                source_id TEXT,
+                scanned_row_count INTEGER,
+                invalid_row_count INTEGER,
+                mixed_dimension_group_count INTEGER,
+                details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at DOUBLE PRECISION NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_workspace_created ON embedding_integrity_events(workspace_id, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_kind_created ON embedding_integrity_events(event_kind, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_model_created ON embedding_integrity_events(model_name, created_at DESC, id DESC)",
         ),
     ),
 )

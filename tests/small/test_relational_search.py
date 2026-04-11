@@ -2,11 +2,13 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from mcp_memory.config import Config, SearchRankingConfig
 from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.relational.repository import RelationalMemoryRecord, RelationalMemoryRepository
 from mcp_memory.relational.search import (
     INLINE_EMBEDDING_REPAIR_LIMIT,
@@ -24,6 +26,7 @@ from mcp_memory.relational.search import (
 )
 from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.context import ApplicationContext
+from mcp_memory.work_item_store import SQLiteWorkItemRepository
 
 
 pytestmark = pytest.mark.small
@@ -770,6 +773,15 @@ class _CountingFakeEmbedder(_FakeEmbedder):
     def embed(self, texts: list[str]) -> list[list[float]]:
         self.batch_sizes.append(len(texts))
         return super().embed(texts)
+
+
+class _BlockedFallbackEmbedder:
+    @property
+    def model_name(self) -> str:
+        return "hash:sentence-transformers/all-MiniLM-L6-v2"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] for _ in texts]
 
 
 class _CandidateFilteringVectorStore:
@@ -2194,6 +2206,91 @@ def test_rebuild_semantic_index_recreates_embeddings_for_current_model(db_manage
     assert stored is not None
     assert health.rebuild_count == 1
     assert health.available is True
+
+
+def test_search_memories_falls_back_without_queueing_repairs_when_fallback_persistence_is_blocked(db_manager, caplog) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    work_items = SQLiteWorkItemRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_BlockedFallbackEmbedder(),
+        vector_store=SimpleNamespace(
+            get_write_policy_state=lambda: SimpleNamespace(
+                fallback_persistence_policy="blocked",
+                blocked_fallback_write_count=0,
+                last_blocked_fallback_model_name=None,
+            )
+        ),
+        task_queue=task_queue,
+        work_items=work_items,
+        background_repair_wait_seconds=1.0,
+    )
+
+    record = repository.create_memory(
+        title="Postgres shared-mode note",
+        content="Fallback models should degrade to keyword search without scheduling repair work.",
+        summary="Shared-mode fallback handling.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres"],
+    )
+    assert record is not None
+
+    with caplog.at_level("WARNING"):
+        results = service.search_memories("shared-mode fallback", workspace_id="workspace-alpha", limit=5)
+
+    queued_work_item_count = db_manager.get_connection().execute("SELECT COUNT(*) FROM work_items").fetchone()[0]
+
+    assert [result.memory_id for result in results] == [record.id]
+    assert task_queue.list_tasks(status=None, workspace_id=None, limit=10) == []
+    assert queued_work_item_count == 0
+    assert any("Semantic search unavailable; falling back to keyword-only ranking" in message for message in caplog.messages)
+
+
+def test_rebuild_semantic_index_reports_blocked_fallback_persistence_policy(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(
+        repository,
+        Config(),
+        embedder=_BlockedFallbackEmbedder(),
+        vector_store=SimpleNamespace(
+            get_write_policy_state=lambda: SimpleNamespace(
+                fallback_persistence_policy="blocked",
+                blocked_fallback_write_count=0,
+                last_blocked_fallback_model_name=None,
+            )
+        ),
+        db_manager=db_manager,
+    )
+
+    record = repository.create_memory(
+        title="Blocked rebuild note",
+        content="Rebuild should report the policy block instead of raising.",
+        summary="Rebuild policy block.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["postgres"],
+    )
+    assert record is not None
+
+    result = service.rebuild_semantic_index()
+    health = service.get_health()
+
+    assert result == {
+        "semantic_enabled": True,
+        "rebuilt": False,
+        "records_indexed": 0,
+        "reason": "fallback_embedding_persistence_blocked",
+    }
+    assert health.available is False
+    assert health.degraded is True
+    assert health.fallback_count == 1
+    assert health.last_error == (
+        "Fallback/hash embeddings cannot be persisted in Postgres/shared mode; "
+        "blocked model_name 'hash:sentence-transformers/all-MiniLM-L6-v2'"
+    )
 
 
 def test_stale_embedding_detection_uses_bulk_updated_at_lookup_when_available(db_manager, monkeypatch) -> None:

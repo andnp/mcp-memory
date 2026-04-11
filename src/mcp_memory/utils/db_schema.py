@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -297,6 +297,20 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(memory_id, model_name, memory_updated_at)
         );
 
+        CREATE TABLE IF NOT EXISTS embedding_integrity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            event_kind TEXT NOT NULL,
+            model_name TEXT,
+            source_kind TEXT,
+            source_id TEXT,
+            scanned_row_count INTEGER,
+            invalid_row_count INTEGER,
+            mixed_dimension_group_count INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             memory_id UNINDEXED,
             title,
@@ -508,6 +522,23 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS embedding_integrity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            event_kind TEXT NOT NULL,
+            model_name TEXT,
+            source_kind TEXT,
+            source_id TEXT,
+            scanned_row_count INTEGER,
+            invalid_row_count INTEGER,
+            mixed_dimension_group_count INTEGER,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL
+        )
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -601,6 +632,12 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON embedding_repair_queue(workspace_id, status, available_at, created_at);
         CREATE INDEX IF NOT EXISTS idx_embedding_repair_queue_lease_owner
             ON embedding_repair_queue(lease_owner, status, lease_expires_at);
+        CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_workspace_created_at
+            ON embedding_integrity_events(workspace_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_kind_created_at
+            ON embedding_integrity_events(event_kind, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_model_created_at
+            ON embedding_integrity_events(model_name, created_at DESC, id DESC);
         """
     )
     conn.execute(

@@ -13,7 +13,7 @@ from threading import Event, Lock
 from typing import Any, Protocol, cast
 
 from mcp_memory.config import Config
-from mcp_memory.embeddings import Embedder
+from mcp_memory.embeddings import Embedder, is_fallback_embedding_model
 from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
@@ -536,6 +536,16 @@ class RelationalMemorySearchService:
                 "reason": "semantic_search_disabled",
             }
 
+        blocked_reason = self._blocked_embedding_persistence_reason()
+        if blocked_reason is not None:
+            self._mark_semantic_failure(ValueError(blocked_reason), fallback=True)
+            return {
+                "semantic_enabled": True,
+                "rebuilt": False,
+                "records_indexed": 0,
+                "reason": "fallback_embedding_persistence_blocked",
+            }
+
         candidates = [
             record
             for record in self._repository.list_memories(limit=limit)
@@ -824,6 +834,25 @@ class RelationalMemorySearchService:
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         return self._repository.get_read_cache_validation_tokens(memory_ids)
+
+    def _blocked_embedding_persistence_reason(self) -> str | None:
+        if self._embedder is None or self._vector_store is None:
+            return None
+        if not is_fallback_embedding_model(self._embedder.model_name):
+            return None
+
+        get_write_policy_state = getattr(self._vector_store, "get_write_policy_state", None)
+        if not callable(get_write_policy_state):
+            return None
+
+        policy_state = get_write_policy_state()
+        if getattr(policy_state, "fallback_persistence_policy", None) != "blocked":
+            return None
+
+        return (
+            "Fallback/hash embeddings cannot be persisted in Postgres/shared mode; "
+            f"blocked model_name {self._embedder.model_name!r}"
+        )
 
     def _get_query_embedding(self, query: str) -> list[float]:
         assert self._embedder is not None
@@ -1305,6 +1334,10 @@ class RelationalMemorySearchService:
         *,
         semantic_timing_ms: dict[str, float] | None = None,
     ) -> None:
+        blocked_reason = self._blocked_embedding_persistence_reason()
+        if blocked_reason is not None:
+            raise ValueError(blocked_reason)
+
         stale_check_started = time.perf_counter()
         stale_or_missing = self._stale_or_missing_embedding_candidates(candidates)
         _record_timing_ms(semantic_timing_ms, "semantic_embedding_stale_check", stale_check_started)

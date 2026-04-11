@@ -10,7 +10,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from mcp_memory.daemon import ensure_daemon_started
+from mcp_memory.daemon import ensure_daemon_started, stop_daemon
 from mcp_memory.daemon_transport import request_daemon_json
 
 
@@ -21,8 +21,14 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
+_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS = 30.0
+_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD = 2
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 _REQUEST_RECOVERY_RETRY_COUNT = 2
+
+
+class _DaemonRequestTimeout(Exception):
+    """Internal sentinel for sync daemon timeouts surfaced from the worker thread."""
 
 
 class MCPServer:
@@ -36,6 +42,9 @@ class MCPServer:
         self.workspace_root = workspace_root
         self.server = Server(server_name)
         self._daemon: object | None = None
+        self._daemon_recovery_task: asyncio.Task[None] | None = None
+        self._daemon_recovery_force_restart_requested = False
+        self._consecutive_client_timeout_failures = 0
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
         self._setup_handlers()
@@ -43,7 +52,7 @@ class MCPServer:
     def _setup_handlers(self) -> None:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
-            payload = await asyncio.to_thread(self._request_json_with_recovery, self._tool_path_prefix, None)
+            payload = await self._request_daemon_json_with_client_timeout(self._tool_path_prefix, None)
             tools = payload.get("tools")
             if not isinstance(tools, list):
                 raise ValueError("daemon_response_missing_tools")
@@ -59,8 +68,7 @@ class MCPServer:
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-            payload = await asyncio.to_thread(
-                self._request_json_with_recovery,
+            payload = await self._request_daemon_json_with_client_timeout(
                 f"{self._tool_path_prefix}/{name}",
                 arguments,
             )
@@ -72,6 +80,73 @@ class MCPServer:
                 for item in contents
                 if isinstance(item, dict)
             ]
+
+    async def _request_daemon_json_with_client_timeout(
+        self,
+        path: str,
+        payload: dict | None,
+    ) -> dict[str, object]:
+        async def request_with_wrapped_timeout() -> dict[str, object]:
+            try:
+                return await asyncio.to_thread(self._request_json_with_recovery, path, payload)
+            except TimeoutError as exc:
+                raise _DaemonRequestTimeout from exc
+
+        try:
+            response = await asyncio.wait_for(
+                request_with_wrapped_timeout(),
+                timeout=_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS,
+            )
+            self._consecutive_client_timeout_failures = 0
+            return response
+        except asyncio.TimeoutError as exc:
+            self._consecutive_client_timeout_failures += 1
+            self._daemon = None
+            self._start_background_daemon_recovery(
+                force_restart=(
+                    self._consecutive_client_timeout_failures
+                    >= _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD
+                )
+            )
+            raise TimeoutError("mcp_client_request_timed_out") from exc
+        except _DaemonRequestTimeout as exc:
+            cause = exc.__cause__
+            if isinstance(cause, TimeoutError):
+                raise cause from None
+            raise RuntimeError("daemon_request_timeout_wrapping_failed") from exc
+
+    def _start_background_daemon_recovery(self, *, force_restart: bool = False) -> None:
+        self._daemon_recovery_force_restart_requested = (
+            self._daemon_recovery_force_restart_requested or force_restart
+        )
+        if self._daemon_recovery_task is not None and not self._daemon_recovery_task.done():
+            return
+        recovery_task = asyncio.create_task(self._refresh_daemon_metadata_in_background())
+        self._daemon_recovery_task = recovery_task
+        recovery_task.add_done_callback(self._clear_daemon_recovery_task)
+
+    async def _refresh_daemon_metadata_in_background(self) -> None:
+        try:
+            while True:
+                force_restart = self._daemon_recovery_force_restart_requested
+                self._daemon_recovery_force_restart_requested = False
+                if force_restart:
+                    await asyncio.to_thread(stop_daemon, self.workspace_root, None)
+                self._daemon = await asyncio.to_thread(ensure_daemon_started, self.workspace_root, None)
+                if not self._daemon_recovery_force_restart_requested:
+                    break
+        except Exception as exc:  # pragma: no cover - exercised via log assertion paths if needed
+            logger.warning(
+                "Background daemon metadata recovery failed after client timeout",
+                extra={
+                    "workspace_root": self.workspace_root,
+                    "error": str(exc),
+                },
+            )
+
+    def _clear_daemon_recovery_task(self, recovery_task: asyncio.Task[None]) -> None:
+        if self._daemon_recovery_task is recovery_task:
+            self._daemon_recovery_task = None
 
     async def run(self) -> None:
         logger.info("Initializing MCP Memory Server proxy...")

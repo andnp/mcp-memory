@@ -369,6 +369,58 @@ class SQLiteTaskQueue:
         conn.commit()
         return self.get_task(task_id)
 
+    def retry_running_task(
+        self,
+        task_id: str,
+        error: str,
+        available_at: float | None = None,
+        execution_epoch: int | None = None,
+    ) -> TaskRecord:
+        now = time.time() if available_at is None else available_at
+        conn = self._db.get_connection()
+        row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
+        if row is None:
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
+
+        cursor = conn.execute(*self._running_task_update_statement(
+            """
+            UPDATE tasks
+            SET status = 'pending',
+                updated_at = ?,
+                available_at = ?,
+                claimed_at = NULL,
+                completed_at = NULL,
+                last_error = ?,
+                subprocess_pid = NULL,
+                active_request_id = NULL,
+                cancellation_requested_at = NULL,
+                cancelled_at = NULL,
+                cancellation_reason = NULL,
+                cancelled_by = NULL
+            """,
+            task_id,
+            now,
+            now,
+            error,
+            execution_epoch=execution_epoch,
+        ))
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
+        self._insert_task_run(
+            conn,
+            task_id=task_id,
+            task_name=str(row["task_name"]),
+            workspace_id=row["workspace_id"],
+            status="retry",
+            started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
+            completed_at=now,
+            result={"retry_reason": error},
+            error_text=error,
+        )
+        conn.commit()
+        return self.get_task(task_id)
+
     def set_running_process(
         self,
         task_id: str,

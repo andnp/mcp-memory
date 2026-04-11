@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import SQLiteVectorStore
@@ -60,6 +61,7 @@ def build_sqlite_runtime_components(
         provider_usage=provider_usage,
         runtime_logs=runtime_logs,
         provider_policy_events=ProviderPolicyEventRepository(db_manager, workspace_id=spec.workspace_id),
+        embedding_integrity_events=EmbeddingIntegrityEventRepository(db_manager, workspace_id=None),
         task_execution_attempts=task_execution_attempts,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,

@@ -7,8 +7,30 @@ from pydantic import BaseModel, Field
 
 class EmbeddingStatusPayload(BaseModel):
     model_name: str | None = None
+    configured_model_name: str | None = None
     backend: str | None = None
     model_cached: bool = False
+    fallback_persistence_policy: str = "allowed"
+    blocked_fallback_write_count: int = 0
+    last_blocked_fallback_model_name: str | None = None
+    integrity_events: "EmbeddingIntegrityEventSummaryPayload" = Field(default_factory=lambda: EmbeddingIntegrityEventSummaryPayload())
+
+
+class EmbeddingIntegrityEventSnapshotPayload(BaseModel):
+    created_at: float = 0.0
+    model_name: str | None = None
+    source_kind: str | None = None
+    source_id: str | None = None
+    scanned_row_count: int | None = None
+    invalid_row_count: int | None = None
+    mixed_dimension_group_count: int | None = None
+
+
+class EmbeddingIntegrityEventSummaryPayload(BaseModel):
+    total: int = 0
+    by_kind: dict[str, int] = Field(default_factory=dict)
+    last_scan: EmbeddingIntegrityEventSnapshotPayload | None = None
+    last_blocked_fallback_write: EmbeddingIntegrityEventSnapshotPayload | None = None
 
 
 class SearchHealthPayload(BaseModel):

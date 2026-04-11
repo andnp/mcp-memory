@@ -89,6 +89,7 @@ def create_runtime_from_spec(spec: RuntimeSpec, *, enable_background_repair_queu
         provider_usage=storage.provider_usage,
         runtime_logs=storage.runtime_logs,
         provider_policy_events=storage.provider_policy_events,
+        embedding_integrity_events=storage.embedding_integrity_events,
         task_execution_attempts=storage.task_execution_attempts,
         work_items=storage.work_items,
         embedding_repair_queue=storage.embedding_repair_queue,

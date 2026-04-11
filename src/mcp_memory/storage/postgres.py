@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp_memory.config import PostgresStorageConfig
+from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_provider_policy_event_store import PostgresProviderPolicyEventRepository
@@ -106,6 +107,7 @@ def build_postgres_runtime_components(
     journal = PostgresSystem1Journal(connection_manager)
     task_queue = PostgresTaskQueue(connection_manager)
     provider_policy_events = PostgresProviderPolicyEventRepository(connection_manager, workspace_id=spec.workspace_id)
+    embedding_integrity_events = PostgresEmbeddingIntegrityEventRepository(connection_manager, workspace_id=None)
     provider_usage = PostgresProviderUsageRepository(connection_manager, workspace_id=spec.workspace_id)
     runtime_logs = PostgresRuntimeLogRepository(
         connection_manager,
@@ -115,7 +117,10 @@ def build_postgres_runtime_components(
     task_execution_attempts = PostgresTaskExecutionAttemptRepository(connection_manager, workspace_id=spec.workspace_id)
     work_items = PostgresWorkItemRepository(connection_manager)
     embedding_repair_queue = PostgresEmbeddingRepairQueue(connection_manager)
-    vector_store = PostgresVectorStore(connection_manager)
+    vector_store = PostgresVectorStore(
+        connection_manager,
+        event_repository=embedding_integrity_events,
+    )
     relational_search = RelationalMemorySearchService(
         repository,
         spec.config,
@@ -143,6 +148,7 @@ def build_postgres_runtime_components(
         provider_usage=provider_usage,
         runtime_logs=runtime_logs,
         provider_policy_events=provider_policy_events,
+        embedding_integrity_events=embedding_integrity_events,
         task_execution_attempts=task_execution_attempts,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
