@@ -526,6 +526,7 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         provider_usage=object(),
         runtime_logs=object(),
         provider_policy_events=object(),
+        embedding_integrity_events=object(),
         task_execution_attempts=object(),
         work_items=object(),
         embedding_repair_queue=object(),

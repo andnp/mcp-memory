@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.mcp.internal_services import internal_search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
@@ -14,6 +15,119 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
 pytestmark = pytest.mark.small
+
+
+def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> None:
+    payload = build_retrieval_analytics(
+        [
+            {
+                "id": "memory-a",
+                "title": "Alpha retrieval memory",
+                "type": "fact",
+                "status": "active",
+                "tags_csv": "alpha-tag,common-tag",
+            },
+            {
+                "id": "memory-b",
+                "title": "Beta retrieval memory",
+                "type": "plan",
+                "status": "stale",
+                "tags_csv": "beta-tag,common-tag",
+            },
+        ],
+        retrieval_rows=[
+            {
+                "event_kind": "search",
+                "invocation_id": "search-1",
+                "created_at": 100.0,
+                "caller_kind": "external",
+                "query_text": "Alpha phrase",
+                "result_count": 2,
+                "memory_id": "memory-a",
+            },
+            {
+                "event_kind": "search",
+                "invocation_id": "search-1",
+                "created_at": 100.0,
+                "caller_kind": "external",
+                "query_text": "Alpha phrase",
+                "result_count": 2,
+                "memory_id": "memory-b",
+            },
+            {
+                "event_kind": "read",
+                "invocation_id": "read-1",
+                "created_at": 130.0,
+                "caller_kind": "external",
+                "memory_id": "memory-a",
+            },
+            {
+                "event_kind": "search",
+                "invocation_id": "search-2",
+                "created_at": 160.0,
+                "caller_kind": "internal",
+                "query_text": "Missing phrase",
+                "result_count": 0,
+                "memory_id": None,
+            },
+            {
+                "event_kind": "search",
+                "invocation_id": "search-3",
+                "created_at": 170.0,
+                "caller_kind": "external",
+                "query_text": "  alpha   phrase  ",
+                "result_count": 1,
+                "memory_id": "missing-memory",
+            },
+        ],
+        cutoff=0.0,
+        generated_at=200.0,
+        bucket_seconds=60,
+    )
+
+    assert payload.summary.search_invocations == 3
+    assert payload.summary.search_hits == 2
+    assert payload.summary.zero_result_searches == 1
+    assert payload.summary.read_events == 1
+    assert payload.summary.unique_search_memories == 2
+    assert payload.summary.unique_read_memories == 1
+    assert payload.funnel.search_hits == 2
+    assert payload.funnel.converted_search_hits == 1
+    assert payload.funnel.conversion_rate == 0.5
+
+    by_caller_kind = {row.key: row for row in payload.by_caller_kind}
+    assert by_caller_kind["external"].search_invocations == 2
+    assert by_caller_kind["external"].search_hits == 2
+    assert by_caller_kind["external"].zero_result_searches == 0
+    assert by_caller_kind["external"].read_events == 1
+    assert by_caller_kind["internal"].search_invocations == 1
+    assert by_caller_kind["internal"].search_hits == 0
+    assert by_caller_kind["internal"].zero_result_searches == 1
+
+    query_families = {row.key: row for row in payload.top_query_families}
+    assert query_families["alpha phrase"].search_invocations == 2
+    assert query_families["alpha phrase"].search_hits == 2
+    assert query_families["alpha phrase"].unique_search_memories == 2
+    assert query_families["alpha phrase"].converted_search_hits == 1
+    assert query_families["alpha phrase"].conversion_rate == 0.5
+    assert query_families["missing phrase"].search_invocations == 1
+    assert query_families["missing phrase"].search_hits == 0
+    assert query_families["missing phrase"].zero_result_searches == 1
+    assert [row.key for row in payload.top_zero_result_query_families] == ["missing phrase"]
+
+    assert [row.memory_id for row in payload.top_read_memories] == ["memory-a"]
+    assert [row.memory_id for row in payload.top_search_memories] == ["memory-a", "memory-b"]
+    assert [row.memory_id for row in payload.low_conversion_memories] == ["memory-b", "memory-a"]
+
+    top_tags = {row.key: row for row in payload.top_tags}
+    assert top_tags["common-tag"].read_count == 1
+    assert top_tags["common-tag"].search_count == 2
+    assert top_tags["alpha-tag"].search_count == 1
+    assert top_tags["beta-tag"].search_count == 1
+
+    timelines = {row.key: row for row in payload.tag_timelines}
+    assert sum(bucket.count for bucket in timelines["common-tag"].read_buckets) == 1
+    assert sum(bucket.count for bucket in timelines["common-tag"].search_buckets) == 2
 
 
 def test_build_nerd_metrics_includes_retrieval_analytics(monkeypatch, tmp_path: Path) -> None:
