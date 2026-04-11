@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import sqlite3
 import threading
 import time
 
 import pytest
 
+from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.journal_operations import RecordThoughtOperation
@@ -37,6 +40,28 @@ pytestmark = pytest.mark.small
 
 
 LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
+
+
+@dataclass
+class _TaskRuntimeContextStub:
+    config: Config | None = None
+    workspace_id: str | None = None
+    workspace_root: Path | None = None
+    memory_path: Path | None = None
+    db_manager: object = None
+    journal: object = None
+    repository: object = None
+    relational_search: object = None
+    task_queue: object = None
+    ai_json_provider: object = None
+    ai_agent_provider: object = None
+    ai_provider: object = None
+    ai_provider_registry: dict[str, object] | None = None
+    provider_usage: object = None
+    provider_policy_events: object = None
+    task_execution_attempts: object = None
+    work_items: object = None
+    embedding_repair_queue: object = None
 
 
 def test_sqlite_task_queue_enqueue_and_claim_order(db_manager) -> None:
@@ -820,6 +845,41 @@ def test_schedule_system1_ingest_continuation_bypasses_slow_auto_gates_and_reuse
     assert continued.task.available_at == pytest.approx(now + 5.0)
     assert continued.task.data["trigger"] == "system1_backlog_continuation"
     assert queue.count_by_status() == {"completed": 1, "pending": 1}
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_accepts_structural_task_runtime_context(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    seen: list[tuple[str, str | None]] = []
+
+    def handle_structural(ctx: _TaskRuntimeContextStub, task) -> None:
+        seen.append((task.id, ctx.workspace_id))
+
+    task = queue.enqueue(
+        "structural-task",
+        available_at=0.0,
+        task_id="structural-task",
+    )
+    worker = RuntimeTaskWorker(
+        _TaskRuntimeContextStub(
+            db_manager=db_manager,
+            task_queue=queue,
+            workspace_id="workspace-a",
+        ),
+        handlers={"structural-task": handle_structural},
+        poll_interval_seconds=0.01,
+    )
+
+    await worker.start()
+    for _ in range(100):
+        if queue.get_task(task.id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+    await worker.stop(0.05)
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert seen == [("structural-task", "workspace-a")]
 
 
 @pytest.mark.asyncio

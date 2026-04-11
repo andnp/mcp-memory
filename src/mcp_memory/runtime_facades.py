@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp_memory.config import Config
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import MemoryPipelineContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
@@ -26,7 +26,7 @@ class RuntimeInfoFacade:
     @classmethod
     def from_context(
         cls,
-        ctx: ApplicationContext,
+        ctx: MemoryPipelineContext,
         controller: Any | None = None,
     ) -> RuntimeInfoFacade:
         config: Config | None = ctx.config
@@ -49,7 +49,7 @@ class JournalFacade:
     journal: System1Journal | None
 
     @classmethod
-    def from_context(cls, ctx: ApplicationContext) -> JournalFacade:
+    def from_context(cls, ctx: MemoryPipelineContext) -> JournalFacade:
         return cls(journal=ctx.journal)
 
     def count_by_status(self) -> dict[str, int]:
@@ -63,7 +63,7 @@ class TaskQueueFacade:
     task_queue: SQLiteTaskQueue | None
 
     @classmethod
-    def from_context(cls, ctx: ApplicationContext) -> TaskQueueFacade:
+    def from_context(cls, ctx: MemoryPipelineContext) -> TaskQueueFacade:
         return cls(task_queue=ctx.task_queue)
 
     def count_by_status(self) -> dict[str, int]:

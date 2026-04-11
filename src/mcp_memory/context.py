@@ -2,9 +2,108 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from mcp_memory.config import Config
+
+if TYPE_CHECKING:
+    from mcp_memory.core.tasks import TaskRecord
+
+
+class TaskQueueProtocol(Protocol):
+    def find_open_task_with_data_any_workspace(
+        self,
+        task_name: str,
+        *,
+        data_fields: dict[str, Any],
+    ) -> TaskRecord | None: ...
+
+    def enqueue(
+        self,
+        task_name: str,
+        data: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+        priority: int = 100,
+        max_retries: int = 3,
+        available_at: float | None = None,
+        task_id: str | None = None,
+    ) -> TaskRecord: ...
+
+    def clear_running_task_data_keys(self, task_id: str, *, field_names: list[str]) -> TaskRecord: ...
+
+    def get_task(self, task_id: str) -> TaskRecord: ...
+
+    def extend_running_task_data_int_list(
+        self,
+        task_id: str,
+        *,
+        field_name: str,
+        values: list[int],
+    ) -> TaskRecord: ...
+
+    def extend_running_task_data_object_list(
+        self,
+        task_id: str,
+        *,
+        field_name: str,
+        values: list[dict[str, Any]],
+    ) -> TaskRecord: ...
+
+
+class TaskQueueContext(Protocol):
+    @property
+    def task_queue(self) -> TaskQueueProtocol | None: ...
+
+
+class MemoryPipelineContext(Protocol):
+    config: Config | None
+    workspace_id: str | None
+    workspace_root: Path | None
+    memory_path: Path | None
+    db_manager: Any
+    journal: Any
+    repository: Any
+    relational_search: Any
+    task_queue: Any
+
+
+class ManagementContext(MemoryPipelineContext, Protocol):
+    storage_backend: str | None
+    read_cache: Any
+    ai_json_provider: Any
+    ai_agent_provider: Any
+    ai_provider: Any
+    ai_provider_registry: dict[str, Any] | None
+    provider_usage: Any
+    runtime_logs: Any
+    retrieval_telemetry: Any
+    embedding_integrity_events: Any
+    embedder: Any
+    vector_store: Any
+
+
+class TaskRuntimeContext(MemoryPipelineContext, Protocol):
+    ai_json_provider: Any
+    ai_agent_provider: Any
+    ai_provider: Any
+    ai_provider_registry: dict[str, Any] | None
+    provider_usage: Any
+    provider_policy_events: Any
+    task_execution_attempts: Any
+    work_items: Any
+    embedding_repair_queue: Any
+
+
+class ProviderSelectionContext(Protocol):
+    config: Config | None
+    ai_provider_registry: dict[str, Any] | None
+    provider_policy_events: Any
+
+
+class BackgroundTaskBootstrapContext(Protocol):
+    config: Config | None
+    journal: Any
+    task_queue: Any
 
 
 @dataclass

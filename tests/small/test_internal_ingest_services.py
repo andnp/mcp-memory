@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ingest_claim_lifecycle import (
+    _record_ingest_tool_invocation,
+    _record_successful_ingest_entry_dispositions,
+    _record_successful_ingest_entry_ids,
+    _record_touched_memory_ids,
+    _recorded_ingest_run_metadata,
+    _reset_recorded_ingest_handled_entry_ids,
+)
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.task_submission import enqueue_summary_refresh_task
 from mcp_memory.core.task_handlers import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME, SYSTEM1_INGEST_TASK_NAME
@@ -19,6 +29,11 @@ from mcp_memory.relational.repository import RelationalMemoryRepository
 
 
 pytestmark = pytest.mark.small
+
+
+@dataclass
+class _TaskQueueOnlyContext:
+    task_queue: SQLiteTaskQueue | None
 
 
 def _build_ctx(db_manager) -> ApplicationContext:
@@ -40,6 +55,19 @@ def _start_running_ingest_task(ctx: ApplicationContext, task_id: str):
         task_id=task_id,
     )
     task = ctx.task_queue.claim_next(now=0.0)
+    assert task is not None
+    assert task.id == task_id
+    return task
+
+
+def _start_running_ingest_task_on_queue(queue: SQLiteTaskQueue, task_id: str, *, workspace_id: str = "workspace-a"):
+    queue.enqueue(
+        SYSTEM1_INGEST_TASK_NAME,
+        workspace_id=workspace_id,
+        available_at=0.0,
+        task_id=task_id,
+    )
+    task = queue.claim_next(now=0.0)
     assert task is not None
     assert task.id == task_id
     return task
@@ -196,6 +224,96 @@ def test_enqueue_summary_refresh_task_dedupes_globally_across_workspace_contexts
     assert first.workspace_id is None
     assert second.workspace_id is None
     assert first.data == {"memory_id": "memory-shared"}
+
+
+def test_enqueue_summary_refresh_task_accepts_queue_only_context(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = _TaskQueueOnlyContext(task_queue=queue)
+
+    first = enqueue_summary_refresh_task(ctx, memory_id="memory-shared")
+    second = enqueue_summary_refresh_task(ctx, memory_id="memory-shared")
+
+    assert first is not None
+    assert second is not None
+    assert first.id == second.id
+    assert first.workspace_id is None
+    assert first.data == {"memory_id": "memory-shared"}
+
+
+def test_ingest_task_data_helpers_accept_queue_only_context(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    _start_running_ingest_task_on_queue(queue, "ingest-task-data-only")
+    ctx = _TaskQueueOnlyContext(task_queue=queue)
+
+    _record_successful_ingest_entry_ids(ctx, task_id="ingest-task-data-only", entry_ids=[11, 12])
+    _record_successful_ingest_entry_dispositions(
+        ctx,
+        task_id="ingest-task-data-only",
+        entry_dispositions=[
+            {
+                "entry_id": 11,
+                "disposition": "created",
+                "memory_id": "memory-1",
+                "memory_title": "Created memory",
+            },
+            {
+                "entry_id": 12,
+                "disposition": "appended",
+                "memory_id": "memory-2",
+                "memory_title": "Appended memory",
+                "reason": "duplicate observation",
+            },
+        ],
+    )
+    _record_ingest_tool_invocation(
+        ctx,
+        task_id="ingest-task-data-only",
+        tool_name="internal_ingest_create_memory",
+        mutation=True,
+    )
+    _record_touched_memory_ids(
+        ctx,
+        task_id="ingest-task-data-only",
+        memory_ids=["memory-2", "memory-1", " ", "memory-1"],
+    )
+
+    assert _recorded_ingest_run_metadata(ctx, "ingest-task-data-only") == {
+        "handled_entry_ids": [11, 12],
+        "entry_dispositions": [
+            {
+                "entry_id": 11,
+                "disposition": "created",
+                "memory_id": "memory-1",
+                "memory_title": "Created memory",
+            },
+            {
+                "entry_id": 12,
+                "disposition": "appended",
+                "memory_id": "memory-2",
+                "memory_title": "Appended memory",
+                "reason": "duplicate observation",
+            },
+        ],
+        "touched_memory_ids": ["memory-1", "memory-2"],
+        "tool_usage": {
+            "tool_calls_executed": 1,
+            "mutations": 1,
+            "tool_names_used": ["internal_ingest_create_memory"],
+        },
+    }
+
+    _reset_recorded_ingest_handled_entry_ids(ctx, "ingest-task-data-only")
+
+    assert _recorded_ingest_run_metadata(ctx, "ingest-task-data-only") == {
+        "handled_entry_ids": [],
+        "entry_dispositions": [],
+        "touched_memory_ids": [],
+        "tool_usage": {
+            "tool_calls_executed": 0,
+            "mutations": 0,
+            "tool_names_used": [],
+        },
+    }
 
 
 def test_internal_ingest_create_rejects_routine_completion_trace_payload(db_manager) -> None:

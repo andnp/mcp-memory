@@ -8,7 +8,7 @@ import time
 from typing import Any, cast
 
 import mcp_memory.core.tasks as task_queue_module
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import TaskRuntimeContext
 from mcp_memory.core.maintenance_idle import (
     build_idle_pause_result,
     should_pause_autonomous_recurring_maintenance,
@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 class RuntimeTaskWorker:
     def __init__(
         self,
-        ctx: ApplicationContext,
-        handlers: dict[str, Callable[[ApplicationContext, TaskRecord], Any]] | None = None,
-        handler_factory: Callable[[], dict[str, Callable[[ApplicationContext, TaskRecord], Any]]] | None = None,
+        ctx: TaskRuntimeContext,
+        handlers: dict[str, Callable[[Any, TaskRecord], Any]] | None = None,
+        handler_factory: Callable[[], dict[str, Callable[[Any, TaskRecord], Any]]] | None = None,
         poll_interval_seconds: float = 0.1,
         retry_delay_seconds: float = 0.0,
         abandoned_recovery_interval_seconds: float = 30.0,

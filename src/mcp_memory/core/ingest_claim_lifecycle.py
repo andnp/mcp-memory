@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import ApplicationContext, TaskQueueContext
 from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_ENTRY_DISPOSITIONS_TASK_DATA_KEY,
     INGEST_HANDLED_ENTRY_IDS_TASK_DATA_KEY,
@@ -60,7 +60,7 @@ def _journal_entry_payload(entry) -> dict[str, Any]:
     }
 
 
-def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> None:
+def _reset_recorded_ingest_handled_entry_ids(ctx: TaskQueueContext, task_id: str) -> None:
     if ctx.task_queue is None:
         return
     try:
@@ -77,7 +77,7 @@ def _reset_recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: s
         return
 
 
-def _recorded_ingest_run_metadata(ctx: ApplicationContext, task_id: str) -> IngestRecordedRunMetadata:
+def _recorded_ingest_run_metadata(ctx: TaskQueueContext, task_id: str) -> IngestRecordedRunMetadata:
     return {
         "handled_entry_ids": _recorded_ingest_handled_entry_ids(ctx, task_id),
         "entry_dispositions": _recorded_ingest_entry_dispositions(ctx, task_id),
@@ -86,7 +86,7 @@ def _recorded_ingest_run_metadata(ctx: ApplicationContext, task_id: str) -> Inge
     }
 
 
-def _recorded_ingest_tool_usage(ctx: ApplicationContext, task_id: str) -> IngestRecordedToolUsage:
+def _recorded_ingest_tool_usage(ctx: TaskQueueContext, task_id: str) -> IngestRecordedToolUsage:
     empty_usage: IngestRecordedToolUsage = {
         "tool_calls_executed": 0,
         "mutations": 0,
@@ -124,7 +124,7 @@ def _recorded_ingest_tool_usage(ctx: ApplicationContext, task_id: str) -> Ingest
     }
 
 
-def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) -> list[int]:
+def _recorded_ingest_handled_entry_ids(ctx: TaskQueueContext, task_id: str) -> list[int]:
     if ctx.task_queue is None:
         return []
     try:
@@ -141,7 +141,7 @@ def _recorded_ingest_handled_entry_ids(ctx: ApplicationContext, task_id: str) ->
     ]
 
 
-def _recorded_ingest_entry_dispositions(ctx: ApplicationContext, task_id: str) -> list[dict[str, Any]]:
+def _recorded_ingest_entry_dispositions(ctx: TaskQueueContext, task_id: str) -> list[dict[str, Any]]:
     if ctx.task_queue is None:
         return []
     try:
@@ -174,7 +174,7 @@ def _recorded_ingest_entry_dispositions(ctx: ApplicationContext, task_id: str) -
     return normalized
 
 
-def _recorded_ingest_touched_memory_ids(ctx: ApplicationContext, task_id: str) -> list[str]:
+def _recorded_ingest_touched_memory_ids(ctx: TaskQueueContext, task_id: str) -> list[str]:
     if ctx.task_queue is None:
         return []
     try:
@@ -194,7 +194,7 @@ def _recorded_ingest_touched_memory_ids(ctx: ApplicationContext, task_id: str) -
     )
 
 
-def _record_successful_ingest_entry_ids(ctx: ApplicationContext, *, task_id: str, entry_ids: list[int]) -> None:
+def _record_successful_ingest_entry_ids(ctx: TaskQueueContext, *, task_id: str, entry_ids: list[int]) -> None:
     if ctx.task_queue is None:
         return
     try:
@@ -208,7 +208,7 @@ def _record_successful_ingest_entry_ids(ctx: ApplicationContext, *, task_id: str
 
 
 def _record_successful_ingest_entry_dispositions(
-    ctx: ApplicationContext,
+    ctx: TaskQueueContext,
     *,
     task_id: str,
     entry_dispositions: list[dict[str, Any]],
@@ -226,7 +226,7 @@ def _record_successful_ingest_entry_dispositions(
 
 
 def _record_ingest_tool_invocation(
-    ctx: ApplicationContext,
+    ctx: TaskQueueContext,
     *,
     task_id: str,
     tool_name: str,
@@ -249,7 +249,7 @@ def _record_ingest_tool_invocation(
         return
 
 
-def _record_touched_memory_ids(ctx: ApplicationContext, *, task_id: str, memory_ids: list[str]) -> None:
+def _record_touched_memory_ids(ctx: TaskQueueContext, *, task_id: str, memory_ids: list[str]) -> None:
     if ctx.task_queue is None:
         return
     normalized_memory_ids = [memory_id for memory_id in memory_ids if isinstance(memory_id, str) and memory_id.strip()]

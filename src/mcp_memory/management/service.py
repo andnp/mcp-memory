@@ -11,7 +11,7 @@ from time import perf_counter
 from typing import cast
 from uuid import uuid4
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import ManagementContext
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
@@ -81,7 +81,7 @@ _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 logger = logging.getLogger(__name__)
 
 
-def _build_default_provider_usage(ctx: ApplicationContext):
+def _build_default_provider_usage(ctx: ManagementContext):
     if (ctx.storage_backend or "sqlite") == "postgres":
         return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
     if not hasattr(ctx.db_manager, "get_connection"):
@@ -89,7 +89,7 @@ def _build_default_provider_usage(ctx: ApplicationContext):
     return ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
 
 
-def _build_default_runtime_logs(ctx: ApplicationContext):
+def _build_default_runtime_logs(ctx: ManagementContext):
     config = None if ctx.config is None else ctx.config.logging
     if (ctx.storage_backend or "sqlite") == "postgres":
         return PostgresRuntimeLogRepository(
@@ -104,7 +104,7 @@ def _build_default_runtime_logs(ctx: ApplicationContext):
     )
 
 
-def _build_default_embedding_integrity_events(ctx: ApplicationContext):
+def _build_default_embedding_integrity_events(ctx: ManagementContext):
     if ctx.db_manager is None:
         return None
     if hasattr(ctx.db_manager, "get_connection"):
@@ -141,7 +141,7 @@ def _resolve_service_workspace_id(
 
 
 class ManagementService:
-    def __init__(self, ctx: ApplicationContext, controller) -> None:
+    def __init__(self, ctx: ManagementContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
         self._controller = controller
         self._db_manager = ctx.db_manager

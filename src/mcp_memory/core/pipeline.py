@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import MemoryPipelineContext
 from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.runtime_facades import JournalFacade, RuntimeInfoFacade, TaskQueueFacade
 
@@ -20,7 +20,7 @@ class MemoryPipeline:
     @classmethod
     def from_context(
         cls,
-        ctx: ApplicationContext,
+        ctx: MemoryPipelineContext,
         controller: Any | None = None,
     ) -> MemoryPipeline:
         return cls(

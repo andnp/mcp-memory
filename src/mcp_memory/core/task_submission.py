@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import TaskQueueContext
 from mcp_memory.core.task_handlers.constants import SUMMARIZE_MEMORY_PRIORITY, SUMMARIZE_MEMORY_TASK_NAME
 from mcp_memory.core.tasks import TaskRecord
 
 
 def enqueue_summary_refresh_task(
-    ctx: ApplicationContext,
+    ctx: TaskQueueContext,
     *,
     memory_id: str,
     workspace_ids: list[str] | None = None,

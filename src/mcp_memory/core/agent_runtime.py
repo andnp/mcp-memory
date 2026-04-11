@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import BackgroundTaskBootstrapContext, ProviderSelectionContext, TaskRuntimeContext
 from mcp_memory.core.maintenance_schedule import LEGACY_MAINTENANCE_TASK_NAME_ALIASES
 from mcp_memory.core.maintenance_idle import should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
@@ -63,7 +63,7 @@ _LEGACY_WRAPPER_HANDLER_EXPORTS = (
 
 
 def build_runtime_task_worker(
-    ctx: ApplicationContext,
+    ctx: TaskRuntimeContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
     provider_selection_inputs = _provider_selection_inputs_from_context(ctx)
@@ -115,8 +115,8 @@ def build_default_task_handlers(
     agentic_provider: Any = None,
     *,
     provider_selection_inputs: ProviderSelectionInputs | None = None,
-) -> dict[str, Callable[[ApplicationContext, TaskRecord], Any]]:
-    def scoped(ctx: ApplicationContext, task_name: str, task: TaskRecord):
+) -> dict[str, Callable[[Any, TaskRecord], Any]]:
+    def scoped(ctx: ProviderSelectionContext, task_name: str, task: TaskRecord):
         inputs = provider_selection_inputs or _provider_selection_inputs_from_context(ctx)
         return _provider_for_task_inputs(inputs, provider, agentic_provider, task_name, task)
 
@@ -166,7 +166,7 @@ def build_default_task_handlers(
     }
 
 
-def _provider_selection_inputs_from_context(ctx: ApplicationContext) -> ProviderSelectionInputs:
+def _provider_selection_inputs_from_context(ctx: ProviderSelectionContext) -> ProviderSelectionInputs:
     return ProviderSelectionInputs(
         config=ctx.config,
         ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
@@ -191,11 +191,11 @@ def _provider_for_task_inputs(inputs: ProviderSelectionInputs, provider: Any, ag
     return selected
 
 
-def _provider_for_task(ctx: ApplicationContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
+def _provider_for_task(ctx: ProviderSelectionContext, provider: Any, agentic_provider: Any, task_name: str, task: TaskRecord):
     return _provider_for_task_inputs(_provider_selection_inputs_from_context(ctx), provider, agentic_provider, task_name, task)
 
 
-def bootstrap_background_tasks(ctx: ApplicationContext) -> None:
+def bootstrap_background_tasks(ctx: BackgroundTaskBootstrapContext) -> None:
     task_queue = getattr(ctx, "task_queue", None)
     if task_queue is None:
         return

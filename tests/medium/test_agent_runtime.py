@@ -84,6 +84,20 @@ LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
 LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
 
 
+class _BootstrapContextStub:
+    def __init__(self, *, task_queue, config=None, journal=None) -> None:
+        self.task_queue = task_queue
+        self.config = config
+        self.journal = journal
+
+
+class _ProviderSelectionContextStub:
+    def __init__(self, *, config=None, ai_provider_registry=None, provider_policy_events=None) -> None:
+        self.config = config
+        self.ai_provider_registry = ai_provider_registry
+        self.provider_policy_events = provider_policy_events
+
+
 def test_normalize_ingest_agentic_result_preserves_rich_final_json_contract() -> None:
     result = _normalize_ingest_agentic_result(
         AgenticRunResult(
@@ -1884,6 +1898,15 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 3600.0
 
 
+def test_bootstrap_background_tasks_accepts_bootstrap_capability_view(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    bootstrap_background_tasks(_BootstrapContextStub(task_queue=queue))
+
+    assert queue.count_by_status() == {"pending": 9}
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
+
+
 def test_low_yield_maintenance_tasks_use_the_updated_recurring_cadence() -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
     assert RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
@@ -1983,6 +2006,64 @@ async def test_build_runtime_task_worker_dispatches_legacy_wrapper_names_to_cano
         (canonical_task_name, f"legacy:{legacy_task_name}", None)
         for legacy_task_name, canonical_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES.items()
     ]
+
+
+def test_provider_for_task_accepts_provider_selection_capability_view() -> None:
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.bound_contexts: list[dict[str, object | None]] = []
+
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            execution_epoch: int | None = None,
+            workspace_id: str | None = None,
+        ) -> dict[str, object | None]:
+            bound = {
+                "task_name": task_name,
+                "task_id": task_id,
+                "execution_epoch": execution_epoch,
+                "workspace_id": workspace_id,
+            }
+            self.bound_contexts.append(bound)
+            return bound
+
+    provider = _AgenticProvider()
+    task = TaskRecord(
+        id="provider-selection-capability-view",
+        task_name=CURATOR_TASK_NAME,
+        data={"workspace_id": "workspace-a"},
+        workspace_id="workspace-a",
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+    selected = _provider_for_task(
+        _ProviderSelectionContextStub(),
+        None,
+        provider,
+        CURATOR_TASK_NAME,
+        task,
+    )
+
+    assert selected == {
+        "task_name": CURATOR_TASK_NAME,
+        "task_id": task.id,
+        "execution_epoch": task.execution_epoch,
+        "workspace_id": task.workspace_id,
+    }
+    assert provider.bound_contexts == [selected]
 
 
 def test_bootstrap_background_tasks_enqueues_ingest_when_pending_thoughts_exist(db_manager) -> None:
