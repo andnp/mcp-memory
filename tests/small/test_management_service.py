@@ -1,5 +1,6 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 import logging
 import time
@@ -9,6 +10,7 @@ import pytest
 from mcp_memory.config import Config, StorageCacheMode
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
@@ -28,6 +30,31 @@ from mcp_memory.work_item_store import SQLiteWorkItemRepository
 pytestmark = pytest.mark.small
 
 
+@dataclass
+class _ManagementContextStub:
+    config: Config | None = None
+    workspace_id: str | None = None
+    workspace_root: Path | None = None
+    memory_path: Path | None = None
+    storage_backend: str | None = None
+    db_manager: object = None
+    journal: object = None
+    repository: object = None
+    relational_search: object = None
+    read_cache: object = None
+    task_queue: object = None
+    ai_json_provider: object = None
+    ai_agent_provider: object = None
+    ai_provider: object = None
+    ai_provider_registry: dict[str, object] | None = None
+    provider_usage: object = None
+    runtime_logs: object = None
+    retrieval_telemetry: object = None
+    embedding_integrity_events: object = None
+    embedder: object = None
+    vector_store: object = None
+
+
 def _build_management_service(
     db_manager,
     *,
@@ -45,6 +72,52 @@ def _build_management_service(
         ),
         SimpleNamespace(has_runtime=True, client_count=1),
     )
+
+
+def test_management_service_accepts_structural_management_context(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = ManagementService(
+        _ManagementContextStub(
+            workspace_id="workspace-a",
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+
+    assert health.storage_backend == "sqlite"
+    assert service.workspace_id == "workspace-a"
+
+
+def test_management_service_health_tolerates_hook_client_count_failures(db_manager, caplog: pytest.LogCaptureFixture) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+
+    class _BrokenHookService:
+        def get_active_client_count(self) -> int:
+            raise RuntimeError("hook_store_unavailable")
+
+    service = ManagementService(
+        _ManagementContextStub(
+            workspace_id="workspace-a",
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=repository,
+            task_queue=task_queue,
+        ),
+        DaemonControllerView(hook_service=_BrokenHookService()),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        health = service.get_health()
+
+    assert health.client_count == 0
+    assert any("Failed to read active daemon client count" in message for message in caplog.messages)
 
 
 def test_management_service_reporting_handles_empty_store(db_manager) -> None:

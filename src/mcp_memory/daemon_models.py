@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
+import logging
 from pathlib import Path
 from typing import Any, cast
 
 from mcp_memory.management.service import ManagementService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,7 +56,11 @@ class DaemonControllerView:
     def client_count(self) -> int:
         if self.hook_service is None:
             return 0
-        return int(self.hook_service.get_active_client_count())
+        try:
+            return int(self.hook_service.get_active_client_count())
+        except Exception as exc:
+            logger.warning("Failed to read active daemon client count", exc_info=exc)
+            return 0
 
     @property
     def transport_diagnostics(self) -> dict[str, object] | None:

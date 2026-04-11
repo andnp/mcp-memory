@@ -100,7 +100,11 @@ async def _shutdown_daemon_when_idle(app: FastAPI) -> None:
     try:
         while True:
             await asyncio.sleep(_IDLE_SHUTDOWN_DELAY_SECONDS)
-            active_clients = app.state.routes.hook_service.get_active_client_count()
+            try:
+                active_clients = app.state.routes.hook_service.get_active_client_count()
+            except Exception as exc:
+                logger.warning("Unable to read active daemon client count during idle shutdown check", exc_info=exc)
+                continue
             if active_clients > 0:
                 logger.debug("Skipping idle daemon shutdown; %s client(s) remain active", active_clients)
                 return
