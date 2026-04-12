@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -782,6 +783,63 @@ def test_admin_install_forwards_to_existing_install_helper(monkeypatch) -> None:
         "scope": "user",
         "workspace_root": "/tmp/demo",
     }
+
+
+def test_hidden_hook_runner_forwards_to_existing_hook_helpers(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+    echo_calls: list[tuple[object | None, bool]] = []
+
+    def fake_load_hook_payload(stream) -> dict[str, object]:
+        captured["stdin_text"] = stream.read()
+        return {"hookEventName": "Stop", "source": "demo"}
+
+    def fake_safe_forward_hook_event(
+        payload: dict[str, object],
+        workspace_root: str | None = None,
+    ) -> tuple[dict[str, object], str | None]:
+        captured["payload"] = payload
+        captured["workspace_root"] = workspace_root
+        return {"forwarded": True}, None
+
+    def fake_echo(message=None, *, err: bool = False, **_kwargs) -> None:
+        echo_calls.append((message, err))
+
+    monkeypatch.setattr("mcp_memory.cli.load_hook_payload", fake_load_hook_payload)
+    monkeypatch.setattr("mcp_memory.cli.safe_forward_hook_event", fake_safe_forward_hook_event)
+    monkeypatch.setattr("mcp_memory.cli.click.echo", fake_echo)
+
+    result = runner.invoke(main, ["hook-runner", "--workspace-root", "/tmp/demo"], input='{"hookEventName":"Stop"}')
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "stdin_text": '{"hookEventName":"Stop"}',
+        "payload": {"hookEventName": "Stop", "source": "demo"},
+        "workspace_root": "/tmp/demo",
+    }
+    assert echo_calls == [('{"forwarded": true}', False)]
+
+
+def test_hidden_hook_runner_preserves_invalid_json_fallback(monkeypatch) -> None:
+    runner = CliRunner()
+    echo_calls: list[tuple[object | None, bool]] = []
+
+    def fake_load_hook_payload(_stream) -> dict[str, object]:
+        raise json.JSONDecodeError("bad payload", "{", 0)
+
+    def fake_echo(message=None, *, err: bool = False, **_kwargs) -> None:
+        echo_calls.append((message, err))
+
+    monkeypatch.setattr("mcp_memory.cli.load_hook_payload", fake_load_hook_payload)
+    monkeypatch.setattr("mcp_memory.cli.click.echo", fake_echo)
+
+    result = runner.invoke(main, ["hook-runner"], input="{")
+
+    assert result.exit_code == 0, result.output
+    assert len(echo_calls) == 2
+    assert echo_calls[0][1] is True
+    assert str(echo_calls[0][0]).startswith("mcp-memory hook-runner: bad payload")
+    assert echo_calls[1] == ("{}", False)
 
 
 @pytest.mark.parametrize("status", ["built", "up_to_date"])

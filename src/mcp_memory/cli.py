@@ -28,6 +28,7 @@ from mcp_memory.cli_admin_search_commands import build_admin_search_command_fami
 from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
 from mcp_memory.cli_admin_utility_commands import build_admin_utility_command_cluster
 from mcp_memory.cli_daemon_commands import build_daemon_command_family
+from mcp_memory.cli_hook_runner_commands import build_hook_runner_command
 from mcp_memory.cli_memory import build_memory_group
 from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
@@ -1924,10 +1925,7 @@ def _admin_install_command_action(
         )
 
 
-@main.command(name="hook-runner", hidden=True)
-@click.option("--workspace-root", help="Override the target workspace root")
-def hook_runner(workspace_root: str | None) -> None:
-    """Forward VS Code hook payloads into the global daemon."""
+def _hook_runner_command_action(workspace_root: str | None) -> None:
     try:
         payload = load_hook_payload(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -1939,6 +1937,10 @@ def hook_runner(workspace_root: str | None) -> None:
     if error_message is not None:
         click.echo(f"mcp-memory hook-runner: {error_message}", err=True)
     click.echo(json.dumps(response, sort_keys=True))
+
+
+hook_runner = build_hook_runner_command(hook_runner_command_action=_hook_runner_command_action)
+main.add_command(hook_runner)
 
 
 def _admin_prefetch_model_command_action(workspace_root: str | None) -> None:
