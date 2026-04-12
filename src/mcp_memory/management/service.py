@@ -140,6 +140,16 @@ def _resolve_service_workspace_id(
     return cast(str | None, workspace_id)
 
 
+def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnosticsPayload:
+    if snapshot is None:
+        return TransportDiagnosticsPayload()
+    if isinstance(snapshot, TransportDiagnosticsPayload):
+        return snapshot
+    if isinstance(snapshot, dict):
+        return TransportDiagnosticsPayload(**snapshot)
+    return TransportDiagnosticsPayload()
+
+
 class ManagementService:
     def __init__(self, ctx: ManagementContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
@@ -209,13 +219,7 @@ class ManagementService:
 
     def _build_transport_diagnostics(self) -> TransportDiagnosticsPayload:
         snapshot = getattr(self._controller, "transport_diagnostics", None)
-        if snapshot is None:
-            return TransportDiagnosticsPayload()
-        if isinstance(snapshot, TransportDiagnosticsPayload):
-            return snapshot
-        if isinstance(snapshot, dict):
-            return TransportDiagnosticsPayload(**snapshot)
-        return TransportDiagnosticsPayload()
+        return _coerce_transport_diagnostics_payload(snapshot)
 
     def _build_cache_health(self) -> CacheHealthPayload:
         cache_config = None if self._config is None else self._config.storage.cache
