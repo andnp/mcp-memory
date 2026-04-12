@@ -13,6 +13,68 @@ from mcp_memory.management.frontend_build import DashboardFrontendBuildResult
 pytestmark = pytest.mark.small
 
 
+def test_run_forwards_to_existing_stdio_proxy_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_run_stdio_proxy(
+        debug_enabled: bool,
+        workspace_root: str | None,
+        source: str,
+        server_name: str,
+        tool_path_prefix: str,
+    ) -> None:
+        captured["debug_enabled"] = debug_enabled
+        captured["workspace_root"] = workspace_root
+        captured["source"] = source
+        captured["server_name"] = server_name
+        captured["tool_path_prefix"] = tool_path_prefix
+
+    monkeypatch.setattr("mcp_memory.cli._run_stdio_proxy", fake_run_stdio_proxy)
+
+    result = runner.invoke(main, ["--debug", "run", "--workspace-root", "/tmp/demo"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "debug_enabled": True,
+        "workspace_root": "/tmp/demo",
+        "source": "stdio",
+        "server_name": "mcp-memory",
+        "tool_path_prefix": "/internal/tools",
+    }
+
+
+def test_internal_run_forwards_to_existing_internal_stdio_proxy_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_run_stdio_proxy(
+        debug_enabled: bool,
+        workspace_root: str | None,
+        source: str,
+        server_name: str,
+        tool_path_prefix: str,
+    ) -> None:
+        captured["debug_enabled"] = debug_enabled
+        captured["workspace_root"] = workspace_root
+        captured["source"] = source
+        captured["server_name"] = server_name
+        captured["tool_path_prefix"] = tool_path_prefix
+
+    monkeypatch.setattr("mcp_memory.cli._run_stdio_proxy", fake_run_stdio_proxy)
+
+    result = runner.invoke(main, ["--debug", "internal-run", "--workspace-root", "/tmp/demo"])
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "debug_enabled": True,
+        "workspace_root": "/tmp/demo",
+        "source": "internal-stdio",
+        "server_name": "mcp-memory-internal",
+        "tool_path_prefix": "/internal/maintenance/tools",
+    }
+
+
 def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}

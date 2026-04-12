@@ -30,6 +30,7 @@ from mcp_memory.cli_admin_utility_commands import build_admin_utility_command_cl
 from mcp_memory.cli_daemon_commands import build_daemon_command_family
 from mcp_memory.cli_hook_runner_commands import build_hook_runner_command
 from mcp_memory.cli_memory import build_memory_group
+from mcp_memory.cli_stdio_proxy_commands import build_stdio_proxy_command_family
 from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
@@ -1536,13 +1537,9 @@ import_markdown = memory_group.commands["import-markdown"]
 main.add_command(memory_group)
 
 
-@main.command()
-@workspace_root_option
-@click.pass_context
-def run(ctx: click.Context, workspace_root: str | None) -> None:
-    """Run the MCP stdio proxy, auto-starting the global daemon when needed."""
+def _run_command_action(debug_enabled: bool, workspace_root: str | None) -> None:
     _run_stdio_proxy(
-        bool(ctx.obj.get("debug", False)),
+        debug_enabled,
         workspace_root,
         "stdio",
         "mcp-memory",
@@ -1550,18 +1547,25 @@ def run(ctx: click.Context, workspace_root: str | None) -> None:
     )
 
 
-@main.command(name="internal-run", hidden=True)
-@workspace_root_option
-@click.pass_context
-def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
-    """Run the internal maintenance MCP stdio proxy for trusted tool-using agents."""
+def _internal_run_command_action(debug_enabled: bool, workspace_root: str | None) -> None:
     _run_stdio_proxy(
-        bool(ctx.obj.get("debug", False)),
+        debug_enabled,
         workspace_root,
         "internal-stdio",
         "mcp-memory-internal",
         "/internal/maintenance/tools",
     )
+
+
+_stdio_proxy_command_family = build_stdio_proxy_command_family(
+    workspace_root_option,
+    run_stdio_proxy=_run_command_action,
+    run_internal_stdio_proxy=_internal_run_command_action,
+)
+run = _stdio_proxy_command_family.run
+internal_run = _stdio_proxy_command_family.internal_run
+main.add_command(run)
+main.add_command(internal_run)
 
 
 def _daemon_start_command_action(
