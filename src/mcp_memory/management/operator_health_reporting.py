@@ -29,18 +29,6 @@ def _percentile(values: list[float], percentile: float) -> float:
     return float(ordered[index])
 
 
-def _coerce_optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
-
-
 def summarize_memory_tool_latency(
     db_manager,
     *,
@@ -57,11 +45,11 @@ def summarize_memory_tool_latency(
     )
     durations_by_kind: dict[str, dict[str, float]] = {}
     for row in rows:
-        duration_ms = _coerce_optional_float(row.get("duration_ms"))
+        duration_ms = row.duration_ms
         if duration_ms is None:
             continue
-        event_kind = str(row.get("event_kind") or "unknown")
-        invocation_id = str(row.get("invocation_id") or f"{event_kind}:{len(durations_by_kind.get(event_kind, {}))}")
+        event_kind = row.event_kind or "unknown"
+        invocation_id = row.invocation_id or f"{event_kind}:{len(durations_by_kind.get(event_kind, {}))}"
         durations_by_kind.setdefault(event_kind, {})[invocation_id] = max(
             duration_ms,
             durations_by_kind.setdefault(event_kind, {}).get(invocation_id, duration_ms),

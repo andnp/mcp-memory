@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, cast
 
 from mcp_memory.management.models import (
     NerdRetrievalCallerKindRowPayload,
@@ -16,7 +15,7 @@ from mcp_memory.management.models import (
     NerdRetrievalTagTimelinePayload,
     NerdTimeCountBucketPayload,
 )
-from mcp_memory.management.reporting_queries import split_csv_values
+from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
 
 
 _RETRIEVAL_MEMORY_LIMIT = 100
@@ -79,9 +78,9 @@ class _RetrievalSearchHitRecord:
 
 
 def build_retrieval_analytics(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
-    retrieval_rows,
+    retrieval_rows: list[MemoryToolEventRow],
     cutoff: float,
     generated_at: float,
     bucket_seconds: int,
@@ -90,15 +89,7 @@ def build_retrieval_analytics(
     if not bucket_starts:
         return NerdRetrievalPayload()
 
-    memory_info = {
-        str(row["id"]): {
-            "title": str(row["title"]),
-            "memory_type": str(row["type"]),
-            "status": str(row["status"]),
-            "tags": split_csv_values(row["tags_csv"]),
-        }
-        for row in memory_rows
-    }
+    memory_info = {row.id: row for row in memory_rows}
     memory_accumulators: dict[str, _RetrievalMemoryAccumulator] = {}
     tag_accumulators: dict[str, _RetrievalTagAccumulator] = {}
     caller_kind_accumulators: dict[str, _RetrievalCallerKindAccumulator] = {}
@@ -117,42 +108,42 @@ def build_retrieval_analytics(
     search_hits = 0
 
     for row in retrieval_rows:
-        event_kind = str(row["event_kind"])
-        invocation_id = str(row["invocation_id"])
-        created_at = float(row["created_at"] or 0.0)
-        caller_kind = _normalize_caller_kind(row["caller_kind"])
+        event_kind = row.event_kind
+        invocation_id = row.invocation_id
+        created_at = row.created_at
+        caller_kind = _normalize_caller_kind(row.caller_kind)
         if event_kind == "search":
             search_invocation_ids.add(invocation_id)
             search_invocation = search_invocation_accumulators.setdefault(
                 invocation_id,
                 _RetrievalSearchInvocationAccumulator(
                     caller_kind=caller_kind,
-                    query_family_key=_normalize_query_family_key(row["query_text"]),
-                    query_family_label=_format_query_family_label(row["query_text"]),
+                    query_family_key=_normalize_query_family_key(row.query_text),
+                    query_family_label=_format_query_family_label(row.query_text),
                 ),
             )
-            if int(row["result_count"] or 0) == 0:
+            if row.result_count == 0:
                 zero_result_search_invocation_ids.add(invocation_id)
                 search_invocation.zero_result = True
 
-        memory_id = None if row["memory_id"] is None else str(row["memory_id"])
+        memory_id = row.memory_id
         if memory_id is None or memory_id not in memory_info:
             if event_kind == "read":
                 caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
             continue
 
-        info = cast(dict[str, Any], memory_info[memory_id])
+        info = memory_info[memory_id]
         memory_accumulator = memory_accumulators.setdefault(
             memory_id,
             _RetrievalMemoryAccumulator(
-                title=str(info["title"]),
-                memory_type=str(info["memory_type"]),
-                status=str(info["status"]),
-                tags=list(cast(list[str], info["tags"])),
+                title=info.title,
+                memory_type=info.memory_type,
+                status=info.status,
+                tags=list(info.tags),
             ),
         )
         bucket_start = int(created_at // bucket_seconds) * bucket_seconds
-        for tag in info["tags"]:
+        for tag in info.tags:
             tag_accumulator = tag_accumulators.setdefault(tag, _RetrievalTagAccumulator())
             if event_kind == "read":
                 tag_accumulator.read_count += 1

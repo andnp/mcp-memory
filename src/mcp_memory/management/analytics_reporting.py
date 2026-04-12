@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-import json
+from datetime import datetime
 import math
 from statistics import median
-from typing import cast
 
 from mcp_memory.management.analytics_maintenance_summary import build_maintenance_summary
 from mcp_memory.management.analytics_quality import (
@@ -20,7 +18,6 @@ from mcp_memory.management.analytics_read_model import load_nerd_metrics_read_mo
 from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
 from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
 from mcp_memory.management.agent_run_reporting import (
-    decode_run_result,
     extract_ingest_audit,
     extract_run_result_metadata,
     format_result_summary,
@@ -52,10 +49,16 @@ from mcp_memory.management.models import (
     SearchQualityPayload,
 )
 from mcp_memory.management.reporting_queries import (
-    summarize_copilot_premium_requests,
     list_scoped_link_rows,
     list_scoped_memory_rows,
-    split_csv_values,
+    summarize_copilot_premium_requests,
+)
+from mcp_memory.management.reporting_rows import (
+    MaintenanceTaskRunRow,
+    ProviderPolicyEventRow,
+    ProviderUsageRow,
+    RuntimeLogRow,
+    ScopedMemoryRow,
 )
 from mcp_memory.management.route_audit import build_task_route_audit
 
@@ -103,32 +106,6 @@ _PROVENANCE_PROCESS_TAGS: frozenset[str] = frozenset(
         "startup",
     }
 )
-
-
-def _coerce_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
-
-
-def _coerce_int(value: object) -> int:
-    if value is None:
-        return 0
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
 
 
 @dataclass
@@ -296,7 +273,7 @@ def build_nerd_metrics(
         NerdStatPayload(key="missing_attempt_count", label="Missing execution attempts", value=float(execution_attempt_health.missing_attempt_count), unit="count"),
         NerdStatPayload(key="dead_attempt_subprocess_count", label="Dead attempt subprocesses", value=float(execution_attempt_health.dead_subprocess_count), unit="count"),
         NerdStatPayload(key="runs_last_window", label="Runs in window", value=float(len(task_rows)), unit="runs"),
-        NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if str(row["status"]) == "failed")), unit="runs"),
+        NerdStatPayload(key="failed_runs_last_window", label="Failed runs in window", value=float(sum(1 for row in task_rows if row.status == "failed")), unit="runs"),
         NerdStatPayload(key="provider_calls_last_window", label="Provider calls in window", value=float(len(provider_rows)), unit="calls"),
         NerdStatPayload(key="provider_failures_last_window", label="Provider failures in window", value=float(throughput_rollups.provider_failures), unit="calls"),
         NerdStatPayload(key="provider_skips_last_window", label="Provider skips in window", value=float(throughput_rollups.provider_skips), unit="calls"),
@@ -307,13 +284,13 @@ def build_nerd_metrics(
         NerdStatPayload(
             key="copilot_premium_requests_today",
             label="Copilot premium requests today",
-            value=float(copilot_premium_usage["copilot_premium_requests_today"]),
+            value=float(copilot_premium_usage.copilot_premium_requests_today),
             unit="calls",
         ),
         NerdStatPayload(
             key="copilot_premium_requests_last_day",
             label="Copilot premium requests last 24h",
-            value=float(copilot_premium_usage["copilot_premium_requests_last_day"]),
+            value=float(copilot_premium_usage.copilot_premium_requests_last_day),
             unit="calls",
         ),
         NerdStatPayload(key="compatible_batch_calls", label="Compatible batch calls", value=float(throughput_rollups.compatible_batch_calls), unit="calls"),
@@ -398,9 +375,9 @@ def build_nerd_metrics(
 
 def build_provider_policy_rollups(
     *,
-    provider_rows,
-    provider_policy_event_rows,
-    provider_policy_log_rows,
+    provider_rows: list[ProviderUsageRow],
+    provider_policy_event_rows: list[ProviderPolicyEventRow],
+    provider_policy_log_rows: list[RuntimeLogRow],
     provider_usage_repo,
     workspace_id: str | None,
 ) -> NerdProviderPolicyPayload:
@@ -413,9 +390,9 @@ def build_provider_policy_rollups(
 
     if provider_policy_event_rows:
         for row in provider_policy_event_rows:
-            task_name = _coerce_row_str(row["task_name"]) or "unknown"
+            task_name = row.task_name or "unknown"
             accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
-            event_kind = str(row["event_kind"])
+            event_kind = row.event_kind
             if event_kind == "route_exhausted":
                 accumulator.route_exhaustion_count += 1
                 total_route_exhaustion_count += 1
@@ -423,17 +400,17 @@ def build_provider_policy_rollups(
                 accumulator.legacy_fallback_denied_count += 1
                 total_legacy_fallback_denied_count += 1
             elif event_kind == "route_skipped":
-                provider_key = _coerce_row_str(row["provider_key"])
-                model_name = _coerce_row_str(row["model_name"])
-                reason_code = _coerce_row_str(row["reason_code"])
+                provider_key = row.provider_key
+                model_name = row.model_name
+                reason_code = row.reason_code
                 if provider_key is not None and model_name is not None:
                     accumulator.skip_provider_counts[(provider_key, model_name, reason_code)] += 1
-            if bool(row["warning_suppressed"]):
+            if row.warning_suppressed:
                 total_warning_suppressed_count += 1
     else:
         for row in provider_policy_log_rows:
-            message = str(row["message"])
-            task_name = _runtime_log_task_name(_runtime_log_data(row))
+            message = row.message
+            task_name = row.task_name or "unknown"
             accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
             if message == "Provider routing exhausted all configured routes":
                 accumulator.route_exhaustion_count += 1
@@ -443,13 +420,13 @@ def build_provider_policy_rollups(
                 total_legacy_fallback_denied_count += 1
 
     for row in provider_rows:
-        if str(row["status"]) != "skipped":
+        if row.status != "skipped":
             continue
-        task_name = _coerce_row_str(row["task_name"]) or "unknown"
-        provider_key = str(row["provider_key"])
-        provider_name = str(row["provider_name"])
-        model_name = str(row["model_name"])
-        reason_code = _coerce_row_str(row["reason_code"])
+        task_name = row.task_name or "unknown"
+        provider_key = row.provider_key
+        provider_name = row.provider_name
+        model_name = row.model_name
+        reason_code = row.reason_code
 
         task_accumulator = by_task.setdefault(task_name, _ProviderPolicyTaskAccumulator())
         task_accumulator.admission_skip_count += 1
@@ -559,7 +536,7 @@ def build_provider_policy_rollups(
 def build_graph_topology(db_manager, workspace_id: str | None, *, memory_rows=None) -> GraphTopologyPayload:
     if memory_rows is None:
         memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
-    memory_ids = {str(row["id"]) for row in memory_rows}
+    memory_ids = {row.id for row in memory_rows}
     if not memory_ids:
         return GraphTopologyPayload()
 
@@ -569,10 +546,10 @@ def build_graph_topology(db_manager, workspace_id: str | None, *, memory_rows=No
     link_type_counts: dict[str, int] = {}
 
     for row in link_rows:
-        link_type = str(row["type"])
+        link_type = row.link_type
         link_type_counts[link_type] = link_type_counts.get(link_type, 0) + 1
-        source_id = str(row["source_id"])
-        target_id = str(row["target_id"])
+        source_id = row.source_id
+        target_id = row.target_id
         if source_id in degree_by_memory:
             degree_by_memory[source_id] += 1
         if target_id in degree_by_memory:
@@ -611,16 +588,16 @@ def build_memory_lifecycle(db_manager, workspace_id: str | None, *, memory_rows=
     degraded_count = 0
 
     for row in memory_rows:
-        status = str(row["status"])
-        memory_type = str(row["type"])
+        status = row.status
+        memory_type = row.memory_type
         by_status[status] = by_status.get(status, 0) + 1
         by_type[memory_type] = by_type.get(memory_type, 0) + 1
 
-        content_size = _coerce_int(row["content_bytes"])
+        content_size = row.content_bytes
         content_sizes.append(content_size)
-        if row["last_accessed_at"] is None:
+        if row.last_accessed_at is None:
             cold_memory_count += 1
-        if row["last_surfaced_at"] is None:
+        if row.last_surfaced_at is None:
             never_surfaced_count += 1
         if status == "stale":
             stale_count += 1
@@ -653,10 +630,10 @@ def build_composition(memory_rows) -> NerdCompositionPayload:
     status_counts: Counter[str] = Counter()
 
     for row in memory_rows:
-        type_counts[str(row["type"])] += 1
-        status_counts[str(row["status"])] += 1
-        workspace_counts.update(split_csv_values(row["workspace_ids_csv"]))
-        tags = split_csv_values(row["tags_csv"])
+        type_counts[row.memory_type] += 1
+        status_counts[row.status] += 1
+        workspace_counts.update(row.workspace_ids)
+        tags = row.tags
         tag_counts.update(tags)
         for tag in tags:
             if is_provenance_process_tag(tag):
@@ -685,9 +662,9 @@ def build_distributions(memory_rows, *, generated_at: float) -> NerdDistribution
     size_counts = {key: 0 for key, _, _, _ in _SIZE_BUCKETS}
 
     for row in memory_rows:
-        created_at = _iso_to_timestamp(row["created_at"])
-        updated_at = _iso_to_timestamp(row["updated_at"])
-        content_bytes = int(row["content_bytes"] or 0)
+        created_at = _datetime_to_timestamp(row.created_at)
+        updated_at = _datetime_to_timestamp(row.updated_at)
+        content_bytes = row.content_bytes
         if created_at is not None:
             created_counts[_bucket_key_for_value(max(generated_at - created_at, 0.0), _AGE_BUCKETS)] += 1
         if updated_at is not None:
@@ -722,9 +699,9 @@ def build_timelines(
     baseline_bytes = 0
 
     for row in memory_rows:
-        content_bytes = int(row["content_bytes"] or 0)
-        created_at = _iso_to_timestamp(row["created_at"])
-        updated_at = _iso_to_timestamp(row["updated_at"])
+        content_bytes = row.content_bytes
+        created_at = _datetime_to_timestamp(row.created_at)
+        updated_at = _datetime_to_timestamp(row.updated_at)
         if created_at is not None:
             if created_at < cutoff:
                 baseline_bytes += content_bytes
@@ -752,7 +729,7 @@ def build_timelines(
 
 
 def build_maintenance_events(
-    maintenance_rows,
+    maintenance_rows: list[MaintenanceTaskRunRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -763,33 +740,32 @@ def build_maintenance_events(
 
     events: list[MaintenanceEventPayload] = []
     for row in maintenance_rows:
-        completed_at = float(row["completed_at"] or 0.0)
+        completed_at = row.completed_at
         if completed_at < cutoff or completed_at > generated_at:
             continue
 
-        result = decode_run_result(row["result_json"])
-        result_metadata = extract_run_result_metadata(result)
-        ingest_audit = extract_ingest_audit(result)
+        result_metadata = extract_run_result_metadata(row.result)
+        ingest_audit = extract_ingest_audit(row.result)
         events.append(
             MaintenanceEventPayload(
-                task_id=str(row["task_id"]),
-                task_name=str(row["task_name"]),
-                status=str(row["status"]),
+                task_id=row.task_id,
+                task_name=row.task_name,
+                status=row.status,
                 completed_at=completed_at,
                 bucket_start=float(int(completed_at // bucket_seconds) * bucket_seconds),
-                duration_seconds=float(row["duration_seconds"] or 0.0),
-                result_summary=format_result_summary(result) or _coerce_row_str(row["error_text"]),
+                duration_seconds=row.duration_seconds,
+                result_summary=format_result_summary(row.result) or row.error_text,
                 strategy_used=result_metadata.strategy_used,
-                impact_summary=_build_maintenance_impact_summary(result, ingest_audit=ingest_audit),
+                impact_summary=_build_maintenance_impact_summary(row.result, ingest_audit=ingest_audit),
                 candidate_count=result_metadata.candidate_count,
                 group_count=result_metadata.group_count,
-                created_count=_prefer_nonzero_int(_result_int(result, "created"), ingest_audit.created_count),
-                merged_count=_result_int(result, "merged"),
-                updated_count=_result_int(result, "updated"),
-                archived_count=_result_int(result, "archived"),
-                lines_compressed=_result_int(result, "lines_compressed"),
+                created_count=_prefer_nonzero_int(_result_int(row.result, "created"), ingest_audit.created_count),
+                merged_count=_result_int(row.result, "merged"),
+                updated_count=_result_int(row.result, "updated"),
+                archived_count=_result_int(row.result, "archived"),
+                lines_compressed=_result_int(row.result, "lines_compressed"),
                 meaningful_actions=_prefer_nonzero_int(
-                    _result_int(result, "meaningful_actions"),
+                    _result_int(row.result, "meaningful_actions"),
                     ingest_audit.meaningful_actions,
                 ),
             )
@@ -811,9 +787,9 @@ def build_search_quality(*, search_health, graph_topology: GraphTopologyPayload,
 
 
 def build_lifecycle_trends(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
-    maintenance_rows,
+    maintenance_rows: list[MaintenanceTaskRunRow],
     cutoff: float,
     generated_at: float,
     bucket_seconds: int,
@@ -827,26 +803,25 @@ def build_lifecycle_trends(
         cutoff=cutoff,
         generated_at=generated_at,
         bucket_seconds=bucket_seconds,
-        predicate=lambda row: row["last_surfaced_at"] is None,
+        predicate=lambda row: row.last_surfaced_at is None,
     )
     cold_tail = _build_backlog_series(
         memory_rows,
         cutoff=cutoff,
         generated_at=generated_at,
         bucket_seconds=bucket_seconds,
-        predicate=lambda row: row["last_accessed_at"] is None,
+        predicate=lambda row: row.last_accessed_at is None,
     )
 
     event_buckets: dict[str, Counter[int]] = {key: Counter() for key, _ in _STATUS_EVENT_DEFS}
     observed_event_keys: set[str] = set()
     for row in maintenance_rows:
-        completed_at = float(row["completed_at"] or 0.0)
+        completed_at = row.completed_at
         if completed_at < cutoff or completed_at > generated_at:
             continue
-        result = decode_run_result(row["result_json"])
         bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
         for key, _label in _STATUS_EVENT_DEFS:
-            value = _result_int(result, key)
+            value = _result_int(row.result, key)
             if value is None:
                 continue
             observed_event_keys.add(key)
@@ -879,7 +854,7 @@ def build_lifecycle_trends(
 
 
 def build_growth_dynamics(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -892,8 +867,8 @@ def build_growth_dynamics(
     tag_counts: Counter[str] = Counter()
     workspace_counts: Counter[str] = Counter()
     for row in memory_rows:
-        tag_counts.update(split_csv_values(row["tags_csv"]))
-        workspace_counts.update(split_csv_values(row["workspace_ids_csv"]))
+        tag_counts.update(row.tags)
+        workspace_counts.update(row.workspace_ids)
 
     top_tag_keys, include_other_tags = _select_top_keys(tag_counts, limit=_DYNAMICS_LIMIT)
     top_workspace_keys, include_other_workspaces = _select_top_keys(workspace_counts, limit=_DYNAMICS_LIMIT)
@@ -907,7 +882,7 @@ def build_growth_dynamics(
             bucket_starts=bucket_starts,
             top_keys=top_tag_keys,
             include_other=include_other_tags,
-            extractor=lambda row: split_csv_values(row["tags_csv"]),
+            extractor=lambda row: row.tags,
         ),
         workspace_contribution_share=_build_cumulative_dimension_share_series(
             memory_rows,
@@ -917,30 +892,9 @@ def build_growth_dynamics(
             bucket_starts=bucket_starts,
             top_keys=top_workspace_keys,
             include_other=include_other_workspaces,
-            extractor=lambda row: split_csv_values(row["workspace_ids_csv"]),
+            extractor=lambda row: row.workspace_ids,
         ),
     )
-
-
-def _runtime_log_data(row) -> dict[str, object]:
-    raw_data = row["data_json"]
-    if not isinstance(raw_data, str) or not raw_data.strip():
-        return {}
-    try:
-        decoded = json.loads(raw_data)
-    except ValueError:
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
-
-
-def _runtime_log_task_name(log_data: dict[str, object]) -> str:
-    extra = log_data.get("extra")
-    if isinstance(extra, dict):
-        extra_dict = cast(dict[str, object], extra)
-        task_name = extra_dict.get("task_name")
-        if isinstance(task_name, str) and task_name.strip():
-            return task_name.strip()
-    return "unknown"
 
 
 def _counter_top_value(counter: Counter[tuple[str, str, str | None]], *, index: int) -> str | None:
@@ -1210,7 +1164,7 @@ def _bucket_starts(*, cutoff: float, generated_at: float, bucket_seconds: int) -
 
 
 def _build_backlog_series(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -1226,7 +1180,7 @@ def _build_backlog_series(
     for row in memory_rows:
         if not predicate(row):
             continue
-        created_at = _iso_to_timestamp(row["created_at"])
+        created_at = _datetime_to_timestamp(row.created_at)
         if created_at is None:
             continue
         if created_at < cutoff:
@@ -1256,7 +1210,7 @@ def _dimension_labels(top_keys: list[str], *, include_other: bool) -> list[tuple
 
 
 def _build_cumulative_dimension_count_series(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -1277,7 +1231,7 @@ def _build_cumulative_dimension_count_series(
         contributions = _map_dimension_contributions(extractor(row), top_keys=top_keys, include_other=include_other)
         if not contributions:
             continue
-        created_at = _iso_to_timestamp(row["created_at"])
+        created_at = _datetime_to_timestamp(row.created_at)
         if created_at is None or created_at > generated_at:
             continue
         if created_at < cutoff:
@@ -1303,7 +1257,7 @@ def _build_cumulative_dimension_count_series(
 
 
 def _build_cumulative_dimension_share_series(
-    memory_rows,
+    memory_rows: list[ScopedMemoryRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -1324,7 +1278,7 @@ def _build_cumulative_dimension_share_series(
         contributions = _map_dimension_contributions(extractor(row), top_keys=top_keys, include_other=include_other)
         if not contributions:
             continue
-        created_at = _iso_to_timestamp(row["created_at"])
+        created_at = _datetime_to_timestamp(row.created_at)
         if created_at is None or created_at > generated_at:
             continue
         if created_at < cutoff:
@@ -1376,10 +1330,6 @@ def _bucket_key_for_value(value: float, bucket_defs) -> str:
     return str(bucket_defs[-1][0])
 
 
-def _coerce_row_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
 def _result_int(result: dict[str, object], key: str) -> int | None:
     value = result.get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else None
@@ -1393,10 +1343,7 @@ def _prefer_nonzero_int(primary: int | None, fallback: int | None) -> int | None
     return primary if primary is not None else fallback
 
 
-def _iso_to_timestamp(value: str | None) -> float | None:
+def _datetime_to_timestamp(value: datetime | None) -> float | None:
     if value is None:
         return None
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.timestamp()
+    return value.timestamp()

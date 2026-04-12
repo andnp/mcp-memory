@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
+from mcp_memory.management.reporting_rows import ProviderUsageRow, TaskRunRow
 
 
 pytestmark = pytest.mark.small
@@ -11,62 +12,57 @@ pytestmark = pytest.mark.small
 def test_build_nerd_metrics_throughput_rollups_aggregates_buckets_and_premium_counters() -> None:
     rollups = build_nerd_metrics_throughput_rollups(
         task_rows=[
-            {
-                "completed_at": 120.0,
-                "status": "completed",
-                "duration_seconds": 2.0,
-                "result_json": {
+            TaskRunRow(
+                completed_at=120.0,
+                status="completed",
+                duration_seconds=2.0,
+                result={
                     "provider_calls_used": 2,
                     "claimed_work_item_count": 6,
                     "mutations": 4,
                     "tool_calls_executed": 3,
                     "compatible_batch_calls": 1,
                 },
-            },
-            {
-                "completed_at": 150.0,
-                "status": "failed",
-                "duration_seconds": 4.0,
-                "result_json": {
+            ),
+            TaskRunRow(
+                completed_at=150.0,
+                status="failed",
+                duration_seconds=4.0,
+                result={
                     "provider_calls_used": 1,
                     "claimed_work_item_count": 2,
                     "mutations": 1,
                     "tool_calls_executed": 5,
                     "compatible_batch_calls": 2,
                 },
-            },
-            {
-                "completed_at": 170.0,
-                "status": "retry",
-                "duration_seconds": 0.0,
-                "result_json": {},
-            },
+            ),
+            TaskRunRow(completed_at=170.0, status="retry", duration_seconds=0.0, result={}),
         ],
         provider_rows=[
-            {
-                "created_at": 130.0,
-                "provider_key": "gemini-cli",
-                "provider_name": "Gemini CLI",
-                "model_name": "gemini-3-flash-preview",
-                "status": "success",
-                "duration_seconds": 0.25,
-            },
-            {
-                "created_at": 140.0,
-                "provider_key": "gemini-cli",
-                "provider_name": "Gemini CLI",
-                "model_name": "gemini-3-flash-preview",
-                "status": "error",
-                "duration_seconds": 0.75,
-            },
-            {
-                "created_at": 150.0,
-                "provider_key": "copilot-mini",
-                "provider_name": "Copilot CLI",
-                "model_name": "gpt-5-mini",
-                "status": "skipped",
-                "duration_seconds": 0.0,
-            },
+            ProviderUsageRow(
+                created_at=130.0,
+                provider_key="gemini-cli",
+                provider_name="Gemini CLI",
+                model_name="gemini-3-flash-preview",
+                status="success",
+                duration_seconds=0.25,
+            ),
+            ProviderUsageRow(
+                created_at=140.0,
+                provider_key="gemini-cli",
+                provider_name="Gemini CLI",
+                model_name="gemini-3-flash-preview",
+                status="error",
+                duration_seconds=0.75,
+            ),
+            ProviderUsageRow(
+                created_at=150.0,
+                provider_key="copilot-mini",
+                provider_name="Copilot CLI",
+                model_name="gpt-5-mini",
+                status="skipped",
+                duration_seconds=0.0,
+            ),
         ],
         bucket_seconds=60,
     )

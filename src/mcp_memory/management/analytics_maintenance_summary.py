@@ -13,7 +13,6 @@ from mcp_memory.core.task_handlers import (
     SWEEPER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
 )
-from mcp_memory.management.agent_run_reporting import decode_run_result
 from mcp_memory.management.models import (
     NerdMaintenanceAgentYieldPayload,
     NerdMaintenanceDeltaBucketPayload,
@@ -21,6 +20,7 @@ from mcp_memory.management.models import (
     NerdMaintenanceSummaryPayload,
     NerdMaintenanceSummaryRowPayload,
 )
+from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
 
 
 _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
@@ -91,7 +91,7 @@ class _MaintenanceSummaryAccumulator:
 
 
 def build_maintenance_summary(
-    maintenance_rows,
+    maintenance_rows: list[MaintenanceTaskRunRow],
     *,
     cutoff: float,
     generated_at: float,
@@ -107,19 +107,18 @@ def build_maintenance_summary(
     family_bucket_totals: dict[str, dict[int, dict[str, int]]] = {}
 
     for row in maintenance_rows:
-        completed_at = float(row["completed_at"] or 0.0)
+        completed_at = row.completed_at
         if completed_at < cutoff or completed_at > generated_at:
             continue
-        task_name = str(row["task_name"])
+        task_name = row.task_name
         family_key, family_label = _maintenance_family_for_task(task_name)
         family_acc = family_accumulators.setdefault(family_key, _MaintenanceSummaryAccumulator())
         agent_acc = agent_accumulators.setdefault(task_name, _MaintenanceSummaryAccumulator())
         agent_families[task_name] = (family_key, family_label)
 
-        result = decode_run_result(row["result_json"])
-        deltas = _run_reported_delta_counts(result)
-        _update_maintenance_summary_accumulator(family_acc, task_name=task_name, status=str(row["status"]), deltas=deltas)
-        _update_maintenance_summary_accumulator(agent_acc, task_name=task_name, status=str(row["status"]), deltas=deltas)
+        deltas = _run_reported_delta_counts(row.result)
+        _update_maintenance_summary_accumulator(family_acc, task_name=task_name, status=row.status, deltas=deltas)
+        _update_maintenance_summary_accumulator(agent_acc, task_name=task_name, status=row.status, deltas=deltas)
 
         bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
         family_bucket = family_bucket_totals.setdefault(family_key, {}).setdefault(

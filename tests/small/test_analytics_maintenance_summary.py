@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.management.analytics_maintenance_summary import build_maintenance_summary
+from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
 
 
 pytestmark = pytest.mark.small
@@ -11,24 +12,30 @@ pytestmark = pytest.mark.small
 def test_build_maintenance_summary_rolls_up_family_agent_and_delta_series() -> None:
     payload = build_maintenance_summary(
         maintenance_rows=[
-            {
-                "completed_at": 120.0,
-                "task_name": "project-manager",
-                "status": "completed",
-                "result_json": {"updated": 2, "meaningful_actions": 2},
-            },
-            {
-                "completed_at": 180.0,
-                "task_name": "graph-linker",
-                "status": "failed",
-                "result_json": {"updated": 3, "lines_compressed": 5},
-            },
-            {
-                "completed_at": 240.0,
-                "task_name": "deduplicator",
-                "status": "completed",
-                "result_json": {"merged": 4, "archived": 1, "meaningful_actions": 3},
-            },
+            MaintenanceTaskRunRow(
+                task_id="task-organization",
+                task_name="project-manager",
+                status="completed",
+                completed_at=120.0,
+                duration_seconds=0.0,
+                result={"updated": 2, "meaningful_actions": 2},
+            ),
+            MaintenanceTaskRunRow(
+                task_id="task-verification",
+                task_name="graph-linker",
+                status="failed",
+                completed_at=180.0,
+                duration_seconds=0.0,
+                result={"updated": 3, "lines_compressed": 5},
+            ),
+            MaintenanceTaskRunRow(
+                task_id="task-compaction",
+                task_name="deduplicator",
+                status="completed",
+                completed_at=240.0,
+                duration_seconds=0.0,
+                result={"merged": 4, "archived": 1, "meaningful_actions": 3},
+            ),
         ],
         cutoff=100.0,
         generated_at=300.0,

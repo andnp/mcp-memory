@@ -8,6 +8,7 @@ import pytest
 
 from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
+from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
 from mcp_memory.mcp.internal_services import internal_search_memory_records_service
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
@@ -20,65 +21,64 @@ pytestmark = pytest.mark.small
 def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> None:
     payload = build_retrieval_analytics(
         [
-            {
-                "id": "memory-a",
-                "title": "Alpha retrieval memory",
-                "type": "fact",
-                "status": "active",
-                "tags_csv": "alpha-tag,common-tag",
-            },
-            {
-                "id": "memory-b",
-                "title": "Beta retrieval memory",
-                "type": "plan",
-                "status": "stale",
-                "tags_csv": "beta-tag,common-tag",
-            },
+            ScopedMemoryRow(
+                id="memory-a",
+                title="Alpha retrieval memory",
+                memory_type="fact",
+                status="active",
+                tags=["alpha-tag", "common-tag"],
+            ),
+            ScopedMemoryRow(
+                id="memory-b",
+                title="Beta retrieval memory",
+                memory_type="plan",
+                status="stale",
+                tags=["beta-tag", "common-tag"],
+            ),
         ],
         retrieval_rows=[
-            {
-                "event_kind": "search",
-                "invocation_id": "search-1",
-                "created_at": 100.0,
-                "caller_kind": "external",
-                "query_text": "Alpha phrase",
-                "result_count": 2,
-                "memory_id": "memory-a",
-            },
-            {
-                "event_kind": "search",
-                "invocation_id": "search-1",
-                "created_at": 100.0,
-                "caller_kind": "external",
-                "query_text": "Alpha phrase",
-                "result_count": 2,
-                "memory_id": "memory-b",
-            },
-            {
-                "event_kind": "read",
-                "invocation_id": "read-1",
-                "created_at": 130.0,
-                "caller_kind": "external",
-                "memory_id": "memory-a",
-            },
-            {
-                "event_kind": "search",
-                "invocation_id": "search-2",
-                "created_at": 160.0,
-                "caller_kind": "internal",
-                "query_text": "Missing phrase",
-                "result_count": 0,
-                "memory_id": None,
-            },
-            {
-                "event_kind": "search",
-                "invocation_id": "search-3",
-                "created_at": 170.0,
-                "caller_kind": "external",
-                "query_text": "  alpha   phrase  ",
-                "result_count": 1,
-                "memory_id": "missing-memory",
-            },
+            MemoryToolEventRow(
+                event_kind="search",
+                invocation_id="search-1",
+                created_at=100.0,
+                caller_kind="external",
+                query_text="Alpha phrase",
+                result_count=2,
+                memory_id="memory-a",
+            ),
+            MemoryToolEventRow(
+                event_kind="search",
+                invocation_id="search-1",
+                created_at=100.0,
+                caller_kind="external",
+                query_text="Alpha phrase",
+                result_count=2,
+                memory_id="memory-b",
+            ),
+            MemoryToolEventRow(
+                event_kind="read",
+                invocation_id="read-1",
+                created_at=130.0,
+                caller_kind="external",
+                memory_id="memory-a",
+            ),
+            MemoryToolEventRow(
+                event_kind="search",
+                invocation_id="search-2",
+                created_at=160.0,
+                caller_kind="internal",
+                query_text="Missing phrase",
+                result_count=0,
+            ),
+            MemoryToolEventRow(
+                event_kind="search",
+                invocation_id="search-3",
+                created_at=170.0,
+                caller_kind="external",
+                query_text="  alpha   phrase  ",
+                result_count=1,
+                memory_id="missing-memory",
+            ),
         ],
         cutoff=0.0,
         generated_at=200.0,

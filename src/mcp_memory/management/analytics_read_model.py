@@ -14,6 +14,15 @@ from mcp_memory.management.reporting_queries import (
     list_scoped_memory_rows,
     list_task_run_rows_since,
 )
+from mcp_memory.management.reporting_rows import (
+    MaintenanceTaskRunRow,
+    MemoryToolEventRow,
+    ProviderPolicyEventRow,
+    ProviderUsageRow,
+    RuntimeLogRow,
+    ScopedMemoryRow,
+    TaskRunRow,
+)
 
 
 @dataclass(frozen=True)
@@ -21,13 +30,13 @@ class NerdMetricsReadModel:
     generated_at: float
     cutoff: float
     bucket_seconds: int
-    task_rows: list[dict[str, object]] = field(default_factory=list)
-    maintenance_rows: list[dict[str, object]] = field(default_factory=list)
-    provider_rows: list[dict[str, object]] = field(default_factory=list)
-    provider_policy_event_rows: list[dict[str, object]] = field(default_factory=list)
-    provider_policy_log_rows: list[dict[str, object]] = field(default_factory=list)
-    memory_rows: list[dict[str, object]] = field(default_factory=list)
-    retrieval_rows: list[dict[str, object]] = field(default_factory=list)
+    task_rows: list[TaskRunRow] = field(default_factory=list)
+    maintenance_rows: list[MaintenanceTaskRunRow] = field(default_factory=list)
+    provider_rows: list[ProviderUsageRow] = field(default_factory=list)
+    provider_policy_event_rows: list[ProviderPolicyEventRow] = field(default_factory=list)
+    provider_policy_log_rows: list[RuntimeLogRow] = field(default_factory=list)
+    memory_rows: list[ScopedMemoryRow] = field(default_factory=list)
+    retrieval_rows: list[MemoryToolEventRow] = field(default_factory=list)
     queue_rows: list[QueueDiagnosticPayload] = field(default_factory=list)
 
 

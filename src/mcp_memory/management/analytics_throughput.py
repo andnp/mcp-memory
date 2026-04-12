@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 import math
 from statistics import mean
 
-from mcp_memory.management.agent_run_reporting import decode_run_result, extract_run_result_metadata
+from mcp_memory.management.agent_run_reporting import extract_run_result_metadata
 from mcp_memory.management.models import AgentThroughputBucketPayload, ProviderLatencyBucketPayload
+from mcp_memory.management.reporting_rows import ProviderUsageRow, TaskRunRow
 
 
 @dataclass
@@ -42,23 +43,23 @@ class NerdMetricsThroughputRollups:
 
 def build_nerd_metrics_throughput_rollups(
     *,
-    task_rows: list[dict[str, object]],
-    provider_rows: list[dict[str, object]],
+    task_rows: list[TaskRunRow],
+    provider_rows: list[ProviderUsageRow],
     bucket_seconds: int,
 ) -> NerdMetricsThroughputRollups:
     task_buckets: dict[float, _TaskBucketAccumulator] = {}
     for row in task_rows:
-        bucket_start = float(int(_coerce_float(row["completed_at"]) // bucket_seconds) * bucket_seconds)
+        bucket_start = float(int(row.completed_at // bucket_seconds) * bucket_seconds)
         bucket = task_buckets.setdefault(bucket_start, _TaskBucketAccumulator())
         bucket.total_runs += 1
-        status = str(row["status"])
+        status = row.status
         if status == "completed":
             bucket.completed_runs += 1
         elif status == "failed":
             bucket.failed_runs += 1
         elif status == "retry":
             bucket.retry_runs += 1
-        bucket.durations.append(_coerce_float(row["duration_seconds"]))
+        bucket.durations.append(row.duration_seconds)
 
     agent_throughput = [
         AgentThroughputBucketPayload(
@@ -83,7 +84,7 @@ def build_nerd_metrics_throughput_rollups(
     compatible_batch_calls = 0
 
     for row in task_rows:
-        result_metadata = extract_run_result_metadata(decode_run_result(row["result_json"]))
+        result_metadata = extract_run_result_metadata(row.result)
         provider_calls_used = result_metadata.provider_calls_used or 0
         premium_execution_count += provider_calls_used
         if provider_calls_used > 0:
@@ -93,20 +94,20 @@ def build_nerd_metrics_throughput_rollups(
         compatible_batch_calls += result_metadata.compatible_batch_calls or 0
 
     for row in provider_rows:
-        status = str(row["status"])
+        status = row.status
         if status == "skipped":
             provider_skips += 1
             continue
 
-        bucket_start = float(int(_coerce_float(row["created_at"]) // bucket_seconds) * bucket_seconds)
+        bucket_start = float(int(row.created_at // bucket_seconds) * bucket_seconds)
         key = (
             bucket_start,
-            str(row["provider_key"]),
-            str(row["provider_name"]),
-            str(row["model_name"]),
+            row.provider_key,
+            row.provider_name,
+            row.model_name,
         )
         bucket = provider_buckets.setdefault(key, _ProviderBucketAccumulator())
-        duration = _coerce_float(row["duration_seconds"])
+        duration = row.duration_seconds
         bucket.call_count += 1
         bucket.durations.append(duration)
         all_provider_durations.append(duration)
@@ -146,20 +147,6 @@ def build_nerd_metrics_throughput_rollups(
         premium_tool_calls=premium_tool_calls,
         compatible_batch_calls=compatible_batch_calls,
     )
-
-
-def _coerce_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
-
-
 def _percentile(values: list[float], ratio: float) -> float:
     if not values:
         return 0.0

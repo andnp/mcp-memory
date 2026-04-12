@@ -22,9 +22,9 @@ from mcp_memory.management.reporting_queries import (
     fetch_memory_metrics_row,
     fetch_pending_journal_metrics_row,
     fetch_task_count_rows,
-    row_int,
     summarize_copilot_premium_requests,
 )
+from mcp_memory.management.reporting_rows import MemoryMetricsRow, PendingJournalMetricsRow
 from mcp_memory.serialization import compact_memory_record_payload, task_payload
 
 
@@ -34,16 +34,16 @@ def build_memory_counts(db_manager, workspace_id: str | None) -> tuple[dict[str,
     by_status: dict[str, int] = {}
     total = 0
     for row in rows:
-        count = row_int(row, "count")
+        count = row.count
         total += count
-        by_type[str(row["type"])] = by_type.get(str(row["type"]), 0) + count
-        by_status[str(row["status"])] = by_status.get(str(row["status"]), 0) + count
+        by_type[row.memory_type] = by_type.get(row.memory_type, 0) + count
+        by_status[row.status] = by_status.get(row.status, 0) + count
     return by_type, by_status, total
 
 
 def build_task_counts(db_manager, workspace_id: str | None) -> dict[str, int]:
     rows = fetch_task_count_rows(db_manager, workspace_id)
-    return {str(row["status"]): row_int(row, "count") for row in rows}
+    return {row.status: row.count for row in rows}
 
 
 def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> MemoryMetricsPayload:
@@ -57,8 +57,8 @@ def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> Me
             thought_buffer_lines=0,
         )
 
-    memory_row = fetch_memory_metrics_row(db_manager, workspace_id)
-    journal_row = fetch_pending_journal_metrics_row(db_manager, workspace_id)
+    memory_row = fetch_memory_metrics_row(db_manager, workspace_id) or MemoryMetricsRow()
+    journal_row = fetch_pending_journal_metrics_row(db_manager, workspace_id) or PendingJournalMetricsRow()
 
     total_lines_compressed = sum(
         max(agent_run.total_lines_compressed, 0)
@@ -68,12 +68,12 @@ def build_memory_metrics(db_manager, workspace_id: str | None, task_queue) -> Me
         )
     )
     return MemoryMetricsPayload(
-        total_memories=row_int(memory_row, "total_memories"),
-        total_memory_lines=row_int(memory_row, "total_memory_lines"),
-        total_summary_lines=row_int(memory_row, "total_summary_lines"),
+        total_memories=memory_row.total_memories,
+        total_memory_lines=memory_row.total_memory_lines,
+        total_summary_lines=memory_row.total_summary_lines,
         total_lines_compressed=total_lines_compressed,
-        thought_buffer_entries=row_int(journal_row, "thought_buffer_entries"),
-        thought_buffer_lines=row_int(journal_row, "thought_buffer_lines"),
+        thought_buffer_entries=journal_row.thought_buffer_entries,
+        thought_buffer_lines=journal_row.thought_buffer_lines,
     )
 
 
@@ -147,8 +147,10 @@ def build_overview(
         sqlite_bytes = sqlite_path.stat().st_size
 
     memory_metrics = build_memory_metrics(db_manager, None, task_queue)
+    premium_usage_summary = summarize_copilot_premium_requests(db_manager, workspace_id=None)
     premium_usage = PremiumUsageSummaryPayload(
-        **summarize_copilot_premium_requests(db_manager, workspace_id=None)
+        copilot_premium_requests_today=premium_usage_summary.copilot_premium_requests_today,
+        copilot_premium_requests_last_day=premium_usage_summary.copilot_premium_requests_last_day,
     )
     agent_runs = build_agent_runs(task_queue, None)
     provider_usage = build_provider_usage(provider_usage_repo, None)

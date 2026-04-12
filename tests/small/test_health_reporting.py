@@ -6,54 +6,15 @@ import pytest
 
 from mcp_memory.embeddings import HashingEmbedder
 from mcp_memory.management.health_reporting import (
-    _coerce_float,
-    _coerce_int,
     build_embedding_status,
     build_execution_attempt_health,
     build_search_health,
 )
 from mcp_memory.management.models import EmbeddingIntegrityEventSummaryPayload, SearchHealthPayload
+from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
 
 
 pytestmark = pytest.mark.small
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (None, 0.0),
-        (True, 1.0),
-        (2, 2.0),
-        (2.5, 2.5),
-        ("3.25", 3.25),
-    ],
-)
-def test_coerce_float_handles_supported_values(value: object, expected: float) -> None:
-    assert _coerce_float(value) == expected
-
-
-def test_coerce_float_rejects_invalid_type() -> None:
-    with pytest.raises(TypeError, match="Expected float-compatible value"):
-        _coerce_float([1, 2, 3])
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (None, 0),
-        (False, 0),
-        (7, 7),
-        (7.9, 7),
-        ("12", 12),
-    ],
-)
-def test_coerce_int_handles_supported_values(value: object, expected: int) -> None:
-    assert _coerce_int(value) == expected
-
-
-def test_coerce_int_rejects_invalid_type() -> None:
-    with pytest.raises(TypeError, match="Expected int-compatible value"):
-        _coerce_int({"value": 1})
 
 
 def test_build_execution_attempt_health_returns_defaults_when_no_rows() -> None:
@@ -77,33 +38,29 @@ def test_build_execution_attempt_health_returns_defaults_when_no_rows() -> None:
 def test_build_execution_attempt_health_counts_fresh_stale_missing_and_subprocess_states() -> None:
     observed_pids: list[int] = []
     rows = [
-        {
-            "task_id": "task-fresh",
-            "updated_at": "200.0",
-            "started_at": "180.0",
-            "claimed_at": None,
-            "attempt_started_at": 190.0,
-            "last_heartbeat_at": "195.0",
-            "attempt_subprocess_pid": "101",
-        },
-        {
-            "task_id": "task-stale",
-            "updated_at": 100.0,
-            "started_at": 90.0,
-            "claimed_at": 95.0,
-            "attempt_started_at": 100.0,
-            "last_heartbeat_at": None,
-            "attempt_subprocess_pid": 202,
-        },
-        {
-            "task_id": "task-missing",
-            "updated_at": 210.0,
-            "started_at": 205.0,
-            "claimed_at": 206.0,
-            "attempt_started_at": None,
-            "last_heartbeat_at": None,
-            "attempt_subprocess_pid": 303,
-        },
+        RunningTaskAttemptRow(
+            task_id="task-fresh",
+            updated_at=200.0,
+            started_at=180.0,
+            attempt_started_at=190.0,
+            last_heartbeat_at=195.0,
+            attempt_subprocess_pid=101,
+        ),
+        RunningTaskAttemptRow(
+            task_id="task-stale",
+            updated_at=100.0,
+            started_at=90.0,
+            claimed_at=95.0,
+            attempt_started_at=100.0,
+            attempt_subprocess_pid=202,
+        ),
+        RunningTaskAttemptRow(
+            task_id="task-missing",
+            updated_at=210.0,
+            started_at=205.0,
+            claimed_at=206.0,
+            attempt_subprocess_pid=303,
+        ),
     ]
 
     payload = build_execution_attempt_health(
@@ -133,15 +90,14 @@ def test_build_execution_attempt_health_skips_subprocess_liveness_without_pid() 
         stale_after_seconds=60.0,
         now=240.0,
         fetch_running_attempt_rows=lambda db_manager: [
-            {
-                "task_id": "task-running-no-pid",
-                "updated_at": 200.0,
-                "started_at": 180.0,
-                "claimed_at": 181.0,
-                "attempt_started_at": 190.0,
-                "last_heartbeat_at": 220.0,
-                "attempt_subprocess_pid": None,
-            }
+            RunningTaskAttemptRow(
+                task_id="task-running-no-pid",
+                updated_at=200.0,
+                started_at=180.0,
+                claimed_at=181.0,
+                attempt_started_at=190.0,
+                last_heartbeat_at=220.0,
+            )
         ],
         process_is_alive=unexpected_process_check,
     )

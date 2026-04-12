@@ -9,6 +9,37 @@ import time
 from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.management.models import QueueDiagnosticPayload
 from mcp_memory.management.query_runner import ManagementQueryRunner
+from mcp_memory.management.reporting_rows import (
+    AiConversationRow,
+    CopilotPremiumUsageSummary,
+    LinkRow,
+    MaintenanceTaskRunRow,
+    MemoryCountRow,
+    MemoryMetricsRow,
+    MemoryToolEventRow,
+    PendingJournalMetricsRow,
+    ProviderPolicyEventRow,
+    ProviderUsageRow,
+    RunningTaskAttemptRow,
+    RuntimeLogRow,
+    ScopedMemoryRow,
+    TaskCountRow,
+    TaskRunRow,
+    adapt_ai_conversation_row,
+    adapt_link_row,
+    adapt_maintenance_task_run_row,
+    adapt_memory_count_row,
+    adapt_memory_metrics_row,
+    adapt_memory_tool_event_row,
+    adapt_pending_journal_metrics_row,
+    adapt_provider_policy_event_row,
+    adapt_provider_usage_row,
+    adapt_running_task_attempt_row,
+    adapt_runtime_log_row,
+    adapt_scoped_memory_row,
+    adapt_task_count_row,
+    adapt_task_run_row,
+)
 
 
 def _fetchall_rows(db_manager, query: str, params: Sequence[object] | None = None) -> list[dict[str, object]]:
@@ -19,7 +50,7 @@ def _fetchone_row(db_manager, query: str, params: Sequence[object] | None = None
     return ManagementQueryRunner(db_manager).fetchone(query, params)
 
 
-def fetch_memory_count_rows(db_manager, workspace_id: str | None):
+def fetch_memory_count_rows(db_manager, workspace_id: str | None) -> list[MemoryCountRow]:
     if db_manager is None:
         return []
     params: list[object] = []
@@ -36,10 +67,10 @@ def fetch_memory_count_rows(db_manager, workspace_id: str | None):
         )
         params.append(workspace_id)
     query += " GROUP BY memories.type, memories.status"
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_memory_count_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def fetch_task_count_rows(db_manager, workspace_id: str | None):
+def fetch_task_count_rows(db_manager, workspace_id: str | None) -> list[TaskCountRow]:
     if db_manager is None:
         return []
     query = "SELECT status, COUNT(*) AS count FROM tasks"
@@ -48,10 +79,10 @@ def fetch_task_count_rows(db_manager, workspace_id: str | None):
         query += " WHERE workspace_id = ?"
         params.append(workspace_id)
     query += " GROUP BY status"
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_task_count_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def fetch_running_task_attempt_rows(db_manager):
+def fetch_running_task_attempt_rows(db_manager) -> list[RunningTaskAttemptRow]:
     if db_manager is None:
         return []
     query = (
@@ -64,10 +95,10 @@ def fetch_running_task_attempt_rows(db_manager):
         "WHERE tasks.status = 'running'"
     )
     query += " ORDER BY tasks.updated_at DESC, tasks.id DESC"
-    return _fetchall_rows(db_manager, query)
+    return [adapt_running_task_attempt_row(row) for row in _fetchall_rows(db_manager, query)]
 
 
-def fetch_memory_metrics_row(db_manager, workspace_id: str | None):
+def fetch_memory_metrics_row(db_manager, workspace_id: str | None) -> MemoryMetricsRow | None:
     if db_manager is None:
         return None
     params: list[object] = []
@@ -89,10 +120,11 @@ def fetch_memory_metrics_row(db_manager, workspace_id: str | None):
             "WHERE memory_workspaces.workspace_id = ?"
         )
         params.append(workspace_id)
-    return _fetchone_row(db_manager, query, params)
+    row = _fetchone_row(db_manager, query, params)
+    return None if row is None else adapt_memory_metrics_row(row)
 
 
-def fetch_pending_journal_metrics_row(db_manager, workspace_id: str | None):
+def fetch_pending_journal_metrics_row(db_manager, workspace_id: str | None) -> PendingJournalMetricsRow | None:
     if db_manager is None:
         return None
     query = (
@@ -105,10 +137,11 @@ def fetch_pending_journal_metrics_row(db_manager, workspace_id: str | None):
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
-    return _fetchone_row(db_manager, query, params)
+    row = _fetchone_row(db_manager, query, params)
+    return None if row is None else adapt_pending_journal_metrics_row(row)
 
 
-def list_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+def list_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | None) -> list[TaskRunRow]:
     if db_manager is None:
         return []
     query = "SELECT status, completed_at, duration_seconds, result_json FROM task_runs WHERE completed_at >= ?"
@@ -116,10 +149,15 @@ def list_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | N
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_task_run_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_maintenance_task_run_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+def list_maintenance_task_run_rows_since(
+    db_manager,
+    *,
+    cutoff: float,
+    workspace_id: str | None,
+) -> list[MaintenanceTaskRunRow]:
     if db_manager is None:
         return []
     placeholders = ",".join("?" for _ in MAINTENANCE_TASK_NAMES)
@@ -132,10 +170,10 @@ def list_maintenance_task_run_rows_since(db_manager, *, cutoff: float, workspace
         query += " AND workspace_id = ?"
         params.append(workspace_id)
     query += " ORDER BY completed_at DESC, started_at DESC"
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_maintenance_task_run_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: str | None) -> list[ProviderUsageRow]:
     if db_manager is None:
         return []
     query = (
@@ -146,7 +184,7 @@ def list_provider_usage_rows_since(db_manager, *, cutoff: float, workspace_id: s
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_provider_usage_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
 def count_recent_conversation_statuses(
@@ -192,7 +230,13 @@ def count_recent_memory_updates(
     return updated_count
 
 
-def list_ai_conversation_rows_since(db_manager, *, cutoff: float, upper_bound: float, workspace_id: str | None):
+def list_ai_conversation_rows_since(
+    db_manager,
+    *,
+    cutoff: float,
+    upper_bound: float,
+    workspace_id: str | None,
+) -> list[AiConversationRow]:
     if db_manager is None:
         return []
     query = (
@@ -203,15 +247,17 @@ def list_ai_conversation_rows_since(db_manager, *, cutoff: float, upper_bound: f
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_ai_conversation_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, now: float | None = None) -> dict[str, float]:
+def summarize_copilot_premium_requests(
+    db_manager,
+    *,
+    workspace_id: str | None,
+    now: float | None = None,
+) -> CopilotPremiumUsageSummary:
     if db_manager is None:
-        return {
-            "copilot_premium_requests_today": 0,
-            "copilot_premium_requests_last_day": 0,
-        }
+        return CopilotPremiumUsageSummary()
 
     current_time = time.time() if now is None else now
     last_day_cutoff = current_time - 86_400
@@ -226,43 +272,27 @@ def summarize_copilot_premium_requests(db_manager, *, workspace_id: str | None, 
         upper_bound=current_time,
         workspace_id=workspace_id,
     ):
-        provider_key = str(row["provider_key"] or "")
+        provider_key = row.provider_key
         if not provider_key.startswith("copilot"):
             continue
 
         premium_requests = extract_copilot_premium_requests(
-            response_text=_optional_string(row.get("response_text")),
-            parsed_json=_optional_string(row.get("parsed_json")),
+            response_text=row.response_text,
+            parsed_json=row.parsed_json,
         )
         if premium_requests <= 0:
             continue
 
-        completed_at = _coerce_float(row.get("completed_at"))
+        completed_at = row.completed_at
         if completed_at >= last_day_cutoff:
             premium_requests_last_day += premium_requests
         if completed_at >= today_start:
             premium_requests_today += premium_requests
 
-    return {
-        "copilot_premium_requests_today": premium_requests_today,
-        "copilot_premium_requests_last_day": premium_requests_last_day,
-    }
-
-
-def _optional_string(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _coerce_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
+    return CopilotPremiumUsageSummary(
+        copilot_premium_requests_today=premium_requests_today,
+        copilot_premium_requests_last_day=premium_requests_last_day,
+    )
 
 
 def extract_copilot_premium_requests(*, response_text: str | None, parsed_json: str | None) -> float:
@@ -324,7 +354,7 @@ def list_runtime_log_rows_since(
     workspace_id: str | None,
     logger_name: str | None = None,
     level: str | None = None,
-):
+) -> list[RuntimeLogRow]:
     if db_manager is None:
         return []
     query = (
@@ -341,10 +371,15 @@ def list_runtime_log_rows_since(
     if level is not None:
         query += " AND level = ?"
         params.append(level)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_runtime_log_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_provider_policy_event_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+def list_provider_policy_event_rows_since(
+    db_manager,
+    *,
+    cutoff: float,
+    workspace_id: str | None,
+) -> list[ProviderPolicyEventRow]:
     if db_manager is None:
         return []
     query = (
@@ -355,10 +390,15 @@ def list_provider_policy_event_rows_since(db_manager, *, cutoff: float, workspac
     if workspace_id is not None:
         query += " AND workspace_id = ?"
         params.append(workspace_id)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_provider_policy_event_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_memory_tool_event_rows_since(db_manager, *, cutoff: float, workspace_id: str | None):
+def list_memory_tool_event_rows_since(
+    db_manager,
+    *,
+    cutoff: float,
+    workspace_id: str | None,
+) -> list[MemoryToolEventRow]:
     if db_manager is None:
         return []
     query = (
@@ -370,10 +410,10 @@ def list_memory_tool_event_rows_since(db_manager, *, cutoff: float, workspace_id
         query += " AND workspace_id = ?"
         params.append(workspace_id)
     query += " ORDER BY created_at DESC, id DESC"
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_memory_tool_event_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_scoped_memory_rows(db_manager, workspace_id: str | None):
+def list_scoped_memory_rows(db_manager, workspace_id: str | None) -> list[ScopedMemoryRow]:
     if db_manager is None:
         return []
     query = (
@@ -397,21 +437,21 @@ def list_scoped_memory_rows(db_manager, workspace_id: str | None):
             "AND memory_workspaces.workspace_id = ?)"
         )
         params.append(workspace_id)
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_scoped_memory_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
-def list_scoped_link_rows(db_manager, workspace_id: str | None, memory_ids: set[str]):
+def list_scoped_link_rows(db_manager, workspace_id: str | None, memory_ids: set[str]) -> list[LinkRow]:
     if db_manager is None or not memory_ids:
         return []
     if workspace_id is None:
-        return _fetchall_rows(db_manager, "SELECT source_id, target_id, type FROM links")
+        return [adapt_link_row(row) for row in _fetchall_rows(db_manager, "SELECT source_id, target_id, type FROM links")]
 
     placeholders = ",".join("?" for _ in memory_ids)
     params = [*memory_ids, *memory_ids]
     query = (
         f"SELECT source_id, target_id, type FROM links WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})"
     )
-    return _fetchall_rows(db_manager, query, params)
+    return [adapt_link_row(row) for row in _fetchall_rows(db_manager, query, params)]
 
 
 def build_queue_diagnostics(task_queue, workspace_id: str | None, limit: int = 8, now: float | None = None) -> list[QueueDiagnosticPayload]:
@@ -449,24 +489,3 @@ def build_queue_diagnostics(task_queue, workspace_id: str | None, limit: int = 8
             )
         )
     return diagnostics
-
-
-def row_int(row: Any, key: str) -> int:
-    if row is None:
-        return 0
-    value = row[key]
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value for {key!r}, got {type(value)!r}")
-
-
-def split_csv_values(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item for item in value.split(",") if item]

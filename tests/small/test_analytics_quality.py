@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-import json
 
 import pytest
 
@@ -11,6 +10,7 @@ from mcp_memory.management.analytics_quality import (
     build_quality_remediation,
     build_quality_signal_series,
 )
+from mcp_memory.management.reporting_rows import ScopedMemoryRow
 
 
 pytestmark = pytest.mark.small
@@ -19,54 +19,49 @@ pytestmark = pytest.mark.small
 def test_quality_analytics_builders_preserve_existing_quality_contracts() -> None:
     now = datetime(2026, 4, 11, 12, 0, tzinfo=UTC)
     memory_rows = [
-        {
-            "id": "memory-trace",
-            "title": "task_complete: deduplicator-1",
-            "summary": "Concrete summary.",
-            "type": "fact",
-            "status": "active",
-            "tags_csv": "",
-            "content_bytes": 128,
-            "metadata": "",
-            "created_at": (now - timedelta(hours=4)).isoformat(),
-            "updated_at": (now - timedelta(hours=3)).isoformat(),
-        },
-        {
-            "id": "memory-observation",
-            "title": "Broad observation",
-            "summary": "Covers several related findings.",
-            "type": "observation",
-            "status": "active",
-            "tags_csv": "",
-            "content_bytes": 96,
-            "metadata": "",
-            "created_at": (now - timedelta(hours=3)).isoformat(),
-            "updated_at": (now - timedelta(hours=2)).isoformat(),
-        },
-        {
-            "id": "memory-oversized",
-            "title": "Oversized durable memory",
-            "summary": "Detailed but concrete summary.",
-            "type": "fact",
-            "status": "active",
-            "tags_csv": "durable",
-            "content_bytes": 4_200,
-            "metadata": json.dumps({"split_from_memory_id": "source-1", "split_group_id": "split-1"}),
-            "created_at": (now - timedelta(hours=2)).isoformat(),
-            "updated_at": (now - timedelta(hours=1)).isoformat(),
-        },
-        {
-            "id": "memory-tagged-observation",
-            "title": "Tagged observation",
-            "summary": "Concrete summary.",
-            "type": "observation",
-            "status": "active",
-            "tags_csv": "tagged,quality",
-            "content_bytes": 128,
-            "metadata": "",
-            "created_at": (now - timedelta(minutes=45)).isoformat(),
-            "updated_at": (now - timedelta(minutes=30)).isoformat(),
-        },
+        ScopedMemoryRow(
+            id="memory-trace",
+            title="task_complete: deduplicator-1",
+            summary="Concrete summary.",
+            memory_type="fact",
+            status="active",
+            content_bytes=128,
+            created_at=now - timedelta(hours=4),
+            updated_at=now - timedelta(hours=3),
+        ),
+        ScopedMemoryRow(
+            id="memory-observation",
+            title="Broad observation",
+            summary="Covers several related findings.",
+            memory_type="observation",
+            status="active",
+            content_bytes=96,
+            created_at=now - timedelta(hours=3),
+            updated_at=now - timedelta(hours=2),
+        ),
+        ScopedMemoryRow(
+            id="memory-oversized",
+            title="Oversized durable memory",
+            summary="Detailed but concrete summary.",
+            memory_type="fact",
+            status="active",
+            content_bytes=4_200,
+            tags=["durable"],
+            has_split_lineage=True,
+            created_at=now - timedelta(hours=2),
+            updated_at=now - timedelta(hours=1),
+        ),
+        ScopedMemoryRow(
+            id="memory-tagged-observation",
+            title="Tagged observation",
+            summary="Concrete summary.",
+            memory_type="observation",
+            status="active",
+            content_bytes=128,
+            tags=["tagged", "quality"],
+            created_at=now - timedelta(minutes=45),
+            updated_at=now - timedelta(minutes=30),
+        ),
     ]
 
     quality_signals = build_memory_quality_signals(memory_rows)

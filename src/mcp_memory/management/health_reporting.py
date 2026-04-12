@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 import mcp_memory.core.tasks as task_queue_module
 import time
 
@@ -12,36 +12,11 @@ from mcp_memory.management.models import (
     SearchHealthPayload,
 )
 from mcp_memory.management.reporting_queries import fetch_running_task_attempt_rows
+from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
 
 
-type RunningTaskAttemptRowFetcher = Callable[[object], Sequence[Mapping[str, object]]]
+type RunningTaskAttemptRowFetcher = Callable[[object], Sequence[RunningTaskAttemptRow]]
 type ProcessAliveChecker = Callable[[int], bool]
-
-
-def _coerce_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
-
-
-def _coerce_int(value: object) -> int:
-    if value is None:
-        return 0
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
 
 
 def build_embedding_status(
@@ -134,19 +109,19 @@ def build_execution_attempt_health(
     dead_subprocess_count = 0
 
     for row in rows:
-        attempt_started_at = row["attempt_started_at"]
-        last_heartbeat_at = row["last_heartbeat_at"]
-        subprocess_pid = row["attempt_subprocess_pid"]
+        attempt_started_at = row.attempt_started_at
+        last_heartbeat_at = row.last_heartbeat_at
+        subprocess_pid = row.attempt_subprocess_pid
         if attempt_started_at is None:
             missing_attempt_count += 1
             continue
 
         running_attempt_count += 1
         recent_activity_at = max(
-            _coerce_float(row["updated_at"]),
-            _coerce_float(row["started_at"] or row["updated_at"]),
-            _coerce_float(row["claimed_at"] or row["updated_at"]),
-            _coerce_float(last_heartbeat_at or attempt_started_at),
+            row.updated_at,
+            row.started_at or row.updated_at,
+            row.claimed_at or row.updated_at,
+            last_heartbeat_at or attempt_started_at,
         )
         age_seconds = max(current_time - recent_activity_at, 0.0)
         if age_seconds >= stale_after_seconds:
@@ -156,7 +131,7 @@ def build_execution_attempt_health(
 
         if subprocess_pid is None:
             continue
-        if process_is_alive(_coerce_int(subprocess_pid)):
+        if process_is_alive(subprocess_pid):
             live_subprocess_count += 1
         else:
             dead_subprocess_count += 1
