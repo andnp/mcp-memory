@@ -1,6 +1,6 @@
 # Architecture Decision Record: System Resilience & Runtime Safety
 
-**Status:** Current implementation baseline
+**Status:** Active
 
 ## 1. Boot Coordination
 

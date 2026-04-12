@@ -1,6 +1,6 @@
 # Specification: Memory Command Center (UI Overhaul)
 
-**Status:** Draft - High Priority
+**Status:** Draft
 
 ## 1. Vision: The "Memory Pulse"
 Transition from a static "monitoring dashboard" to an interactive **Memory Command Center**. The UI should feel "alive," reflecting the autonomous nature of the background agents and providing a low-friction interface for human thought stashing and memory exploration.

@@ -1,6 +1,6 @@
 # Architecture Decision Record: Provider Admission Control
 
-**Status:** Accepted incremental direction
+**Status:** Accepted direction
 **Date:** 2026-03-20
 
 ## 1. Context

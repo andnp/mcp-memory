@@ -1,5 +1,7 @@
 # Specification: End-to-End User Flows
 
+**Status:** Active
+
 This document defines the highest-value user journeys that should stay green as `mcp-memory` evolves.
 
 ## 1. Thought Capture to Searchable Memory

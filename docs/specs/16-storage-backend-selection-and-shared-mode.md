@@ -1,6 +1,6 @@
 # Architecture Decision Record: Storage Backend Selection, Shared Mode, and Partial Local Cache/Writeback
 
-**Status:** Active direction, partially implemented
+**Status:** Active, partially implemented
 
 ## 1. Decision
 

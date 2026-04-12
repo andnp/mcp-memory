@@ -1,6 +1,6 @@
 # Specification: Memory Management System (Relational)
 
-**Status:** Active runtime baseline
+**Status:** Active
 
 ## 1. Relational Schema
 

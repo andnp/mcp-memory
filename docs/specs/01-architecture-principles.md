@@ -1,5 +1,7 @@
 # Architecture Principles: Relational Memory Server
 
+**Status:** Active
+
 ## 1. Relational-First Persistence
 The runtime remains relational-first, but authority depends on backend mode.
 

@@ -1,6 +1,6 @@
 # Architecture Decision Record: Background Task Architecture
 
-**Status:** Current durable-task baseline
+**Status:** Active
 
 ## 1. Context
 The daemon runs background work while still needing to tolerate process restarts and short-lived client sessions.

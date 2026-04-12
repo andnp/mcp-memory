@@ -1,6 +1,6 @@
 # Architecture Decision Record: Work-Item Execution Architecture
 
-**Status:** Proposed incremental direction
+**Status:** Proposed direction
 **Date:** 2026-03-22
 
 ## 1. Context

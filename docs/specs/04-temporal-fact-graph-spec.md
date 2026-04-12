@@ -1,6 +1,6 @@
 # Specification: Temporal Fact Graph (Relational)
 
-**Status:** Active relational-link baseline with future expansion points.
+**Status:** Active
 
 ## 1. Overview
 The memory graph is represented by explicit typed rows in the `links` table.

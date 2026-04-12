@@ -1,5 +1,7 @@
 # Specification: Testing Strategy
 
+**Status:** Active
+
 ## 1. Overview
 The test suite uses the `small` / `medium` / `large` structure and prefers real local components over brittle mocks.
 

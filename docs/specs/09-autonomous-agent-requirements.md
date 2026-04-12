@@ -1,6 +1,6 @@
 # Specification: Autonomous Agent Requirements
 
-**Status:** ✅ Complete Vision (Target for Implementation)
+**Status:** Vision
 
 ## 1. Overview
 The `mcp-memory` daemon runs 9 background agents to maintain the relational knowledge graph. This document defines the model strength requirements and operational logic for each.

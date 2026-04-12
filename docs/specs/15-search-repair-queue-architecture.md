@@ -1,6 +1,6 @@
 # Architecture Decision Record: Queue-Backed Search Repair
 
-**Status:** Proposed incremental direction
+**Status:** Proposed direction
 **Date:** 2026-03-24
 
 ## 1. Context

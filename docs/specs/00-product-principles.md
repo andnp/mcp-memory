@@ -1,5 +1,7 @@
 # Product Principles
 
+**Status:** Active
+
 ## 1. One Global Runtime Authority
 `mcp-memory` runs as one global daemon per user environment.
 

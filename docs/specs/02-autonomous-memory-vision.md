@@ -1,5 +1,7 @@
 # Vision: Autonomous Memory Consolidation
 
+**Status:** Vision
+
 ## 1. Overview
 Current memory systems place high cognitive load on the AI, requiring it to manually organize, format, and structure files. This vision introduces a **Self-Healing Knowledge Graph** for `mcp-memory`:
 - **System 1 (Thought Cache):** A fast, append-only scratchpad for raw thoughts.

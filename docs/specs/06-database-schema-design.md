@@ -1,6 +1,6 @@
 # Architecture Decision Record: Database Schema Design
 
-**Status:** Current relational schema baseline
+**Status:** Active
 
 ## 1. Core Principle
 The server uses one shared SQLite database for operational state.
