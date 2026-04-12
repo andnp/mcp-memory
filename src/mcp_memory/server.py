@@ -21,7 +21,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
-_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS = 30.0
+_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS = 60.0
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD = 2
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 _REQUEST_RECOVERY_RETRY_COUNT = 2
@@ -53,6 +53,7 @@ class MCPServer:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
             payload = await self._request_daemon_json_with_client_timeout(self._tool_path_prefix, None)
+            _raise_for_daemon_error_payload(payload)
             tools = payload.get("tools")
             if not isinstance(tools, list):
                 raise ValueError("daemon_response_missing_tools")
@@ -72,6 +73,7 @@ class MCPServer:
                 f"{self._tool_path_prefix}/{name}",
                 arguments,
             )
+            _raise_for_daemon_error_payload(payload)
             contents = payload.get("contents")
             if not isinstance(contents, list):
                 raise ValueError("daemon_response_missing_contents")
@@ -250,3 +252,14 @@ def _is_recoverable_daemon_request_error(exc: Exception) -> bool:
     if isinstance(exc, (OSError, TimeoutError, ValueError)):
         return True
     return isinstance(exc, RuntimeError) and str(exc) == "daemon_not_started"
+
+
+def _raise_for_daemon_error_payload(payload: dict[str, object]) -> None:
+    status = payload.get("status")
+    if status != "error":
+        return
+    error = payload.get("error")
+    error_text = str(error) if error is not None else "daemon_request_failed"
+    if error_text == "daemon_request_timed_out":
+        raise TimeoutError(error_text)
+    raise RuntimeError(error_text)

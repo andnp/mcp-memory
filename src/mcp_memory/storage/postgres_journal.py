@@ -33,15 +33,44 @@ class PostgresSystem1Journal:
         self._sessions = session_manager
 
     def record(self, content: str, workspace_id: str | None = None) -> JournalEntry:
+        return self.record_with_timestamp(content, workspace_id=workspace_id)
+
+    def record_with_timestamp(
+        self,
+        content: str,
+        workspace_id: str | None = None,
+        *,
+        timestamp: float | None = None,
+    ) -> JournalEntry:
         if self._sessions is None:
             raise RuntimeError("journal_unavailable")
         if not content or not content.strip():
             raise ValueError("Journal content cannot be empty")
         stripped = content.strip()
-        now = time.time()
+        now = time.time() if timestamp is None else float(timestamp)
         entry_id: int | None = None
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, content, workspace_id, timestamp, status
+                    FROM system1_journal
+                    WHERE content = %s
+                      AND workspace_id IS NOT DISTINCT FROM %s
+                      AND timestamp = %s
+                    LIMIT 1
+                    """,
+                    (stripped, workspace_id, now),
+                )
+                existing_row = cursor.fetchone()
+                if existing_row is not None:
+                    return JournalEntry(
+                        id=_coerce_int(existing_row[0]),
+                        content=str(existing_row[1]),
+                        workspace_id=None if existing_row[2] is None else str(existing_row[2]),
+                        timestamp=_coerce_float(existing_row[3]),
+                        status=str(existing_row[4]),
+                    )
                 cursor.execute(
                     """
                     INSERT INTO system1_journal (content, workspace_id, timestamp, status)

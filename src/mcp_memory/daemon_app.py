@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import importlib.metadata
 import logging
 import os
@@ -18,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_backup_dir, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
 from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
+from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
 from mcp_memory.daemon_dispatch import dispatch_management_request, error_payload
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
 from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
@@ -33,6 +35,7 @@ from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_
 logger = logging.getLogger(__name__)
 _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
+_RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = 5.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
 
@@ -41,6 +44,14 @@ _REQUEST_SESSION_ID_KEY = "__session_id"
 class _RequestScope:
     session_id: str | None = None
     workspace_root: Path | None = None
+
+
+@dataclass(frozen=True)
+class _RecordThoughtWritebackFlushContext:
+    journal: Any
+    task_queue: Any
+    writeback_cache: Any
+    suppression_config: Any = None
 
 
 def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
@@ -196,6 +207,67 @@ async def _run_periodic_backup_loop(runtime) -> None:
             logger.warning("SQLite backup snapshot failed: %s", exc)
 
 
+def _resolve_record_thought_writeback_flush_context(runtime) -> _RecordThoughtWritebackFlushContext | None:
+    config = getattr(runtime, "config", None)
+    storage_backend = getattr(runtime, "storage_backend", None)
+    if config is None or storage_backend != "postgres":
+        return None
+
+    storage_config = getattr(config, "storage", None)
+    cache_config = None if storage_config is None else getattr(storage_config, "cache", None)
+    if cache_config is None or not cache_config.enabled or cache_config.mode != "writeback":
+        return None
+
+    journal = getattr(runtime, "journal", None)
+    writeback_cache = getattr(runtime, "read_cache", None)
+    if journal is None or writeback_cache is None:
+        return None
+
+    return _RecordThoughtWritebackFlushContext(
+        journal=journal,
+        task_queue=getattr(runtime, "task_queue", None),
+        writeback_cache=writeback_cache,
+        suppression_config=getattr(config, "ingest_suppression", None),
+    )
+
+
+def _flush_record_thought_writeback_once(runtime) -> int:
+    flush_context = _resolve_record_thought_writeback_flush_context(runtime)
+    if flush_context is None:
+        return 0
+
+    result = flush_record_thought_writeback_outbox(
+        flush_context.journal,
+        task_queue=flush_context.task_queue,
+        suppression_config=flush_context.suppression_config,
+        writeback_cache=flush_context.writeback_cache,
+    )
+    if result.flushed_count > 0:
+        logger.info(
+            "Flushed %s queued record_thought writeback entr%s",
+            result.flushed_count,
+            "y" if result.flushed_count == 1 else "ies",
+        )
+    return result.flushed_count
+
+
+async def _run_record_thought_writeback_flush_loop(
+    runtime,
+    *,
+    executor: ThreadPoolExecutor,
+    poll_seconds: float = _RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
+) -> None:
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            await loop.run_in_executor(executor, _flush_record_thought_writeback_once, runtime)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Record-thought writeback flush loop failed", exc_info=True)
+        await asyncio.sleep(poll_seconds)
+
+
 def create_daemon_app(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -261,9 +333,24 @@ def create_daemon_app(
             metadata_path=metadata_path,
         )
         await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
+        record_thought_writeback_flush_executor: ThreadPoolExecutor | None = None
+        record_thought_writeback_flush_task: asyncio.Task[None] | None = None
+        if _resolve_record_thought_writeback_flush_context(runtime) is not None:
+            record_thought_writeback_flush_executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="record-thought-writeback-flush",
+            )
+            record_thought_writeback_flush_task = asyncio.create_task(
+                _run_record_thought_writeback_flush_loop(
+                    runtime,
+                    executor=record_thought_writeback_flush_executor,
+                )
+            )
         app.state.routes = routes
         app.state.idle_shutdown_task = None
         app.state.backup_task = backup_task
+        app.state.record_thought_writeback_flush_task = record_thought_writeback_flush_task
+        app.state.record_thought_writeback_flush_executor = record_thought_writeback_flush_executor
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.last_http_activity_at = time.monotonic()
         app.state.metadata = DaemonMetadata(
@@ -284,6 +371,11 @@ def create_daemon_app(
         finally:
             await _cancel_idle_shutdown_task(app)
             await _cancel_background_task(app, "backup_task")
+            await _cancel_background_task(app, "record_thought_writeback_flush_task")
+            record_thought_writeback_flush_executor = getattr(app.state, "record_thought_writeback_flush_executor", None)
+            if record_thought_writeback_flush_executor is not None:
+                await asyncio.to_thread(record_thought_writeback_flush_executor.shutdown, True)
+                app.state.record_thought_writeback_flush_executor = None
             await zmq_server.stop()
             if not warmup_task.done():
                 warmup_task.cancel()

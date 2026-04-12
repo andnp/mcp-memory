@@ -131,7 +131,7 @@ def build_postgres_runtime_components(
         embedding_repair_queue=embedding_repair_queue,
     )
     read_cache = None
-    if spec.config.storage.cache.enabled and spec.config.storage.cache.mode == "readonly":
+    if spec.config.storage.cache.enabled and spec.config.storage.cache.mode in {"readonly", "writeback"}:
         read_cache = SharedReadCache(spec.memory_path / "cache" / "shared_read_cache.sqlite3")
     if not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None:
         raise PostgresBackendNotImplementedError(

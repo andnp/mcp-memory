@@ -27,6 +27,7 @@ def test_resolve_daemon_request_timeout_seconds_uses_extended_budget_for_memory_
 
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/memories/search") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/memories/memory-123") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
+    assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/record-thought") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/internal/tools") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/internal/tools/record_thought") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/internal/tools/search_memory_records") == daemon_transport.EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS
@@ -119,6 +120,89 @@ def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> 
     assert second_socket.closed_with == 0
     assert created_contexts[0].terminated is True
     assert created_contexts[1].terminated is True
+
+
+@pytest.mark.asyncio
+async def test_daemon_transport_returns_structured_timeout_payload_for_slow_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    daemon_transport = _daemon_transport_module()
+    socket_path = tmp_path / "daemon.sock"
+
+    async def _slow_handler(_payload: dict[str, object]) -> dict[str, object]:
+        await asyncio.sleep(0.05)
+        return {"status": "ok"}
+
+    monkeypatch.setattr("mcp_memory.daemon_transport.DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS", 0.01)
+
+    server = daemon_transport.DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/slow": _slow_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: None,
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        started_at = asyncio.get_running_loop().time()
+        payload = await asyncio.to_thread(
+            daemon_transport.request_daemon_json,
+            metadata,
+            "/api/hooks/slow",
+            {},
+            timeout_seconds=0.5,
+        )
+        elapsed = asyncio.get_running_loop().time() - started_at
+    finally:
+        await server.stop()
+
+    assert payload == {
+        "status": "error",
+        "error": "daemon_request_timed_out",
+        "path": "/api/hooks/slow",
+        "timeout_seconds": 0.01,
+    }
+    assert elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_daemon_transport_does_not_relabel_handler_timeout_as_transport_timeout(tmp_path) -> None:
+    daemon_transport = _daemon_transport_module()
+    socket_path = tmp_path / "daemon.sock"
+
+    async def _timed_out_handler(_payload: dict[str, object]) -> dict[str, object]:
+        raise TimeoutError("handler_timed_out")
+
+    server = daemon_transport.DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/timed-out": _timed_out_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: None,
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        payload = await asyncio.to_thread(
+            daemon_transport.request_daemon_json,
+            metadata,
+            "/api/hooks/timed-out",
+            {},
+            timeout_seconds=0.5,
+        )
+    finally:
+        await server.stop()
+
+    assert payload == {
+        "status": "error",
+        "error": "handler_timed_out",
+    }
 
 
 def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> None:

@@ -46,12 +46,21 @@ class System1Journal:
         self._db = db_manager
 
     def record(self, content: str, workspace_id: str | None = None) -> JournalEntry:
+        return self.record_with_timestamp(content, workspace_id=workspace_id)
+
+    def record_with_timestamp(
+        self,
+        content: str,
+        workspace_id: str | None = None,
+        *,
+        timestamp: float | None = None,
+    ) -> JournalEntry:
         """Record a raw thought. Returns the created entry."""
         if not content or not content.strip():
             raise ValueError("Journal content cannot be empty")
 
         content = content.strip()
-        now = time.time()
+        now = time.time() if timestamp is None else float(timestamp)
         conn = self._db.get_connection()
         cursor = conn.execute(
             "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",

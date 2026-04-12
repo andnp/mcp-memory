@@ -624,7 +624,8 @@ def test_management_service_health_uses_global_embedding_integrity_summary_even_
     [
         ("sqlite", False, "readonly", None, "disabled", None),
         ("sqlite", True, "readonly", None, "unsupported_backend", None),
-        ("postgres", True, "writeback", None, "reserved_unimplemented", None),
+        ("postgres", True, "writeback", None, "inactive", "cache/shared_read_cache.sqlite3"),
+        ("postgres", True, "writeback", "active-cache.sqlite3", "active", "active-cache.sqlite3"),
         ("postgres", True, "readonly", None, "inactive", "cache/shared_read_cache.sqlite3"),
         ("postgres", True, "readonly", "active-cache.sqlite3", "active", "active-cache.sqlite3"),
     ],

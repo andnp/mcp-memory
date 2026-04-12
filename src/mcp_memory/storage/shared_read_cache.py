@@ -94,6 +94,15 @@ class SharedReadCacheProjectionEntry:
     cached_at: float
 
 
+@dataclass(frozen=True)
+class SharedReadCacheRecordThoughtOutboxEntry:
+    outbox_id: int
+    content: str
+    workspace_id: str | None
+    timestamp: float
+    cached_at: float
+
+
 @dataclass
 class _SharedReadCacheInFlightSearchState:
     created_at: float = field(default_factory=time)
@@ -142,6 +151,96 @@ class SharedReadCache:
 
     def close(self) -> None:
         return None
+
+    def enqueue_record_thought_outbox_entry(
+        self,
+        *,
+        content: str,
+        workspace_id: str | None,
+        timestamp: float,
+        max_entries: int,
+    ) -> SharedReadCacheRecordThoughtOutboxEntry | None:
+        try:
+            with self._connect() as connection:
+                cached_at = time()
+                cursor = connection.execute(
+                    """
+                    INSERT INTO record_thought_outbox (content, workspace_id, timestamp, cached_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (content, workspace_id, timestamp, cached_at),
+                )
+                outbox_id = cursor.lastrowid
+                if outbox_id is None:
+                    raise RuntimeError("record_thought_outbox_insert_missing_rowid")
+                count_row = connection.execute(
+                    "SELECT COUNT(*) FROM record_thought_outbox",
+                ).fetchone()
+                entry_count = 0 if count_row is None else _coerce_int(count_row[0])
+                overflow = max(entry_count - max_entries, 0)
+                if overflow > 0:
+                    connection.execute(
+                        """
+                        DELETE FROM record_thought_outbox
+                        WHERE id IN (
+                            SELECT id
+                            FROM record_thought_outbox
+                            ORDER BY cached_at ASC, id ASC
+                            LIMIT ?
+                        )
+                        """,
+                        (overflow,),
+                    )
+                connection.commit()
+        except Exception:
+            logger.warning("Shared read cache writeback outbox write failed", exc_info=True)
+            return None
+        return SharedReadCacheRecordThoughtOutboxEntry(
+            outbox_id=int(outbox_id),
+            content=content,
+            workspace_id=workspace_id,
+            timestamp=timestamp,
+            cached_at=cached_at,
+        )
+
+    def list_record_thought_outbox_entries(
+        self,
+        *,
+        limit: int,
+    ) -> list[SharedReadCacheRecordThoughtOutboxEntry]:
+        rows = self._fetchall(
+            """
+            SELECT id, content, workspace_id, timestamp, cached_at
+            FROM record_thought_outbox
+            ORDER BY cached_at ASC, id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [
+            SharedReadCacheRecordThoughtOutboxEntry(
+                outbox_id=_coerce_int(row[0]),
+                content=str(row[1]),
+                workspace_id=None if row[2] is None else str(row[2]),
+                timestamp=float(row[3]),
+                cached_at=float(row[4]),
+            )
+            for row in rows
+        ]
+
+    def delete_record_thought_outbox_entries(self, outbox_ids: list[int]) -> None:
+        normalized_ids = [outbox_id for outbox_id in outbox_ids if isinstance(outbox_id, int) and outbox_id > 0]
+        if not normalized_ids:
+            return
+        placeholders = ",".join("?" for _ in normalized_ids)
+        self._execute(
+            f"DELETE FROM record_thought_outbox WHERE id IN ({placeholders})",
+            tuple(normalized_ids),
+        )
+
+    def count_record_thought_outbox_entries(self) -> int:
+        row = self._fetchone("SELECT COUNT(*) FROM record_thought_outbox", ())
+        return 0 if row is None else _coerce_int(row[0])
 
     def load_search_response(self, request: SharedReadCacheSearchRequest) -> dict[str, Any] | None:
         row = self._fetchone(
@@ -490,6 +589,14 @@ class SharedReadCache:
                 memory_id TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
                 validation_token TEXT,
+                cached_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS record_thought_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                workspace_id TEXT,
+                timestamp REAL NOT NULL,
                 cached_at REAL NOT NULL
             );
 

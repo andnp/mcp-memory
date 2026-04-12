@@ -30,12 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
-EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 30.0
+EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 60.0
 _SOCKET_PROBE_TIMEOUT_SECONDS = 0.1
 _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
     "/api/admin/search/repair",
     "/api/memories/",
+    "/api/record-thought",
     "/internal/tools",
     "/internal/maintenance/tools",
 )
@@ -316,6 +317,7 @@ class DaemonZmqServer:
 
     async def _dispatch_request(self, identity: bytes, payload_frame: bytes) -> tuple[bytes, dict, int]:
         path = _normalized_transport_path(payload_frame) or "<invalid_transport_payload>"
+        request_timeout_seconds = resolve_daemon_request_timeout_seconds(path)
         tracked_request = self._track_request(path)
         uses_request_semaphore = path not in _UNCONSTRAINED_REQUEST_PATHS
         queue_wait_started_at = perf_counter()
@@ -339,10 +341,21 @@ class DaemonZmqServer:
         execution_started_at = perf_counter()
         try:
             tracked_request.phase = "dispatching"
-            response = await self._dispatch(payload_frame)
+            response = await asyncio.wait_for(
+                self._dispatch(payload_frame),
+                timeout=request_timeout_seconds,
+            )
             tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
             tracked_request.response_status = _response_status(response)
             tracked_request.phase = "dispatched"
+            return identity, response, tracked_request.request_id
+        except asyncio.TimeoutError:
+            tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            tracked_request.phase = "timed_out"
+            tracked_request.error = "daemon_request_timed_out"
+            response = _dispatch_timeout_payload(path, timeout_seconds=request_timeout_seconds)
+            tracked_request.response_status = _response_status(response)
+            self._log_request_warning("Daemon transport request timed out", tracked_request)
             return identity, response, tracked_request.request_id
         except asyncio.CancelledError:
             tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
@@ -499,6 +512,15 @@ class DaemonZmqServer:
             return await self._dispatch_management_request(normalized_path, request_payload)
         except ValueError as exc:
             return error_payload(exc)
+        except TimeoutError as exc:
+            # Python 3.13 aliases asyncio.TimeoutError to TimeoutError.
+            # Convert handler-raised timeouts into ordinary error payloads so
+            # _dispatch_request only treats actual wait_for expiries as
+            # transport-level daemon_request_timed_out responses.
+            return {
+                "status": "error",
+                "error": str(exc),
+            }
 
     async def _dispatch_management_request(self, path: str, payload: dict[str, object]) -> dict:
         routes = self._routes_provider()
@@ -563,6 +585,15 @@ def _response_status(response: dict) -> str | None:
     if isinstance(status, str) and status:
         return status
     return None
+
+
+def _dispatch_timeout_payload(path: str, *, timeout_seconds: float) -> dict[str, object]:
+    return {
+        "status": "error",
+        "error": "daemon_request_timed_out",
+        "path": path,
+        "timeout_seconds": timeout_seconds,
+    }
 
 
 def _remove_stale_socket(socket_path: Path) -> None:

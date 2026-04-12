@@ -380,7 +380,25 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
         return {"status": "error", "error": "journal_not_initialized"}
 
     suppression_config = None if ctx.config is None else ctx.config.ingest_suppression
-    operation = RecordThoughtOperation(ctx.journal, ctx.task_queue, ctx.workspace_id, suppression_config)
+    writeback_cache = None
+    max_outbox_entries = None
+    cache_config = None if ctx.config is None else ctx.config.storage.cache
+    if (
+        cache_config is not None
+        and cache_config.enabled
+        and cache_config.mode == "writeback"
+        and ctx.storage_backend == "postgres"
+    ):
+        writeback_cache = getattr(ctx, "read_cache", None)
+        max_outbox_entries = cache_config.max_outbox_entries
+    operation = RecordThoughtOperation(
+        ctx.journal,
+        ctx.task_queue,
+        ctx.workspace_id,
+        suppression_config,
+        writeback_cache=writeback_cache,
+        max_outbox_entries=max_outbox_entries,
+    )
     return operation.execute(require_string(arguments, "content"))
 
 

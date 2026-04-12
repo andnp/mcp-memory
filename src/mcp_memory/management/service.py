@@ -287,9 +287,6 @@ class ManagementService:
         if self._storage_backend != "postgres":
             return CacheHealthPayload(enabled=True, mode=cache_mode, state="unsupported_backend", path=None, metrics=metrics)
 
-        if cache_mode != "readonly":
-            return CacheHealthPayload(enabled=True, mode=cache_mode, state="reserved_unimplemented", path=None, metrics=metrics)
-
         configured_path = self._configured_cache_path()
         if self._read_cache is None:
             return CacheHealthPayload(
@@ -868,10 +865,25 @@ class ManagementService:
         if self._journal.journal is None:
             raise ValueError("journal_not_initialized")
         effective_workspace_id = _resolve_service_workspace_id(self._workspace_id, workspace_id)
+        suppression_config = None if self._config is None else self._config.ingest_suppression
+        writeback_cache = None
+        max_outbox_entries = None
+        cache_config = None if self._config is None else self._config.storage.cache
+        if (
+            cache_config is not None
+            and cache_config.enabled
+            and cache_config.mode == "writeback"
+            and self._storage_backend == "postgres"
+        ):
+            writeback_cache = self._read_cache
+            max_outbox_entries = cache_config.max_outbox_entries
         return RecordThoughtOperation(
             self._journal.journal,
             self._task_queue.task_queue,
             effective_workspace_id,
+            suppression_config,
+            writeback_cache=writeback_cache,
+            max_outbox_entries=max_outbox_entries,
         ).execute(content)
 
     def list_memories(

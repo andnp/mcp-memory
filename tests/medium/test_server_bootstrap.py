@@ -419,6 +419,40 @@ async def test_mcp_server_call_tool_times_out_when_sync_request_stalls(monkeypat
     assert result_content.text == "mcp_client_request_timed_out"
 
 
+def test_mcp_server_client_timeout_budget_defaults_to_sixty_seconds() -> None:
+    from mcp_memory import server as server_module
+
+    assert server_module._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS == 60.0
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_call_tool_surfaces_daemon_timeout_error_payload(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = object()
+    server.server._tool_cache["record_thought"] = types.Tool(
+        name="record_thought",
+        description="Record a thought.",
+        inputSchema={"type": "object"},
+    )
+
+    def _timed_out_request(_path: str, _payload: dict | None) -> dict[str, object]:
+        return {"status": "error", "error": "daemon_request_timed_out"}
+
+    monkeypatch.setattr(server, "_request_json_with_recovery", _timed_out_request)
+
+    handler = server.server.request_handlers[types.CallToolRequest]
+    result = await handler(
+        types.CallToolRequest(
+            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
+        )
+    )
+    result_root = cast(types.CallToolResult, result.root)
+    result_content = cast(TextContent, result_root.content[0])
+
+    assert result_root.isError is True
+    assert result_content.text == "daemon_request_timed_out"
+
+
 @pytest.mark.asyncio
 async def test_mcp_server_client_timeout_clears_cached_daemon_and_schedules_recovery(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")

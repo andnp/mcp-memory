@@ -6,9 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.journal import JournalEntry
 from mcp_memory.mcp import services as services_module
-from mcp_memory.mcp.services import read_memory_record_service, search_memory_records_service
+from mcp_memory.mcp.services import read_memory_record_service, record_thought_service, search_memory_records_service
 from mcp_memory.storage.shared_read_cache import (
     SharedReadCache,
     SharedReadCacheProjectionUpsert,
@@ -148,6 +150,49 @@ class ProjectionAwareSearchService:
             for memory_id, token in self.token_by_memory_id.items()
             if memory_id in memory_ids
         }
+
+
+class WritebackCapableJournal:
+    def __init__(self, *, should_fail: bool = False, block_on_record: Event | None = None) -> None:
+        self.should_fail = should_fail
+        self.block_on_record = block_on_record
+        self.completed = Event()
+        self.entries: list[JournalEntry] = []
+        self._next_id = 1
+
+    def record_with_timestamp(
+        self,
+        content: str,
+        workspace_id: str | None = None,
+        *,
+        timestamp: float | None = None,
+    ) -> JournalEntry:
+        try:
+            if self.block_on_record is not None:
+                self.block_on_record.wait(timeout=1.0)
+            if self.should_fail:
+                raise TimeoutError("authoritative postgres write timed out")
+            normalized_content = content.strip()
+            resolved_timestamp = 0.0 if timestamp is None else float(timestamp)
+            for entry in self.entries:
+                if (
+                    entry.content == normalized_content
+                    and entry.workspace_id == workspace_id
+                    and entry.timestamp == resolved_timestamp
+                ):
+                    return entry
+            entry = JournalEntry(
+                id=self._next_id,
+                content=normalized_content,
+                workspace_id=workspace_id,
+                timestamp=resolved_timestamp,
+                status="pending",
+            )
+            self._next_id += 1
+            self.entries.append(entry)
+            return entry
+        finally:
+            self.completed.set()
 
 
 def _build_read_result(*, summary: str = "Fresh authoritative record") -> SimpleNamespace:
@@ -335,6 +380,98 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
 
     assert response["status"] == "ok"
     assert cached_payload == response
+
+
+def test_record_thought_service_queues_writeback_entry_on_authoritative_failure(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    config = Config()
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "writeback"
+    config.storage.cache.max_outbox_entries = 4
+    journal = WritebackCapableJournal(should_fail=True)
+    ctx = ApplicationContext(
+        config=config,
+        workspace_id="workspace-123",
+        storage_backend="postgres",
+        journal=journal,
+        read_cache=cache,
+    )
+
+    response = record_thought_service(ctx, {"content": "queue this thought"})
+
+    outbox_entries = cache.list_record_thought_outbox_entries(limit=10)
+    assert response["status"] == "recorded"
+    assert response["degraded"] is True
+    assert response["cache_status"] == "writeback_queued"
+    assert response["entry"]["status"] == "queued_writeback"
+    assert response["writeback_queue_depth"] == 1
+    assert [entry.content for entry in outbox_entries] == ["queue this thought"]
+    assert [entry.workspace_id for entry in outbox_entries] == ["workspace-123"]
+
+
+def test_record_thought_service_flushes_writeback_queue_after_authoritative_success(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    config = Config()
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "writeback"
+    config.storage.cache.max_outbox_entries = 4
+    journal = WritebackCapableJournal(should_fail=True)
+    ctx = ApplicationContext(
+        config=config,
+        workspace_id="workspace-123",
+        storage_backend="postgres",
+        journal=journal,
+        read_cache=cache,
+    )
+
+    first = record_thought_service(ctx, {"content": "queue this thought"})
+    journal.should_fail = False
+    second = record_thought_service(ctx, {"content": "write the current thought"})
+
+    assert first["degraded"] is True
+    assert second["status"] == "recorded"
+    assert second["entry"]["status"] == "pending"
+    assert second["flushed_writeback_entries"] == 1
+    assert cache.list_record_thought_outbox_entries(limit=10) == []
+    assert {entry.content for entry in journal.entries} == {
+        "queue this thought",
+        "write the current thought",
+    }
+
+
+def test_record_thought_service_queues_writeback_entry_on_authoritative_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    config = Config()
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "writeback"
+    config.storage.cache.max_outbox_entries = 4
+    unblock_record = Event()
+    journal = WritebackCapableJournal(should_fail=True, block_on_record=unblock_record)
+    ctx = ApplicationContext(
+        config=config,
+        workspace_id="workspace-123",
+        storage_backend="postgres",
+        journal=journal,
+        read_cache=cache,
+    )
+
+    monkeypatch.setattr(
+        "mcp_memory.core.journal_operations._RECORD_THOUGHT_AUTHORITATIVE_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    response = record_thought_service(ctx, {"content": "slow thought"})
+    unblock_record.set()
+    assert journal.completed.wait(timeout=1.0)
+
+    outbox_entries = cache.list_record_thought_outbox_entries(limit=10)
+    assert response["status"] == "recorded"
+    assert response["degraded"] is True
+    assert response["cache_status"] == "writeback_queued"
+    assert [entry.content for entry in outbox_entries] == ["slow thought"]
 
 
 def test_search_memory_records_service_warms_projection_rows_and_persists_tokens(tmp_path: Path) -> None:
