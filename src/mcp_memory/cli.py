@@ -1149,8 +1149,9 @@ def _render_quality_cleanup_candidates(payload) -> None:
     table.add_column("Conversion", no_wrap=True)
     table.add_column("Title")
     table.add_column("Criteria", overflow="fold")
+    table.add_column("Suggested actions", overflow="fold")
     if not payload.candidates:
-        table.add_row("-", "0", "-", "-", "-", "No cleanup candidates", "-")
+        table.add_row("-", "0", "-", "-", "-", "No cleanup candidates", "-", "-")
         console.print(table)
         return
 
@@ -1168,6 +1169,7 @@ def _render_quality_cleanup_candidates(payload) -> None:
             conversion_text,
             candidate.title,
             ", ".join(criterion.label for criterion in candidate.criteria) or "-",
+            ", ".join(recommendation.label for recommendation in candidate.recommendations) or "-",
         )
     console.print(table)
 

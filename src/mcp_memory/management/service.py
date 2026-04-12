@@ -48,6 +48,7 @@ from mcp_memory.management.models import (
     QualityCleanupCandidatePayload,
     QualityCleanupCandidatesPayload,
     QualityCleanupCriterionPayload,
+    QualityCleanupRecommendationPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
     RuntimeLogPayload,
@@ -101,6 +102,33 @@ _QUALITY_CLEANUP_CRITERIA: dict[str, tuple[str, str, int]] = {
         "Oversized memory",
         "Memory content is at least 4 KB, making it a good cleanup or split candidate.",
         20,
+    ),
+}
+_QUALITY_CLEANUP_RECOMMENDATIONS: dict[str, tuple[str, str, int]] = {
+    "trace_like_memory_count": (
+        "Archive or curate",
+        "This looks trace-like enough that it may belong in archival/cleanup flow rather than as a durable canonical memory.",
+        60,
+    ),
+    "generic_summary_count": (
+        "Resummarize",
+        "Rewrite the summary to state the concrete takeaway so retrieval value is obvious before opening the record.",
+        35,
+    ),
+    "untagged_observation_count": (
+        "Retag",
+        "Add concrete subsystem or topic tags so the memory is easier to retrieve and maintain.",
+        30,
+    ),
+    "oversized_memory_count": (
+        "Split or trim",
+        "Break the memory into narrower focused records or trim excess detail if the size is obscuring the durable point.",
+        20,
+    ),
+    "low_conversion": (
+        "Review title and summary",
+        "The memory is surfaced often but rarely opened, so its title/summary or overall relevance signal likely needs improvement.",
+        50,
     ),
 }
 
@@ -755,6 +783,7 @@ class ManagementService:
                         weight=weight,
                     ),
                 )
+                _append_quality_cleanup_recommendation(candidate, signal.key)
 
         for record in nerd_metrics.retrieval.low_conversion_memories:
             if record.search_count < low_conversion_min_search_count:
@@ -795,6 +824,7 @@ class ManagementService:
                     conversion_rate=record.conversion_rate,
                 ),
             )
+            _append_quality_cleanup_recommendation(candidate, "low_conversion")
 
         all_candidates = sorted(
             candidates_by_id.values(),
@@ -1117,3 +1147,24 @@ def _append_quality_cleanup_criterion(
     candidate.criteria.append(criterion)
     candidate.criteria.sort(key=lambda item: (-item.weight, item.key))
     candidate.priority_score = sum(item.weight for item in candidate.criteria)
+
+
+def _append_quality_cleanup_recommendation(
+    candidate: QualityCleanupCandidatePayload,
+    criterion_key: str,
+) -> None:
+    recommendation = _QUALITY_CLEANUP_RECOMMENDATIONS.get(criterion_key)
+    if recommendation is None:
+        return
+    label, rationale, weight = recommendation
+    if any(existing.key == criterion_key for existing in candidate.recommendations):
+        return
+    candidate.recommendations.append(
+        QualityCleanupRecommendationPayload(
+            key=criterion_key,
+            label=label,
+            rationale=rationale,
+            weight=weight,
+        )
+    )
+    candidate.recommendations.sort(key=lambda item: (-item.weight, item.key))

@@ -813,6 +813,13 @@ class QualityCleanupCriterionPayload(BaseModel):
     conversion_rate: float | None = None
 
 
+class QualityCleanupRecommendationPayload(BaseModel):
+    key: str
+    label: str
+    rationale: str
+    weight: int = 0
+
+
 class QualityCleanupCandidatePayload(BaseModel):
     memory_id: str
     title: str
@@ -823,6 +830,7 @@ class QualityCleanupCandidatePayload(BaseModel):
     tags: list[str] = Field(default_factory=list)
     priority_score: int = 0
     criteria: list[QualityCleanupCriterionPayload] = Field(default_factory=list)
+    recommendations: list[QualityCleanupRecommendationPayload] = Field(default_factory=list)
     search_count: int | None = None
     read_count: int | None = None
     converted_search_count: int | None = None

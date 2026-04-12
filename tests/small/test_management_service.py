@@ -1763,10 +1763,15 @@ def test_management_service_lists_prioritized_quality_cleanup_candidates(db_mana
         "trace_like_memory_count",
         "generic_summary_count",
     ]
+    assert [recommendation.key for recommendation in trace_like_candidate.recommendations] == [
+        "trace_like_memory_count",
+        "generic_summary_count",
+    ]
 
     low_conversion_candidate = candidates.candidates[1]
     assert low_conversion_candidate.priority_score == 50
     assert [criterion.key for criterion in low_conversion_candidate.criteria] == ["low_conversion"]
+    assert [recommendation.key for recommendation in low_conversion_candidate.recommendations] == ["low_conversion"]
     assert low_conversion_candidate.search_count == 3
     assert low_conversion_candidate.read_count == 0
     assert low_conversion_candidate.converted_search_count == 0
@@ -1838,6 +1843,11 @@ def test_management_service_merges_quality_and_low_conversion_criteria_per_memor
     merged_candidate = candidates.candidates[0]
     assert merged_candidate.priority_score == 115
     assert [criterion.key for criterion in merged_candidate.criteria] == [
+        "low_conversion",
+        "generic_summary_count",
+        "untagged_observation_count",
+    ]
+    assert [recommendation.key for recommendation in merged_candidate.recommendations] == [
         "low_conversion",
         "generic_summary_count",
         "untagged_observation_count",
