@@ -4,6 +4,7 @@ import json
 import time
 from uuid import uuid4
 
+from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.work_item_store import (
     DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
@@ -61,13 +62,11 @@ class PostgresWorkItemRepository:
         available_at: float | None = None,
         idempotency_key: str | None = None,
     ) -> tuple[WorkItemRecord, bool]:
-        if self._sessions is None:
-            raise RuntimeError("work_items_unavailable")
         item_id = str(uuid4())
         now = time.time()
         ready_at = now if available_at is None else available_at
         payload_json = json.dumps(payload or {}, sort_keys=True)
-        with self._sessions.open_connection() as connection:
+        with require_connection(self._sessions, error="work_items_unavailable") as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -162,8 +161,6 @@ class PostgresWorkItemRepository:
         now: float | None,
         lease_ttl_seconds: float,
     ) -> list[WorkItemRecord]:
-        if self._sessions is None:
-            return []
         if limit < 1:
             raise ValueError("limit must be at least 1")
         current_time = time.time() if now is None else now
@@ -179,7 +176,9 @@ class PostgresWorkItemRepository:
         elif workspace_id != "*":
             clauses.append("workspace_id = %s")
             params.append(workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT id FROM work_items WHERE " + " AND ".join(clauses) + " ORDER BY priority ASC, created_at ASC LIMIT %s FOR UPDATE SKIP LOCKED",
@@ -236,11 +235,9 @@ class PostgresWorkItemRepository:
         lease_ttl_seconds: float = DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
         heartbeated_at: float | None = None,
     ) -> WorkItemRecord:
-        if self._sessions is None:
-            raise RuntimeError("work_items_unavailable")
         now = time.time() if heartbeated_at is None else heartbeated_at
         lease_expires_at = now + lease_ttl_seconds
-        with self._sessions.open_connection() as connection:
+        with require_connection(self._sessions, error="work_items_unavailable") as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -338,9 +335,7 @@ class PostgresWorkItemRepository:
         return self.get_item(item_id)
 
     def get_item(self, item_id: str) -> WorkItemRecord:
-        if self._sessions is None:
-            raise RuntimeError("work_items_unavailable")
-        with self._sessions.open_connection() as connection:
+        with require_connection(self._sessions, error="work_items_unavailable") as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -367,8 +362,6 @@ class PostgresWorkItemRepository:
         lease_owner: str | None = None,
         limit: int = 50,
     ) -> list[WorkItemRecord]:
-        if self._sessions is None:
-            return []
         query = (
             "SELECT id, family_key, execution_lane, workspace_id, payload_json, status, priority, attempt_count, available_at, "
             "created_at, updated_at, claimed_at, completed_at, lease_owner, lease_expires_at, idempotency_key, last_error FROM work_items"
@@ -394,15 +387,19 @@ class PostgresWorkItemRepository:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY updated_at DESC, created_at DESC LIMIT %s"
         params.append(limit)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 return [self._row_to_record(row) for row in cursor.fetchall()]
 
     def find_by_idempotency_key(self, idempotency_key: str | None) -> WorkItemRecord | None:
-        if self._sessions is None or idempotency_key is None:
+        if idempotency_key is None:
             return None
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return None
             with connection.cursor() as cursor:
                 cursor.execute(
                     """

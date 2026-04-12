@@ -12,6 +12,7 @@ from mcp_memory.provider_usage_store import (
     _mean,
     _top_reason,
 )
+from mcp_memory.storage.postgres_store_support import optional_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -78,9 +79,9 @@ class PostgresProviderUsageRepository:
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
     ) -> None:
-        if self._sessions is None:
-            return
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -132,9 +133,9 @@ class PostgresProviderUsageRepository:
         started_at: float,
         completed_at: float,
     ) -> None:
-        if self._sessions is None:
-            return
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -204,8 +205,6 @@ class PostgresProviderUsageRepository:
         status: str | None = None,
         limit: int = 50,
     ) -> list[AIConversationRecord]:
-        if self._sessions is None:
-            return []
         clauses: list[str] = []
         params: list[object] = []
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
@@ -230,7 +229,9 @@ class PostgresProviderUsageRepository:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY completed_at DESC, id DESC LIMIT %s"
         params.append(limit)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 return [self._row_to_conversation(row) for row in cursor.fetchall()]
@@ -293,12 +294,12 @@ class PostgresProviderUsageRepository:
         completed_at: float | None = None,
         subprocess_pid: int | None | object = _UNCHANGED,
     ) -> int:
-        if self._sessions is None:
-            return 0
         heartbeat_at = time.time() if completed_at is None else completed_at
         keep_subprocess_pid = subprocess_pid is _UNCHANGED
         next_subprocess_pid = None if keep_subprocess_pid else subprocess_pid
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return 0
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -334,8 +335,6 @@ class PostgresProviderUsageRepository:
         response_text: str | object = _UNCHANGED,
         parsed: dict | None | object = _UNCHANGED,
     ) -> int:
-        if self._sessions is None:
-            return 0
         finalized_at = time.time() if completed_at is None else completed_at
         keep_response_text = response_text is _UNCHANGED
         next_response_text = "" if keep_response_text else str(response_text)
@@ -343,7 +342,9 @@ class PostgresProviderUsageRepository:
         next_parsed_json = None
         if not keep_parsed and parsed is not None:
             next_parsed_json = json.dumps(parsed, sort_keys=True)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return 0
             with connection.cursor() as cursor:
                 cursor.execute(
                     (
@@ -379,8 +380,6 @@ class PostgresProviderUsageRepository:
         return rowcount
 
     def summarize_usage(self, *, workspace_id: str | None | object = _ALL_WORKSPACES, now: float | None = None):
-        if self._sessions is None:
-            return []
         current_time = time.time() if now is None else now
         last_hour = current_time - 3600
         last_day = current_time - 86400
@@ -393,7 +392,9 @@ class PostgresProviderUsageRepository:
         if active_workspace_id is not None:
             query += " WHERE workspace_id = %s"
             params.append(active_workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -497,9 +498,9 @@ class PostgresProviderUsageRepository:
         active_until: float,
         updated_at: float,
     ) -> None:
-        if self._sessions is None:
-            return
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -530,9 +531,9 @@ class PostgresProviderUsageRepository:
             connection.commit()
 
     def clear_admission_state(self, *, provider_key: str, model_name: str) -> None:
-        if self._sessions is None:
-            return
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return
             with connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM provider_admission_state WHERE provider_key = %s AND model_name = %s",
@@ -557,8 +558,6 @@ class PostgresProviderUsageRepository:
         provider_key: str | None = None,
         model_name: str | None = None,
     ) -> list[ProviderAdmissionStateRecord]:
-        if self._sessions is None:
-            return []
         current_time = time.time() if now is None else now
         query = (
             "SELECT provider_key, model_name, reason_category, reason_code, error_text, retry_delay_seconds, active_until, updated_at "
@@ -572,7 +571,9 @@ class PostgresProviderUsageRepository:
             query += " AND model_name = %s"
             params.append(model_name)
         query += " ORDER BY active_until DESC, updated_at DESC"
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -597,7 +598,7 @@ class PostgresProviderUsageRepository:
         now: float | None = None,
         window_seconds: float = 86400.0,
     ) -> int:
-        if self._sessions is None or not provider_keys:
+        if not provider_keys:
             return 0
         current_time = time.time() if now is None else now
         cutoff = current_time - window_seconds
@@ -610,7 +611,9 @@ class PostgresProviderUsageRepository:
         if self._workspace_id is not None:
             query += " AND workspace_id = %s"
             params.append(self._workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return 0
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
@@ -623,7 +626,7 @@ class PostgresProviderUsageRepository:
         now: float | None = None,
         window_seconds: float = 600.0,
     ) -> int:
-        if self._sessions is None or not model_names:
+        if not model_names:
             return 0
         current_time = time.time() if now is None else now
         cutoff = current_time - window_seconds
@@ -636,7 +639,9 @@ class PostgresProviderUsageRepository:
         if self._workspace_id is not None:
             query += " AND workspace_id = %s"
             params.append(self._workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return 0
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()

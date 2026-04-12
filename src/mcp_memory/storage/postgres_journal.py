@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from mcp_memory.core.journal import JournalEntry, RECOVERABLE_RETENTION_SECONDS, _ALL_WORKSPACES
+from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -42,14 +43,12 @@ class PostgresSystem1Journal:
         *,
         timestamp: float | None = None,
     ) -> JournalEntry:
-        if self._sessions is None:
-            raise RuntimeError("journal_unavailable")
         if not content or not content.strip():
             raise ValueError("Journal content cannot be empty")
         stripped = content.strip()
         now = time.time() if timestamp is None else float(timestamp)
         entry_id: int | None = None
-        with self._sessions.open_connection() as connection:
+        with require_connection(self._sessions, error="journal_unavailable") as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -102,15 +101,15 @@ class PostgresSystem1Journal:
         workspace_id: str | None | object = _ALL_WORKSPACES,
         claimed_at: float | None = None,
     ) -> list[JournalEntry]:
-        if self._sessions is None:
-            return []
         if not task_id or not task_id.strip():
             raise ValueError("task_id is required")
         now = time.time() if claimed_at is None else claimed_at
         clauses = ["status = 'pending'"]
         params: list[object] = []
         self._append_workspace_clause(clauses, params, workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT id, content, workspace_id, timestamp, status FROM system1_journal WHERE "
@@ -202,9 +201,9 @@ class PostgresSystem1Journal:
         return claimed_entry_ids
 
     def release_orphaned_claims(self) -> list[int]:
-        if self._sessions is None:
-            return []
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -280,8 +279,6 @@ class PostgresSystem1Journal:
         return updated
 
     def count_by_status(self, workspace_id: str | None | object = _ALL_WORKSPACES) -> dict[str, int]:
-        if self._sessions is None:
-            return {}
         clauses: list[str] = []
         params: list[object] = []
         self._append_workspace_clause(clauses, params, workspace_id)
@@ -289,19 +286,21 @@ class PostgresSystem1Journal:
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " GROUP BY status"
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return {}
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
         return {str(row[0]): _coerce_int(row[1]) for row in rows}
 
     def get_oldest_pending_timestamp(self, workspace_id: str | None | object = _ALL_WORKSPACES):
-        if self._sessions is None:
-            return None
         clauses = ["status = 'pending'"]
         params: list[object] = []
         self._append_workspace_clause(clauses, params, workspace_id)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return None
             with connection.cursor() as cursor:
                 cursor.execute("SELECT MIN(timestamp) FROM system1_journal WHERE " + " AND ".join(clauses), tuple(params))
                 row = cursor.fetchone()
@@ -310,15 +309,15 @@ class PostgresSystem1Journal:
         return _coerce_float(row[0])
 
     def get_latest_thought_timestamp(self, workspace_id: str | None | object = _ALL_WORKSPACES) -> float | None:
-        if self._sessions is None:
-            return None
         clauses: list[str] = []
         params: list[object] = []
         self._append_workspace_clause(clauses, params, workspace_id)
         query = "SELECT MAX(timestamp) FROM system1_journal"
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return None
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
@@ -330,7 +329,7 @@ class PostgresSystem1Journal:
         return self._list_entries(base_clause=None, workspace_id=_ALL_WORKSPACES, order_by="timestamp DESC", limit=limit)
 
     def _normalize_claimed_entry_ids(self, task_id: str, entry_ids: list[int] | None) -> list[int]:
-        if self._sessions is None or not task_id or not task_id.strip():
+        if not task_id or not task_id.strip():
             return []
         params: list[object] = [task_id.strip()]
         query = "SELECT id FROM system1_journal WHERE status = 'claimed' AND claim_task_id = %s"
@@ -342,7 +341,9 @@ class PostgresSystem1Journal:
             query += f" AND id IN ({placeholders})"
             params.extend(normalized_entry_ids)
         query += " ORDER BY timestamp ASC"
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -356,8 +357,6 @@ class PostgresSystem1Journal:
         order_by: str,
         limit: int,
     ) -> list[JournalEntry]:
-        if self._sessions is None:
-            return []
         clauses: list[str] = []
         params: list[object] = []
         if base_clause is not None:
@@ -368,7 +367,9 @@ class PostgresSystem1Journal:
             query += " WHERE " + " AND ".join(clauses)
         query += f" ORDER BY {order_by} LIMIT %s"
         params.append(limit)
-        with self._sessions.open_connection() as connection:
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return []
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
