@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-import json
 import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.task_handlers.relationship_proposal_support import (
+    build_candidate_prompt_entries,
+    normalize_conflict_proposals,
+    normalize_graph_link_proposals,
+    truncate_text,
+)
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -38,20 +43,9 @@ async def propose_graph_links(
         ],
         max_rounds=3,
     )
-    proposals = response.response.get("links", [])
-    if isinstance(proposals, list):
-        normalized: list[tuple[str, str, str, str]] = []
-        for item in proposals:
-            if not isinstance(item, dict):
-                continue
-            source_id = str(item.get("source_id", "")).strip()
-            target_id = str(item.get("target_id", "")).strip()
-            link_type = str(item.get("link_type", "")).strip() or "DEPENDS_ON"
-            context = str(item.get("context", "")).strip() or "Auto-linked by graph linker."
-            if source_id and target_id:
-                normalized.append((source_id, target_id, link_type, context))
-        if normalized:
-            return normalized
+    normalized = normalize_graph_link_proposals(response.response.get("links", []))
+    if normalized:
+        return normalized
 
     return fallback
 
@@ -75,19 +69,9 @@ async def propose_conflicts(
         ],
         max_rounds=3,
     )
-    proposals = response.response.get("conflicts", [])
-    if isinstance(proposals, list):
-        normalized: list[tuple[str, str, str]] = []
-        for item in proposals:
-            if not isinstance(item, dict):
-                continue
-            left_id = str(item.get("left_id", "")).strip()
-            right_id = str(item.get("right_id", "")).strip()
-            context = str(item.get("context", "")).strip() or "Potential contradiction detected."
-            if left_id and right_id:
-                normalized.append((left_id, right_id, context))
-        if normalized:
-            return normalized
+    normalized = normalize_conflict_proposals(response.response.get("conflicts", []))
+    if normalized:
+        return normalized
 
     return []
 
@@ -126,21 +110,7 @@ def _fallback_conflicts(candidates: list) -> list[tuple[str, str, str]]:
 
 
 def _build_linker_prompt(candidates: list) -> str:
-    entries = json.dumps(
-        [
-            {
-                "id": record.id,
-                "type": record.type,
-                "status": record.status,
-                "title": record.title,
-                "summary": _truncate_text(record.summary or record.content, 180),
-                "tags": record.tags,
-            }
-            for record in candidates[:20]
-        ],
-        sort_keys=True,
-        ensure_ascii=False,
-    )
+    entries = build_candidate_prompt_entries(candidates)
     return (
         "Review these active memories and propose only high-confidence typed links.\n"
         "Use DEPENDS_ON when one memory relies on, implements, or is downstream of another.\n"
@@ -153,21 +123,7 @@ def _build_linker_prompt(candidates: list) -> str:
 
 
 def _build_conflict_prompt(candidates: list) -> str:
-    entries = json.dumps(
-        [
-            {
-                "id": record.id,
-                "type": record.type,
-                "status": record.status,
-                "title": record.title,
-                "summary": _truncate_text(record.summary or record.content, 180),
-                "tags": record.tags,
-            }
-            for record in candidates[:20]
-        ],
-        sort_keys=True,
-        ensure_ascii=False,
-    )
+    entries = build_candidate_prompt_entries(candidates)
     return (
         "Review these active memories and propose contradictions only when two records make materially incompatible claims.\n"
         "Do not flag mere topic overlap, phrasing differences, or newer refinements of older memories as contradictions.\n"
@@ -198,7 +154,4 @@ def _token_overlap(left: str, right: str) -> float:
 
 
 def _truncate_text(value: str | None, limit: int) -> str:
-    text = "" if value is None else " ".join(value.strip().split())
-    if len(text) <= limit:
-        return text
-    return text[: max(limit - 1, 0)].rstrip() + "…"
+    return truncate_text(value, limit)
