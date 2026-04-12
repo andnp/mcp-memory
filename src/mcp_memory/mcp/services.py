@@ -626,6 +626,10 @@ def search_memory_records_service(
             }
             payload["search_diagnostics"] = diagnostics.to_payload()
         payload["timing_ms"] = timing_ms
+        payload["adaptive_limit_enabled"] = execution_arguments["adaptive_limit"]
+        payload["requested_limit"] = execution_arguments["limit"]
+        payload["expanded_result_window"] = len(results) > execution_arguments["limit"]
+        payload["returned_result_count"] = len(results)
     warmed_projection_rows = _warm_cached_search_projections(
         ctx,
         result_payloads,

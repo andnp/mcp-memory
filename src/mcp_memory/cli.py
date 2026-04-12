@@ -350,6 +350,10 @@ def _show_search_debug(
         if isinstance(search_diagnostics, dict)
         else None
     )
+    cli_payload["adaptive_limit_enabled"] = bool(payload.get("adaptive_limit_enabled", False))
+    cli_payload["requested_limit"] = payload.get("requested_limit")
+    cli_payload["expanded_result_window"] = bool(payload.get("expanded_result_window", False))
+    cli_payload["returned_result_count"] = payload.get("returned_result_count")
     cli_payload["total_timing_ms"] = (
         timing_ms.get("total")
         if isinstance(timing_ms, dict)
@@ -365,6 +369,13 @@ def _show_search_debug(
     console.print(
         "[bold]Semantic candidate strategy:[/] "
         f"{cli_payload['semantic_candidate_strategy'] or '-'}"
+    )
+    console.print(f"[bold]Adaptive shaping:[/] {'enabled' if cli_payload['adaptive_limit_enabled'] else 'disabled'}")
+    console.print(
+        f"[bold]Requested floor:[/] {cli_payload['requested_limit'] if isinstance(cli_payload['requested_limit'], int) else '-'}"
+    )
+    console.print(
+        f"[bold]Expanded window:[/] {'yes' if cli_payload['expanded_result_window'] else 'no'}"
     )
     total_timing_ms = cli_payload["total_timing_ms"]
     total_timing_label = "-"

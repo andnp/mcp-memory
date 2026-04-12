@@ -652,6 +652,10 @@ def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summa
                 "semantic_selection": 4.0,
                 "keyword_lookup": 3.0,
             },
+            "adaptive_limit_enabled": True,
+            "requested_limit": 5,
+            "expanded_result_window": False,
+            "returned_result_count": 2,
             "search_diagnostics": {
                 "semantic_candidate_strategy": "speculative-bounded",
             },
@@ -675,6 +679,9 @@ def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summa
     assert "Query: semantic latency" in result.output
     assert "Result count: 2" in result.output
     assert "Semantic candidate strategy: speculative-bounded" in result.output
+    assert "Adaptive shaping: enabled" in result.output
+    assert "Requested floor: 5" in result.output
+    assert "Expanded window: no" in result.output
     assert "Total timing: 12.500ms" in result.output
     assert "semantic_selection" in result.output
     assert "keyword_lookup" in result.output
@@ -697,6 +704,10 @@ def test_admin_search_debug_json_includes_query_result_count_and_diagnostics(mon
             "status": "ok",
             "results": [{"memory_id": "memory-1"}],
             "timing_ms": {"total": 7.25, "ranking": 1.5},
+            "adaptive_limit_enabled": True,
+            "requested_limit": 5,
+            "expanded_result_window": False,
+            "returned_result_count": 1,
             "search_diagnostics": {
                 "semantic_candidate_strategy": "global",
                 "timing_ms": {"total": 7.25, "ranking": 1.5},
@@ -715,6 +726,8 @@ def test_admin_search_debug_json_includes_query_result_count_and_diagnostics(mon
     assert '"query": "latency"' in result.output
     assert '"result_count": 1' in result.output
     assert '"semantic_candidate_strategy": "global"' in result.output
+    assert '"adaptive_limit_enabled": true' in result.output
+    assert '"requested_limit": 5' in result.output
     assert '"total_timing_ms": 7.25' in result.output
 
 
