@@ -1687,6 +1687,165 @@ def test_management_service_nerd_metrics_surface_memory_quality_signals(db_manag
     assert alerts["oversized_memory_count"].severity == "info"
 
 
+def test_management_service_lists_prioritized_quality_cleanup_candidates(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    now = time.time() + 120.0
+
+    trace_like = repository.create_memory(
+        title="task_complete: cleanup-run-1",
+        content="Operational closeout should be curated.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Covers several cleanup follow-ups.",
+        created_at=datetime.fromtimestamp(now - 300.0, tz=UTC).isoformat(),
+        updated_at=datetime.fromtimestamp(now - 60.0, tz=UTC).isoformat(),
+    )
+    low_conversion = repository.create_memory(
+        title="Low conversion memory",
+        content="Useful content that still fails to convert when surfaced.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Concrete summary.",
+        tags=["quality"],
+        created_at=datetime.fromtimestamp(now - 400.0, tz=UTC).isoformat(),
+        updated_at=datetime.fromtimestamp(now - 120.0, tz=UTC).isoformat(),
+    )
+    oversized = repository.create_memory(
+        title="Oversized cleanup candidate",
+        content="x" * 4_500,
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Detailed but concrete summary.",
+        tags=["durable"],
+        created_at=datetime.fromtimestamp(now - 500.0, tz=UTC).isoformat(),
+        updated_at=datetime.fromtimestamp(now - 180.0, tz=UTC).isoformat(),
+    )
+    assert trace_like is not None and low_conversion is not None and oversized is not None
+
+    db_manager.get_connection().executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, duration_ms, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("search-1", "workspace-a", "operator", "search", None, "cleanup", None, 1, 50.0, now - 30.0),
+            ("search-1", "workspace-a", "operator", "search", low_conversion.id, "cleanup", 1, 1, 50.0, now - 30.0),
+            ("search-2", "workspace-a", "operator", "search", None, "cleanup", None, 1, 55.0, now - 20.0),
+            ("search-2", "workspace-a", "operator", "search", low_conversion.id, "cleanup", 1, 1, 55.0, now - 20.0),
+            ("search-3", "workspace-a", "operator", "search", None, "cleanup", None, 1, 60.0, now - 10.0),
+            ("search-3", "workspace-a", "operator", "search", low_conversion.id, "cleanup", 1, 1, 60.0, now - 10.0),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    candidates = service.list_quality_cleanup_candidates(window_hours=24, bucket_minutes=60, now=now, limit=10)
+
+    assert candidates.total_candidates == 3
+    assert [candidate.memory_id for candidate in candidates.candidates] == [
+        trace_like.id,
+        low_conversion.id,
+        oversized.id,
+    ]
+
+    trace_like_candidate = candidates.candidates[0]
+    assert trace_like_candidate.priority_score == 95
+    assert [criterion.key for criterion in trace_like_candidate.criteria] == [
+        "trace_like_memory_count",
+        "generic_summary_count",
+    ]
+
+    low_conversion_candidate = candidates.candidates[1]
+    assert low_conversion_candidate.priority_score == 50
+    assert [criterion.key for criterion in low_conversion_candidate.criteria] == ["low_conversion"]
+    assert low_conversion_candidate.search_count == 3
+    assert low_conversion_candidate.read_count == 0
+    assert low_conversion_candidate.converted_search_count == 0
+    assert low_conversion_candidate.conversion_rate == 0.0
+
+    oversized_candidate = candidates.candidates[2]
+    assert oversized_candidate.priority_score == 20
+    assert [criterion.key for criterion in oversized_candidate.criteria] == ["oversized_memory_count"]
+
+
+def test_management_service_merges_quality_and_low_conversion_criteria_per_memory(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    now = time.time() + 60.0
+
+    candidate = repository.create_memory(
+        title="Cleanup follow-up",
+        content="Short durable note.",
+        workspace_ids=["workspace-a"],
+        memory_type="observation",
+        summary="Covers related retrieval cleanup findings.",
+        created_at=datetime.fromtimestamp(now - 300.0, tz=UTC).isoformat(),
+        updated_at=datetime.fromtimestamp(now - 90.0, tz=UTC).isoformat(),
+    )
+    below_threshold = repository.create_memory(
+        title="Below threshold memory",
+        content="Another durable note.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+        summary="Concrete summary.",
+        tags=["quality"],
+        created_at=datetime.fromtimestamp(now - 200.0, tz=UTC).isoformat(),
+        updated_at=datetime.fromtimestamp(now - 80.0, tz=UTC).isoformat(),
+    )
+    assert candidate is not None and below_threshold is not None
+
+    db_manager.get_connection().executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, duration_ms, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("merge-search-1", "workspace-a", "operator", "search", None, "follow up", None, 1, 40.0, now - 30.0),
+            ("merge-search-1", "workspace-a", "operator", "search", candidate.id, "follow up", 1, 1, 40.0, now - 30.0),
+            ("merge-search-2", "workspace-a", "operator", "search", None, "follow up", None, 1, 42.0, now - 20.0),
+            ("merge-search-2", "workspace-a", "operator", "search", candidate.id, "follow up", 1, 1, 42.0, now - 20.0),
+            ("merge-search-3", "workspace-a", "operator", "search", None, "follow up", None, 1, 45.0, now - 10.0),
+            ("merge-search-3", "workspace-a", "operator", "search", candidate.id, "follow up", 1, 1, 45.0, now - 10.0),
+            ("low-threshold-1", "workspace-a", "operator", "search", None, "threshold", None, 1, 35.0, now - 25.0),
+            ("low-threshold-1", "workspace-a", "operator", "search", below_threshold.id, "threshold", 1, 1, 35.0, now - 25.0),
+            ("low-threshold-2", "workspace-a", "operator", "search", None, "threshold", None, 1, 36.0, now - 15.0),
+            ("low-threshold-2", "workspace-a", "operator", "search", below_threshold.id, "threshold", 1, 1, 36.0, now - 15.0),
+        ],
+    )
+    db_manager.get_connection().commit()
+
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    candidates = service.list_quality_cleanup_candidates(window_hours=24, bucket_minutes=60, now=now, limit=10)
+
+    assert [candidate_result.memory_id for candidate_result in candidates.candidates] == [candidate.id]
+    merged_candidate = candidates.candidates[0]
+    assert merged_candidate.priority_score == 115
+    assert [criterion.key for criterion in merged_candidate.criteria] == [
+        "low_conversion",
+        "generic_summary_count",
+        "untagged_observation_count",
+    ]
+    assert merged_candidate.search_count == 3
+    assert merged_candidate.conversion_rate == 0.0
+
+
 def test_management_service_overview_and_memory_detail(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

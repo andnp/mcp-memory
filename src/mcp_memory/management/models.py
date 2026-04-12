@@ -802,6 +802,45 @@ class NerdRetrievalPayload(BaseModel):
     tag_timelines: list[NerdRetrievalTagTimelinePayload] = Field(default_factory=list)
 
 
+class QualityCleanupCriterionPayload(BaseModel):
+    key: str
+    label: str
+    rationale: str
+    weight: int = 0
+    search_count: int | None = None
+    read_count: int | None = None
+    converted_search_count: int | None = None
+    conversion_rate: float | None = None
+
+
+class QualityCleanupCandidatePayload(BaseModel):
+    memory_id: str
+    title: str
+    summary: str | None = None
+    memory_type: str
+    status: str
+    updated_at: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    priority_score: int = 0
+    criteria: list[QualityCleanupCriterionPayload] = Field(default_factory=list)
+    search_count: int | None = None
+    read_count: int | None = None
+    converted_search_count: int | None = None
+    conversion_rate: float | None = None
+    last_search_at: float | None = None
+    last_read_at: float | None = None
+
+
+class QualityCleanupCandidatesPayload(BaseModel):
+    generated_at: float
+    window_hours: int
+    bucket_minutes: int
+    low_conversion_min_search_count: int
+    low_conversion_max_conversion_rate: float
+    total_candidates: int = 0
+    candidates: list[QualityCleanupCandidatePayload] = Field(default_factory=list)
+
+
 class NerdMaintenanceSummaryRowPayload(BaseModel):
     key: str
     label: str
