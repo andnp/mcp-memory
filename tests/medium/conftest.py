@@ -20,25 +20,6 @@ POSTGRES_USER = "postgres"
 POSTGRES_PASSWORD = "password"
 
 
-@pytest.fixture(autouse=True)
-def isolate_medium_test_environment(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Keep medium tests from touching the caller's real config, state, or daemon metadata."""
-
-    home_dir = tmp_path / "home"
-    config_dir = tmp_path / "config"
-    data_dir = tmp_path / "data"
-    state_dir = tmp_path / "state"
-    home_dir.mkdir(parents=True, exist_ok=True)
-    config_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    state_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
-    monkeypatch.setenv("XDG_DATA_HOME", str(data_dir))
-    monkeypatch.setenv("XDG_STATE_HOME", str(state_dir))
-
-
 def _get_free_localhost_port() -> int:
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
