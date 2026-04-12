@@ -1517,7 +1517,21 @@ def _memory_stash_command_action(workspace_root: str | None, text: tuple[str, ..
     _run_or_exit(lambda: _stash_thought(workspace_root, _resolve_stash_content(text)))
 
 
-memory_group = build_memory_group(workspace_root_option, _memory_stash_command_action)
+def _memory_import_markdown_command_action(
+    file_paths: tuple[str, ...],
+    workspace_root: str | None,
+    workspace_ids: tuple[str, ...],
+    thought: bool,
+) -> None:
+    _run_or_exit(lambda: _import_markdown_files(file_paths, workspace_root, workspace_ids, thought))
+
+
+memory_group = build_memory_group(
+    workspace_root_option,
+    _memory_stash_command_action,
+    import_markdown_command_action=_memory_import_markdown_command_action,
+)
+import_markdown = memory_group.commands["import-markdown"]
 main.add_command(memory_group)
 
 
@@ -1929,33 +1943,6 @@ def hook_runner(workspace_root: str | None) -> None:
 
 def _admin_prefetch_model_command_action(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
-
-
-@click.command(name="import-markdown")
-@click.argument("file_paths", nargs=-1, type=str)
-@workspace_root_option
-@click.option(
-    "--workspace-id",
-    "workspace_ids",
-    multiple=True,
-    help="Attach the imported memory to explicit workspace IDs (defaults to the active workspace)",
-)
-@click.option(
-    "--thought",
-    is_flag=True,
-    help="Import as a thought into the thought buffer instead of directly into storage (for intelligent processing by agents)",
-)
-def import_markdown(
-    file_paths: tuple[str, ...],
-    workspace_root: str | None,
-    workspace_ids: tuple[str, ...],
-    thought: bool,
-) -> None:
-    """Import one or more markdown memory files into the relational store or thought buffer."""
-    _run_or_exit(lambda: _import_markdown_files(file_paths, workspace_root, workspace_ids, thought))
-
-
-memory_group.add_command(import_markdown)
 
 
 def _admin_migrate_sqlite_to_postgres_command_action(
