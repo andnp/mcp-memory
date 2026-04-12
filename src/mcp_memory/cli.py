@@ -1140,6 +1140,38 @@ def _render_task_detail(payload) -> None:
             console.print_json(json.dumps(run.result, sort_keys=True))
 
 
+def _render_quality_cleanup_candidates(payload) -> None:
+    table = Table(title="Quality Cleanup Candidates")
+    table.add_column("Priority", justify="right", no_wrap=True)
+    table.add_column("Signals", justify="right", no_wrap=True)
+    table.add_column("Type", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Conversion", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Criteria", overflow="fold")
+    if not payload.candidates:
+        table.add_row("-", "0", "-", "-", "-", "No cleanup candidates", "-")
+        console.print(table)
+        return
+
+    for candidate in payload.candidates:
+        conversion_text = (
+            "-"
+            if candidate.conversion_rate is None
+            else f"{candidate.conversion_rate:.2f} ({candidate.converted_search_count or 0}/{candidate.search_count or 0})"
+        )
+        table.add_row(
+            str(candidate.priority_score),
+            str(len(candidate.criteria)),
+            candidate.memory_type,
+            candidate.status,
+            conversion_text,
+            candidate.title,
+            ", ".join(criterion.label for criterion in candidate.criteria) or "-",
+        )
+    console.print(table)
+
+
 def _build_sampling_summary(payload):
     return build_task_sampling_summary(payload.runs)
 
@@ -1891,18 +1923,52 @@ def _admin_monitor_command_action(workspace_root: str | None, interval: float) -
     _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
 
 
+def _show_quality_cleanup_candidates(
+    workspace_root: str | None,
+    window_hours: int,
+    bucket_minutes: int,
+    limit: int,
+    json_output: bool,
+) -> None:
+    def _run(service: ManagementService) -> None:
+        payload = service.list_quality_cleanup_candidates(
+            window_hours=window_hours,
+            bucket_minutes=bucket_minutes,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_quality_cleanup_candidates(payload)
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+def _admin_quality_cleanup_command_action(
+    workspace_root: str | None,
+    window_hours: int,
+    bucket_minutes: int,
+    limit: int,
+    json_output: bool,
+) -> None:
+    _show_quality_cleanup_candidates(workspace_root, window_hours, bucket_minutes, limit, json_output)
+
+
 _admin_operator_command_cluster = build_admin_operator_command_cluster(
     workspace_root_option,
     show_overview=_admin_overview_command_action,
     show_health=_admin_health_command_action,
     open_monitor=_admin_monitor_command_action,
+    show_quality_cleanup=_admin_quality_cleanup_command_action,
 )
 admin_overview_command = _admin_operator_command_cluster.overview_command
 admin_health_command = _admin_operator_command_cluster.health_command
 admin_monitor_command = _admin_operator_command_cluster.monitor_command
+admin_quality_cleanup_command = _admin_operator_command_cluster.quality_cleanup_command
 admin_group.add_command(admin_overview_command)
 admin_group.add_command(admin_health_command)
 admin_group.add_command(admin_monitor_command)
+admin_group.add_command(admin_quality_cleanup_command)
 
 
 def _admin_install_command_action(

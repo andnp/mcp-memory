@@ -243,6 +243,52 @@ def test_admin_overview_forwards_to_existing_stats_helper(monkeypatch) -> None:
     }
 
 
+def test_admin_quality_cleanup_forwards_to_existing_quality_cleanup_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_quality_cleanup(
+        workspace_root: str | None,
+        window_hours: int,
+        bucket_minutes: int,
+        limit: int,
+        json_output: bool,
+    ) -> None:
+        captured["workspace_root"] = workspace_root
+        captured["window_hours"] = window_hours
+        captured["bucket_minutes"] = bucket_minutes
+        captured["limit"] = limit
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr("mcp_memory.cli._show_quality_cleanup_candidates", fake_quality_cleanup)
+
+    result = runner.invoke(
+        main,
+        [
+            "admin",
+            "quality-cleanup",
+            "--workspace-root",
+            "/tmp/demo",
+            "--window-hours",
+            "48",
+            "--bucket-minutes",
+            "30",
+            "--limit",
+            "7",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "workspace_root": "/tmp/demo",
+        "window_hours": 48,
+        "bucket_minutes": 30,
+        "limit": 7,
+        "json_output": True,
+    }
+
+
 def test_admin_task_list_forwards_to_existing_task_list_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
