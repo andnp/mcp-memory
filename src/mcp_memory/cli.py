@@ -21,6 +21,7 @@ import uvicorn
 
 from mcp_memory.cli_admin_agent_commands import build_admin_agent_command_family
 from mcp_memory.cli_admin_conversation_commands import build_admin_conversation_command_family
+from mcp_memory.cli_admin_dashboard_commands import build_admin_dashboard_command_family
 from mcp_memory.cli_admin_log_commands import build_admin_log_command_family
 from mcp_memory.cli_admin_search_commands import build_admin_search_command_family
 from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
@@ -1833,6 +1834,25 @@ search_debug_command = _admin_search_command_family.debug_command
 admin_group.add_command(admin_search_group)
 
 
+def _admin_dashboard_open_command_action(workspace_root: str | None) -> None:
+    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=True))
+
+
+def _admin_dashboard_build_command_action() -> None:
+    _run_or_exit(_build_dashboard_frontend)
+
+
+_admin_dashboard_command_family = build_admin_dashboard_command_family(
+    workspace_root_option,
+    open_dashboard=_admin_dashboard_open_command_action,
+    build_dashboard_frontend=_admin_dashboard_build_command_action,
+)
+admin_dashboard_group = _admin_dashboard_command_family.group
+admin_dashboard_open_command = _admin_dashboard_command_family.open_command
+admin_dashboard_build_command = _admin_dashboard_command_family.build_command
+admin_group.add_command(admin_dashboard_group)
+
+
 @admin_group.command(name="install")
 @click.option(
     "--tool",
@@ -1936,24 +1956,6 @@ def admin_health_command(workspace_root: str | None, json_output: bool) -> None:
 def admin_monitor_command(workspace_root: str | None, interval: float) -> None:
     """Open the live operations TUI."""
     _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
-
-
-@admin_group.group(name="dashboard")
-def admin_dashboard_group() -> None:
-    """Canonical operator dashboard commands."""
-
-
-@admin_dashboard_group.command(name="open")
-@workspace_root_option
-def admin_dashboard_open_command(workspace_root: str | None) -> None:
-    """Ensure the daemon is running and open the operator dashboard."""
-    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=True))
-
-
-@admin_dashboard_group.command(name="build")
-def admin_dashboard_build_command() -> None:
-    """Build the operator dashboard frontend bundle."""
-    _run_or_exit(_build_dashboard_frontend)
 
 
 @click.command(name="import-markdown")
