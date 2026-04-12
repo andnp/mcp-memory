@@ -50,7 +50,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._assess_daemon_health",
         lambda current, timeout_seconds=3.0: DaemonHealthAssessment(
@@ -100,7 +100,7 @@ def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, t
         def release(self) -> None:
             released.append(True)
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon.FilesystemLock", _FakeLock)
     monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
     monkeypatch.setattr(
@@ -198,7 +198,7 @@ def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exit
         def poll(self) -> int:
             return 17
 
-    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon.resolve_global_daemon_bootstrap_spec', lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', lambda path: None)
     monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
     monkeypatch.setattr(
@@ -278,7 +278,7 @@ def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch,
         monotonic_state['value'] += 0.05
         return monotonic_state['value']
 
-    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon.resolve_global_daemon_bootstrap_spec', lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
     monkeypatch.setattr(
         'mcp_memory.daemon._spawn_daemon_process',
@@ -338,7 +338,7 @@ def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, t
     spawned: list[tuple[Path, str, int]] = []
     monotonic_values = iter([value * 0.05 for value in range(80)])
 
-    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon.resolve_global_daemon_bootstrap_spec', lambda workspace_root_override=None, cwd=None: spec)
 
     def _fake_read(_path):
         read_count['count'] += 1
@@ -407,7 +407,7 @@ def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(mon
             pass
 
     monkeypatch.setattr('mcp_memory.daemon.FilesystemLock', _FakeLock)
-    monkeypatch.setattr('mcp_memory.daemon.resolve_runtime_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon.resolve_global_daemon_bootstrap_spec', lambda workspace_root_override=None, cwd=None: spec)
 
     def _fake_read(_path):
         read_count['count'] += 1
@@ -465,7 +465,7 @@ def test_stop_daemon_waits_for_process_exit_after_healthcheck_fails(monkeypatch,
     process_states = iter([True, True, False])
     sent_signals: list[int] = []
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: next(health_states))
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
@@ -512,7 +512,7 @@ def test_stop_daemon_terminates_unhealthy_running_process_before_removing_metada
     process_states = iter([True, False])
     removed_sockets: list[Path] = []
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: False)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
@@ -560,7 +560,7 @@ def test_stop_daemon_reports_sigkill_escalation(monkeypatch, tmp_path: Path) -> 
     sent_signals: list[int] = []
     process_states = iter([True, True, True, False])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(sig))
@@ -624,7 +624,7 @@ def test_stop_daemon_escalates_to_process_group_for_sigkill(monkeypatch, tmp_pat
     sent_signals: list[tuple[str, int, signal.Signals]] = []
     process_states = iter([True, True, True, False])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: next(process_states))
     monkeypatch.setattr("mcp_memory.daemon.os.getpgid", lambda pid: 777)
     monkeypatch.setattr("mcp_memory.daemon.os.kill", lambda pid, sig: sent_signals.append(("pid", pid, sig)))
@@ -711,7 +711,7 @@ def test_ensure_daemon_started_stops_unhealthy_running_process_before_spawn(monk
     sent_signals: list[int] = []
     process_states = iter([True, False])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._read_daemon_metadata",
         lambda path: metadata if not spawned and metadata_path.exists() else fresh_metadata,
@@ -1003,7 +1003,7 @@ def test_ensure_daemon_started_does_not_kill_daemon_after_single_retryable_probe
         ]
     )
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: metadata)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: True)
     monkeypatch.setattr("mcp_memory.daemon._assess_daemon_health", lambda current, timeout_seconds=3.0: next(assessments))
@@ -1049,7 +1049,7 @@ def test_ensure_daemon_started_skips_health_probe_for_stale_metadata_pid(monkeyp
     )
     spawned: list[tuple[Path, str, int]] = []
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._read_daemon_metadata",
         lambda path: stale_metadata if not spawned else fresh_metadata,
@@ -1262,7 +1262,7 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
     removed_sockets: list[Path] = []
     monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._read_daemon_metadata",
         lambda path: stale_metadata if not spawned else fresh_metadata,
