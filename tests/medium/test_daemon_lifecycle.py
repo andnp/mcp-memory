@@ -766,7 +766,7 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
     process_states = iter([False, False, False])
     monotonic_values = iter([value * 0.2 for value in range(8)])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: None if not spawned else metadata)
     monkeypatch.setattr(
         "mcp_memory.daemon._list_daemon_processes",
@@ -775,6 +775,7 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
                 pid=4321,
                 executable="/old/tool/python",
                 command=("python", "-m", "mcp_memory.cli", "daemon"),
+                state_dir=tmp_path / "state" / "mcp-memory",
             )
         ],
     )
@@ -790,6 +791,62 @@ def test_ensure_daemon_started_terminates_orphaned_daemon_processes_when_metadat
 
     assert current.port == 8126
     assert killed == [4321]
+    assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
+
+
+def test_ensure_daemon_started_orphan_cleanup_ignores_other_state_roots(monkeypatch, tmp_path: Path) -> None:
+    current_state_home = tmp_path / "state-current"
+    monkeypatch.setenv("XDG_STATE_HOME", str(current_state_home))
+    config = Config()
+    config.daemon.port = 4242
+    spec = _Spec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-start",
+        workspace_root=tmp_path / "workspace",
+        lock_path=tmp_path / "workspace.lock",
+    )
+    metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=8126,
+        pid=7777,
+        started_at=1.0,
+        status="ready",
+    )
+    spawned: list[tuple[Path, str, int]] = []
+    terminated: list[int] = []
+    monotonic_values = iter([value * 0.2 for value in range(8)])
+
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon._read_daemon_metadata", lambda path: None if not spawned else metadata)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._list_daemon_processes",
+        lambda current_pid: [
+            __import__("mcp_memory.daemon").daemon._DaemonProcess(
+                pid=4321,
+                executable="/old/tool/python",
+                command=("python", "-m", "mcp_memory.cli", "daemon"),
+                state_dir=current_state_home / "mcp-memory",
+            ),
+            __import__("mcp_memory.daemon").daemon._DaemonProcess(
+                pid=8765,
+                executable="/other/tool/python",
+                command=("python", "-m", "mcp_memory.cli", "daemon"),
+                state_dir=tmp_path / "state-other" / "mcp-memory",
+            ),
+        ],
+    )
+    monkeypatch.setattr("mcp_memory.daemon._terminate_daemon_process", lambda pid, **kwargs: terminated.append(pid))
+    monkeypatch.setattr("mcp_memory.daemon._cleanup_stale_daemon_socket", lambda *args, **kwargs: False)
+    monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda workspace_root, host, port: spawned.append((workspace_root, host, port)))
+    monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: True)
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
+    monkeypatch.setattr("mcp_memory.daemon.time.monotonic", lambda: next(monotonic_values))
+
+    current = ensure_daemon_started()
+
+    assert current.port == 8126
+    assert terminated == [4321]
     assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 
 
@@ -830,7 +887,7 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
     process_states = iter([False, False, False])
     monotonic_values = iter([value * 0.2 for value in range(8)])
 
-    monkeypatch.setattr("mcp_memory.daemon.resolve_runtime_spec", lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._read_daemon_metadata",
         lambda path: stale_metadata if not spawned and metadata_path.exists() else fresh_metadata,
@@ -844,6 +901,7 @@ def test_ensure_daemon_started_removes_stale_metadata_and_terminates_orphans(mon
                 pid=3333,
                 executable="/old/tool/python",
                 command=("python", "-m", "mcp_memory.cli", "daemon"),
+                state_dir=tmp_path / "state" / "mcp-memory",
             )
         ],
     )

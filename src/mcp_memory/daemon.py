@@ -10,11 +10,13 @@ from dataclasses import dataclass
 from dataclasses import replace
 
 from mcp_memory.config import (
+    DEFAULT_APP_NAME,
     GLOBAL_DAEMON_IDENTITY,
     resolve_daemon_lock_path,
     resolve_daemon_metadata_path,
     resolve_daemon_socket_path,
     resolve_daemon_startup_log_path,
+    resolve_state_dir,
 )
 from mcp_memory.daemon_app import create_daemon_app
 from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
@@ -47,6 +49,7 @@ class _DaemonProcess:
     pid: int
     executable: str | None
     command: tuple[str, ...]
+    state_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ def ensure_daemon_started(
     cwd: Path | None = None,
 ) -> DaemonMetadata:
     spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    current_state_dir = _normalize_state_dir(resolve_state_dir())
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
@@ -99,6 +103,7 @@ def ensure_daemon_started(
                 remove_metadata(metadata_path)
             _terminate_orphaned_daemon_processes(
                 current_pid=os.getpid(),
+                current_state_dir=current_state_dir,
                 deadline=cleanup_deadline,
                 poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
             )
@@ -390,10 +395,19 @@ def _socket_path_exists(socket_path: Path) -> bool:
 def _terminate_orphaned_daemon_processes(
     *,
     current_pid: int,
+    current_state_dir: Path,
     deadline: float,
     poll_interval_seconds: float,
 ) -> None:
     for process in _list_daemon_processes(current_pid=current_pid):
+        if process.state_dir != current_state_dir:
+            logger.debug(
+                "Skipping orphan daemon cleanup for pid=%s due to state-dir mismatch: candidate=%s current=%s",
+                process.pid,
+                process.state_dir,
+                current_state_dir,
+            )
+            continue
         _terminate_daemon_process(
             process.pid,
             deadline=deadline,
@@ -420,6 +434,7 @@ def _list_daemon_processes(*, current_pid: int) -> list[_DaemonProcess]:
                 pid=pid,
                 executable=_read_process_executable(entry),
                 command=command,
+                state_dir=_resolve_process_state_dir(_read_process_environment(entry)),
             )
         )
     return processes
@@ -439,6 +454,39 @@ def _read_process_executable(proc_entry: Path) -> str | None:
         return str((proc_entry / "exe").resolve())
     except OSError:
         return None
+
+
+def _read_process_environment(proc_entry: Path) -> dict[str, str]:
+    try:
+        raw = (proc_entry / "environ").read_bytes()
+    except OSError:
+        return {}
+    environment: dict[str, str] = {}
+    for entry in raw.split(b"\0"):
+        if not entry or b"=" not in entry:
+            continue
+        key, value = entry.split(b"=", 1)
+        environment[key.decode("utf-8", errors="ignore")] = value.decode("utf-8", errors="ignore")
+    return environment
+
+
+def _resolve_process_state_dir(environment: dict[str, str]) -> Path | None:
+    xdg_state_home = environment.get("XDG_STATE_HOME", "").strip()
+    if xdg_state_home:
+        return _normalize_state_dir(Path(xdg_state_home) / DEFAULT_APP_NAME)
+
+    home = environment.get("HOME", "").strip()
+    if home:
+        return _normalize_state_dir(Path(home) / ".local" / "state" / DEFAULT_APP_NAME)
+    return None
+
+
+def _normalize_state_dir(state_dir: Path) -> Path:
+    expanded = state_dir.expanduser()
+    try:
+        return expanded.resolve()
+    except OSError:
+        return Path(os.path.abspath(str(expanded)))
 
 
 def _is_daemon_command(command: tuple[str, ...]) -> bool:
