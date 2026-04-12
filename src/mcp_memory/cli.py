@@ -26,6 +26,7 @@ from mcp_memory.cli_admin_log_commands import build_admin_log_command_family
 from mcp_memory.cli_admin_operator_commands import build_admin_operator_command_cluster
 from mcp_memory.cli_admin_search_commands import build_admin_search_command_family
 from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
+from mcp_memory.cli_admin_utility_commands import build_admin_utility_command_cluster
 from mcp_memory.cli_daemon_commands import build_daemon_command_family
 from mcp_memory.cli_memory import build_memory_group
 from mcp_memory.config import load_config, resolve_memory_path
@@ -1885,31 +1886,12 @@ admin_group.add_command(admin_health_command)
 admin_group.add_command(admin_monitor_command)
 
 
-@admin_group.command(name="install")
-@click.option(
-    "--tool",
-    "tools",
-    multiple=True,
-    type=click.Choice(["all", "copilot", "claude", "gemini"]),
-    help="Install for selected tool integrations (defaults to all).",
-)
-@click.option(
-    "--component",
-    "components",
-    multiple=True,
-    type=click.Choice(["all", "hooks", "mcp"]),
-    help="Install only selected integration components (defaults to all).",
-)
-@click.option(
-    "--scope",
-    type=click.Choice(["workspace", "user"]),
-    default="workspace",
-    show_default=True,
-    help="Target workspace-local or user-level config files where supported.",
-)
-@click.option("--workspace-root", help="Override the target workspace root")
-def install(tools: tuple[str, ...], components: tuple[str, ...], scope: str, workspace_root: str | None) -> None:
-    """Install hook and MCP integration config for supported tools."""
+def _admin_install_command_action(
+    tools: tuple[str, ...],
+    components: tuple[str, ...],
+    scope: str,
+    workspace_root: str | None,
+) -> None:
     try:
         result = install_integrations(
             tools=tools,
@@ -1945,10 +1927,7 @@ def hook_runner(workspace_root: str | None) -> None:
     click.echo(json.dumps(response, sort_keys=True))
 
 
-@admin_group.command(name="prefetch-model")
-@workspace_root_option
-def prefetch_model(workspace_root: str | None) -> None:
-    """Download and cache the configured local embedding model in the foreground."""
+def _admin_prefetch_model_command_action(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
 
 
@@ -1979,31 +1958,13 @@ def import_markdown(
 memory_group.add_command(import_markdown)
 
 
-@admin_group.command(name="migrate-sqlite-to-postgres")
-@click.option(
-    "--sqlite-path",
-    type=click.Path(path_type=Path, dir_okay=False, resolve_path=True),
-    help="Source SQLite database path (defaults to the current local memory.db path).",
-)
-@click.option(
-    "--postgres-dsn",
-    help="Target Postgres DSN (defaults to storage.postgres.dsn from config).",
-)
-@click.option("--dry-run", is_flag=True, help="Read and summarize the source without importing rows.")
-@click.option(
-    "--allow-non-empty-target",
-    is_flag=True,
-    help="Allow importing into a non-empty Postgres target for controlled reruns.",
-)
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def migrate_sqlite_to_postgres_cli(
+def _admin_migrate_sqlite_to_postgres_command_action(
     sqlite_path: Path | None,
     postgres_dsn: str | None,
     dry_run: bool,
     allow_non_empty_target: bool,
     json_output: bool,
 ) -> None:
-    """Import the current SQLite memory graph into a Postgres backend."""
     _run_or_exit(
         lambda: _migrate_sqlite_to_postgres_command(
             sqlite_path,
@@ -2013,6 +1974,20 @@ def migrate_sqlite_to_postgres_cli(
             json_output,
         )
     )
+
+
+_admin_utility_command_cluster = build_admin_utility_command_cluster(
+    workspace_root_option,
+    install_command_action=_admin_install_command_action,
+    prefetch_model=_admin_prefetch_model_command_action,
+    migrate_sqlite_to_postgres=_admin_migrate_sqlite_to_postgres_command_action,
+)
+install = _admin_utility_command_cluster.install_command
+prefetch_model = _admin_utility_command_cluster.prefetch_model_command
+migrate_sqlite_to_postgres_cli = _admin_utility_command_cluster.migrate_sqlite_to_postgres_command
+admin_group.add_command(install)
+admin_group.add_command(prefetch_model)
+admin_group.add_command(migrate_sqlite_to_postgres_cli)
 
 
 def _build_management_service(runtime, workspace_id: str | None | object = ... ) -> ManagementService:
