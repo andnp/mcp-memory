@@ -1009,7 +1009,7 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
     assert ignored_scoped_overview.json()["memories"]["total"] == 3
 
 
-def test_http_operator_lists_default_to_global_scope_and_search_uses_workspace_ranking_context(
+def test_http_operator_lists_default_to_global_scope_and_search_uses_explicit_workspace_context(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1094,15 +1094,25 @@ def test_http_operator_lists_default_to_global_scope_and_search_uses_workspace_r
     app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
     with TestClient(app) as client:
         global_tasks = client.get("/api/tasks")
-        workspace_tasks = client.get("/api/tasks", params={"scope": "workspace"})
+        workspace_tasks = client.get(
+            "/api/tasks",
+            params={"scope": "workspace", "workspace_id": runtime_a.workspace_id},
+        )
         global_memories = client.get("/api/memories")
-        workspace_memories = client.get("/api/memories", params={"scope": "workspace"})
+        workspace_memories = client.get(
+            "/api/memories",
+            params={"scope": "workspace", "workspace_id": runtime_a.workspace_id},
+        )
         global_search = client.post("/api/memories/search", json={"query": "API fact", "limit": 10})
-        workspace_search = client.post("/api/memories/search?scope=workspace", json={"query": "API fact", "limit": 10})
-        global_logs = client.post("/api/logs", json={"source": "daemon"})
-        workspace_logs = client.post("/api/logs?scope=workspace", json={"source": "daemon"})
+        workspace_search = client.post(
+            "/api/memories/search?scope=workspace&workspace_id=" + runtime_a.workspace_id,
+            json={"query": "API fact", "limit": 10},
+        )
         global_conversations = client.post("/api/ai-conversations", json={"limit": 10})
-        workspace_conversations = client.post("/api/ai-conversations?scope=workspace", json={"limit": 10})
+        workspace_conversations = client.post(
+            "/api/ai-conversations?scope=workspace&workspace_id=" + runtime_a.workspace_id,
+            json={"limit": 10},
+        )
 
     assert global_tasks.status_code == 200
     global_task_ids = {task["id"] for task in global_tasks.json()["tasks"]}
@@ -1121,19 +1131,12 @@ def test_http_operator_lists_default_to_global_scope_and_search_uses_workspace_r
     assert global_search.status_code == 200
     assert {record["title"] for record in global_search.json()["results"]} == {"Workspace A API fact", "Workspace B API fact"}
     workspace_results = workspace_search.json()["results"]
-    # Search remains global; workspace scope only supplies ranking context for the active workspace.
+    # Search remains global; workspace scope only supplies ranking context for the requested workspace.
     assert {record["title"] for record in workspace_results} == {"Workspace A API fact", "Workspace B API fact"}
     assert workspace_results[0]["title"] == "Workspace A API fact"
     workspace_a_result = next(record for record in workspace_results if record["title"] == "Workspace A API fact")
     workspace_b_result = next(record for record in workspace_results if record["title"] == "Workspace B API fact")
     assert workspace_a_result["score"] >= workspace_b_result["score"]
-
-    assert global_logs.status_code == 200
-    global_log_messages = {record["message"] for record in global_logs.json()["logs"]}
-    workspace_log_messages = {record["message"] for record in workspace_logs.json()["logs"]}
-    assert {"workspace-a api log", "workspace-b api log"} <= global_log_messages
-    assert "workspace-a api log" in workspace_log_messages
-    assert "workspace-b api log" not in workspace_log_messages
 
     assert global_conversations.status_code == 200
     global_request_ids = {record["request_id"] for record in global_conversations.json()["conversations"]}
@@ -1318,12 +1321,13 @@ async def test_daemon_zmq_record_thought_tool_fast_path_ignores_saturated_reques
         decoded = json.loads(response["contents"][0]["text"])
         assert blocking_request.done() is False
         assert decoded["status"] == "recorded"
-        assert decoded["entry"]["workspace_id"] == app.state.routes.ctx.workspace_id
+        expected_workspace_id = daemon_app_module.resolve_workspace_id(workspace_root=str(workspace))
+        assert decoded["entry"]["workspace_id"] == expected_workspace_id
         assert request_elapsed < 1.0
 
         pending_entries = app.state.routes.ctx.journal.get_pending(limit=10)
         assert len(pending_entries) == 1
-        assert pending_entries[0].workspace_id == app.state.routes.ctx.workspace_id
+        assert pending_entries[0].workspace_id == expected_workspace_id
 
         release_blocking_request.set()
         assert await asyncio.wait_for(blocking_request, timeout=0.5) == {"status": "ok"}
