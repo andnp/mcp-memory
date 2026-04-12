@@ -1587,7 +1587,12 @@ async def test_runtime_task_worker_logs_unchanged_overdue_pending_tasks_once(db_
 async def test_runtime_task_worker_reconciles_running_conversation_for_recovered_dead_subprocess_task(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
-    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        provider_usage=repository,
+        workspace_id="workspace-a",
+    )
     task = queue.enqueue(
         "ingest-system1",
         workspace_id="workspace-a",
@@ -1618,36 +1623,34 @@ async def test_runtime_task_worker_reconciles_running_conversation_for_recovered
         ctx,
         handlers={"ingest-system1": lambda ctx, task: None},
         poll_interval_seconds=0.01,
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=0.0,
     )
-
-    original = SQLiteTaskQueue.recover_abandoned_running_tasks
-
-    def recover(self, **kwargs):
-        kwargs.pop("stale_after_seconds", None)
-        kwargs.pop("now", None)
-        return original(self, stale_after_seconds=0.0, now=5.0, **kwargs)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
-    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
     try:
         await worker.start()
         for _ in range(20):
-            if queue.get_task(task.id).status == "failed":
+            if queue.get_task(task.id).status == "pending":
                 break
             await asyncio.sleep(0.01)
         await worker.stop(0.05)
     finally:
         monkeypatch.undo()
 
-    failed = queue.get_task(task.id)
+    retried = queue.get_task(task.id)
     conversation = repository.get_conversation("req-orphaned")[0]
 
-    assert failed.status == "failed"
-    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.status == "pending"
+    assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.retries_count == 1
+    assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
     assert conversation.status == "error"
     assert conversation.task_id == task.id
     assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert conversation.reason_category == "recovery"
+    assert conversation.reason_code == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio
@@ -1755,10 +1758,12 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
 ) -> None:
     queue = SQLiteTaskQueue(db_manager)
     attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
     ctx = ApplicationContext(
         db_manager=db_manager,
         task_queue=queue,
         task_execution_attempts=attempt_repository,
+        provider_usage=provider_usage,
         workspace_id="workspace-a",
     )
     task = queue.enqueue(
@@ -1790,6 +1795,23 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
             model_name="gemini-3-flash-preview",
             started_at=2.0,
         )
+        provider_usage.record_conversation(
+            request_id="req-late-cancel",
+            attempt=1,
+            task_name=queued_task.task_name,
+            task_id=queued_task.id,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            subprocess_pid=9999,
+            prompt_text="keep running",
+            response_text="",
+            parsed=None,
+            status="running",
+            error_text=None,
+            started_at=2.0,
+            completed_at=2.0,
+        )
         started.set()
         try:
             await asyncio.Future()
@@ -1804,6 +1826,14 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
                 subprocess_pid=9999,
                 error_text="Command cancelled",
                 termination_reason="provider_cancelled",
+            )
+            provider_usage.finalize_running_conversation(
+                request_id="req-late-cancel",
+                status="cancelled",
+                error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                completed_at=50.0,
             )
             raise
 
@@ -1824,7 +1854,13 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
         for _ in range(100):
             retried = queue.get_task(task.id)
             attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
-            if retried.status == "pending" and attempt.termination_reason == "provider_subprocess_exited_retry":
+            conversations = provider_usage.get_conversation("req-late-cancel")
+            if (
+                retried.status == "pending"
+                and attempt.termination_reason == "provider_subprocess_exited_retry"
+                and conversations
+                and conversations[0].reason_code == "provider_subprocess_exited_retry"
+            ):
                 break
             await asyncio.sleep(0.01)
     finally:
@@ -1832,6 +1868,7 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
 
     retried = queue.get_task(task.id)
     attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+    conversation = provider_usage.get_conversation("req-late-cancel")[0]
 
     assert retried.status == "pending"
     assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
@@ -1840,6 +1877,10 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
     assert attempt.completed_at == pytest.approx(retried.updated_at)
     assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
     assert attempt.termination_reason == "provider_subprocess_exited_retry"
+    assert conversation.status == "error"
+    assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert conversation.reason_category == "recovery"
+    assert conversation.reason_code == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio

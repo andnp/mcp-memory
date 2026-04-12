@@ -1062,6 +1062,7 @@ async def test_postgres_integration_runtime_worker_reconciles_running_conversati
             ),
             handlers={"ingest-system1": lambda context, queued_task: None},
             poll_interval_seconds=0.01,
+            retry_delay_seconds=45.0,
             abandoned_task_stale_after_seconds=300.0,
         )
 
@@ -1069,16 +1070,18 @@ async def test_postgres_integration_runtime_worker_reconciles_running_conversati
 
         await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
 
-        failed = queue.get_task(task.id)
+        retried = queue.get_task(task.id)
         conversation = provider_usage.get_conversation("req-orphaned")[0]
 
-        assert failed.status == "failed"
-        assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert retried.status == "pending"
+        assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert retried.retries_count == 1
+        assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
         assert conversation.status == "error"
         assert conversation.task_id == task.id
         assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
-        assert conversation.reason_category is None
-        assert conversation.reason_code is None
+        assert conversation.reason_category == "recovery"
+        assert conversation.reason_code == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio
@@ -1197,6 +1200,141 @@ async def test_postgres_integration_runtime_worker_reconciles_attempt_for_recove
         assert attempt.completed_at == pytest.approx(1000.0)
         assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
         assert attempt.termination_reason == "provider_subprocess_exited_retry"
+
+
+@pytest.mark.asyncio
+async def test_postgres_integration_runtime_worker_preserves_retry_recovery_conversation_after_late_provider_cancellation(
+    postgres_storage_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        attempt_repository = PostgresTaskExecutionAttemptRepository(manager, workspace_id="workspace-a")
+        provider_usage = PostgresProviderUsageRepository(manager, workspace_id="workspace-a")
+        task = queue.enqueue(
+            "late-cancel-task",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-late-cancel-task",
+        )
+        ctx = ApplicationContext(
+            db_manager=manager,
+            task_queue=queue,
+            task_execution_attempts=attempt_repository,
+            provider_usage=provider_usage,
+            workspace_id="workspace-a",
+        )
+
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def blocking_handler(_ctx: ApplicationContext, queued_task: TaskRecord) -> None:
+            queue.set_running_process(
+                queued_task.id,
+                subprocess_pid=9999,
+                request_id="req-late-cancel",
+                updated_at=2.0,
+                execution_epoch=queued_task.execution_epoch,
+            )
+            attempt_repository.start_attempt(
+                task_id=queued_task.id,
+                execution_epoch=queued_task.execution_epoch,
+                task_name=queued_task.task_name,
+                request_id="req-late-cancel",
+                subprocess_pid=9999,
+                provider_key="gemini-cli",
+                provider_name="Gemini CLI",
+                model_name="gemini-3-flash-preview",
+                started_at=2.0,
+            )
+            provider_usage.record_conversation(
+                request_id="req-late-cancel",
+                attempt=1,
+                task_name=queued_task.task_name,
+                task_id=queued_task.id,
+                provider_key="gemini-cli",
+                provider_name="Gemini CLI",
+                model_name="gemini-3-flash-preview",
+                subprocess_pid=9999,
+                prompt_text="keep running",
+                response_text="",
+                parsed=None,
+                status="running",
+                error_text=None,
+                started_at=2.0,
+                completed_at=2.0,
+            )
+            started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                attempt_repository.finish_attempt(
+                    task_id=queued_task.id,
+                    execution_epoch=queued_task.execution_epoch,
+                    status="cancelled",
+                    completed_at=50.0,
+                    request_id="req-late-cancel",
+                    subprocess_pid=9999,
+                    error_text="Command cancelled",
+                    termination_reason="provider_cancelled",
+                )
+                provider_usage.finalize_running_conversation(
+                    request_id="req-late-cancel",
+                    status="cancelled",
+                    error_text="Command cancelled",
+                    reason_category="cancellation",
+                    reason_code="provider_cancelled",
+                    completed_at=50.0,
+                )
+                raise
+
+        monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+        worker = RuntimeTaskWorker(
+            ctx,
+            handlers={"late-cancel-task": blocking_handler},
+            poll_interval_seconds=0.01,
+            retry_delay_seconds=45.0,
+            abandoned_recovery_interval_seconds=0.01,
+            abandoned_task_stale_after_seconds=0.0,
+        )
+
+        await worker.start()
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+            for _ in range(100):
+                retried = queue.get_task(task.id)
+                attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+                conversations = provider_usage.get_conversation("req-late-cancel")
+                if (
+                    retried.status == "pending"
+                    and attempt.termination_reason == "provider_subprocess_exited_retry"
+                    and conversations
+                    and conversations[0].reason_code == "provider_subprocess_exited_retry"
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await worker.stop(0.05)
+
+        retried = queue.get_task(task.id)
+        attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+        conversation = provider_usage.get_conversation("req-late-cancel")[0]
+
+        assert retried.status == "pending"
+        assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
+        assert attempt.status == "error"
+        assert attempt.completed_at == pytest.approx(retried.updated_at)
+        assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
+        assert attempt.termination_reason == "provider_subprocess_exited_retry"
+        assert conversation.status == "error"
+        assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+        assert conversation.reason_category == "recovery"
+        assert conversation.reason_code == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio

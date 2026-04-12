@@ -468,11 +468,6 @@ class RuntimeTaskWorker:
         if task_queue is None:
             return []
         attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
-        if attempt_repository is None:
-            return task_queue.recover_abandoned_running_tasks(
-                stale_after_seconds=self._abandoned_task_stale_after_seconds,
-                now=current_time,
-            )
         recovered: list[TaskRecord] = []
         running_tasks = task_queue.list_tasks(status="running", workspace_id=None, limit=200)
         for task in running_tasks:
