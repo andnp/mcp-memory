@@ -16,9 +16,13 @@ from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
-from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
+from mcp_memory.management.context_resources import (
+    _build_default_embedding_integrity_events as _context_build_default_embedding_integrity_events,
+    _build_default_provider_usage as _context_build_default_provider_usage,
+    ensure_management_context_resources,
+)
 from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.operator_health_reporting import (
     build_operator_health_snapshot_payload,
@@ -60,12 +64,10 @@ from mcp_memory.management.models import (
     TransportDiagnosticsPayload,
 )
 from mcp_memory.management.reporting_queries import count_recent_conversation_statuses, count_recent_memory_updates
-from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
-from mcp_memory.runtime_log_store import RuntimeLogRepository, _AllWorkspacesSentinel
-from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
+from mcp_memory.runtime_log_store import _AllWorkspacesSentinel
 from mcp_memory.serialization import (
     compact_memory_record_payload,
     link_payload,
@@ -73,9 +75,6 @@ from mcp_memory.serialization import (
     search_result_payload,
     task_payload,
 )
-from mcp_memory.storage.noop import NoopProviderUsageRepository
-from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
-from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
@@ -136,46 +135,8 @@ _QUALITY_CLEANUP_RECOMMENDATIONS: dict[str, tuple[str, str, int]] = {
 
 logger = logging.getLogger(__name__)
 
-
-def _build_default_provider_usage(ctx: ManagementContext):
-    if (ctx.storage_backend or "sqlite") == "postgres":
-        return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
-    if not hasattr(ctx.db_manager, "get_connection"):
-        return NoopProviderUsageRepository(workspace_id=ctx.workspace_id)
-    return ProviderUsageRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
-
-
-def _build_default_runtime_logs(ctx: ManagementContext):
-    config = None if ctx.config is None else ctx.config.logging
-    if (ctx.storage_backend or "sqlite") == "postgres":
-        return PostgresRuntimeLogRepository(
-            ctx.db_manager,
-            workspace_id=ctx.workspace_id,
-            config=config,
-        )
-    return RuntimeLogRepository(
-        ctx.db_manager,
-        workspace_id=ctx.workspace_id,
-        config=config,
-    )
-
-
-def _build_default_embedding_integrity_events(ctx: ManagementContext):
-    if ctx.db_manager is None:
-        return None
-    if hasattr(ctx.db_manager, "get_connection"):
-        return EmbeddingIntegrityEventRepository(
-            ctx.db_manager,
-            workspace_id=None,
-        )
-    if (ctx.storage_backend or "sqlite") == "postgres":
-        if not hasattr(ctx.db_manager, "open_connection"):
-            return None
-        return PostgresEmbeddingIntegrityEventRepository(
-            ctx.db_manager,
-            workspace_id=None,
-        )
-    return None
+_build_default_provider_usage = _context_build_default_provider_usage
+_build_default_embedding_integrity_events = _context_build_default_embedding_integrity_events
 
 
 def _resolve_log_workspace_id(
@@ -209,6 +170,7 @@ def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnost
 class ManagementService:
     def __init__(self, ctx: ManagementContext, controller) -> None:
         pipeline = MemoryPipeline.from_context(ctx, controller)
+        resources = ensure_management_context_resources(ctx)
         self._controller = controller
         self._db_manager = ctx.db_manager
         self._storage_backend = ctx.storage_backend or "sqlite"
@@ -218,16 +180,10 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
-        self._provider_usage = ctx.provider_usage or _build_default_provider_usage(ctx)
-        self._runtime_logs = ctx.runtime_logs or _build_default_runtime_logs(ctx)
-        self._embedding_integrity_events = ctx.embedding_integrity_events
-        if self._embedding_integrity_events is None:
-            self._embedding_integrity_events = _build_default_embedding_integrity_events(ctx)
-            ctx.embedding_integrity_events = self._embedding_integrity_events
-        self._retrieval_telemetry = ctx.retrieval_telemetry
-        if self._retrieval_telemetry is None:
-            self._retrieval_telemetry = RetrievalTelemetryRepository(self._db_manager, workspace_id=self._workspace_id)
-            ctx.retrieval_telemetry = self._retrieval_telemetry
+        self._provider_usage = resources.provider_usage
+        self._runtime_logs = resources.runtime_logs
+        self._embedding_integrity_events = resources.embedding_integrity_events
+        self._retrieval_telemetry = resources.retrieval_telemetry
         self._read_cache = getattr(ctx, "read_cache", None)
         self._embedder = ctx.embedder
         self._vector_store = getattr(ctx, "vector_store", None)
