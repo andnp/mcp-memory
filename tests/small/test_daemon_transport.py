@@ -10,7 +10,7 @@ import pytest
 from mcp_memory.config import resolve_workspace_id
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
-from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, create_daemon_app
+from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, _workspace_id_for_request_scope, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.server import MCPServer
@@ -293,7 +293,7 @@ def test_request_scope_for_arguments_extracts_request_scoped_identity(tmp_path) 
 
     assert request_scope.session_id == "session-123"
     assert request_scope.workspace_root == workspace
-    assert request_scope.workspace_id == resolve_workspace_id(workspace_root=str(workspace))
+    assert _workspace_id_for_request_scope(request_scope) == resolve_workspace_id(workspace_root=str(workspace))
 
 
 @pytest.mark.asyncio
