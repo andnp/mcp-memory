@@ -15,6 +15,10 @@ from mcp_memory.core.task_handlers.ingest_batch_support import process_ingest_ba
 from mcp_memory.core.task_handlers.ingest_preflight_support import (
     build_ingest_preflight_state,
 )
+from mcp_memory.core.task_handlers.ingest_run_support import (
+    IngestRunAccumulator,
+    should_continue_ingest_run,
+)
 from mcp_memory.core.task_handlers.ingest_support import (
     _build_ingest_result,
     _normalize_ingest_agentic_result as _normalize_ingest_agentic_result,
@@ -82,16 +86,10 @@ async def handle_ingest_system1_task(
             journal.release_claims(task.id)
             raise
 
-    created_ids: list[str] = []
-    claimed_ids: list[int] = []
-    recoverable_ids: list[int] = []
-    released_ids: list[int] = []
-    meaningful_actions = 0
-    semantic_entry_dispositions: list[dict[str, Any]] = []
-    batches_processed = 0
+    run_state = IngestRunAccumulator()
 
     try:
-        while batches_processed < preflight.max_batches_per_run:
+        while run_state.batches_processed < preflight.max_batches_per_run:
             entries = journal.claim_pending(
                 task_id=task.id,
                 limit=preflight.batch_size,
@@ -109,34 +107,20 @@ async def handle_ingest_system1_task(
                 analyze_ingest_actions=_analyze_ingest_actions,
                 entries=entries,
             )
-            batches_processed += 1
-            created_ids.extend(batch_result["created_ids"])
-            claimed_ids.extend(batch_result["claimed_ids"])
-            recoverable_ids.extend(batch_result["recoverable_ids"])
-            released_ids.extend(batch_result["released_ids"])
-            semantic_entry_dispositions.extend(batch_result["entry_dispositions"])
-            meaningful_actions += batch_result["meaningful_actions"]
-
-            if batch_result["meaningful_actions"] <= 0:
-                break
-            if journal.count_by_status(workspace_id=preflight.journal_workspace_id).get("pending", 0) <= 0:
+            run_state.absorb_batch_result(batch_result)
+            pending_remaining = journal.count_by_status(workspace_id=preflight.journal_workspace_id).get("pending", 0)
+            if not should_continue_ingest_run(
+                batch_meaningful_actions=int(batch_result["meaningful_actions"]),
+                pending_remaining=pending_remaining,
+            ):
                 break
 
-        return _build_ingest_result(
-            created_ids=created_ids,
-            claimed_ids=sorted(set(claimed_ids)),
-            deleted_ids=[],
-            recoverable_ids=sorted(set(recoverable_ids)),
-            released_ids=sorted(set(released_ids)),
-            meaningful_actions=meaningful_actions,
-            semantic_entry_dispositions=semantic_entry_dispositions,
-        ) | {
-            "requested_grouping_strategy": preflight.requested_grouping_strategy,
-            "grouping_strategy_used": preflight.grouping_strategy_used,
-            "grouping_fallback_reason": preflight.grouping_fallback_reason,
-            "batches_processed": batches_processed,
-            "pending_remaining": journal.count_by_status(workspace_id=preflight.journal_workspace_id).get("pending", 0),
-        }
+        return run_state.build_handler_result(
+            requested_grouping_strategy=preflight.requested_grouping_strategy,
+            grouping_strategy_used=preflight.grouping_strategy_used,
+            grouping_fallback_reason=preflight.grouping_fallback_reason,
+            pending_remaining=journal.count_by_status(workspace_id=preflight.journal_workspace_id).get("pending", 0),
+        )
     except BaseException:
         journal.release_claims(task.id)
         raise
