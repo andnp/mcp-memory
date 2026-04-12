@@ -2,58 +2,37 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.hook_reminders import HookReminderService, REMINDER_MESSAGE
+from mcp_memory.hook_reminders import HookReminderService
+from tests.small.hook_reminder_contract import (
+    assert_active_client_count_excludes_stale_unended_sessions,
+    assert_active_client_count_is_global_across_workspace_scoped_instances,
+    assert_post_tool_use_only_reminds_after_interval,
+    assert_session_end_marks_conversation_ended,
+)
 
 
 pytestmark = pytest.mark.small
 
 
-def test_post_tool_use_only_reminds_every_five_minutes(db_manager) -> None:
-    service = HookReminderService(db_manager, workspace_id="workspace-a")
-
-    first = service.record_post_tool_use(
-        {"sessionId": "conv-1", "tool_name": "read_file", "timestamp": 100.0}
-    )
-    second = service.record_post_tool_use(
-        {"sessionId": "conv-1", "tool_name": "read_file", "timestamp": 399.0}
-    )
-    third = service.record_post_tool_use(
-        {"sessionId": "conv-1", "tool_name": "read_file", "timestamp": 401.0}
+def test_sqlite_hook_reminders_post_tool_use_only_reminds_every_five_minutes(db_manager) -> None:
+    assert_post_tool_use_only_reminds_after_interval(
+        lambda workspace_id: HookReminderService(db_manager, workspace_id=workspace_id)
     )
 
-    assert first == {}
-    assert second == {}
-    assert third["systemMessage"] == REMINDER_MESSAGE
+
+def test_sqlite_hook_reminders_session_end_marks_conversation_ended(db_manager) -> None:
+    assert_session_end_marks_conversation_ended(
+        lambda workspace_id: HookReminderService(db_manager, workspace_id=workspace_id)
+    )
 
 
-def test_session_end_marks_conversation_ended(db_manager) -> None:
-    service = HookReminderService(db_manager, workspace_id="workspace-a")
-
-    service.record_session_start("conv-2", {"timestamp": 50.0})
-    service.record_session_end("conv-2", {"timestamp": 75.0})
-
-    record = service.get_conversation("conv-2")
-    assert record is not None
-    assert record.ended_at == 75.0
+def test_sqlite_hook_reminders_active_client_count_is_global(db_manager) -> None:
+    assert_active_client_count_is_global_across_workspace_scoped_instances(
+        lambda workspace_id: HookReminderService(db_manager, workspace_id=workspace_id)
+    )
 
 
-def test_active_client_count_is_global(db_manager) -> None:
-    workspace_a = HookReminderService(db_manager, workspace_id="workspace-a")
-    workspace_b = HookReminderService(db_manager, workspace_id="workspace-b")
-
-    workspace_a.record_session_start("conv-a-1", {"timestamp": 10.0})
-    workspace_a.record_session_start("conv-a-2", {"timestamp": 11.0})
-    workspace_b.record_session_start("conv-b-1", {"timestamp": 12.0})
-    workspace_a.record_session_end("conv-a-1", {"timestamp": 13.0})
-
-    assert workspace_a.get_active_client_count(now=15.0) == 2
-    assert workspace_b.get_active_client_count(now=15.0) == 2
-
-
-def test_active_client_count_excludes_stale_unended_sessions(db_manager) -> None:
-    service = HookReminderService(db_manager, workspace_id="workspace-a")
-
-    service.record_session_start("stale-conv", {"timestamp": 10.0})
-    service.record_session_start("fresh-conv", {"timestamp": 4000.0})
-
-    assert service.get_active_client_count(now=4000.0) == 1
+def test_sqlite_hook_reminders_active_client_count_excludes_stale_unended_sessions(db_manager) -> None:
+    assert_active_client_count_excludes_stale_unended_sessions(
+        lambda workspace_id: HookReminderService(db_manager, workspace_id=workspace_id)
+    )
