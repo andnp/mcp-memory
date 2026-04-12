@@ -90,6 +90,21 @@ mcp-memory/
 └── README.md               # You are here
 ```
 
+## 📚 Documentation map
+
+If you want the repo's canonical docs without spelunking every markdown file, start here:
+
+- `docs/README.md` — documentation index and entry points
+
+Most readers will usually want one of these first:
+
+- `docs/specs/00-product-principles.md` — product invariants
+- `docs/specs/01-architecture-principles.md` — architecture invariants
+- `docs/postgres-shared-mode-runbook.md` — operator path for Postgres shared mode
+- `docs/specs/16-storage-backend-selection-and-shared-mode.md` — storage authority and backend rules
+- `docs/specs/17-shared-mode-readthrough-cache.md` — shared-mode cache and narrow writeback behavior
+- `docs/specs/18-postgres-server-side-vector-search.md` — Postgres semantic-search architecture
+
 ## 📋 Current MCP Tools
 
 The following tools are exposed via the MCP server:
