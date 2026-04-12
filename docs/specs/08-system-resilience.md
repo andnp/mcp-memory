@@ -27,6 +27,13 @@ Use ZeroMQ over a stable local IPC socket between the MCP thin proxy and the dae
 - IPC keeps the transport local, explicit, and independent of dynamic port selection
 - transport metadata can expose stronger provenance than ad hoc localhost probing
 
+### Current Timeout Behavior
+- the MCP thin proxy applies a 60s client timeout budget for daemon-backed tool calls
+- the daemon transport enforces bounded execution deadlines instead of allowing requests to hang forever
+- slower request classes such as search, read, `record_thought`, and internal tool paths use an extended 60s transport budget; ordinary paths keep a shorter default deadline
+- when a transport deadline expires, the daemon returns a structured timeout payload (`status = "error"`, `error = "daemon_request_timed_out"`, plus path/timeout metadata)
+- repeated client-observed timeout failures trigger background daemon metadata refresh and can escalate to a forced daemon restart
+
 ### Remaining Limits
 - stale-socket and mixed-binary recovery still need stronger migration coverage
 - the daemon hello contract still needs richer runtime-state reporting beyond basic ready health
@@ -68,7 +75,7 @@ ZeroMQ over the stable IPC socket is the current runtime authority; any remainin
 ## 3. Durable Task Safety
 
 ### Decision
-Use a SQLite-backed `tasks` table for background work.
+Use the authoritative backend's durable `tasks` store for background work.
 
 ### Current Behavior
 - tasks are persisted before background processing
@@ -76,6 +83,11 @@ Use a SQLite-backed `tasks` table for background work.
 - permanently failed tasks remain visible for inspection
 - worker state survives daemon restarts through the database
 - worker recovery now complements the hardened daemon stop path: stale daemon shutdown no longer relies on metadata removal alone and instead proves the underlying process is gone
+
+SQLite remains the default local task backend.
+In shared mode, Postgres is authoritative for the task system.
+
+The `record_thought` writeback flusher is a separate daemon-owned support loop, not a durable maintenance task family.
 
 ## 4. Deadlettering
 

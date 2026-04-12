@@ -14,6 +14,7 @@ The MCP Memory Server provides a persistent memory bank for AI assistants, enabl
 
 - **SQLite** as the default local, zero-config backend
 - **Postgres** as the explicit shared-mode backend for multi-machine or cloud-hosted use
+- **Local SQLite cache sidecars** as optional, non-authoritative support state in shared Postgres mode
 
 ## 🚧 Current status
 
@@ -22,6 +23,10 @@ The runtime is now **relational-first**.
 - New memory CRUD, search, read, and markdown import flows run through the relational runtime.
 - Background task handling is now part of the active runtime surface.
 - The MCP stdio entrypoint is now a thin proxy that auto-starts a proper workspace daemon on demand.
+- Shared Postgres mode now has an active local SQLite sidecar cache for readthrough and degraded-read behavior.
+- `storage.cache.mode = "writeback"` is now shipped in a narrow form for `record_thought`: durable local outbox queueing on connectivity/timeout-ish authoritative failures, opportunistic foreground flush after later successful authoritative writes, and a daemon-owned periodic background flusher.
+- Broader offline mutation and generalized writeback remain deferred.
+- Daemon-backed MCP requests now use a 60s client timeout budget, and the transport returns structured timeout errors instead of hanging indefinitely.
 
 ### Premium provider economics
 
@@ -47,6 +52,7 @@ That product goal shapes the maintenance architecture:
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
 - **Local Semantic Search**: Fully local embeddings via `sentence-transformers` enrich search and ingest without any external AI provider.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
+- **Shared-Mode Local Cache**: In Postgres shared mode, an optional local SQLite sidecar can serve fresh exact search hits, validated read hits, and degraded cached search/read fallbacks without becoming a second source of truth.
 - **Global Daemon**: One global daemon per user environment owns runtime state, background workers, and transport coordination.
 - **Stable IPC Transport**: The thin MCP proxy talks to the daemon over a stable ZeroMQ ROUTER/DEALER transport on a Unix socket.
 - **Agentic Maintenance Agents**: Curator, deduplicator, and ingest now run through a trusted internal MCP maintenance surface when an agentic provider is configured.
@@ -89,7 +95,7 @@ mcp-memory/
 The following tools are exposed via the MCP server:
 
 ### Minimal Public Surface
-- `record_thought`: Record a raw system-1 thought in the local journal.
+- `record_thought`: Record a raw system-1 thought in the system-1 journal. In shared Postgres `writeback` mode, this can degrade into a durable local outbox queue when the authoritative write times out or connectivity fails.
 - `search_memory_records`: Search relational memory records with summary-first results and staged ranking over weighted keyword + optional semantic retrieval.
 - `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
 
@@ -103,7 +109,9 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 - `uv run mcp-memory admin dashboard open`: ensure the daemon is running and open the operator dashboard.
 - `uv run mcp-memory admin agent run memory-curator`: trigger one background agent for the active workspace.
 - `uv run mcp-memory admin agent run --all`: enqueue all background agents for the active workspace.
+- `uv run mcp-memory admin health --json`: print an AI-friendly health snapshot, including active backend and cache state.
 - `uv run mcp-memory admin overview`: print background task and memory statistics from the active backend.
+- `uv run mcp-memory admin search health`: show semantic search health for the current runtime context.
 - `uv run mcp-memory memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
@@ -148,7 +156,11 @@ If you want one shared memory store across multiple machines, use Postgres inste
 
 - local SQLite remains the default
 - Postgres is the shared-mode backend
+- Postgres is authoritative whenever shared mode is selected
 - shared mode must not silently fall back to SQLite
+- if `[storage.cache]` is enabled in shared mode, the runtime creates a non-authoritative local SQLite sidecar at `.../memories/cache/shared_read_cache.sqlite3`
+- `storage.cache.mode = "readonly"` enables readthrough and degraded cached search/read behavior
+- `storage.cache.mode = "writeback"` currently extends that cache with a narrow durable outbox for `record_thought` only
 
 For local Postgres startup and operator guidance, see:
 
@@ -272,6 +284,17 @@ backend = "postgres"
 dsn = "postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory"
 ```
 
+Optional shared-mode cache settings:
+
+```toml
+[storage.cache]
+enabled = true
+mode = "readonly" # or "writeback"
+```
+
+Use `mode = "readonly"` for readthrough/degraded cached search+read behavior.
+Use `mode = "writeback"` only if you want the current narrow `record_thought` outbox fallback; broader offline mutation is still deferred.
+
 If you already have SQLite data, dry-run the migration first:
 
 ```bash
@@ -295,6 +318,8 @@ Local semantic embeddings are now part of the default runtime behavior. The runt
 
 On daemon startup, the runtime also makes a best-effort background attempt to download and cache the configured embedding model locally.
 
+Daemon-backed MCP requests use a 60s client timeout budget. If a daemon request exceeds its transport deadline, the client now receives a structured timeout error instead of waiting forever.
+
    This command auto-starts the global daemon if it is not already running.
 
 6. **Open the operator dashboard**:
@@ -306,7 +331,7 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
 
 7. **Run the daemon manually** (optional):
    ```bash
-   uv run mcp-memory daemon
+   uv run mcp-memory daemon start
    ```
 
 8. **Stash one thought quickly** (optional admin flow):
@@ -323,7 +348,9 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    ```bash
    uv run mcp-memory admin agent run memory-curator
    uv run mcp-memory admin agent run --all
+   uv run mcp-memory admin health --json
    uv run mcp-memory admin overview
+   uv run mcp-memory admin search health
    ```
 
 11. **Install local tool integrations** (optional admin flow):
@@ -355,9 +382,10 @@ On daemon startup, the runtime also makes a best-effort background attempt to do
    ```
 
 13. **Smoke test the system**:
-   - confirm the daemon command prints a stable `ipc://...` endpoint
+   - confirm `uv run mcp-memory daemon status` reports a healthy daemon with a stable `ipc://...` endpoint
    - if using SQLite, confirm `~/.local/share/mcp-memory/memories/indices/memory.db` exists
    - if using Postgres, confirm `uv run mcp-memory admin health --json` reports the Postgres backend
+   - if shared-mode cache is enabled, confirm `uv run mcp-memory admin health --json` reports the expected cache mode/state/path
    - record a thought through your MCP client
    - verify that the thought becomes searchable and readable through the MCP client
    - run `uv run mcp-memory admin overview` and confirm the task/memory metrics look sane
@@ -399,6 +427,8 @@ cp -R ~/.local/share/mcp-memory ~/.local/share/mcp-memory.backup
 The daemon now also supports periodic SQLite snapshots into `~/.local/share/mcp-memory/backups/` through the `[backups]` config block. This is useful for local SQLite mode.
 
 In Postgres shared mode, use normal Postgres backup/restore procedures instead. See `docs/postgres-shared-mode-runbook.md`.
+
+If shared-mode cache is enabled, treat the local SQLite sidecar as disposable support state, not as a backup or second source of truth.
 
 ## 📄 License
 

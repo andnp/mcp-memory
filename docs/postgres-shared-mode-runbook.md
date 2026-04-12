@@ -5,6 +5,10 @@ This runbook is the operator path for using `mcp-memory` with Postgres as the au
 Use this mode when you want one shared memory store across machines.
 Do **not** use Syncthing or similar live file-sync tools against an active SQLite store for that job.
 
+SQLite remains the default backend overall.
+In shared mode, Postgres is authoritative.
+If shared-mode cache is enabled, the runtime may also create a local SQLite sidecar under `.../memories/cache/shared_read_cache.sqlite3`; that sidecar is derivative and non-authoritative.
+
 ## 1. Bring up Postgres locally with Docker Compose
 
 From the repo root:
@@ -57,6 +61,22 @@ Important invariants:
 - the runtime must not silently fall back to SQLite
 - local filesystem state may still exist for sockets, logs, embeddings, and runtime support, but it is not the source of truth
 
+Optional shared-mode cache:
+
+```toml
+[storage.cache]
+enabled = true
+mode = "readonly" # or "writeback"
+max_cached_search_docs = 50000
+max_outbox_entries = 10000
+```
+
+Current cache-mode behavior:
+
+- `readonly`: active readthrough and degraded cached search/read behavior
+- `writeback`: `readonly` plus a narrow durable local outbox for `record_thought` only
+- broader offline mutation is still deferred
+
 ## 3. Migrate an existing SQLite corpus
 
 Dry run first:
@@ -87,32 +107,26 @@ That is intentional for the first dogfooding slice.
 Start or restart the daemon:
 
 ```bash
-uv run mcp-memory daemon-restart
+uv run mcp-memory daemon restart
+uv run mcp-memory daemon status
 ```
 
 Check health:
 
 ```bash
-uv run mcp-memory health --json
-uv run mcp-memory stats
-uv run mcp-memory search health
+uv run mcp-memory admin health --json
+uv run mcp-memory admin overview
+uv run mcp-memory admin search health
 ```
 
 Recommended smoke flow:
 
-1. confirm `uv run mcp-memory health --json` reports `storage_backend` as `postgres`
-2. record a new thought through your MCP client or CLI
-3. search for that memory
-4. read the memory back
-5. confirm the dashboard/health surface still looks sane
-
-Useful direct commands:
-
-```bash
-uv run mcp-memory stash "postgres shared-mode smoke test"
-uv run mcp-memory health --json
-uv run mcp-memory stats
-```
+1. confirm `uv run mcp-memory admin health --json` reports `storage_backend` as `postgres`
+2. if shared-mode cache is enabled, confirm the health snapshot reports the expected cache `mode`, `state`, and `path`
+3. record a new thought through your MCP client
+4. search for that memory
+5. read the memory back
+6. confirm `uv run mcp-memory admin overview` still looks sane
 
 ## 5. Backups and restore
 
@@ -133,6 +147,8 @@ cat mcp-memory-postgres.sql | docker compose -f compose.postgres.yml exec -T pos
 
 For a remote server, prefer provider-native backups or scheduled `pg_dump` over pretending the local filesystem cache is your backup plan.
 
+If shared-mode cache is enabled, treat the local sidecar as disposable support state, not as your backup source.
+
 ## 6. Failure guidance
 
 ### Postgres unavailable at startup
@@ -144,7 +160,23 @@ Check:
 
 ```bash
 docker compose -f compose.postgres.yml logs postgres --tail=100
-uv run mcp-memory health --json
+uv run mcp-memory admin health --json
+```
+
+### Postgres slow or unavailable after startup
+
+Current behavior depends on cache mode:
+
+- `readonly` can serve previously warmed cached reads/searches in degraded mode
+- `writeback` can also queue `record_thought` locally until authoritative Postgres writes succeed again
+- all other writes still require authoritative Postgres and remain unavailable during the outage
+
+After recovery, use:
+
+```bash
+uv run mcp-memory daemon status
+uv run mcp-memory admin health --json
+uv run mcp-memory admin overview
 ```
 
 ### Authentication or DSN mistakes

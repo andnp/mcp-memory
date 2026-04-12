@@ -6,7 +6,7 @@
 The daemon runs background work while still needing to tolerate process restarts and short-lived client sessions.
 
 ## 2. Current Decision
-Use a SQLite-backed `tasks` table with a worker loop.
+Use the active backend's durable `tasks` store with a worker loop.
 
 ### Current Benefits
 - durable enqueue before execution
@@ -14,10 +14,14 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - failed-task visibility
 - restart-safe background processing
 
+SQLite remains the default local task backend.
+In shared mode, Postgres stores the authoritative task queue and task-run records.
+
 ## 3. Current Task Lifecycle
 
 ### 3.1 Enqueue
 - `record_thought` writes to `system1_journal`
+- in shared Postgres `writeback` mode, `record_thought` may temporarily queue into a durable local outbox when the authoritative write fails with a timeout-ish/connectivity failure
 - threshold logic enqueues ingest work
 - runtime bootstrap ensures recurring maintenance tasks exist
 - when local embeddings are enabled, ingest still runs as a durable task but may cluster pending thoughts into smaller semantic mini-batches before consolidation
@@ -38,7 +42,7 @@ Use a SQLite-backed `tasks` table with a worker loop.
 
 ### 3.2 Execute
 - the daemon starts a runtime worker
-- the worker claims ready tasks from SQLite
+- the worker claims ready tasks from the authoritative backend task store
 - handlers process tasks, update status, and append immutable run logs to `task_runs`
 
 ### 3.3 Failure
@@ -47,11 +51,18 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - permanently failed tasks remain visible for inspection
 
 ### 3.4 Observability
-- every execution attempt is logged in SQLite via `task_runs`
+- every execution attempt is logged in the authoritative backend via `task_runs`
 - overview/dashboard and CLI stats read directly from those task-run records
 - task recency, average duration, and compressed-line totals are derived from the run log
 
-## 4. Current Implemented Task Families
+## 4.1 Daemon-Owned Support Loop
+The `record_thought` writeback flusher is not a general durable task family.
+
+- it is a daemon-owned support loop that runs only when shared Postgres mode enables `storage.cache.mode = "writeback"`
+- it drains the local `record_thought` outbox back into the authoritative journal
+- durable maintenance tasks remain in the normal task system
+
+## 5. Current Implemented Task Families
 - ingest
 - summarize
 - graph linker
@@ -63,7 +74,7 @@ Use a SQLite-backed `tasks` table with a worker loop.
 - project manager
 - sweeper
 
-## 5. Current Non-Goals
+## 6. Current Non-Goals
 The present runtime does **not** require:
 - Huey
 - reference-count-based shutdown semantics
@@ -74,7 +85,7 @@ Trusted maintenance agents may use a separate internal MCP surface for read/sear
 
 That trusted surface is no longer hypothetical: it is now the active execution path for multiple maintenance agents in the shipped runtime.
 
-## 6. Future Work
+## 7. Future Work
 Potential future additions:
 - richer selection policies for maintenance batches, including strategy roulette at the candidate-selection layer
 - broader maintenance agent roster

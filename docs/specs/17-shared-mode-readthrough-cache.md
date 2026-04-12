@@ -1,12 +1,12 @@
-# Architecture Decision Record: Shared-Mode Readthrough Cache and Validation-Based Local Read Cache
+# Architecture Decision Record: Shared-Mode Readthrough Cache and Narrow Record-Thought Writeback
 
-**Status:** Proposed direction
+**Status:** Active, partially implemented
 
 ## 1. Decision
 
-`mcp-memory` should support an optional **readonly local readthrough cache** for **shared Postgres mode**.
+`mcp-memory` now supports an optional local SQLite sidecar cache for **shared Postgres mode**.
 
-This cache is intended to improve WAN and intermittent-connectivity read UX for:
+This cache improves bounded-latency and degraded-read UX for:
 
 - `search_memory_records`
 - `read_memory_record`
@@ -14,64 +14,62 @@ This cache is intended to improve WAN and intermittent-connectivity read UX for:
 The cache is **not** authoritative.
 Postgres remains authoritative at all times.
 
-The first cache implementation should support:
+### Current implementation
 
-1. **exact hot search-response caching** with conservative freshness rules
-2. **cached memory-record payloads** with validation-based freshness extension
-3. **cached search projections** for degraded local search over recently seen records
+1. `storage.cache.mode = "readonly"` provides readthrough and degraded cached behavior for `search_memory_records` and `read_memory_record`.
+2. Exact hot search-response cache hits are active with conservative short-lived freshness.
+3. Cached memory-record payloads and cached search projections use authoritative validation tokens.
+4. Cached search projections can power degraded local search over recently seen records when authoritative search fails.
+5. `storage.cache.mode = "writeback"` includes all readonly behavior and adds a durable local outbox for `record_thought` only.
+6. Successful authoritative `record_thought` writes opportunistically flush older queued outbox entries.
+7. The daemon owns a periodic background flusher for queued `record_thought` outbox entries.
 
-The first cache implementation must **not** support:
+### Still deferred
 
-- local writes
-- writeback or replay
-- bidirectional SQLite sync
-- transparent offline parity with authoritative search
-- internal maintenance-tool reads from cache
+- generalized writeback/replay beyond `record_thought`
+- offline mutation for maintenance or other public tools
+- cache-backed internal maintenance reads by default
+- full offline parity with authoritative search
+- bidirectional SQLite/Postgres sync or dual-write
 
 ## 2. Why this decision exists
 
-Search latency on the current LAN path is now mostly acceptable in warm steady state.
-The remaining search costs are in the tens of milliseconds, not seconds.
+Search latency on the current LAN path is already much better than the earlier timeout-heavy baseline.
+For roaming/shared-mode use, the remaining user-visible cost is often the network round trip rather than only server-side search time.
 
-For roaming use, however, end-to-end latency is no longer dominated only by server-side search time.
-It also includes network round trips:
+That shifts the optimization target.
+For shared mode, a small local sidecar cache provides more value than continuing to squeeze only server-side milliseconds, as long as the cache remains explicitly non-authoritative.
 
-$$
-T_{total} \approx T_{network\_roundtrip} + T_{server\_search} + T_{serialization/client}
-$$
+The storage architecture is no longer merely reserving this direction:
 
-That changes the optimization target.
-For WAN use, a local read cache can provide more product value than continued small server-side latency wins.
-
-The storage architecture already recognizes this direction:
-
-- SQLite is the default local backend
+- SQLite is still the default local backend
 - Postgres is the authoritative shared backend
-- a future shared-mode local cache is desirable
-- writeback must remain deferred until the primary shared-mode path is stable
+- the shared-mode local cache is now active
+- writeback now exists, but only in a narrow `record_thought` slice
 
-This ADR narrows that future cache work to a first useful, low-risk shape.
+This ADR documents the shipped shape and keeps the boundary crisp between active behavior and still-deferred broader offline mutation.
 
 ## 3. Scope
 
 ### 3.1 In scope
 
 - shared Postgres mode only
-- readonly local SQLite sidecar cache
+- local SQLite sidecar cache
 - exact-key search-response cache
 - cached read payloads for memory records
 - cached search projections for recently seen memories
 - degraded cached reads when authoritative access fails
-- validation-based freshness extension for object caches
+- validation-based read/projection freshness checks
+- narrow `record_thought` writeback outbox and flush behavior in `storage.cache.mode = "writeback"`
 
 ### 3.2 Out of scope
 
 - default local SQLite mode
-- writeback outbox
-- queued mutations or replay
-- cache-aware maintenance agents
+- generalized queued mutations or replay
+- cache-aware maintenance agents by default
 - full offline search parity
 - active-active replication between SQLite and Postgres
+- broader writeback for non-`record_thought` mutations
 
 ## 4. Authority rules
 
@@ -80,208 +78,167 @@ The following invariants apply:
 1. **Postgres remains authoritative in shared mode.**
 2. **The local cache is derivative and disposable.**
 3. **The cache must never become a hidden second source of truth.**
-4. **Writes remain online-only in the first cache implementation.**
+4. **Only `record_thought` may currently degrade into the local outbox, and only in `writeback` mode.**
 5. **Internal maintenance and background mutation flows remain authoritative-only.**
 
 ## 5. Cache model
 
-The cache should live in a **separate local SQLite sidecar database**.
-It should not reuse the authoritative SQLite mode database.
-It should be safe to delete and rebuild.
+The cache lives in a **separate local SQLite sidecar database**.
+It does not reuse the authoritative SQLite-mode database.
+It is safe to delete and rebuild.
+
+The current default sidecar path is under the runtime memory root:
+
+- `.../memories/cache/shared_read_cache.sqlite3`
 
 ### 5.1 Cached search results
 
-Use a `cached_search_results` table keyed by an exact normalized request.
+Current implementation uses `cached_search_results`, keyed by an exact normalized request.
 
-Suggested cache key inputs:
-
-- query text
-- effective workspace id
-- `limit`
-- `memory_type`
-- `status`
-- `include_superseded`
-- cache contract version
-- ranking-config hash
-
-Suggested stored fields:
-
-- `cache_key`
-- normalized params JSON
-- ordered result IDs JSON
-- cached result payload JSON
-- `created_at`
-- `last_hit_at`
-- `fresh_until`
-- `stale_until`
+The stored payload is a full cached search response plus normalized request parameters and cache timestamp.
 
 ### 5.2 Cached memory records
 
-Use a `cached_memory_records` table keyed by `memory_id`.
+Current implementation uses `cached_memory_records`, keyed by `memory_id`.
 
-Suggested stored fields:
-
-- `memory_id`
-- `record_json`
-- `relationships_json`
-- `superseded_json`
-- `authoritative_updated_at`
-- `cached_at`
-- `last_hit_at`
-- `fresh_until`
-- `stale_until`
+Each row stores the cached read payload, an authoritative validation token, and cache timestamp.
 
 ### 5.3 Cached search projections
 
-Use a `cached_memory_projections` table keyed by `memory_id`.
+Current implementation uses `cached_memory_projections`, keyed by `memory_id`.
 
-This table is intended for degraded local search over recently seen records, not for authoritative parity.
+These rows store compact record projections plus validation tokens for degraded local search over recently seen records.
 
-Suggested stored fields:
+### 5.4 Record-thought writeback outbox
 
-- `memory_id`
-- `title`
-- `summary`
-- `memory_type`
-- `status`
-- `tags_json`
-- `workspace_ids_json`
-- `authoritative_updated_at`
-- `cached_at`
-- `last_hit_at`
+When `storage.cache.mode = "writeback"`, the same sidecar also stores `record_thought_outbox` rows.
+
+Each queued row stores:
+
+- raw thought content
+- workspace association
+- original thought timestamp
+- local cache timestamp
+
+This outbox is intentionally narrow.
+It is not a general mutation queue.
 
 ## 6. Freshness and validation policy
 
-The cache should use **two different strategies**.
+The current cache uses two different strategies.
 
-### 6.1 Object-cache validation for records and projections
+### 6.1 Object validation for records and projections
 
-For cached memory records and cached projections, the system should support **validation-based freshness extension**.
+Cached memory records and cached projections rely on authoritative validation tokens.
 
-The authoritative backend should be able to answer a cheap version query for a batch of memory IDs, returning fields such as:
-
-- `memory_id`
-- `cache_version` or equivalent version token
-- `updated_at`
-- deletion / visibility state if needed
-
-If the authoritative version is unchanged, the local cache entry can have its freshness extended without fetching the full payload again.
-
-This allows longer soft TTLs for object caches while keeping bandwidth low.
+If the authoritative token still matches, the cached object can be used directly.
+If validation fails or the token no longer matches, the runtime falls back to the authoritative path or discards stale projection rows.
 
 ### 6.2 Conservative freshness for exact search-result caches
 
-Exact search-result caches should be treated more conservatively.
+Exact search-result caches remain intentionally conservative.
 
-A cached query result can become wrong even when the currently cached result objects are unchanged, because:
+A cached query result can become wrong even when the cached objects are unchanged, because:
 
 - a new matching memory may appear
 - a previously lower-ranked memory may overtake the cached set
 - supersession or link changes may affect visibility
 - ranking inputs may change outside simple content timestamps
 
-Therefore, per-object `updated_at` validation is **not sufficient** to prove that a full cached search-response payload is still valid.
+Therefore, exact search-response caches use short-lived freshness and do not rely only on per-object validation.
 
-For the first version:
-
-- exact search-response caches should use **short TTLs**
-- exact search-response caches should not rely on per-object timestamp validation alone
-- longer-lived exact query caches require a future **query-level validator** if needed
-
-## 7. Online and offline behavior
+## 7. Online and degraded behavior
 
 ### 7.1 Online and healthy
 
 - authoritative search/read remains the default path
 - successful authoritative responses warm the local cache
-- exact search-response cache hits may be enabled later for short-TTL non-debug requests
+- external non-debug requests may hit the fresh exact search cache directly
+- validated cached reads may short-circuit a fresh authoritative fetch when the validation token still matches
+- in `writeback` mode, successful authoritative `record_thought` writes can opportunistically flush older queued outbox entries
 
 ### 7.2 Online but slow or failing
 
 If the authoritative request fails or times out:
 
-- return a cached stale response if available
-- mark the response as degraded/cached
-- fail normally if no usable cache entry exists
+- cached stale search responses may be served
+- degraded projection-backed search may be served
+- cached stale read responses may be served
+- responses are marked as degraded/cached
+- in `writeback` mode, `record_thought` may queue into the local outbox when the authoritative write fails with a timeout-ish/connectivity failure
 
-### 7.3 Offline
+### 7.3 Offline or disconnected
 
-- cached reads may be served
-- cached degraded search over local projections may be served
-- results must be marked stale/degraded
-- uncached requests fail normally
-- writes remain unavailable
+- cached reads may be served if present
+- degraded search over cached projections may be served if present
+- uncached reads/searches fail normally
+- only `record_thought` can currently queue locally, and only in `writeback` mode
+- broader writes remain unavailable
 
 ## 8. Integration boundary
 
-The first cache implementation should be integrated at the **MCP service layer**, not by decorating low-level repositories directly.
+The shipped cache implementation is intentionally narrow and lives above the repository layer.
 
-Recommended integration points:
+Current integration points:
 
+- `src/mcp_memory/storage/postgres.py`
+  - creates the sidecar only for `storage.backend = "postgres"`
 - `src/mcp_memory/mcp/services.py`
-  - wrap `search_memory_records_service`
-  - wrap `read_memory_record_service`
-- `src/mcp_memory/mcp/runtime.py`
-  - create the cache capability during runtime assembly
-- `src/mcp_memory/storage/factory.py`
-  - enable cache creation only for `storage.backend = "postgres"`
-- `src/mcp_memory/context.py`
-  - add the cache capability to `ApplicationContext`
+  - handles fresh search hits, validated read hits, cache warming, and degraded cached fallbacks
+- `src/mcp_memory/core/journal_operations.py`
+  - owns narrow `record_thought` outbox queueing and opportunistic foreground flush
+- `src/mcp_memory/daemon_app.py`
+  - owns the periodic background flusher for queued `record_thought` outbox entries
+- `src/mcp_memory/management/service.py`
+  - exposes cache mode/state/path and cache metrics in operator health surfaces
 
-This keeps the first implementation narrowly scoped to user-facing read/search flows and preserves current repository contracts.
+This keeps the current implementation scoped to user-facing read/search flows plus the narrow `record_thought` durability path.
 
-## 9. Rollout order
+## 9. Current slice status
 
-### 9.1 Slice 1 — warm-on-read/search fallback cache
+### 9.1 Shipped today
 
-- add the local sidecar cache
-- warm cache on successful authoritative reads/searches
-- use cache only as fallback when authoritative access fails
-- enable only in shared Postgres mode
+- local sidecar cache in shared Postgres mode
+- warm-on-read/search cache population
+- short-lived fresh exact search hits for external non-debug requests
+- validated cached read hits
+- degraded cached read/search fallbacks
+- operator-visible cache mode/state/path and metrics
+- narrow `record_thought` writeback outbox with foreground and daemon-owned background flush paths
 
-### 9.2 Slice 2 — exact hot search cache hits
+### 9.2 Still deferred
 
-- allow short-TTL exact search-response hits for external non-debug calls
-- keep authoritative refresh on miss
-- continue warming projections and records
-
-### 9.3 Slice 3 — object validation path
-
-- add batched authoritative version checks for cached records/projections
-- extend object freshness without full payload fetch when versions match
-- keep exact query caches on conservative TTL rules
-
-### 9.4 Slice 4 — degraded local projection search and operator visibility
-
-- allow degraded local search over cached projections
-- surface cache hit/miss and stale-serve telemetry
-- expose cache mode/state in operator health surfaces
+- broader writeback for other mutation families
+- maintenance-tool reads from cache by default
+- richer query-level search validation beyond short-lived exact cache hits
+- full offline parity or conflict-resolution workflows
 
 ## 10. Risks to avoid
 
 1. **Accidental second source of truth**
 2. **Bad cache keys that ignore workspace/filter/version context**
 3. **Promising full offline parity**
-4. **Blocking fast cache paths on non-critical telemetry work**
-5. **Using per-object timestamps to justify long-lived exact query caches**
+4. **Over-claiming `writeback` as a general offline mutation mode**
+5. **Blocking fast cache paths on non-critical telemetry work**
 6. **Extending cache use to internal maintenance flows too early**
 
 ## 11. Consequences
 
-This decision gives shared Postgres mode a practical local-read resilience story without taking on writeback or distributed conflict semantics.
+This decision gives shared Postgres mode a practical local-read resilience story and a narrow `record_thought` durability fallback without taking on general distributed writeback semantics.
 
 The main benefits are:
 
 - lower perceived WAN read latency for hot data
 - useful degraded-mode reads during connectivity problems
-- a clean path to validation-based freshness for cached records/projections
+- bounded `record_thought` durability during transient authoritative failures
 
-The main trade-off is that exact query-result caches remain intentionally conservative until the system has a proper query-level validation mechanism.
+The main trade-off is that offline capability remains intentionally partial.
+Exact query-result caches stay conservative, and broader writeback remains deliberately deferred.
 
 ## 12. Follow-up work
 
-1. define the local cache SQLite schema and lifecycle
-2. add a cache capability to runtime assembly for shared Postgres mode only
-3. implement Slice 1 warm-on-read/search fallback behavior
-4. define a backend version-check endpoint or repository API for batched object validation
-5. decide whether additive cached/degraded metadata should be exposed in MCP payloads immediately or only in debug/operator surfaces
+1. keep the operator/runbook docs aligned with the active cache/writeback slice
+2. improve operator visibility for outbox depth/age and replay health
+3. decide whether exact search caching needs a stronger query-level validator later
+4. decide deliberately whether any mutation family beyond `record_thought` is safe enough for future writeback support
+5. preserve the invariant that cache/writeback remains derivative even if the feature surface widens later

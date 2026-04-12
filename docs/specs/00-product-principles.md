@@ -10,7 +10,10 @@
 ## 2. One Global Store
 The memory store is global.
 
-- memories, tasks, telemetry, and runtime state live in one shared store
+- memories, tasks, telemetry, and runtime state live in one shared logical store selected by backend mode
+- SQLite is the default authoritative backend for local single-machine use
+- Postgres is the authoritative backend in shared mode
+- shared-mode local cache sidecars may exist, but they are derivative and non-authoritative
 - workspaces are not storage shards
 - workspaces must not create independent queues, workers, or background runtimes
 
@@ -39,6 +42,8 @@ Workspace context must not be used for:
 - recurring task fan-out by workspace
 - default management/API isolation
 - implicit filesystem-root recovery from a workspace identifier
+
+Local shared-mode cache sidecars must also not be treated as workspace-owned stores or as a second authoritative copy of the corpus.
 
 ## 6. Search Behavior
 Search is global-first.

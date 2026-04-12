@@ -1,4 +1,4 @@
-# Architecture Decision Record: Storage Backend Selection, Shared Mode, and Deferred Writeback
+# Architecture Decision Record: Storage Backend Selection, Shared Mode, and Partial Local Cache/Writeback
 
 **Status:** Active direction, partially implemented
 
@@ -8,12 +8,16 @@
 
 - **SQLite** remains the default backend for local, zero-config, single-machine use.
 - **Postgres** is the explicit shared-mode backend for multi-machine or cloud-hosted use.
+- **Local SQLite cache sidecars** may exist in shared Postgres mode, but they are derivative and non-authoritative.
 
 The system must not silently fall back from a broken Postgres configuration to SQLite.
 When shared mode is selected, Postgres is authoritative.
 
-Local cache and writeback behavior are explicitly deferred.
-They are not part of the first stable shared-mode contract.
+Current implementation status:
+
+- `storage.cache.mode = "readonly"` is active for readthrough and degraded cached search/read behavior in shared Postgres mode.
+- `storage.cache.mode = "writeback"` is active only for a narrow `record_thought` durability path: local outbox queueing on timeout-ish/connectivity failures, opportunistic foreground flush after later successful authoritative writes, and a daemon-owned periodic background flusher.
+- Broader offline mutation and generalized writeback remain deferred.
 
 ## 2. Why this decision exists
 
@@ -40,11 +44,14 @@ The correct product answer is therefore backend selection, not “better live SQ
 As of March 2026, this decision is not purely aspirational.
 The codebase already includes:
 
-- storage config models for `sqlite`, `postgres`, and reserved cache settings
+- storage config models for `sqlite`, `postgres`, and active cache settings
 - a backend factory under `src/mcp_memory/storage/`
 - backend-aware runtime composition through `ApplicationContext.storage_backend`
 - Postgres connection management, bootstrap, and migrations
 - Postgres-backed repositories for the current operational surface
+- an active shared-mode local SQLite sidecar cache when `[storage.cache]` is enabled
+- shipped readthrough/degraded cached search/read behavior for `storage.cache.mode = "readonly"`
+- shipped narrow `record_thought` outbox/flush behavior for `storage.cache.mode = "writeback"`
 - backend-aware health/status reporting in the management layer
 - focused Postgres integration coverage for runtime, daemon health, hooks, search, and backup skipping
 
@@ -79,11 +86,16 @@ The remaining work is mostly about tightening the abstraction boundary, aligning
 
 **Default:** no
 
-**Behavior:**
-- reserved for future work
-- not part of the current supported shared-mode contract
+**Current implementation:**
+- optional local SQLite sidecar cache in shared Postgres mode
+- `storage.cache.mode = "readonly"` enables readthrough and degraded cached search/read behavior
+- `storage.cache.mode = "writeback"` extends that cache with a durable local outbox for `record_thought` only
+- the cache remains derivative and disposable; Postgres remains authoritative
 
-Any current config fields related to cache/writeback are preparatory only and must not be documented as active shared-mode functionality.
+**Still deferred:**
+- broader writeback beyond `record_thought`
+- generalized offline mutation/replay
+- full offline parity with authoritative search
 
 ## 5. Authority and fallback rules
 
@@ -106,7 +118,8 @@ It means “the local filesystem is not the authoritative memory store.”
 In Postgres mode:
 
 - the daemon still runs locally
-- local runtime paths may still exist for support concerns such as state, sockets, logs, embeddings, or future cache sidecars
+- local runtime paths may still exist for support concerns such as state, sockets, logs, embeddings, or cache sidecars
+- when shared-mode cache is enabled, the current sidecar lives under `.../memories/cache/shared_read_cache.sqlite3`
 - those local paths are non-authoritative unless a future cache design explicitly says otherwise
 
 This distinction must be documented clearly so operators do not mistake the presence of local files or directories for a second source of truth.
@@ -198,8 +211,7 @@ Operational guidance becomes service-oriented:
 
 The following are intentionally deferred from the first stable shared-mode contract:
 
-- local read-only cache
-- writeback outbox and replay
+- generalized writeback outbox and replay beyond the current `record_thought` path
 - offline multi-writer conflict handling
 - transparent SQLite/Postgres dual-write
 - full semantic-search backend convergence
@@ -213,7 +225,7 @@ The highest-value next steps after this ADR are:
 2. replace remaining backend-detection shims in helper/operator modules with protocol-driven interfaces
 3. decide whether the current Postgres lexical-search baseline is sufficient or needs a projection-table follow-up
 4. add a one-way SQLite → Postgres migration/import tool
-5. write a shared-mode operator runbook with setup, backup/restore, and failure guidance
+5. keep the shared-mode operator runbook aligned with setup, backup/restore, and failure guidance
 6. define explicit performance and operability exit criteria for Postgres search, queue claiming, and startup health
 
 ## 13. Consequences
@@ -223,6 +235,8 @@ This decision keeps the product honest:
 - local-first remains simple
 - shared mode has a real first-class answer
 - the repo does not pretend that syncing a live SQLite database is an acceptable substitute for backend design
-- cache/writeback can be designed deliberately later instead of being smuggled into the first shared-mode release
+- the shipped cache/writeback slice stays explicit and narrow instead of pretending shared mode is either online-only or fully offline-capable
 
 The main cost is that the repo must now carry two backend implementations and keep docs/specs disciplined enough that the product story stays coherent across both.
+
+That discipline now also applies to shared-mode cache language: the shipped cache/writeback slice must be documented as active, while broader offline mutation remains explicitly deferred.
