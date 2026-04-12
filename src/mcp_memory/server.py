@@ -186,7 +186,9 @@ class MCPServer:
         for attempt_index in range(_REQUEST_RECOVERY_RETRY_COUNT + 1):
             try:
                 return self._request_json(path, payload)
-            except (OSError, TimeoutError, ValueError) as exc:
+            except (OSError, TimeoutError, ValueError, RuntimeError) as exc:
+                if not _is_recoverable_daemon_request_error(exc):
+                    raise
                 if attempt_index >= _REQUEST_RECOVERY_RETRY_COUNT:
                     raise
                 logger.warning(
@@ -242,3 +244,9 @@ class MCPServer:
         if not isinstance(payload, dict):
             return None
         return payload
+
+
+def _is_recoverable_daemon_request_error(exc: Exception) -> bool:
+    if isinstance(exc, (OSError, TimeoutError, ValueError)):
+        return True
+    return isinstance(exc, RuntimeError) and str(exc) == "daemon_not_started"
