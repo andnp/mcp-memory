@@ -5,7 +5,9 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+import tomlkit
 
+from mcp_memory.config import ensure_default_config_exists, resolve_default_config_path
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.utils.db import DatabaseManager
 from tests.sdk.mcp import FakeToolRuntime
@@ -43,6 +45,12 @@ def isolate_test_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_dir))
     monkeypatch.setenv("XDG_STATE_HOME", str(state_dir))
+
+    config_path = ensure_default_config_exists(resolve_default_config_path())
+    document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+    daemon_table = document.setdefault("daemon", tomlkit.table())
+    daemon_table["port"] = 0
+    config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
 @pytest.fixture

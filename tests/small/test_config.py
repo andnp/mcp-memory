@@ -90,6 +90,10 @@ def test_default_paths_resolve_inside_the_test_temp_area(tmp_path: Path) -> None
     assert resolve_state_dir() == tmp_path / "state" / "mcp-memory"
 
 
+def test_default_test_config_uses_ephemeral_daemon_port() -> None:
+    assert load_config().daemon.port == 0
+
+
 def test_daemon_config_rejects_invalid_port() -> None:
     with pytest.raises(ValueError, match="daemon.port"):
         DaemonConfig(port=-1)
