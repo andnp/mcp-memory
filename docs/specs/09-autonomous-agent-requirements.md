@@ -2,6 +2,9 @@
 
 **Status:** Vision
 
+This is a target-direction document, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 ## 1. Overview
 The `mcp-memory` daemon runs 9 background agents to maintain the relational knowledge graph. This document defines the model strength requirements and operational logic for each.
 

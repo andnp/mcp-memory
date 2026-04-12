@@ -10,6 +10,19 @@ If you need the current product/runtime story, read these first:
 - `specs/00-product-principles.md` — product invariants
 - `specs/01-architecture-principles.md` — architecture invariants
 
+## Status guide
+
+Use `Status:` lines as the first navigation hint:
+
+- `Active` — current baseline; safe default source of truth
+- `Active, partially implemented` — current direction with shipped behavior plus explicit deferred work
+- `Accepted direction` — adopted architectural direction, but not necessarily complete end-state implementation
+- `Draft` — working design/backlog doc, not canonical runtime truth
+- `Vision` — target/product-direction doc, not canonical runtime truth
+- `Proposed direction` — candidate architectural direction, not canonical runtime truth
+
+When a non-active spec conflicts with an active spec, the active spec wins.
+
 ## Core runtime and architecture
 
 - `specs/07-background-task-architecture.md` — durable task model and runtime support loops
@@ -37,6 +50,17 @@ If you need the current product/runtime story, read these first:
 - `specs/05-management-dashboard-ui.md` — dashboard direction
 - `specs/12-nerd-metrics-analytics.md` — analytics/telemetry direction
 - `specs/13-provider-admission-control.md` — provider routing/admission rules
+
+## Design backlog and future direction
+
+These are intentionally useful, but they are **not** the primary source of current runtime behavior:
+
+- `specs/02-autonomous-memory-vision.md`
+- `specs/05-management-dashboard-ui.md`
+- `specs/09-autonomous-agent-requirements.md`
+- `specs/12-nerd-metrics-analytics.md`
+- `specs/14-work-item-execution-architecture.md`
+- `specs/15-search-repair-queue-architecture.md`
 
 ## Plans and history
 

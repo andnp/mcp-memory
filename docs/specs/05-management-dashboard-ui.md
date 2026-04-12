@@ -2,6 +2,9 @@
 
 **Status:** Draft
 
+This is a design/backlog document, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 ## 1. Vision: The "Memory Pulse"
 Transition from a static "monitoring dashboard" to an interactive **Memory Command Center**. The UI should feel "alive," reflecting the autonomous nature of the background agents and providing a low-friction interface for human thought stashing and memory exploration.
 

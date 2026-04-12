@@ -3,6 +3,9 @@
 **Status:** Proposed direction
 **Date:** 2026-03-24
 
+This is a proposed architectural direction, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 ## 1. Context
 
 `mcp-memory` currently repairs missing or stale memory embeddings inside the search request path.

@@ -1,6 +1,10 @@
 # Specification: Nerd Metrics Analytics
 
 **Status:** Draft
+
+This is a design/backlog document, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 **Scope:** Management API `/api/metrics/nerd`
 **Rollout:** Phased, additive, backend-first
 

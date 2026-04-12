@@ -2,6 +2,9 @@
 
 **Status:** Vision
 
+This is a target-direction document, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 ## 1. Overview
 Current memory systems place high cognitive load on the AI, requiring it to manually organize, format, and structure files. This vision introduces a **Self-Healing Knowledge Graph** for `mcp-memory`:
 - **System 1 (Thought Cache):** A fast, append-only scratchpad for raw thoughts.

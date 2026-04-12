@@ -3,6 +3,9 @@
 **Status:** Proposed direction
 **Date:** 2026-03-22
 
+This is a proposed architectural direction, not the canonical source of current runtime behavior.
+Prefer active specs, runbooks, and the root `README` for implemented behavior.
+
 ## 1. Context
 
 `mcp-memory` currently has one durable `tasks` queue, but each background agent still owns too much of its own execution policy.
