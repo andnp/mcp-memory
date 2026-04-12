@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, cast
 
 from mcp_memory.core.ingest_claim_lifecycle import (
@@ -12,6 +11,24 @@ from mcp_memory.core.ingest_claim_lifecycle import (
     _recorded_ingest_touched_memory_ids as _recorded_ingest_touched_memory_ids,
     _reset_recorded_ingest_handled_entry_ids as _reset_recorded_ingest_handled_entry_ids,
 )
+from mcp_memory.core.task_handlers.agentic_result_support import (
+    build_tool_usage_summary,
+    coerce_non_negative_int,
+    coerce_text_summary,
+    count_mutating_agentic_tool_calls,
+    extract_agentic_tool_names,
+    extract_embedded_json_object,
+)
+
+
+_INGEST_READ_ONLY_TOOL_NAMES = {
+    "mcp_mcp-memory-internal_task_complete",
+    "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
+    "mcp_mcp-memory-internal_internal_search_memory_records",
+    "mcp_mcp-memory-internal_internal_read_memory_record",
+    "mcp_mcp-memory-internal_internal_list_memory_records",
+    "mcp_mcp-memory-internal_internal_task_complete",
+}
 
 
 def _build_ingest_result(
@@ -58,10 +75,6 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
         nested = _extract_embedded_json_object(response_text)
         if isinstance(nested, dict):
             response_payload = nested
-    raw_tool_stats = parsed.get("stats")
-    tool_stats = raw_tool_stats if isinstance(raw_tool_stats, dict) else {}
-    raw_tool_payload = tool_stats.get("tools")
-    tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
     created_memory_ids = _coerce_string_list(response_payload.get("created_memory_ids"))
     entry_outcomes = _coerce_ingest_entry_outcomes(response_payload.get("entry_outcomes"))
     cluster_outcomes = _coerce_ingest_cluster_outcomes(response_payload.get("cluster_outcomes"))
@@ -84,10 +97,7 @@ def _normalize_ingest_agentic_result(agentic_result: Any) -> dict[str, Any]:
         "touched_memory_ids": touched_memory_ids,
         "matched_memory_ids": matched_memory_ids,
         "meaningful_actions": _coerce_non_negative_int(response_payload.get("meaningful_actions")),
-        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
-        "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
-        "tool_names_used": _extract_agentic_tool_names(tool_payload.get("byName")),
-    }
+    } | build_tool_usage_summary(parsed, read_only_tool_names=_INGEST_READ_ONLY_TOOL_NAMES)
 
 
 def _build_semantic_entry_dispositions(
@@ -132,17 +142,11 @@ def _build_semantic_entry_disposition(
 
 
 def _coerce_non_negative_int(value: object) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return max(value, 0)
-    return 0
+    return coerce_non_negative_int(value)
 
 
 def _coerce_text_summary(value: object) -> str | None:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+    return coerce_text_summary(value)
 
 
 def _coerce_string_list(value: object) -> list[str]:
@@ -243,46 +247,15 @@ def _merge_string_lists(*values: list[str]) -> list[str]:
 
 
 def _extract_embedded_json_object(text: str) -> dict[str, Any] | None:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        json_start = text.find("{")
-        json_end = text.rfind("}") + 1
-        if json_start < 0 or json_end <= json_start:
-            return None
-        try:
-            parsed = json.loads(text[json_start:json_end])
-        except json.JSONDecodeError:
-            return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    return extract_embedded_json_object(text)
 
 
 def _extract_agentic_tool_names(value: object) -> list[str]:
-    if not isinstance(value, dict):
-        return []
-    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+    return extract_agentic_tool_names(value)
 
 
 def _count_mutating_agentic_tool_calls(value: object) -> int:
-    if not isinstance(value, dict):
-        return 0
-    by_name_payload = cast(dict[Any, Any], value)
-    read_only_tool_names = {
-        "mcp_mcp-memory-internal_task_complete",
-        "mcp_mcp-memory-internal_internal_get_next_ingest_batch",
-        "mcp_mcp-memory-internal_internal_search_memory_records",
-        "mcp_mcp-memory-internal_internal_read_memory_record",
-        "mcp_mcp-memory-internal_internal_list_memory_records",
-        "mcp_mcp-memory-internal_internal_task_complete",
-    }
-    total = 0
-    for name, payload in by_name_payload.items():
-        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
-            continue
-        total += _coerce_non_negative_int(payload.get("count"))
-    return total
+    return count_mutating_agentic_tool_calls(value, read_only_tool_names=_INGEST_READ_ONLY_TOOL_NAMES)
 
 
 def _finalize_entry_dispositions(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import (
@@ -11,6 +11,14 @@ from mcp_memory.core.sampling import (
     SamplingBatch,
 )
 from mcp_memory.core.task_handlers.agentic_guardrails import build_deduplicator_guardrails
+from mcp_memory.core.task_handlers.agentic_result_support import (
+    build_tool_usage_summary,
+    coerce_non_negative_int,
+    coerce_text_summary,
+    count_mutating_agentic_tool_calls,
+    extract_agentic_tool_names,
+    extract_embedded_json_object,
+)
 from mcp_memory.core.task_handlers.constants import DEDUPLICATOR_TASK_NAME
 from mcp_memory.core.task_handlers.maintenance_framework import (
     sample_maintenance_candidates,
@@ -37,6 +45,15 @@ DEDUPLICATOR_STRATEGY_WEIGHTS = {
     SEMANTIC_STRATEGY: 4,
     ANOMALY_STRATEGY: 2,
     COOLDOWN_ESCAPE_STRATEGY: 2,
+}
+
+_DEDUPLICATOR_READ_ONLY_TOOL_NAMES = {
+    "mcp_mcp-memory-internal_task_complete",
+    "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
+    "mcp_mcp-memory-internal_internal_read_memory_record",
+    "mcp_mcp-memory-internal_internal_search_memory_records",
+    "mcp_mcp-memory-internal_internal_list_memory_records",
+    "mcp_mcp-memory-internal_internal_task_complete",
 }
 
 
@@ -125,22 +142,14 @@ def normalize_deduplicator_agentic_result(agentic_result: Any, seed_records: lis
         nested = _extract_embedded_json_object(response_text)
         if isinstance(nested, dict):
             response_payload = nested
-    raw_tool_stats = parsed.get("stats")
-    tool_stats = raw_tool_stats if isinstance(raw_tool_stats, dict) else {}
-    raw_tool_payload = tool_stats.get("tools")
-    tool_payload = raw_tool_payload if isinstance(raw_tool_payload, dict) else {}
-    tool_names_used = _extract_agentic_tool_names(tool_payload.get("byName"))
     return {
         "summary": _coerce_text_summary(getattr(agentic_result, "summary", None)) or _coerce_text_summary(response_payload.get("summary")),
         "merged": _coerce_non_negative_int(response_payload.get("merged")),
         "archived": _coerce_non_negative_int(response_payload.get("archived")),
         "absorbed_observations": _coerce_non_negative_int(response_payload.get("absorbed_observations")),
         "execution_mode": "agentic_mcp",
-        "tool_calls_executed": _coerce_non_negative_int(tool_payload.get("totalCalls")),
-        "mutations": _count_mutating_agentic_tool_calls(tool_payload.get("byName")),
-        "tool_names_used": tool_names_used,
         "seed_memory_ids": [record.id for record in seed_records],
-    }
+    } | build_tool_usage_summary(parsed, read_only_tool_names=_DEDUPLICATOR_READ_ONLY_TOOL_NAMES)
 
 
 def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:
@@ -276,60 +285,23 @@ def _truncate_text(value: str | None, limit: int) -> str:
 
 
 def _coerce_non_negative_int(value: object) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return max(value, 0)
-    return 0
+    return coerce_non_negative_int(value)
 
 
 def _coerce_text_summary(value: object) -> str | None:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+    return coerce_text_summary(value)
 
 
 def _extract_embedded_json_object(text: str) -> dict[str, Any] | None:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        json_start = text.find("{")
-        json_end = text.rfind("}") + 1
-        if json_start < 0 or json_end <= json_start:
-            return None
-        try:
-            parsed = json.loads(text[json_start:json_end])
-        except json.JSONDecodeError:
-            return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    return extract_embedded_json_object(text)
 
 
 def _extract_agentic_tool_names(value: object) -> list[str]:
-    if not isinstance(value, dict):
-        return []
-    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+    return extract_agentic_tool_names(value)
 
 
 def _count_mutating_agentic_tool_calls(value: object) -> int:
-    if not isinstance(value, dict):
-        return 0
-    read_only_tool_names = {
-        "mcp_mcp-memory-internal_task_complete",
-        "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
-        "mcp_mcp-memory-internal_internal_read_memory_record",
-        "mcp_mcp-memory-internal_internal_search_memory_records",
-        "mcp_mcp-memory-internal_internal_list_memory_records",
-        "mcp_mcp-memory-internal_internal_task_complete",
-    }
-    total = 0
-    for name, payload in value.items():
-        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
-            continue
-        payload_dict = cast(dict[str, Any], payload)
-        total += _coerce_non_negative_int(payload_dict.get("count"))
-    return total
+    return count_mutating_agentic_tool_calls(value, read_only_tool_names=_DEDUPLICATOR_READ_ONLY_TOOL_NAMES)
 
 
 def _ordered_packet_memory_ids(payload: dict[str, Any]) -> list[str]:

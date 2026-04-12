@@ -17,6 +17,12 @@ from mcp_memory.core.sampling import (
     NEVER_SURFACED_STRATEGY,
     SamplingBatch,
 )
+from mcp_memory.core.task_handlers.agentic_result_support import (
+    build_tool_usage_summary,
+    count_mutating_agentic_tool_calls,
+    extract_agentic_tool_names,
+    extract_tool_counts,
+)
 from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_handlers.campaigns import (
     campaign_family_keys,
@@ -47,6 +53,16 @@ TAXONOMIST_DEFAULT_PROVIDER_CALL_BUDGET = 1
 TAXONOMIST_DEFAULT_WORK_ITEM_BATCH_LIMIT = 5
 TAXONOMIST_DEFAULT_MAX_BATCHES_PER_RUN = 4
 TAXONOMIST_WORK_ITEM_PRECHECK_LIMIT = 64
+
+_TAXONOMIST_READ_ONLY_TOOL_NAMES = {
+    "mcp_mcp-memory-internal_task_complete",
+    "mcp_mcp-memory-internal_internal_get_work_batch",
+    "mcp_mcp-memory-internal_internal_get_compatible_work_batch",
+    "mcp_mcp-memory-internal_internal_read_memory_record",
+    "mcp_mcp-memory-internal_internal_search_memory_records",
+    "mcp_mcp-memory-internal_internal_list_memory_records",
+    "mcp_mcp-memory-internal_internal_task_complete",
+}
 
 
 def select_taxonomist_sampling_batch(
@@ -411,19 +427,7 @@ def has_ready_tagging_work(
 def normalize_agentic_result(agentic_result: Any, *, coerce_text_summary, extract_embedded_json_object) -> dict[str, Any]:
     summary = coerce_text_summary(getattr(agentic_result, "summary", None))
     parsed = getattr(agentic_result, "parsed", None)
-    tool_stats: dict[str, Any] = {}
-    tool_payload: dict[str, Any] = {}
-    tool_counts: dict[str, Any] = {}
-    if isinstance(parsed, dict):
-        raw_tool_stats = parsed.get("stats")
-        if isinstance(raw_tool_stats, dict):
-            tool_stats = raw_tool_stats
-            raw_tool_payload = tool_stats.get("tools")
-            if isinstance(raw_tool_payload, dict):
-                tool_payload = raw_tool_payload
-                raw_tool_counts = tool_payload.get("byName")
-                if isinstance(raw_tool_counts, dict):
-                    tool_counts = raw_tool_counts
+    tool_counts = extract_tool_counts(parsed)
     if isinstance(parsed, dict):
         response = parsed.get("response")
         if isinstance(response, str):
@@ -432,14 +436,11 @@ def normalize_agentic_result(agentic_result: Any, *, coerce_text_summary, extrac
                 summary = coerce_text_summary(parsed_response.get("summary")) or summary
     return {
         "summary": summary,
-        "tool_calls_executed": tool_payload.get("totalCalls") if isinstance(tool_payload.get("totalCalls"), int) else 0,
-        "mutations": _count_mutating_agentic_tool_calls(tool_counts),
-        "tool_names_used": _extract_agentic_tool_names(tool_counts),
         "compatible_batch_calls": count_named_tool_calls_from_stats(
             tool_counts,
             tool_name="internal_get_compatible_work_batch",
         ),
-    }
+    } | build_tool_usage_summary(parsed, read_only_tool_names=_TAXONOMIST_READ_ONLY_TOOL_NAMES)
 
 
 def build_taxonomist_result(
@@ -504,32 +505,11 @@ def build_taxonomist_result(
 
 
 def _extract_agentic_tool_names(value: object) -> list[str]:
-    if not isinstance(value, dict):
-        return []
-    return sorted(str(name) for name, payload in value.items() if isinstance(name, str) and isinstance(payload, dict))
+    return extract_agentic_tool_names(value)
 
 
 def _count_mutating_agentic_tool_calls(value: object) -> int:
-    if not isinstance(value, dict):
-        return 0
-    read_only_tool_names = {
-        "mcp_mcp-memory-internal_task_complete",
-        "mcp_mcp-memory-internal_internal_get_work_batch",
-        "mcp_mcp-memory-internal_internal_get_compatible_work_batch",
-        "mcp_mcp-memory-internal_internal_read_memory_record",
-        "mcp_mcp-memory-internal_internal_search_memory_records",
-        "mcp_mcp-memory-internal_internal_list_memory_records",
-        "mcp_mcp-memory-internal_internal_task_complete",
-    }
-    total = 0
-    for name, payload in value.items():
-        if not isinstance(name, str) or name in read_only_tool_names or not isinstance(payload, dict):
-            continue
-        payload_dict = dict(payload)
-        count = payload_dict.get("count")
-        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
-            total += count
-    return total
+    return count_mutating_agentic_tool_calls(value, read_only_tool_names=_TAXONOMIST_READ_ONLY_TOOL_NAMES)
 
 
 def build_tag_normalizer_result(
