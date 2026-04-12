@@ -389,6 +389,76 @@ def _show_search_debug(
         timing_table.add_row(name, f"{value:.3f}ms")
     console.print(timing_table)
 
+    if isinstance(results, list):
+        _render_search_debug_results(results)
+
+
+def _render_search_debug_results(results: list[object]) -> None:
+    table = Table(title="Ranked Search Results")
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("Score", justify="right", no_wrap=True)
+    table.add_column("Title", overflow="fold")
+    table.add_column("Summary", overflow="fold")
+    table.add_column("Evidence", overflow="fold")
+    if not results:
+        table.add_row("-", "-", "No results", "-", "-")
+        console.print(table)
+        return
+
+    for index, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            continue
+        score = item.get("score")
+        score_text = f"{float(score):.3f}" if isinstance(score, int | float) else "-"
+        table.add_row(
+            str(index),
+            score_text,
+            str(item.get("title") or item.get("memory_id") or "-"),
+            str(item.get("summary") or "-"),
+            _format_ranking_evidence(item.get("ranking_debug")),
+        )
+    console.print(table)
+
+
+def _format_ranking_evidence(ranking_debug: object) -> str:
+    if not isinstance(ranking_debug, dict):
+        return "-"
+
+    evidence: list[str] = []
+    if ranking_debug.get("matched_by_keyword"):
+        evidence.append("keyword")
+    if ranking_debug.get("matched_by_semantic"):
+        evidence.append("semantic")
+    if ranking_debug.get("workspace_match"):
+        multiplier = ranking_debug.get("workspace_multiplier")
+        if isinstance(multiplier, int | float):
+            evidence.append(f"workspace×{float(multiplier):.2f}")
+        else:
+            evidence.append("workspace")
+    if ranking_debug.get("expanded_by_graph"):
+        link_type = ranking_debug.get("graph_link_type")
+        seed_id = ranking_debug.get("graph_seed_id")
+        graph_label = "graph" if not isinstance(link_type, str) else f"graph:{link_type}"
+        if isinstance(seed_id, str) and seed_id:
+            graph_label = f"{graph_label}@{seed_id[:8]}"
+        evidence.append(graph_label)
+
+    numeric_bits: list[str] = []
+    for key, label in (
+        ("semantic_score", "sem"),
+        ("keyword_token_coverage", "kw"),
+        ("graph_support_bonus", "graph"),
+        ("access_bonus", "access"),
+        ("authority_multiplier", "authority"),
+        ("final_score", "final"),
+    ):
+        value = ranking_debug.get(key)
+        if isinstance(value, int | float):
+            numeric_bits.append(f"{label}={float(value):.2f}")
+
+    bits = evidence + numeric_bits
+    return ", ".join(bits) if bits else "-"
+
 
 def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
     ensure_daemon_started(workspace_root, None)

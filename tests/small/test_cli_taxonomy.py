@@ -617,7 +617,36 @@ def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summa
         captured["caller_kind"] = caller_kind
         return {
             "status": "ok",
-            "results": [{"memory_id": "memory-1"}, {"memory_id": "memory-2"}],
+            "results": [
+                {
+                    "memory_id": "memory-1",
+                    "title": "Ranking candidate one",
+                    "summary": "Covers keyword + semantic match.",
+                    "score": 0.91,
+                    "ranking_debug": {
+                        "matched_by_keyword": True,
+                        "matched_by_semantic": True,
+                        "workspace_match": True,
+                        "workspace_multiplier": 1.2,
+                        "semantic_score": 0.88,
+                        "keyword_token_coverage": 1.0,
+                        "final_score": 0.91,
+                    },
+                },
+                {
+                    "memory_id": "memory-2",
+                    "title": "Ranking candidate two",
+                    "summary": "Expanded through graph support.",
+                    "score": 0.53,
+                    "ranking_debug": {
+                        "expanded_by_graph": True,
+                        "graph_link_type": "DEPENDS_ON",
+                        "graph_seed_id": "memory-seed-12345678",
+                        "graph_support_bonus": 0.35,
+                        "final_score": 0.53,
+                    },
+                },
+            ],
             "timing_ms": {
                 "total": 12.5,
                 "semantic_selection": 4.0,
@@ -649,6 +678,10 @@ def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summa
     assert "Total timing: 12.500ms" in result.output
     assert "semantic_selection" in result.output
     assert "keyword_lookup" in result.output
+    assert "Ranked Search Results" in result.output
+    assert "workspace×1.20" in result.output
+    assert "sem=0.88" in result.output
+    assert "graph:DEPENDS_ON@mem" in result.output
 
 
 def test_admin_search_debug_json_includes_query_result_count_and_diagnostics(monkeypatch) -> None:
