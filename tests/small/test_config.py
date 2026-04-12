@@ -10,7 +10,10 @@ from mcp_memory.config import (
     SearchRankingConfig,
     ensure_default_config_exists,
     load_config,
+    resolve_default_config_path,
+    resolve_global_data_dir,
     resolve_memory_path,
+    resolve_state_dir,
 )
 
 
@@ -79,6 +82,12 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.memory.recency_plan.boost_decay_rate == 0.97
     assert loaded.memory.recency_fact.max_boost_amount == 0.05
     assert loaded.memory.recency_reflection.max_boost_amount == 0.05
+
+
+def test_default_paths_resolve_inside_the_test_temp_area(tmp_path: Path) -> None:
+    assert resolve_default_config_path() == tmp_path / "home" / ".config" / "mcp-memory" / "config.toml"
+    assert resolve_global_data_dir() == tmp_path / "data"
+    assert resolve_state_dir() == tmp_path / "state" / "mcp-memory"
 
 
 def test_daemon_config_rejects_invalid_port() -> None:

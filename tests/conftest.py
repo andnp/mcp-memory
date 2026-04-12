@@ -28,6 +28,23 @@ def pytest_configure(config) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def isolate_test_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home_dir = tmp_path / "home"
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    state_dir = tmp_path / "state"
+    home_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_dir))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_dir))
+
+
 @pytest.fixture
 def memory_path(tmp_path: Path) -> Path:
     return tmp_path / ".memories"
