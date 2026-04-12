@@ -686,9 +686,11 @@ def test_admin_search_debug_runs_existing_debug_search_service_and_renders_summa
     assert "semantic_selection" in result.output
     assert "keyword_lookup" in result.output
     assert "Ranked Search Results" in result.output
+    assert "generic" in result.output
     assert "workspace×1.20" in result.output
     assert "sem=0.88" in result.output
-    assert "graph:DEPENDS_ON@mem" in result.output
+    assert "graph:DEPENDS_" in result.output
+    assert "ON@memory-s" in result.output
 
 
 def test_admin_search_debug_json_includes_query_result_count_and_diagnostics(monkeypatch) -> None:

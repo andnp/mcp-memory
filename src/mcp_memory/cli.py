@@ -410,9 +410,10 @@ def _render_search_debug_results(results: list[object]) -> None:
     table.add_column("Score", justify="right", no_wrap=True)
     table.add_column("Title", overflow="fold")
     table.add_column("Summary", overflow="fold")
+    table.add_column("Scanability", overflow="fold")
     table.add_column("Evidence", overflow="fold")
     if not results:
-        table.add_row("-", "-", "No results", "-", "-")
+        table.add_row("-", "-", "No results", "-", "-", "-")
         console.print(table)
         return
 
@@ -426,9 +427,23 @@ def _render_search_debug_results(results: list[object]) -> None:
             score_text,
             str(item.get("title") or item.get("memory_id") or "-"),
             str(item.get("summary") or "-"),
+            _format_scanability_notes(item),
             _format_ranking_evidence(item.get("ranking_debug")),
         )
     console.print(table)
+
+
+def _format_scanability_notes(result: dict[str, object]) -> str:
+    title = str(result.get("title") or "").strip()
+    summary = str(result.get("summary") or "").strip()
+    notes: list[str] = []
+    if not summary or summary == "-":
+        notes.append("summary missing")
+    elif summary.lower().startswith("covers "):
+        notes.append("generic summary")
+    if len(title.split()) <= 2:
+        notes.append("short title")
+    return ", ".join(notes) if notes else "looks clear"
 
 
 def _format_ranking_evidence(ranking_debug: object) -> str:
