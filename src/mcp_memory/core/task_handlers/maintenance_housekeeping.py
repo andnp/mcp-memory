@@ -11,6 +11,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_STALE_PLAN_DAYS,
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
+from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_workspace_id as _resolve_workspace_id
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.storage.session import CursorLike, DbConnectionLike
 
@@ -216,17 +217,6 @@ def _cleanup_deleted_thought_embeddings(ctx: ApplicationContext, deleted_ids: li
             source_id=str(entry_id),
             model_name=model_name,
         )
-
-
-def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | None:
-    task_workspace = task.data.get("workspace_id")
-    if isinstance(task_workspace, str) and task_workspace.strip():
-        return task_workspace.strip()
-    if isinstance(task.workspace_id, str) and task.workspace_id.strip():
-        return task.workspace_id.strip()
-    return None
-
-
 def _resolve_workspace_root(
     ctx: ApplicationContext,
     workspace_id: str | None,

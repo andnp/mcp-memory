@@ -26,6 +26,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_INGEST_BATCH_SIZE,
 )
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
+from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
 from mcp_memory.core.tasks import TaskRecord
 
 DEFAULT_INGEST_MAX_BATCHES_PER_RUN = 8
@@ -293,9 +294,8 @@ def _extract_ingest_actions(response: dict[str, Any]) -> list[dict[str, Any]] | 
         return results
     return actions
 def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str:
-    task_workspace = task.data.get("workspace_id")
-    if isinstance(task_workspace, str) and task_workspace.strip():
-        return task_workspace.strip()
-    if isinstance(ctx.workspace_id, str) and ctx.workspace_id.strip():
-        return ctx.workspace_id.strip()
-    return "workspace-unknown"
+    return resolve_task_or_context_workspace_id(
+        ctx,
+        task,
+        fallback="workspace-unknown",
+    ) or "workspace-unknown"
