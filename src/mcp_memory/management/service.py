@@ -76,6 +76,7 @@ from mcp_memory.serialization import (
 from mcp_memory.storage.noop import NoopProviderUsageRepository
 from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepository
+from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 _USE_SERVICE_WORKSPACE = object()
@@ -277,31 +278,33 @@ class ManagementService:
         return _coerce_transport_diagnostics_payload(snapshot)
 
     def _build_cache_health(self) -> CacheHealthPayload:
-        cache_config = None if self._config is None else self._config.storage.cache
-        cache_enabled = bool(getattr(cache_config, "enabled", False))
-        cache_mode = getattr(cache_config, "mode", None) if cache_enabled else None
+        cache_state = resolve_shared_mode_cache_state(
+            self._config,
+            storage_backend=self._storage_backend,
+            read_cache=self._read_cache,
+        )
         metrics = self._build_cache_metrics_payload()
-        if not cache_enabled:
+        if not cache_state.enabled:
             return CacheHealthPayload(enabled=False, mode=None, state="disabled", path=None, metrics=metrics)
 
-        if self._storage_backend != "postgres":
-            return CacheHealthPayload(enabled=True, mode=cache_mode, state="unsupported_backend", path=None, metrics=metrics)
+        if not cache_state.backend_supported:
+            return CacheHealthPayload(enabled=True, mode=cache_state.mode, state="unsupported_backend", path=None, metrics=metrics)
 
         configured_path = self._configured_cache_path()
-        if self._read_cache is None:
+        if not cache_state.active:
             return CacheHealthPayload(
                 enabled=True,
-                mode=cache_mode,
+                mode=cache_state.mode,
                 state="inactive",
                 path=str(configured_path) if configured_path is not None else None,
                 metrics=metrics,
             )
 
-        active_path = getattr(self._read_cache, "_db_path", None)
+        active_path = getattr(cache_state.read_cache, "_db_path", None)
         resolved_path = active_path if isinstance(active_path, Path) else configured_path
         return CacheHealthPayload(
             enabled=True,
-            mode=cache_mode,
+            mode=cache_state.mode,
             state="active",
             path=str(resolved_path) if resolved_path is not None else None,
             metrics=metrics,
@@ -866,24 +869,18 @@ class ManagementService:
             raise ValueError("journal_not_initialized")
         effective_workspace_id = _resolve_service_workspace_id(self._workspace_id, workspace_id)
         suppression_config = None if self._config is None else self._config.ingest_suppression
-        writeback_cache = None
-        max_outbox_entries = None
-        cache_config = None if self._config is None else self._config.storage.cache
-        if (
-            cache_config is not None
-            and cache_config.enabled
-            and cache_config.mode == "writeback"
-            and self._storage_backend == "postgres"
-        ):
-            writeback_cache = self._read_cache
-            max_outbox_entries = cache_config.max_outbox_entries
+        cache_state = resolve_shared_mode_cache_state(
+            self._config,
+            storage_backend=self._storage_backend,
+            read_cache=self._read_cache,
+        )
         return RecordThoughtOperation(
             self._journal.journal,
             self._task_queue.task_queue,
             effective_workspace_id,
             suppression_config,
-            writeback_cache=writeback_cache,
-            max_outbox_entries=max_outbox_entries,
+            writeback_cache=cache_state.writeback_cache,
+            max_outbox_entries=cache_state.max_outbox_entries,
         ).execute(content)
 
     def list_memories(

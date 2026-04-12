@@ -30,6 +30,7 @@ from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_global_daemon_bootstrap_spec
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
+from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 logger = logging.getLogger(__name__)
@@ -208,26 +209,23 @@ async def _run_periodic_backup_loop(runtime) -> None:
 
 
 def _resolve_record_thought_writeback_flush_context(runtime) -> _RecordThoughtWritebackFlushContext | None:
-    config = getattr(runtime, "config", None)
-    storage_backend = getattr(runtime, "storage_backend", None)
-    if config is None or storage_backend != "postgres":
-        return None
-
-    storage_config = getattr(config, "storage", None)
-    cache_config = None if storage_config is None else getattr(storage_config, "cache", None)
-    if cache_config is None or not cache_config.enabled or cache_config.mode != "writeback":
+    cache_state = resolve_shared_mode_cache_state(
+        getattr(runtime, "config", None),
+        storage_backend=getattr(runtime, "storage_backend", None),
+        read_cache=getattr(runtime, "read_cache", None),
+    )
+    if not cache_state.writeback_active:
         return None
 
     journal = getattr(runtime, "journal", None)
-    writeback_cache = getattr(runtime, "read_cache", None)
-    if journal is None or writeback_cache is None:
+    if journal is None or cache_state.writeback_cache is None:
         return None
 
     return _RecordThoughtWritebackFlushContext(
         journal=journal,
         task_queue=getattr(runtime, "task_queue", None),
-        writeback_cache=writeback_cache,
-        suppression_config=getattr(config, "ingest_suppression", None),
+        writeback_cache=cache_state.writeback_cache,
+        suppression_config=None if getattr(runtime, "config", None) is None else runtime.config.ingest_suppression,
     )
 
 
