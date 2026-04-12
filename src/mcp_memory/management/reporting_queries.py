@@ -1,65 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 import json
-from typing import Any, cast
+from typing import Any
 import time
 
 from mcp_memory.core.task_handlers import MAINTENANCE_TASK_NAMES
 from mcp_memory.management.models import QueueDiagnosticPayload
-
-
-def _uses_sqlite_connection_api(db_manager) -> bool:
-    return hasattr(db_manager, "get_connection")
-
-
-def _adapt_query_for_backend(query: str, db_manager) -> str:
-    if _uses_sqlite_connection_api(db_manager):
-        return query
-    return (
-        query.replace("CHAR(10)", "CHR(10)")
-        .replace("GROUP_CONCAT(DISTINCT workspace_id)", "STRING_AGG(DISTINCT workspace_id, ',')")
-        .replace("GROUP_CONCAT(DISTINCT tags.name)", "STRING_AGG(DISTINCT tags.name, ',')")
-        .replace("?", "%s")
-    )
-
-
-def _row_to_mapping(row: object, columns: list[str] | None = None) -> dict[str, object]:
-    if isinstance(row, dict):
-        return row
-    if isinstance(row, Mapping):
-        return {str(key): value for key, value in row.items()}
-    row_keys = getattr(row, "keys", None)
-    if callable(row_keys):
-        row_like = cast(Any, row)
-        return {str(key): row_like[key] for key in cast(Any, row_keys)()}
-    if isinstance(row, tuple) and columns is not None:
-        row_values = cast(tuple[object, ...], row)
-        return dict(zip(columns, row_values, strict=False))
-    raise TypeError(f"Unsupported row type: {type(row)!r}")
+from mcp_memory.management.query_runner import ManagementQueryRunner
 
 
 def _fetchall_rows(db_manager, query: str, params: Sequence[object] | None = None) -> list[dict[str, object]]:
-    if db_manager is None:
-        return []
-    effective_params = list(params or [])
-    adapted_query = _adapt_query_for_backend(query, db_manager)
-    if _uses_sqlite_connection_api(db_manager):
-        conn = db_manager.get_connection()
-        rows = conn.execute(adapted_query, effective_params).fetchall()
-        return [_row_to_mapping(row) for row in rows]
-    with db_manager.open_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(adapted_query, tuple(effective_params))
-            rows = cursor.fetchall()
-            columns = [column.name for column in cursor.description] if cursor.description is not None else []
-            return [_row_to_mapping(row, columns) for row in rows]
+    return ManagementQueryRunner(db_manager).fetchall(query, params)
 
 
 def _fetchone_row(db_manager, query: str, params: Sequence[object] | None = None) -> dict[str, object] | None:
-    rows = _fetchall_rows(db_manager, query, params)
-    return rows[0] if rows else None
+    return ManagementQueryRunner(db_manager).fetchone(query, params)
 
 
 def fetch_memory_count_rows(db_manager, workspace_id: str | None):
