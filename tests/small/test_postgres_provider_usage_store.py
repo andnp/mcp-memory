@@ -6,6 +6,9 @@ import json
 import pytest
 
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
+from tests.small.provider_usage_conversation_contract import (
+    assert_preserves_first_terminal_conversation_finalization,
+)
 
 
 pytestmark = pytest.mark.small
@@ -494,6 +497,12 @@ def test_postgres_provider_usage_repository_tracks_conversation_lifecycle() -> N
     assert conversation.response_text == "world"
     assert conversation.parsed == {"answer": 42}
     assert conversation.duration_seconds == pytest.approx(5.0)
+
+
+def test_postgres_provider_usage_repository_preserves_first_terminal_conversation_finalization() -> None:
+    assert_preserves_first_terminal_conversation_finalization(
+        lambda: PostgresProviderUsageRepository(FakeSessionManager(), workspace_id="workspace-a")
+    )
 
 
 def test_postgres_provider_usage_repository_reconciles_running_task_conversations_and_filters_active_states() -> None:
