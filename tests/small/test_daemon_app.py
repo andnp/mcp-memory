@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import threading
 import time
 from types import SimpleNamespace
@@ -9,7 +10,10 @@ from types import SimpleNamespace
 import pytest
 
 import mcp_memory.daemon_app as daemon_app_module
+import mcp_memory.core.journal_operations as journal_operations_module
 from mcp_memory.config import Config, StorageCacheMode
+from mcp_memory.core.journal import System1Journal
+from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
 pytestmark = pytest.mark.small
@@ -93,3 +97,85 @@ async def test_record_thought_writeback_flush_loop_runs_immediately_then_polls(
         with pytest.raises(asyncio.CancelledError):
             await task
         await asyncio.to_thread(executor.shutdown, True)
+
+
+@pytest.mark.asyncio
+async def test_record_thought_writeback_flush_loop_shutdown_does_not_wait_for_timed_out_authoritative_thread(
+    db_manager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config()
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "writeback"
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    assert cache.enqueue_record_thought_outbox_entry(
+        content="queued thought",
+        workspace_id="workspace-a",
+        timestamp=10.0,
+        max_entries=4,
+    ) is not None
+
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    class SlowJournal(System1Journal):
+        def __init__(self) -> None:
+            super().__init__(db_manager)
+
+        def record_with_timestamp(
+            self,
+            content: str,
+            workspace_id: str | None = None,
+            *,
+            timestamp: float | None = None,
+        ):
+            started.set()
+            try:
+                assert release.wait(timeout=1.0)
+                return super().record_with_timestamp(content, workspace_id=workspace_id, timestamp=timestamp)
+            finally:
+                completed.set()
+
+    runtime = SimpleNamespace(
+        config=config,
+        storage_backend="postgres",
+        journal=SlowJournal(),
+        read_cache=cache,
+        task_queue=None,
+    )
+    monkeypatch.setattr(
+        journal_operations_module,
+        "_RECORD_THOUGHT_AUTHORITATIVE_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="daemon-app-shutdown-test")
+    task = asyncio.create_task(
+        daemon_app_module._run_record_thought_writeback_flush_loop(
+            runtime,
+            executor=executor,
+            poll_seconds=60.0,
+        )
+    )
+
+    try:
+        assert await asyncio.to_thread(started.wait, 0.5)
+        await asyncio.sleep(0.05)
+
+        assert cache.count_record_thought_outbox_entries() == 1
+        assert completed.is_set() is False
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        shutdown_started = time.monotonic()
+        await asyncio.to_thread(executor.shutdown, True)
+        assert (time.monotonic() - shutdown_started) < 0.2
+        assert completed.is_set() is False
+        assert cache.count_record_thought_outbox_entries() == 1
+    finally:
+        release.set()
+        assert await asyncio.to_thread(completed.wait, 1.0)
