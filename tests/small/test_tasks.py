@@ -566,7 +566,8 @@ def test_runtime_task_worker_recover_running_task_marks_dead_subprocess_as_retry
     assert recovered is not None
     assert recovered.task.status == "pending"
     assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
-    assert recovered.retry_termination_reason == "provider_subprocess_exited_retry"
+    assert recovered.reconciliation_policy.is_retryable_interruption is True
+    assert recovered.reconciliation_policy.termination_reason == "provider_subprocess_exited_retry"
 
 
 def test_runtime_task_worker_recover_running_task_routes_requested_cancellation_to_terminal_path(
@@ -605,7 +606,8 @@ def test_runtime_task_worker_recover_running_task_routes_requested_cancellation_
     assert recovered is not None
     assert recovered.task.status == "cancelled"
     assert recovered.task.last_error == "operator_cancelled"
-    assert recovered.retry_termination_reason is None
+    assert recovered.reconciliation_policy.is_retryable_interruption is False
+    assert recovered.reconciliation_policy.termination_reason is None
 
 
 def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_is_terminal_failure(
@@ -633,7 +635,8 @@ def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_i
     assert recovered is not None
     assert recovered.task.status == "failed"
     assert recovered.task.last_error == "Task was abandoned without an active provider subprocess"
-    assert recovered.retry_termination_reason is None
+    assert recovered.reconciliation_policy.is_retryable_interruption is False
+    assert recovered.reconciliation_policy.termination_reason is None
 
 
 def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_after_retry_exhaustion(
@@ -678,7 +681,8 @@ def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_aft
     assert recovered.task.status == "failed"
     assert recovered.task.retries_count == 1
     assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
-    assert recovered.retry_termination_reason is None
+    assert recovered.reconciliation_policy.is_retryable_interruption is False
+    assert recovered.reconciliation_policy.termination_reason is None
 
 
 def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying_queue_mutation(
@@ -728,7 +732,8 @@ def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying
 
     assert recovered.task.status == "pending"
     assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
-    assert recovered.retry_termination_reason == "provider_subprocess_exited_retry"
+    assert recovered.reconciliation_policy.is_retryable_interruption is True
+    assert recovered.reconciliation_policy.termination_reason == "provider_subprocess_exited_retry"
 
 
 def test_sqlite_task_queue_retries_recovery_transition_after_transient_database_lock(

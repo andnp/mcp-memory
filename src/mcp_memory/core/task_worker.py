@@ -31,9 +31,35 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class _RecoveredTaskReconciliationPolicy:
+    is_retryable_interruption: bool
+    termination_reason: str | None = None
+
+    @classmethod
+    def terminal(cls) -> _RecoveredTaskReconciliationPolicy:
+        return cls(is_retryable_interruption=False)
+
+    @classmethod
+    def retryable_interruption(cls, *, termination_reason: str) -> _RecoveredTaskReconciliationPolicy:
+        return cls(
+            is_retryable_interruption=True,
+            termination_reason=termination_reason,
+        )
+
+    def reconcile(self, worker: RuntimeTaskWorker, task: TaskRecord) -> None:
+        if self.is_retryable_interruption:
+            termination_reason = self.termination_reason
+            if termination_reason is None:
+                raise ValueError("Retryable interruption reconciliation requires a termination reason")
+            worker._reconcile_retryable_interruption(task, termination_reason=termination_reason)
+            return
+        worker._reconcile_terminal_task_state(task)
+
+
+@dataclass(frozen=True)
 class _RecoveredTaskOutcome:
     task: TaskRecord
-    retry_termination_reason: str | None = None
+    reconciliation_policy: _RecoveredTaskReconciliationPolicy
 
 
 @dataclass(frozen=True)
@@ -609,6 +635,7 @@ class RuntimeTaskWorker:
                     cancelled_at=plan.recovered_at,
                     execution_epoch=task.execution_epoch,
                 ),
+                preferred_reconciliation_policy=_RecoveredTaskReconciliationPolicy.terminal(),
             )
         if plan.action is RecoveryAction.RETRY_DEAD_SUBPROCESS:
             return self._recover_task_outcome(
@@ -620,7 +647,9 @@ class RuntimeTaskWorker:
                     failed_at=plan.recovered_at,
                     execution_epoch=task.execution_epoch,
                 ),
-                retry_termination_reason=plan.retry_termination_reason,
+                preferred_reconciliation_policy=_RecoveredTaskReconciliationPolicy.retryable_interruption(
+                    termination_reason=plan.retry_termination_reason or "provider_subprocess_exited_retry",
+                ),
             )
         return self._recover_task_outcome(
             task_queue,
@@ -630,6 +659,7 @@ class RuntimeTaskWorker:
                 failed_at=plan.recovered_at,
                 execution_epoch=task.execution_epoch,
             ),
+            preferred_reconciliation_policy=_RecoveredTaskReconciliationPolicy.terminal(),
         )
 
     def _recover_task_outcome(
@@ -637,12 +667,15 @@ class RuntimeTaskWorker:
         task_queue,
         callback: Callable[[], TaskRecord],
         *,
-        retry_termination_reason: str | None = None,
+        preferred_reconciliation_policy: _RecoveredTaskReconciliationPolicy,
     ) -> _RecoveredTaskOutcome:
         task = self._recover_terminal_task(task_queue, callback)
+        reconciliation_policy = preferred_reconciliation_policy
+        if preferred_reconciliation_policy.is_retryable_interruption and task.status != "pending":
+            reconciliation_policy = _RecoveredTaskReconciliationPolicy.terminal()
         return _RecoveredTaskOutcome(
             task=task,
-            retry_termination_reason=retry_termination_reason if task.status == "pending" else None,
+            reconciliation_policy=reconciliation_policy,
         )
 
     def _recover_terminal_task(self, task_queue, callback: Callable[[], TaskRecord]) -> TaskRecord:
@@ -658,13 +691,7 @@ class RuntimeTaskWorker:
         self._release_task_embedding_repairs(task)
 
     def _reconcile_recovered_task_state(self, outcome: _RecoveredTaskOutcome) -> None:
-        if outcome.retry_termination_reason is not None:
-            self._reconcile_retryable_interruption(
-                outcome.task,
-                termination_reason=outcome.retry_termination_reason,
-            )
-            return
-        self._reconcile_terminal_task_state(outcome.task)
+        outcome.reconciliation_policy.reconcile(self, outcome.task)
 
     def _reconcile_retryable_interruption(self, task: TaskRecord, *, termination_reason: str) -> None:
         self._finish_task_execution_attempt(
