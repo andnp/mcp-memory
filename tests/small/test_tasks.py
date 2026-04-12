@@ -680,6 +680,56 @@ def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_aft
     assert recovered.retry_termination_reason is None
 
 
+def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying_queue_mutation(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "pid-dead-task",
+        workspace_id="workspace-a",
+        task_id="worker-pid-dead-plan-task",
+        available_at=0.0,
+    )
+    claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=9999,
+        request_id="req-dead-plan",
+        updated_at=12.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={},
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=300.0,
+    )
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    running_task = queue.get_task(task.id)
+    plan = worker._classify_running_task_recovery(  # noqa: SLF001
+        running_task,
+        attempt=None,
+        current_time=1000.0,
+    )
+
+    assert plan is not None
+    assert plan.action == "retry_dead_subprocess"
+    assert plan.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert plan.retry_delay_seconds == pytest.approx(45.0)
+    assert queue.get_task(task.id).status == "running"
+
+    recovered = worker._apply_running_task_recovery_plan(queue, running_task, plan)  # noqa: SLF001
+
+    assert recovered.task.status == "pending"
+    assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert recovered.retry_termination_reason == "provider_subprocess_exited_retry"
+
+
 def test_sqlite_task_queue_retries_recovery_transition_after_transient_database_lock(
     db_manager,
     monkeypatch,

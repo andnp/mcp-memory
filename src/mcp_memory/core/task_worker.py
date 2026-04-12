@@ -23,6 +23,7 @@ from mcp_memory.core.task_handlers import (
 )
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.task_execution_store import TaskExecutionAttemptRecord
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,43 @@ logger = logging.getLogger(__name__)
 class _RecoveredTaskOutcome:
     task: TaskRecord
     retry_termination_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _RunningTaskRecoveryPlan:
+    action: str
+    recovered_at: float
+    error_text: str | None = None
+    retry_delay_seconds: float | None = None
+    retry_termination_reason: str | None = None
+
+    @classmethod
+    def finalize_cancellation(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
+        return cls(action="finalize_cancellation", recovered_at=recovered_at)
+
+    @classmethod
+    def retry_dead_subprocess(
+        cls,
+        *,
+        subprocess_pid: int,
+        recovered_at: float,
+        retry_delay_seconds: float,
+    ) -> _RunningTaskRecoveryPlan:
+        return cls(
+            action="retry_dead_subprocess",
+            recovered_at=recovered_at,
+            error_text=f"Provider subprocess {subprocess_pid} exited unexpectedly",
+            retry_delay_seconds=retry_delay_seconds,
+            retry_termination_reason="provider_subprocess_exited_retry",
+        )
+
+    @classmethod
+    def fail_abandoned(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
+        return cls(
+            action="fail_abandoned",
+            recovered_at=recovered_at,
+            error_text="Task was abandoned without an active provider subprocess",
+        )
 
 
 class RuntimeTaskWorker:
@@ -496,25 +534,46 @@ class RuntimeTaskWorker:
         attempt_repository,
         current_time: float,
     ) -> _RecoveredTaskOutcome | None:
+        attempt = self._get_running_task_attempt(task, attempt_repository=attempt_repository)
+        plan = self._classify_running_task_recovery(task, attempt=attempt, current_time=current_time)
+        if plan is None:
+            return None
+        return self._apply_running_task_recovery_plan(task_queue, task, plan)
+
+    def _get_running_task_attempt(
+        self,
+        task: TaskRecord,
+        *,
+        attempt_repository,
+    ) -> TaskExecutionAttemptRecord | None:
+        if attempt_repository is None:
+            return None
+        try:
+            return attempt_repository.get_attempt(task_id=task.id, execution_epoch=task.execution_epoch)
+        except ValueError:
+            return None
+
+    def _classify_running_task_recovery(
+        self,
+        task: TaskRecord,
+        *,
+        attempt: TaskExecutionAttemptRecord | None,
+        current_time: float,
+    ) -> _RunningTaskRecoveryPlan | None:
         recent_activity_at = max(
             task.updated_at,
             task.started_at or task.updated_at,
             task.claimed_at or task.updated_at,
         )
         subprocess_pid = task.subprocess_pid
-        if attempt_repository is not None:
-            try:
-                attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=task.execution_epoch)
-            except ValueError:
-                attempt = None
-            else:
-                attempt_activity_at = max(
-                    attempt.started_at,
-                    attempt.last_heartbeat_at or attempt.started_at,
-                )
-                recent_activity_at = max(recent_activity_at, attempt_activity_at)
-                if attempt.subprocess_pid is not None:
-                    subprocess_pid = attempt.subprocess_pid
+        if attempt is not None:
+            attempt_activity_at = max(
+                attempt.started_at,
+                attempt.last_heartbeat_at or attempt.started_at,
+            )
+            recent_activity_at = max(recent_activity_at, attempt_activity_at)
+            if attempt.subprocess_pid is not None:
+                subprocess_pid = attempt.subprocess_pid
 
         is_stale = max(current_time - recent_activity_at, 0.0) >= self._abandoned_task_stale_after_seconds
         if subprocess_pid is not None:
@@ -523,42 +582,51 @@ class RuntimeTaskWorker:
             if not is_stale:
                 return None
             if task.cancellation_requested_at is not None:
-                return self._recover_task_outcome(
-                    task_queue,
-                    lambda: task_queue.finalize_cancellation(
-                        task.id,
-                        cancelled_at=current_time,
-                        execution_epoch=task.execution_epoch,
-                    ),
-                )
-            return self._recover_task_outcome(
-                task_queue,
-                lambda: task_queue.fail(
-                    task.id,
-                    f"Provider subprocess {subprocess_pid} exited unexpectedly",
-                    self._retry_delay_seconds,
-                    failed_at=current_time,
-                    execution_epoch=task.execution_epoch,
-                ),
-                retry_termination_reason="provider_subprocess_exited_retry",
+                return _RunningTaskRecoveryPlan.finalize_cancellation(recovered_at=current_time)
+            return _RunningTaskRecoveryPlan.retry_dead_subprocess(
+                subprocess_pid=subprocess_pid,
+                recovered_at=current_time,
+                retry_delay_seconds=self._retry_delay_seconds,
             )
         if task.cancellation_requested_at is not None:
+            return _RunningTaskRecoveryPlan.finalize_cancellation(recovered_at=current_time)
+        if not is_stale:
+            return None
+        return _RunningTaskRecoveryPlan.fail_abandoned(recovered_at=current_time)
+
+    def _apply_running_task_recovery_plan(
+        self,
+        task_queue,
+        task: TaskRecord,
+        plan: _RunningTaskRecoveryPlan,
+    ) -> _RecoveredTaskOutcome:
+        if plan.action == "finalize_cancellation":
             return self._recover_task_outcome(
                 task_queue,
                 lambda: task_queue.finalize_cancellation(
                     task.id,
-                    cancelled_at=current_time,
+                    cancelled_at=plan.recovered_at,
                     execution_epoch=task.execution_epoch,
                 ),
             )
-        if not is_stale:
-            return None
+        if plan.action == "retry_dead_subprocess":
+            return self._recover_task_outcome(
+                task_queue,
+                lambda: task_queue.fail(
+                    task.id,
+                    plan.error_text,
+                    plan.retry_delay_seconds,
+                    failed_at=plan.recovered_at,
+                    execution_epoch=task.execution_epoch,
+                ),
+                retry_termination_reason=plan.retry_termination_reason,
+            )
         return self._recover_task_outcome(
             task_queue,
             lambda: task_queue.fail_permanently(
                 task.id,
-                "Task was abandoned without an active provider subprocess",
-                failed_at=current_time,
+                plan.error_text,
+                failed_at=plan.recovered_at,
                 execution_epoch=task.execution_epoch,
             ),
         )
