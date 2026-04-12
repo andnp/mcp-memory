@@ -1,9 +1,3 @@
-   Development helpers:
-   ```bash
-   uv run mcp-memory daemon status
-   uv run mcp-memory daemon stop
-   uv run mcp-memory daemon restart
-   ```
 # MCP Memory Server
 
 A standalone Model Context Protocol (MCP) server for persistent AI memory management.
@@ -130,26 +124,16 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 - `uv run mcp-memory memory import-markdown /path/to/memory.md`: import one markdown memory file into the relational store.
 - `uv run mcp-memory memory import-markdown /path/to/one.md '/path/to/*.md'`: import explicit files and globbed markdown files in one command.
 
-Background maintenance now also includes a `deduplicator` agent that can merge highly similar fact memories into a canonical fact and absorb matching observation memories into that fact while archiving the source memories with lineage links.
+Current maintenance/runtime highlights:
 
-When an agentic AI provider is configured and the internal maintenance MCP surface is available, the current maintenance stack can now:
-- run `memory-curator` through internal MCP maintenance tools
-- run `deduplicator` through the same agentic MCP mode
-- run `ingest-system1` through agentic MCP mode with internal batch claiming and direct append/create mutations while preserving handler-owned journal finalization
+- `deduplicator` can merge highly similar fact memories into canonical facts and absorb matching observation memories with lineage preserved.
+- When an agentic provider is configured, `memory-curator`, `deduplicator`, and `ingest-system1` can run through the trusted internal maintenance MCP surface.
+- Agentic ingest prefers ingest-specific internal tools, preserving lineage and summarize-task enqueueing in the tool layer rather than in prompt-only behavior.
+- Deduplicator observation absorption stays deterministic; provider-assisted rewriting is reserved for fact-to-fact merges.
+- Provider usage reporting in `admin overview` and the dashboard is task-attributed, so you can see which background task is actually consuming model time.
+- Search debug output exposes graph/ranking fields useful for live tuning and dogfooding.
 
-Agentic ingest now prefers dedicated ingest-specific internal tools for append/create mutations, so `ingest_task_id`, entry lineage, workspace propagation, and summarize-task enqueueing live in the tool layer instead of prompt instructions.
-
-Deduplicator observation absorption now stays deterministic and reserves provider-assisted rewriting for fact-to-fact merges, which reduces per-run provider fan-out without changing the recurring maintenance cadence.
-
-Split maintenance now records richer lineage structure: split children share a `split_group_id`, include per-part ordering/count metadata plus sibling IDs, and the original memory records the full child set/count.
-
-Agentic ingest also now normalizes legacy provider payloads that return `results` instead of `actions`, so append opportunities are no longer silently lost when the provider uses the older shape.
-
-Provider usage reporting in `uv run mcp-memory admin overview` and the dashboard now includes the task name responsible for each provider-usage aggregate row, making it easier to tell whether work is coming from `ingest-system1`, `defragmenter`, `memory-curator`, or another agentic task.
-
-Search debug output now exposes graph- and ranking-specific fields such as `authority_supporting_links`, `authority_contradicting_links`, `expanded_by_graph`, `graph_seed_id`, `graph_link_type`, and `graph_rrf_score`, making live search tuning and dogfooding much easier.
-
-Markdown import keeps its tiny file-scanning logic local to the importer instead of preserving a separate file-backed helper layer in the active package structure.
+For deeper architecture/history context, use `docs/README.md` rather than treating this README as the entire design archive.
 
 ## ⚙️ Configuration
 
