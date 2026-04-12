@@ -6,7 +6,7 @@ import pytest
 
 from mcp_memory.config import AIConfig, Config, PostgresStorageConfig, ProviderRoutingConfig, StorageConfig
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
-from mcp_memory.mcp.runtime import RuntimeSpec, _build_provider_registry
+from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec, WorkspaceRuntimeSpec, _build_provider_registry, create_runtime_from_spec
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.factory import build_storage_runtime_components
 from mcp_memory.storage.bootstrap import StorageBootstrapState
@@ -15,7 +15,7 @@ from mcp_memory.storage.postgres_migrations import POSTGRES_SCHEMA_VERSION
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
-from mcp_memory.storage.types import StorageBackendResources
+from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 
 
 pytestmark = pytest.mark.small
@@ -31,12 +31,10 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
             postgres=PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"),
         )
     )
-    spec = RuntimeSpec(
+    spec = StorageBootstrapSpec(
         memory_path=tmp_path / "memories",
         config=config,
         workspace_id="workspace-123",
-        workspace_root=tmp_path,
-        lock_path=tmp_path / "daemon.lock",
     )
 
     def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
@@ -75,12 +73,10 @@ def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_read
     )
     config.storage.cache.enabled = True
     config.storage.cache.mode = "readonly"
-    spec = RuntimeSpec(
+    spec = StorageBootstrapSpec(
         memory_path=tmp_path / "memories",
         config=config,
         workspace_id="workspace-123",
-        workspace_root=tmp_path,
-        lock_path=tmp_path / "daemon.lock",
     )
 
     def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
@@ -99,6 +95,56 @@ def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_read
     storage = build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
 
     assert isinstance(storage.read_cache, SharedReadCache)
+
+
+def test_storage_factory_accepts_minimal_storage_bootstrap_spec(
+    tmp_path: Path,
+) -> None:
+    memory_path = tmp_path / "memories"
+    (memory_path / "indices").mkdir(parents=True, exist_ok=True)
+
+    storage = build_storage_runtime_components(
+        StorageBootstrapSpec(
+            memory_path=memory_path,
+            config=Config(),
+            workspace_id=None,
+        ),
+        embedder=None,
+        enable_background_repair_queue=False,
+    )
+
+    assert storage.backend == "sqlite"
+    assert storage.db_manager is not None
+    assert storage.provider_usage is not None
+    assert storage.runtime_logs is not None
+    assert storage.task_execution_attempts is not None
+    storage.db_manager.close()
+
+
+def test_create_runtime_from_spec_supports_global_daemon_context_without_workspace_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory_path = tmp_path / "memories"
+    (memory_path / "indices").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("MCP_MEMORY_TEST_MODE", "1")
+
+    runtime = create_runtime_from_spec(
+        GlobalDaemonBootstrapSpec(
+            memory_path=memory_path,
+            config=Config(),
+            workspace_root=tmp_path / "workspace",
+            lock_path=tmp_path / "daemon.lock",
+        )
+    )
+    try:
+        assert runtime.workspace_id is None
+        assert runtime.db_manager is not None
+        assert runtime.provider_usage is not None
+        assert runtime.runtime_logs is not None
+        assert runtime.task_execution_attempts is not None
+    finally:
+        runtime.close()
 
 
 def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -489,7 +535,7 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
     monkeypatch.setattr("mcp_memory.mcp.runtime.build_agentic_ai_provider", lambda *args, **kwargs: agentic_provider)
     monkeypatch.setattr("mcp_memory.mcp.runtime._provider_command_available", lambda provider: True)
 
-    spec = RuntimeSpec(
+    spec = WorkspaceRuntimeSpec(
         memory_path=tmp_path / "memories",
         config=Config(
             ai=AIConfig(provider="none"),
@@ -533,7 +579,12 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         vector_store=object(),
     )
 
-    registry = _build_provider_registry(spec=spec, storage=storage)
+    registry = _build_provider_registry(
+        config=spec.config,
+        workspace_root=spec.workspace_root,
+        workspace_id=spec.workspace_id,
+        storage=storage,
+    )
 
     assert set(registry) == {"gemini-cheap"}
     assert set(registry["gemini-cheap"]) == {"json", "agentic"}

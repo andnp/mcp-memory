@@ -4,7 +4,7 @@ from typing import Any
 
 from mcp_memory.storage.postgres import build_postgres_runtime_components
 from mcp_memory.storage.sqlite import build_sqlite_runtime_components
-from mcp_memory.storage.types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
+from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
 
 
 __all__ = [
@@ -15,7 +15,7 @@ __all__ = [
 
 
 def build_storage_runtime_components(
-    spec: RuntimeSpecLike,
+    spec: StorageBootstrapSpec,
     *,
     embedder: Any,
     enable_background_repair_queue: bool,

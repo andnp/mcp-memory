@@ -38,6 +38,32 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
     }
 
 
+def test_daemon_root_command_forwards_to_existing_daemon_start_helper(monkeypatch) -> None:
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    def fake_start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int | None) -> None:
+        captured["debug_enabled"] = debug_enabled
+        captured["workspace_root"] = workspace_root
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("mcp_memory.cli._start_daemon", fake_start_daemon)
+
+    result = runner.invoke(
+        main,
+        ["--debug", "daemon", "--workspace-root", "/tmp/demo", "--host", "0.0.0.0", "--port", "1234"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "debug_enabled": True,
+        "workspace_root": "/tmp/demo",
+        "host": "0.0.0.0",
+        "port": 1234,
+    }
+
+
 def test_daemon_dashboard_route_is_removed() -> None:
     runner = CliRunner()
 

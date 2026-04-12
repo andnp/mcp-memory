@@ -22,7 +22,7 @@ from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecuti
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
-from mcp_memory.storage.types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
+from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
 
 
 class UnsupportedPostgresRuntimeComponent:
@@ -96,7 +96,7 @@ def _inspect_postgres_bootstrap_state_on_cursor(cursor: CursorLike) -> StorageBo
 
 
 def build_postgres_runtime_components(
-    spec: RuntimeSpecLike,
+    spec: StorageBootstrapSpec,
     *,
     embedder: Any,
     enable_background_repair_queue: bool,

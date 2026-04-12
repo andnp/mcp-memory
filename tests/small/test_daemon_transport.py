@@ -6,9 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
-from mcp_memory.daemon_app import _context_for_request
+from mcp_memory.daemon_app import _context_for_request, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
+from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.server import MCPServer
 
 
@@ -274,6 +276,39 @@ def test_context_for_request_copies_session_id_and_workspace_root(tmp_path) -> N
     assert request_ctx.session_id == "session-123"
     assert request_ctx.workspace_root == workspace
     assert request_ctx.workspace_id is not None
+
+
+def test_create_daemon_app_uses_global_bootstrap_spec_without_workspace_identity(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, object] = {}
+
+    def _fake_resolve_global_daemon_bootstrap_spec(
+        workspace_root_override: str | None = None,
+        cwd=None,
+    ) -> GlobalDaemonBootstrapSpec:
+        captured["workspace_root_override"] = workspace_root_override
+        captured["cwd"] = cwd
+        return GlobalDaemonBootstrapSpec(
+            memory_path=tmp_path / "memories",
+            config=Config(),
+            workspace_root=workspace,
+            lock_path=tmp_path / "daemon.lock",
+        )
+
+    monkeypatch.setattr(
+        "mcp_memory.daemon_app.resolve_global_daemon_bootstrap_spec",
+        _fake_resolve_global_daemon_bootstrap_spec,
+    )
+
+    app = create_daemon_app(workspace_root_override=str(workspace), host="127.0.0.1", port=4242)
+
+    assert app.title == "mcp-memory daemon"
+    assert captured == {
+        "workspace_root_override": str(workspace),
+        "cwd": None,
+    }
 
 
 @pytest.mark.asyncio

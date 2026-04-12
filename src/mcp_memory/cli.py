@@ -19,6 +19,12 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
+from mcp_memory.cli_admin_agent_commands import build_admin_agent_command_family
+from mcp_memory.cli_admin_conversation_commands import build_admin_conversation_command_family
+from mcp_memory.cli_admin_log_commands import build_admin_log_command_family
+from mcp_memory.cli_admin_search_commands import build_admin_search_command_family
+from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
+from mcp_memory.cli_daemon_commands import build_daemon_command_family
 from mcp_memory.cli_memory import build_memory_group
 from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
@@ -33,7 +39,7 @@ from mcp_memory.management.task_sampling_summary import build_task_sampling_summ
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.service import ManagementService
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
-from mcp_memory.mcp.runtime import create_runtime, resolve_runtime_spec
+from mcp_memory.mcp.runtime import create_runtime, resolve_global_daemon_bootstrap_spec
 from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
@@ -96,7 +102,7 @@ def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, po
     )
     resolved_port = port
     if resolved_port is None:
-        resolved_port = resolve_runtime_spec(workspace_root_override=workspace_root).config.daemon.port
+        resolved_port = resolve_global_daemon_bootstrap_spec(workspace_root_override=workspace_root).config.daemon.port
     if resolved_port == 0:
         resolved_port = find_free_port()
     app = create_daemon_app(
@@ -114,12 +120,11 @@ def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, po
 
 
 def _print_daemon_status(workspace_root: str | None) -> None:
-    workspace_id, metadata, healthy = inspect_daemon(workspace_root, None)
+    metadata, healthy = inspect_daemon(workspace_root, None)
     if metadata is None:
         console.print("[yellow]Global daemon not registered[/]")
         return
     console.print("[bold]Daemon scope:[/] global")
-    console.print(f"[bold]Workspace context:[/] {workspace_id}")
     console.print(f"[bold]Status:[/] {'running' if healthy else 'stale'}")
     console.print(f"[bold]PID:[/] {metadata.pid}")
     console.print(f"[bold]Transport:[/] {metadata.transport}")
@@ -1541,47 +1546,40 @@ def internal_run(ctx: click.Context, workspace_root: str | None) -> None:
     )
 
 
-@main.group(name="daemon", invoke_without_command=True)
-@workspace_root_option
-@click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
-@click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
-@click.pass_context
-def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int | None) -> None:
-    """Run and manage the global daemon."""
-    if ctx.invoked_subcommand is not None:
-        return
-    _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
+def _daemon_start_command_action(
+    debug_enabled: bool,
+    workspace_root: str | None,
+    host: str,
+    port: int | None,
+) -> None:
+    _start_daemon(debug_enabled, workspace_root, host, port)
 
 
-@daemon_group.command(name="start")
-@workspace_root_option
-@click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
-@click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
-@click.pass_context
-def daemon_start(ctx: click.Context, workspace_root: str | None, host: str, port: int | None) -> None:
-    """Start the global daemon."""
-    _start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port)
-
-
-@daemon_group.command(name="status")
-@workspace_root_option
-def daemon_status(workspace_root: str | None) -> None:
-    """Print the current global daemon status."""
+def _daemon_status_command_action(workspace_root: str | None) -> None:
     _print_daemon_status(workspace_root)
 
 
-@daemon_group.command(name="stop")
-@workspace_root_option
-def daemon_stop(workspace_root: str | None) -> None:
-    """Stop the global daemon if it is running."""
+def _daemon_stop_command_action(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _stop_daemon_command(workspace_root))
 
 
-@daemon_group.command(name="restart")
-@workspace_root_option
-def daemon_restart(workspace_root: str | None) -> None:
-    """Restart the global daemon and print the active transport endpoint."""
+def _daemon_restart_command_action(workspace_root: str | None) -> None:
     _run_or_exit(lambda: _restart_daemon_command(workspace_root))
+
+
+_daemon_command_family = build_daemon_command_family(
+    workspace_root_option,
+    start_daemon=_daemon_start_command_action,
+    print_daemon_status=_daemon_status_command_action,
+    stop_daemon_command=_daemon_stop_command_action,
+    restart_daemon_command=_daemon_restart_command_action,
+)
+daemon_group = _daemon_command_family.group
+daemon_start = _daemon_command_family.start
+daemon_status = _daemon_command_family.status
+daemon_stop = _daemon_command_family.stop
+daemon_restart = _daemon_command_family.restart
+main.add_command(daemon_group)
 
 
 @main.group(name="admin")
@@ -1589,54 +1587,96 @@ def admin_group() -> None:
     """Canonical operator commands."""
 
 
-@admin_group.group(name="log")
-def admin_log_group() -> None:
-    """Canonical structured runtime log commands."""
+def _admin_agent_run_command_action(
+    agent_name: str | None,
+    workspace_root: str | None,
+    run_all: bool,
+    force: bool,
+) -> None:
+    if run_all:
+        if agent_name is not None:
+            raise click.UsageError("Do not provide an agent name with --all.")
+        _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
+        return
+    if agent_name is None:
+        raise click.UsageError("Provide an agent name or pass --all.")
+    _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
 
 
-@admin_group.group(name="conversation")
-def admin_conversation_group() -> None:
-    """Canonical AI conversation operator commands."""
-
-
-@admin_group.group(name="agent")
-def admin_agent_group() -> None:
-    """Canonical background agent operator commands."""
-
-
-@admin_group.group(name="search")
-def admin_search_group() -> None:
-    """Canonical semantic search operator commands."""
-
-
-@admin_group.group(name="task")
-def admin_task_group() -> None:
-    """Canonical background task operator commands."""
-
-
-@admin_log_group.command(name="list")
-@workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Read logs across the shared runtime or only the active workspace context.",
+_admin_agent_command_family = build_admin_agent_command_family(
+    workspace_root_option,
+    agent_names=TRIGGERABLE_BACKGROUND_TASK_NAMES,
+    run_agent=_admin_agent_run_command_action,
 )
-@click.option("--workspace-id", help="Explicit workspace ID override for log filtering")
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of log rows to print")
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
+admin_agent_group = _admin_agent_command_family.group
+admin_run_agent_command = _admin_agent_command_family.run_command
+admin_group.add_command(admin_agent_group)
+
+
+def _admin_conversation_list_command_action(
+    workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
+    task_name: str | None,
+    status: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
+        payload = service.list_ai_conversations(
+            workspace_id=effective_workspace_id,
+            task_name=task_name,
+            status=status,
+            limit=limit,
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_ai_conversation_table(payload)
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+def _admin_conversation_show_command_action(
+    request_id: str,
+    workspace_root: str | None,
+    scope: str,
+    workspace_id: str | None,
+    json_output: bool,
+) -> None:
+    def _run(service: ManagementService) -> None:
+        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
+        payload = service.list_ai_conversations(workspace_id=effective_workspace_id, request_id=request_id, limit=200)
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_ai_conversation_table(payload)
+        for conversation in payload.conversations:
+            console.print(f"\n[bold]Request {conversation.request_id} attempt {conversation.attempt}[/]")
+            console.print(f"status={conversation.status} pid={conversation.subprocess_pid or '-'} task={conversation.task_name or '-'}")
+            console.print("[bold]Prompt[/]")
+            console.print(conversation.prompt_text or "-")
+            console.print("[bold]Response[/]")
+            console.print(conversation.response_text or "-")
+            if conversation.error_text:
+                console.print(f"[red]Error:[/] {conversation.error_text}")
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+_admin_conversation_command_family = build_admin_conversation_command_family(
+    workspace_root_option,
+    list_conversations=_admin_conversation_list_command_action,
+    show_conversation=_admin_conversation_show_command_action,
 )
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def admin_logs(
+admin_conversation_group = _admin_conversation_command_family.group
+list_conversations_command = _admin_conversation_command_family.list_command
+show_conversation_command = _admin_conversation_command_family.show_command
+admin_group.add_command(admin_conversation_group)
+
+
+def _admin_log_list_command_action(
     workspace_root: str | None,
     scope: str,
     workspace_id: str | None,
@@ -1649,32 +1689,10 @@ def admin_logs(
     before: float | None,
     json_output: bool,
 ) -> None:
-    """Print recent structured runtime logs from SQLite."""
     _show_logs(workspace_root, scope, workspace_id, limit, level, logger_name, source, query, after, before, json_output)
 
 
-@admin_log_group.command(name="summary")
-@workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Summarize logs across the shared runtime or only the active workspace context.",
-)
-@click.option("--workspace-id", help="Explicit workspace ID override for log filtering")
-@click.option(
-    "--level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
-    help="Filter by log level.",
-)
-@click.option("--logger", "logger_name", help="Filter by logger name")
-@click.option("--source", help="Filter by log source (for example: daemon, stdio)")
-@click.option("--query", help="Case-insensitive text filter across message, logger, and source")
-@click.option("--after", type=float, help="Only include logs at or after this UNIX timestamp")
-@click.option("--before", type=float, help="Only include logs at or before this UNIX timestamp")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
-def admin_log_summary(
+def _admin_log_summary_command_action(
     workspace_root: str | None,
     scope: str,
     workspace_id: str | None,
@@ -1686,24 +1704,10 @@ def admin_log_summary(
     before: float | None,
     json_output: bool,
 ) -> None:
-    """Print aggregated runtime log counts."""
     _summarize_logs(workspace_root, scope, workspace_id, level, logger_name, source, query, after, before, json_output)
 
 
-@admin_log_group.command(name="prune")
-@workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Prune logs across the shared runtime or only the active workspace context.",
-)
-@click.option("--workspace-id", help="Explicit workspace ID override for log pruning")
-@click.option("--max-runtime-logs", type=int, help="Keep at most this many recent runtime logs")
-@click.option("--max-log-age-days", type=int, help="Delete runtime logs older than this many days")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def admin_log_prune(
+def _admin_log_prune_command_action(
     workspace_root: str | None,
     scope: str,
     workspace_id: str | None,
@@ -1711,8 +1715,122 @@ def admin_log_prune(
     max_log_age_days: int | None,
     json_output: bool,
 ) -> None:
-    """Prune runtime logs using explicit or configured retention limits."""
     _prune_logs(workspace_root, scope, workspace_id, max_runtime_logs, max_log_age_days, json_output)
+
+
+_admin_log_command_family = build_admin_log_command_family(
+    workspace_root_option,
+    show_logs=_admin_log_list_command_action,
+    summarize_logs=_admin_log_summary_command_action,
+    prune_logs=_admin_log_prune_command_action,
+)
+admin_log_group = _admin_log_command_family.group
+admin_logs = _admin_log_command_family.list_command
+admin_log_summary = _admin_log_command_family.summary_command
+admin_log_prune = _admin_log_command_family.prune_command
+admin_group.add_command(admin_log_group)
+
+
+def _admin_task_list_command_action(
+    workspace_root: str | None,
+    status: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    _list_tasks(workspace_root, status, limit, json_output)
+
+
+def _admin_task_recent_runs_command_action(
+    workspace_root: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    def _run(service: ManagementService) -> None:
+        payload = service.list_recent_agent_runs(
+            limit=limit,
+            detail_level="full",
+        )
+        if json_output:
+            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
+            return
+        _render_recent_agent_runs_table(payload)
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+def _admin_task_sampling_summary_command_action(
+    workspace_root: str | None,
+    limit: int,
+    json_output: bool,
+) -> None:
+    def _run(service: ManagementService) -> None:
+        summary = service.get_task_sampling_summary(limit=limit)
+        if json_output:
+            click.echo(json.dumps(summary.model_dump(), sort_keys=True))
+            return
+        _render_sampling_summary(summary)
+
+    _with_management_service(workspace_root, _run, workspace_id=None)
+
+
+def _admin_task_cancel_command_action(
+    task_id: str,
+    workspace_root: str | None,
+    reason: str,
+    json_output: bool,
+) -> None:
+    _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
+
+
+def _admin_task_show_command_action(task_id: str, workspace_root: str | None, json_output: bool) -> None:
+    _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
+
+
+_admin_task_command_family = build_admin_task_command_family(
+    workspace_root_option,
+    list_tasks=_admin_task_list_command_action,
+    list_recent_task_runs=_admin_task_recent_runs_command_action,
+    show_task_sampling_summary=_admin_task_sampling_summary_command_action,
+    cancel_task=_admin_task_cancel_command_action,
+    show_task=_admin_task_show_command_action,
+)
+admin_task_group = _admin_task_command_family.group
+admin_list_tasks_command = _admin_task_command_family.list_command
+admin_recent_task_runs_command = _admin_task_command_family.recent_runs_command
+admin_task_sampling_summary_command = _admin_task_command_family.sampling_summary_command
+admin_cancel_task_command = _admin_task_command_family.cancel_command
+admin_show_task_command = _admin_task_command_family.show_command
+admin_group.add_command(admin_task_group)
+
+
+def _admin_search_health_command_action(workspace_root: str | None, json_output: bool) -> None:
+    _show_search_health(workspace_root, json_output)
+
+
+def _admin_search_repair_command_action(workspace_root: str | None, json_output: bool) -> None:
+    _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
+
+
+def _admin_search_debug_command_action(
+    workspace_root: str | None,
+    query: str,
+    limit: int,
+    json_output: bool,
+) -> None:
+    _run_or_exit(lambda: _show_search_debug(workspace_root, query, limit, json_output))
+
+
+_admin_search_command_family = build_admin_search_command_family(
+    workspace_root_option,
+    show_search_health=_admin_search_health_command_action,
+    repair_search_index=_admin_search_repair_command_action,
+    show_search_debug=_admin_search_debug_command_action,
+)
+admin_search_group = _admin_search_command_family.group
+search_health_command = _admin_search_command_family.health_command
+search_repair_command = _admin_search_command_family.repair_command
+search_debug_command = _admin_search_command_family.debug_command
+admin_group.add_command(admin_search_group)
 
 
 @admin_group.command(name="install")
@@ -1780,206 +1898,6 @@ def hook_runner(workspace_root: str | None) -> None:
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""
     _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
-
-
-@admin_task_group.command(name="list")
-@workspace_root_option
-@click.option("--status", help="Filter by task status")
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of task rows to print")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def admin_list_tasks_command(workspace_root: str | None, status: str | None, limit: int, json_output: bool) -> None:
-    """List queued or running tasks."""
-    _list_tasks(workspace_root, status, limit, json_output)
-
-
-@admin_task_group.command(name="recent-runs")
-@workspace_root_option
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of recent runs to print")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def admin_recent_task_runs_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
-    """Show recent completed background task runs and their sampling metadata."""
-    def _run(service: ManagementService) -> None:
-        payload = service.list_recent_agent_runs(
-            limit=limit,
-            detail_level="full",
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_recent_agent_runs_table(payload)
-
-    _with_management_service(workspace_root, _run, workspace_id=None)
-
-
-@admin_task_group.command(name="sampling-summary")
-@workspace_root_option
-@click.option("--limit", default=50, show_default=True, type=int, help="Maximum number of recent runs to summarize")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of tables")
-def admin_task_sampling_summary_command(workspace_root: str | None, limit: int, json_output: bool) -> None:
-    """Summarize recent selection and ingest grouping strategy usage."""
-    def _run(service: ManagementService) -> None:
-        summary = service.get_task_sampling_summary(limit=limit)
-        if json_output:
-            click.echo(json.dumps(summary.model_dump(), sort_keys=True))
-            return
-        _render_sampling_summary(summary)
-
-    _with_management_service(workspace_root, _run, workspace_id=None)
-
-
-@admin_task_group.command(name="cancel")
-@workspace_root_option
-@click.argument("task_id")
-@click.option("--reason", default="cancelled_by_user", show_default=True, help="Cancellation reason")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def admin_cancel_task_command(task_id: str, workspace_root: str | None, reason: str, json_output: bool) -> None:
-    """Cancel a pending or running task."""
-    _run_or_exit(lambda: _cancel_task(task_id, workspace_root, reason, json_output))
-
-
-@admin_task_group.command(name="show")
-@workspace_root_option
-@click.argument("task_id")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def admin_show_task_command(task_id: str, workspace_root: str | None, json_output: bool) -> None:
-    """Show one task and its persisted run result details."""
-    _run_or_exit(lambda: _show_task(task_id, workspace_root, json_output))
-
-
-@admin_conversation_group.command(name="list")
-@workspace_root_option
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Read conversations across the shared runtime or only the active workspace context.",
-)
-@click.option("--workspace-id", help="Explicit workspace ID override for conversation filtering")
-@click.option("--task-name", help="Filter by task name")
-@click.option("--status", help="Filter by conversation status")
-@click.option("--limit", default=20, show_default=True, type=int, help="Maximum number of conversation rows to print")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def list_conversations_command(
-    workspace_root: str | None,
-    scope: str,
-    workspace_id: str | None,
-    task_name: str | None,
-    status: str | None,
-    limit: int,
-    json_output: bool,
-) -> None:
-    """List recorded AI conversations."""
-    def _run(service: ManagementService) -> None:
-        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
-        payload = service.list_ai_conversations(
-            workspace_id=effective_workspace_id,
-            task_name=task_name,
-            status=status,
-            limit=limit,
-        )
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_ai_conversation_table(payload)
-
-    _with_management_service(workspace_root, _run, workspace_id=None)
-
-
-@admin_conversation_group.command(name="show")
-@workspace_root_option
-@click.argument("request_id")
-@click.option(
-    "--scope",
-    type=click.Choice(["global", "workspace"]),
-    default="global",
-    show_default=True,
-    help="Read matching conversation attempts across the shared runtime or only the active workspace context.",
-)
-@click.option("--workspace-id", help="Explicit workspace ID override for conversation filtering")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def show_conversation_command(
-    request_id: str,
-    workspace_root: str | None,
-    scope: str,
-    workspace_id: str | None,
-    json_output: bool,
-) -> None:
-    """Show all recorded attempts for one AI request ID."""
-    def _run(service: ManagementService) -> None:
-        effective_workspace_id = _resolve_operator_workspace_filter(service, scope=scope, workspace_id=workspace_id)
-        payload = service.list_ai_conversations(workspace_id=effective_workspace_id, request_id=request_id, limit=200)
-        if json_output:
-            click.echo(json.dumps(payload.model_dump(), sort_keys=True))
-            return
-        _render_ai_conversation_table(payload)
-        for conversation in payload.conversations:
-            console.print(f"\n[bold]Request {conversation.request_id} attempt {conversation.attempt}[/]")
-            console.print(f"status={conversation.status} pid={conversation.subprocess_pid or '-'} task={conversation.task_name or '-'}")
-            console.print("[bold]Prompt[/]")
-            console.print(conversation.prompt_text or "-")
-            console.print("[bold]Response[/]")
-            console.print(conversation.response_text or "-")
-            if conversation.error_text:
-                console.print(f"[red]Error:[/] {conversation.error_text}")
-
-    _with_management_service(workspace_root, _run, workspace_id=None)
-
-
-@admin_search_group.command(name="health")
-@workspace_root_option
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of a table")
-def search_health_command(workspace_root: str | None, json_output: bool) -> None:
-    """Show semantic search health for the current runtime context."""
-    _show_search_health(workspace_root, json_output)
-
-
-@admin_search_group.command(name="repair")
-@workspace_root_option
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def search_repair_command(workspace_root: str | None, json_output: bool) -> None:
-    """Rebuild semantic search embeddings for the current model."""
-    _run_or_exit(lambda: _repair_search_index(workspace_root, json_output))
-
-
-@admin_search_group.command(name="debug")
-@workspace_root_option
-@click.argument("query_parts", nargs=-1, required=True)
-@click.option("--limit", default=5, show_default=True, type=int, help="Maximum number of search results to inspect")
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def search_debug_command(
-    workspace_root: str | None,
-    query_parts: tuple[str, ...],
-    limit: int,
-    json_output: bool,
-) -> None:
-    """Run one search query and print timing/strategy diagnostics."""
-    query = " ".join(part for part in query_parts if part.strip()).strip()
-    if not query:
-        raise click.UsageError("Provide a non-empty query.")
-    _run_or_exit(lambda: _show_search_debug(workspace_root, query, limit, json_output))
-
-
-@admin_agent_group.command(name="run")
-@workspace_root_option
-@click.argument("agent_name", required=False, type=click.Choice(TRIGGERABLE_BACKGROUND_TASK_NAMES))
-@click.option("--all", "run_all", is_flag=True, help="Trigger all background agents")
-@click.option("--force", is_flag=True, help="Enqueue new tasks even if matching tasks are already open")
-def admin_run_agent_command(
-    agent_name: str | None,
-    workspace_root: str | None,
-    run_all: bool,
-    force: bool,
-) -> None:
-    """Trigger one or all background agents for the active workspace."""
-    if run_all:
-        if agent_name is not None:
-            raise click.UsageError("Do not provide an agent name with --all.")
-        _run_or_exit(lambda: _enqueue_all_agents(workspace_root, force))
-        return
-    if agent_name is None:
-        raise click.UsageError("Provide an agent name or pass --all.")
-    _run_or_exit(lambda: _enqueue_agent(agent_name, workspace_root, force))
 
 
 @admin_group.command(name="overview")

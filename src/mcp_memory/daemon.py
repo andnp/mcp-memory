@@ -31,7 +31,7 @@ from mcp_memory.daemon_process import (
 )
 from mcp_memory.daemon_transport import probe_daemon_socket as _probe_daemon_socket
 from mcp_memory.daemon_transport import remove_daemon_socket as _remove_daemon_socket
-from mcp_memory.mcp.runtime import resolve_runtime_spec
+from mcp_memory.mcp.runtime import resolve_global_daemon_bootstrap_spec
 from mcp_memory.process_termination import ProcessTerminationResult as _DaemonTerminationResult
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
@@ -67,7 +67,7 @@ def ensure_daemon_started(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
 ) -> DaemonMetadata:
-    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
@@ -229,18 +229,18 @@ def _confirm_daemon_health(
 def inspect_daemon(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
-) -> tuple[str, DaemonMetadata | None, bool]:
-    spec = resolve_runtime_spec(workspace_root_override, cwd)
+) -> tuple[DaemonMetadata | None, bool]:
+    resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
     metadata = read_daemon_metadata(resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY))
     healthy = metadata is not None and _is_daemon_healthy(metadata)
-    return spec.workspace_id, metadata, healthy
+    return metadata, healthy
 
 
 def stop_daemon(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
 ) -> DaemonStopResult | None:
-    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     metadata = read_daemon_metadata(metadata_path)
     if metadata is None:

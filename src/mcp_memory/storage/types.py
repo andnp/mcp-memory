@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from mcp_memory.config import Config
 
@@ -30,12 +30,8 @@ class StorageBackendResources:
     vector_store: Any
 
 
-class RuntimeSpecLike(Protocol):
-    @property
-    def memory_path(self) -> Path: ...
-
-    @property
-    def config(self) -> Config: ...
-
-    @property
-    def workspace_id(self) -> str: ...
+@dataclass(frozen=True)
+class StorageBootstrapSpec:
+    memory_path: Path
+    config: Config
+    workspace_id: str | None

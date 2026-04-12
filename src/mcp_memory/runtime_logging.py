@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
 
-from mcp_memory.mcp.runtime import resolve_runtime_spec
+from mcp_memory.mcp.runtime import resolve_workspace_runtime_spec
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresStructuredLogHandler
 from mcp_memory.utils.db import DatabaseManager
@@ -74,7 +74,7 @@ def configure_workspace_logging(
     source: str,
 ):
     _configure_root_logging(debug, handlers=[logging.NullHandler()])
-    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    spec = resolve_workspace_runtime_spec(workspace_root_override, cwd)
     handlers: list[logging.Handler] = []
     if console_output:
         handlers.append(RichHandler(rich_tracebacks=True, console=_LOG_CONSOLE))

@@ -26,7 +26,7 @@ from mcp_memory.daemon_transport import DaemonZmqServer
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
 from mcp_memory.management.service import ManagementService
-from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_runtime_spec
+from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_global_daemon_bootstrap_spec
 from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
 
 
@@ -198,7 +198,7 @@ def create_daemon_app(
     *,
     enable_idle_shutdown: bool = False,
 ):
-    spec = resolve_runtime_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
     daemon_host = host or spec.config.daemon.host
     if port is None:
         daemon_port = spec.config.daemon.port
@@ -227,7 +227,7 @@ def create_daemon_app(
         if worker is not None:
             await worker.start()
 
-        hook_service = HookReminderService(runtime.db_manager, runtime.workspace_id)
+        hook_service = HookReminderService(runtime.db_manager, None)
 
         zmq_server = DaemonZmqServer(
             context_factory=lambda arguments: _context_for_request(runtime, arguments),

@@ -19,7 +19,7 @@ from .postgres import (
 from .postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION, PostgresMigration, apply_postgres_migrations
 from .session import ConnectionLease, SessionManager
 from .sqlite import build_sqlite_runtime_components
-from .types import PostgresBackendNotImplementedError, RuntimeSpecLike, StorageBackendResources
+from .types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
 
 __all__ = [
     "PostgresBackendNotImplementedError",
@@ -34,9 +34,9 @@ __all__ = [
     "PostgresRuntimeLogRepository",
     "PostgresStructuredLogHandler",
     "PostgresTaskExecutionAttemptRepository",
-    "RuntimeSpecLike",
     "SessionManager",
     "StorageBootstrapState",
+    "StorageBootstrapSpec",
     "StorageBackendResources",
     "UnsupportedPostgresRuntimeComponent",
     "apply_postgres_migrations",

@@ -67,7 +67,7 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "mcp_memory.cli.inspect_daemon",
-        lambda workspace_root, cwd=None: ("workspace-a", FakeMetadata(), True),
+        lambda workspace_root, cwd=None: (FakeMetadata(), True),
     )
 
     result = runner.invoke(main, ["daemon", "status"])
@@ -78,6 +78,7 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
     assert "ipc:///tmp/mcp-memory.sock" in result.output
     assert "Daemon scope:" in result.output
     assert "global" in result.output
+    assert "Workspace context:" not in result.output
 
 
 def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:

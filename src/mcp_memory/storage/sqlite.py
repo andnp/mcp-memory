@@ -12,14 +12,14 @@ from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
+from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
-from mcp_memory.storage.types import RuntimeSpecLike, StorageBackendResources
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
 
 
 def build_sqlite_runtime_components(
-    spec: RuntimeSpecLike,
+    spec: StorageBootstrapSpec,
     *,
     embedder: Any,
     enable_background_repair_queue: bool,
