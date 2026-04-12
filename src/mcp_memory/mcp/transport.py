@@ -11,6 +11,8 @@ from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
 ToolService = Callable[[ApplicationContext, dict], dict]
+ToolServiceResolver = Callable[[], dict[str, ToolService]]
+ToolSuccessRecorder = Callable[[ApplicationContext, str, dict], None]
 
 
 def text_response(payload: dict) -> list[TextContent]:
@@ -32,6 +34,48 @@ def _call_service_sync(service: ToolService, ctx: ApplicationContext, arguments:
 
 async def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
     return await asyncio.to_thread(_call_service_sync, service, ctx, arguments)
+
+
+def _runtime_not_initialized_response(name: str) -> list[TextContent]:
+    return text_response(
+        {
+            "status": "error",
+            "error": "runtime_not_initialized",
+            "tool": name,
+        }
+    )
+
+
+def _unknown_tool_response(name: str, arguments: dict) -> list[TextContent]:
+    return text_response(
+        {
+            "status": "error",
+            "error": "unknown_tool",
+            "tool": name,
+            "arguments": arguments,
+        }
+    )
+
+
+async def _dispatch_tool(
+    ctx: object,
+    name: str,
+    arguments: dict,
+    *,
+    service_resolver: ToolServiceResolver,
+    on_success: ToolSuccessRecorder | None = None,
+) -> list[TextContent]:
+    if not isinstance(ctx, ApplicationContext):
+        return _runtime_not_initialized_response(name)
+
+    service = service_resolver().get(name)
+    if service is None:
+        return _unknown_tool_response(name, arguments)
+
+    response = await call_service(service, ctx, arguments)
+    if on_success is not None:
+        on_success(ctx, name, arguments)
+    return response
 
 
 def tool_services() -> dict[str, ToolService]:
@@ -118,27 +162,12 @@ async def dispatch_memory_tool(
     name: str,
     arguments: dict,
 ) -> list[TextContent]:
-    if not isinstance(ctx, ApplicationContext):
-        return text_response(
-            {
-                "status": "error",
-                "error": "runtime_not_initialized",
-                "tool": name,
-            }
-        )
-
-    service = tool_services().get(name)
-    if service is None:
-        return text_response(
-            {
-                "status": "error",
-                "error": "unknown_tool",
-                "tool": name,
-                "arguments": arguments,
-            }
-        )
-
-    return await call_service(service, ctx, arguments)
+    return await _dispatch_tool(
+        ctx,
+        name,
+        arguments,
+        service_resolver=tool_services,
+    )
 
 
 async def dispatch_internal_memory_tool(
@@ -146,29 +175,13 @@ async def dispatch_internal_memory_tool(
     name: str,
     arguments: dict,
 ) -> list[TextContent]:
-    if not isinstance(ctx, ApplicationContext):
-        return text_response(
-            {
-                "status": "error",
-                "error": "runtime_not_initialized",
-                "tool": name,
-            }
-        )
-
-    service = internal_tool_services().get(name)
-    if service is None:
-        return text_response(
-            {
-                "status": "error",
-                "error": "unknown_tool",
-                "tool": name,
-                "arguments": arguments,
-            }
-        )
-
-    response = await call_service(service, ctx, arguments)
-    _record_internal_tool_call(ctx, name, arguments)
-    return response
+    return await _dispatch_tool(
+        ctx,
+        name,
+        arguments,
+        service_resolver=internal_tool_services,
+        on_success=_record_internal_tool_call,
+    )
 
 
 def _record_internal_tool_call(ctx: ApplicationContext, name: str, arguments: dict[str, object]) -> None:
