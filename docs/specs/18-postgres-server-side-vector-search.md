@@ -1,15 +1,20 @@
 # Architecture Decision Record: Server-Side Semantic Search for Hosted Postgres
 
-**Status:** Proposed direction
+**Status:** Active, partially implemented
 
 ## 1. Decision
 
-`mcp-memory` should move shared-mode Postgres semantic search toward **server-side ranking** instead of the current client-side fetch-and-score path.
+`mcp-memory` now supports **capability-gated server-side semantic ranking** for shared-mode Postgres instead of treating that direction as future-only.
 
-The target implementation should use `pgvector` when it is available, while preserving a safe fallback to the current Python scoring path when the extension or schema support is missing.
+The current implementation uses `pgvector` when it is available and the schema exposes the expected vector column, while preserving a safe fallback to the Python fetch/decode/score path when those capabilities are missing.
 
-The rollout should be phased.
-The first implementation slice should add **capability detection and diagnostics only**, without changing search behavior.
+The rollout remains phased, but the first slices are already in code:
+
+1. capability detection
+2. diagnostics that disclose the active search mode
+3. server-side ranking when the backend is ready
+
+Further work is now about backfill/tuning/operator visibility, not about inventing the feature from scratch.
 
 ## 2. Why this decision exists
 
@@ -33,7 +38,11 @@ When Postgres is internet-hosted, the system pays both database work and transfe
 
 ## 3. Current implementation shape
 
-The current shared-mode semantic path stores embeddings in `embeddings.embedding_json` and performs ranking outside the database.
+The current shared-mode semantic path has two active modes.
+
+### 3.1 Fallback mode
+
+Fallback mode stores embeddings in `embeddings.embedding_json` and performs ranking outside the database.
 
 In simplified form, the current flow is:
 
@@ -41,7 +50,27 @@ $$
 T_{semantic} \approx T_{db\_fetch\_rows} + T_{network\_transfer} + T_{client\_decode} + T_{client\_score} + T_{client\_sort}
 $$
 
-This is safe and portable, but it is the wrong shape for hosted Postgres once semantic fallback becomes broad.
+This remains the correct fallback shape when `pgvector` support is unavailable.
+
+### 3.2 Capability-gated server-side mode
+
+When both of the following are true:
+
+- the `vector` extension is installed
+- the `embeddings` table exposes `embedding_vector`
+
+the runtime uses server-side ranking in `PostgresVectorStore.search()` and reports:
+
+- `search_mode = "server_side_pgvector"`
+- `pgvector_extension_installed = true`
+- `embedding_vector_column_present = true`
+- `server_side_vector_search_available = true`
+
+When those conditions are not met, the runtime reports:
+
+- `search_mode = "client_python_fallback"`
+
+This means the product already ships a safe dual path rather than a purely aspirational plan.
 
 ## 4. Goals
 
@@ -65,7 +94,7 @@ The first rollout is **not** trying to deliver:
 
 ### 6.1 Preferred path: `pgvector`
 
-The preferred end state is:
+The currently shipped preferred path is:
 
 1. store embeddings in a native vector column on Postgres
 2. issue similarity-ranking queries directly in SQL
@@ -81,54 +110,63 @@ $$
 where $d$ is a vector distance supported by `pgvector`.
 
 The important architectural change is not the exact distance function.
-It is that ranking moves from the client to the database.
+It is that ranking moves from the client to the database when the backend advertises the required capability.
 
 ### 6.2 Fallback path
 
-If `pgvector` is not installed, or the schema does not yet contain the required vector column, the system should continue using the existing client-side JSON fetch/decode/score/sort path.
+If `pgvector` is not installed, or the schema does not yet contain the required vector column, the system continues using the existing client-side JSON fetch/decode/score/sort path.
 
 That fallback must remain correct and fully supported throughout rollout.
 
-## 7. Rollout plan
+## 7. Rollout status and remaining plan
 
 ### 7.1 Slice 1 — capability detection and diagnostics
 
-Add a small, cached capability probe in the Postgres vector store that answers:
+**Status:** shipped
+
+The Postgres vector store now includes a cached capability probe that answers:
 
 - is the `vector` extension installed?
 - does the `embeddings` table expose the expected vector column?
 - which search mode is currently active?
 
-This slice is intentionally behavior-preserving.
-It exists to make the next rollout steps measurable and safer.
+This slice is no longer behavior-preserving in isolation because later slices now build on it in the shipped runtime.
 
 ### 7.2 Slice 2 — additive schema support
 
+**Status:** partially shipped
+
 Add a migration that introduces a nullable vector column for embeddings, along with any needed indexes.
 
-This migration should be additive.
-Existing JSON embedding storage should remain available during transition.
+This remains additive.
+The runtime still preserves JSON embedding storage as the portable fallback representation.
 
 ### 7.3 Slice 3 — dual-write / repair path
+
+**Status:** partially shipped
 
 When vector storage is available, write both:
 
 - the existing JSON embedding payload
 - the new vector column
 
-Backfill or repair older rows incrementally using the existing operational repair mechanisms rather than a risky one-shot migration.
+The current code already dual-writes `embedding_json` plus `embedding_vector` when server-side vector search is available. Broader backfill/repair remains the follow-up concern.
 
 ### 7.4 Slice 4 — server-side ranking path
 
-Teach `PostgresVectorStore.search()` to use server-side similarity ranking when the capability probe says the backend is ready.
+**Status:** shipped behind capability checks
 
-Expected behavior:
+`PostgresVectorStore.search()` now uses server-side similarity ranking when the capability probe says the backend is ready.
+
+Current behavior:
 
 - SQL filtering remains authoritative
 - SQL ranking returns only the top limited rows
-- Python fallback remains available if the capability probe fails or is disabled
+- Python fallback remains available if the capability probe fails or the backend is not ready
 
 ### 7.5 Slice 5 — operator visibility and tuning
+
+**Status:** partially shipped
 
 Add diagnostics and observability that make it easy to answer:
 
@@ -137,7 +175,7 @@ Add diagnostics and observability that make it easy to answer:
 - how many candidate rows are being ranked?
 - where is time spent?
 
-Optional later work can evaluate ANN indexes and operator controls.
+Search diagnostics already expose the active semantic mode and capability state. Optional later work can evaluate ANN indexes, richer operator controls, and comparative telemetry.
 
 ## 8. Operational constraints
 
@@ -156,29 +194,31 @@ Optional later work can evaluate ANN indexes and operator controls.
 
 ## 10. Consequences
 
-This decision gives the product a clear path to reducing WAN-sensitive semantic-search latency without forcing an all-or-nothing storage migration.
+This decision now gives the product an active path—not just a future direction—for reducing WAN-sensitive semantic-search latency without forcing an all-or-nothing storage migration.
 
-The trade-off is a temporary dual-path system:
+The trade-off is a dual-path system:
 
 - one path optimized for portability and compatibility
 - one path optimized for hosted Postgres performance
 
 That complexity is acceptable because the current performance problem is real and the phased rollout keeps risk low.
 
-## 11. First implementation slice
+## 11. Current baseline
 
-The first code change associated with this ADR should do only the following:
+The current shipped baseline already does the following:
 
 1. add cached capability detection to `PostgresVectorStore`
 2. surface the capability state in search diagnostics
-3. explicitly report that the current mode is still `client_python_fallback`
+3. explicitly report whether the current mode is `client_python_fallback` or `server_side_pgvector`
+4. use server-side ranking when the backend is ready
+5. preserve `embedding_json` fallback storage even when vector writes are enabled
 
-This provides the minimum scaffolding needed before changing behavior, migrations, or write paths.
+This means the remaining work is about migration hygiene, backfill/repair, and performance/observability refinement.
 
 ## 12. Follow-up work
 
-1. add additive vector-column migration support
-2. define dual-write behavior for newly written embeddings
-3. integrate background repair/backfill for older rows
-4. switch `search()` to server-side ranking when capability checks pass
-5. expand telemetry to compare fallback and server-side paths under real workloads
+1. document the current additive migration/vector-column requirement more explicitly in operator docs
+2. integrate background repair/backfill for older rows
+3. expand telemetry to compare fallback and server-side paths under real workloads
+4. evaluate ANN/index tuning once real hosted workloads justify it
+5. decide when the fallback path can be considered secondary rather than primary compatibility behavior
