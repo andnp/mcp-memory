@@ -23,6 +23,7 @@ from mcp_memory.cli_admin_agent_commands import build_admin_agent_command_family
 from mcp_memory.cli_admin_conversation_commands import build_admin_conversation_command_family
 from mcp_memory.cli_admin_dashboard_commands import build_admin_dashboard_command_family
 from mcp_memory.cli_admin_log_commands import build_admin_log_command_family
+from mcp_memory.cli_admin_operator_commands import build_admin_operator_command_cluster
 from mcp_memory.cli_admin_search_commands import build_admin_search_command_family
 from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
 from mcp_memory.cli_daemon_commands import build_daemon_command_family
@@ -1853,6 +1854,37 @@ admin_dashboard_build_command = _admin_dashboard_command_family.build_command
 admin_group.add_command(admin_dashboard_group)
 
 
+def _admin_overview_command_action(
+    workspace_root: str | None,
+    watch: bool,
+    interval: float,
+    verbose: bool,
+) -> None:
+    _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
+
+
+def _admin_health_command_action(workspace_root: str | None, json_output: bool) -> None:
+    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, json_output))
+
+
+def _admin_monitor_command_action(workspace_root: str | None, interval: float) -> None:
+    _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
+
+
+_admin_operator_command_cluster = build_admin_operator_command_cluster(
+    workspace_root_option,
+    show_overview=_admin_overview_command_action,
+    show_health=_admin_health_command_action,
+    open_monitor=_admin_monitor_command_action,
+)
+admin_overview_command = _admin_operator_command_cluster.overview_command
+admin_health_command = _admin_operator_command_cluster.health_command
+admin_monitor_command = _admin_operator_command_cluster.monitor_command
+admin_group.add_command(admin_overview_command)
+admin_group.add_command(admin_health_command)
+admin_group.add_command(admin_monitor_command)
+
+
 @admin_group.command(name="install")
 @click.option(
     "--tool",
@@ -1918,44 +1950,6 @@ def hook_runner(workspace_root: str | None) -> None:
 def prefetch_model(workspace_root: str | None) -> None:
     """Download and cache the configured local embedding model in the foreground."""
     _run_or_exit(lambda: _prefetch_embedding_model(workspace_root))
-
-
-@admin_group.command(name="overview")
-@workspace_root_option
-@click.option("--watch", is_flag=True, help="Refresh the stats view continuously")
-@click.option(
-    "--interval",
-    default=2.0,
-    show_default=True,
-    type=click.FloatRange(min=0.1),
-    help="Seconds between watch refreshes",
-)
-@click.option("--verbose", is_flag=True, help="Show detailed recent agent status lines")
-def admin_overview_command(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:
-    """Print background task and memory statistics."""
-    _run_or_exit(lambda: _show_stats_command(workspace_root, watch, interval, verbose))
-
-
-@admin_group.command(name="health")
-@workspace_root_option
-@click.option("--json", "json_output", is_flag=True, help="Print JSON instead of human-readable output")
-def admin_health_command(workspace_root: str | None, json_output: bool) -> None:
-    """Print an AI-friendly operator health snapshot."""
-    _run_or_exit(lambda: _show_operator_health_snapshot(workspace_root, json_output))
-
-
-@admin_group.command(name="monitor")
-@workspace_root_option
-@click.option(
-    "--interval",
-    default=2.0,
-    show_default=True,
-    type=click.FloatRange(min=0.1),
-    help="Seconds between automatic refreshes",
-)
-def admin_monitor_command(workspace_root: str | None, interval: float) -> None:
-    """Open the live operations TUI."""
-    _run_or_exit(lambda: run_monitor_tui(workspace_root, interval))
 
 
 @click.command(name="import-markdown")
