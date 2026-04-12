@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 import mcp_memory.core.tasks as task_queue_module
 import time
 
@@ -11,6 +12,10 @@ from mcp_memory.management.models import (
     SearchHealthPayload,
 )
 from mcp_memory.management.reporting_queries import fetch_running_task_attempt_rows
+
+
+type RunningTaskAttemptRowFetcher = Callable[[object], Sequence[Mapping[str, object]]]
+type ProcessAliveChecker = Callable[[int], bool]
 
 
 def _coerce_float(value: object) -> float:
@@ -112,8 +117,10 @@ def build_execution_attempt_health(
     *,
     stale_after_seconds: float = 60.0,
     now: float | None = None,
+    fetch_running_attempt_rows: RunningTaskAttemptRowFetcher = fetch_running_task_attempt_rows,
+    process_is_alive: ProcessAliveChecker = task_queue_module._is_process_alive,
 ) -> ExecutionAttemptHealthPayload:
-    rows = fetch_running_task_attempt_rows(db_manager)
+    rows = fetch_running_attempt_rows(db_manager)
     if not rows:
         return ExecutionAttemptHealthPayload(stale_after_seconds=stale_after_seconds)
 
@@ -149,7 +156,7 @@ def build_execution_attempt_health(
 
         if subprocess_pid is None:
             continue
-        if task_queue_module._is_process_alive(_coerce_int(subprocess_pid)):
+        if process_is_alive(_coerce_int(subprocess_pid)):
             live_subprocess_count += 1
         else:
             dead_subprocess_count += 1
