@@ -17,6 +17,7 @@ GLOBAL_ONLY_ENDPOINTS = frozenset({
 
 GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS = frozenset({
     "/api/metrics/nerd",
+    "/api/quality-cleanup",
     "/api/selector-stats",
     "/api/tasks",
     "/api/memories",

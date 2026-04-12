@@ -499,6 +499,74 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_management_api_exposes_quality_cleanup_candidates(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    now = time.time() + 120.0
+
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    try:
+        assert runtime.repository is not None
+        assert runtime.db_manager is not None
+        assert runtime.workspace_id is not None
+        candidate = runtime.repository.create_memory(
+            title="Cleanup candidate",
+            content="Short observation that still needs cleanup.",
+            workspace_ids=[runtime.workspace_id],
+            memory_type="observation",
+            summary="Covers quality follow-up work.",
+            created_at=datetime.fromtimestamp(now - 200.0, tz=UTC).isoformat(),
+            updated_at=datetime.fromtimestamp(now - 40.0, tz=UTC).isoformat(),
+        )
+        assert candidate is not None
+        runtime.db_manager.get_connection().executemany(
+            """
+            INSERT INTO memory_tool_events (
+                invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text,
+                result_rank, result_count, duration_ms, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("quality-search-1", runtime.workspace_id, "operator", "search", None, "quality", None, 1, 40.0, now - 30.0),
+                ("quality-search-1", runtime.workspace_id, "operator", "search", candidate.id, "quality", 1, 1, 40.0, now - 30.0),
+                ("quality-search-2", runtime.workspace_id, "operator", "search", None, "quality", None, 1, 41.0, now - 20.0),
+                ("quality-search-2", runtime.workspace_id, "operator", "search", candidate.id, "quality", 1, 1, 41.0, now - 20.0),
+                ("quality-search-3", runtime.workspace_id, "operator", "search", None, "quality", None, 1, 42.0, now - 10.0),
+                ("quality-search-3", runtime.workspace_id, "operator", "search", candidate.id, "quality", 1, 1, 42.0, now - 10.0),
+            ],
+        )
+        runtime.db_manager.get_connection().commit()
+    finally:
+        runtime.close()
+
+    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    async with app.router.lifespan_context(app):
+        payload = await _request_json(
+            app.state.metadata,
+            "/api/quality-cleanup",
+            {"window_hours": 24, "bucket_minutes": 60, "now": now, "limit": 5},
+        )
+
+    assert payload["total_candidates"] == 1
+    assert len(payload["candidates"]) == 1
+    candidate_payload = payload["candidates"][0]
+    assert candidate_payload["title"] == "Cleanup candidate"
+    assert [criterion["key"] for criterion in candidate_payload["criteria"]] == [
+        "low_conversion",
+        "generic_summary_count",
+        "untagged_observation_count",
+    ]
+    assert [recommendation["key"] for recommendation in candidate_payload["recommendations"]] == [
+        "low_conversion",
+        "generic_summary_count",
+        "untagged_observation_count",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_management_api_health_and_overview_include_cache_metrics(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

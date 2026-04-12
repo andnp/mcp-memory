@@ -44,6 +44,16 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=200, minimum=1, maximum=500) or 200,
             now=optional_float(payload, "now"),
         ).model_dump()
+    if path == "/api/quality-cleanup":
+        effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
+        return routes.service.list_quality_cleanup_candidates(
+            scope="global" if effective_workspace_id is None else None,
+            workspace_id=effective_workspace_id,
+            window_hours=optional_int(payload, "window_hours", default=24, minimum=1, maximum=24 * 30) or 24,
+            bucket_minutes=optional_int(payload, "bucket_minutes", default=60, minimum=1, maximum=24 * 60) or 60,
+            now=optional_float(payload, "now"),
+            limit=optional_int(payload, "limit", default=_DEFAULT_LIST_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT) or _DEFAULT_LIST_LIMIT,
+        ).model_dump()
     if path == "/api/tasks":
         effective_workspace_id = _resolve_endpoint_workspace_id(routes, path, payload)
         return routes.service.list_tasks(
