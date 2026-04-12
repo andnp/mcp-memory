@@ -17,6 +17,12 @@ from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
+from tests.small.work_item_repository_contract import (
+    assert_claim_batch_orders_ready_items,
+    assert_enqueue_unique_deduplicates_idempotency_keys,
+    assert_heartbeat_extends_leases_and_allows_expired_reclaim,
+    assert_release_defer_and_complete_items,
+)
 
 
 pytestmark = pytest.mark.small
@@ -257,6 +263,32 @@ class FakePrimitiveCursor:
                     row["lease_owner"] = None
                     row["lease_expires_at"] = None
                     row["last_error"] = None
+                    updated = 1
+            self.rowcount = updated
+            return
+        if normalized.startswith("UPDATE work_items SET status = %s, updated_at = %s, available_at = %s"):
+            item_id = str(arguments[4])
+            updated = 0
+            for row in self._state.work_items:
+                if str(row["id"]) == item_id and str(row["status"]) == str(arguments[5]):
+                    row["status"] = str(arguments[0])
+                    row["updated_at"] = _as_float(arguments[1])
+                    row["available_at"] = _as_float(arguments[2])
+                    row["lease_owner"] = None
+                    row["lease_expires_at"] = None
+                    row["last_error"] = None if arguments[3] is None else str(arguments[3])
+                    updated = 1
+            self.rowcount = updated
+            return
+        if normalized.startswith("UPDATE work_items SET status = %s, updated_at = %s, lease_owner = NULL, lease_expires_at = NULL"):
+            item_id = str(arguments[2])
+            updated = 0
+            for row in self._state.work_items:
+                if str(row["id"]) == item_id and str(row["status"]) == str(arguments[3]):
+                    row["status"] = str(arguments[0])
+                    row["updated_at"] = _as_float(arguments[1])
+                    row["lease_owner"] = None
+                    row["lease_expires_at"] = None
                     updated = 1
             self.rowcount = updated
             return
@@ -794,7 +826,31 @@ def test_postgres_system1_journal_records_and_moves_claims_to_recoverable() -> N
     assert journal.get_latest_thought_timestamp(_ALL_WORKSPACES) == pytest.approx(entry_two.timestamp)
 
 
-def test_postgres_work_item_repository_claims_compatible_batches_and_completes_items() -> None:
+def test_postgres_work_item_repository_deduplicates_idempotency_keys() -> None:
+    assert_enqueue_unique_deduplicates_idempotency_keys(
+        lambda: PostgresWorkItemRepository(FakePrimitiveSessionManager())
+    )
+
+
+def test_postgres_work_item_repository_claim_batch_orders_ready_items() -> None:
+    assert_claim_batch_orders_ready_items(
+        lambda: PostgresWorkItemRepository(FakePrimitiveSessionManager())
+    )
+
+
+def test_postgres_work_item_repository_heartbeat_and_reclaim_share_backend_contract() -> None:
+    assert_heartbeat_extends_leases_and_allows_expired_reclaim(
+        lambda: PostgresWorkItemRepository(FakePrimitiveSessionManager())
+    )
+
+
+def test_postgres_work_item_repository_release_defer_and_complete_share_backend_contract() -> None:
+    assert_release_defer_and_complete_items(
+        lambda: PostgresWorkItemRepository(FakePrimitiveSessionManager())
+    )
+
+
+def test_postgres_work_item_repository_claims_compatible_batches_across_families() -> None:
     session_manager = FakePrimitiveSessionManager()
     repository = PostgresWorkItemRepository(session_manager)
 
@@ -805,25 +861,16 @@ def test_postgres_work_item_repository_claims_compatible_batches_and_completes_i
         workspace_id="workspace-a",
         priority=10,
         available_at=5.0,
-        idempotency_key="dedupe-1",
+        idempotency_key="compatible-1",
     )
-    duplicate, duplicate_created = repository.enqueue_unique(
-        family_key="memory_tagging",
-        execution_lane=EXECUTION_LANE_DETERMINISTIC,
-        payload={"memory_id": "m-1"},
-        workspace_id="workspace-a",
-        priority=99,
-        available_at=6.0,
-        idempotency_key="dedupe-1",
-    )
-    second, _ = repository.enqueue_unique(
+    second, second_created = repository.enqueue_unique(
         family_key="graph_link_review",
         execution_lane=EXECUTION_LANE_DETERMINISTIC,
         payload={"memory_id": "m-2"},
         workspace_id="workspace-a",
         priority=20,
         available_at=5.0,
-        idempotency_key="dedupe-2",
+        idempotency_key="compatible-2",
     )
 
     claimed = repository.claim_compatible_batch(
@@ -834,16 +881,12 @@ def test_postgres_work_item_repository_claims_compatible_batches_and_completes_i
         workspace_id="workspace-a",
         now=10.0,
     )
-    heartbeated = repository.heartbeat_item(first.id, lease_owner="worker-a", heartbeated_at=12.0)
-    completed = repository.complete_item(first.id, completed_at=15.0)
 
     assert created is True
-    assert duplicate_created is False
-    assert duplicate.id == first.id
+    assert second_created is True
     assert [item.id for item in claimed] == [first.id, second.id]
-    assert heartbeated.lease_expires_at == pytest.approx(12.0 + 1800.0)
-    assert completed.status == "completed"
-    assert completed.completed_at == pytest.approx(15.0)
+    assert [item.status for item in claimed] == ["running", "running"]
+    assert [item.lease_owner for item in claimed] == ["worker-a", "worker-a"]
 
 
 def test_postgres_embedding_repair_queue_tracks_backlog_and_prunes_completed_items() -> None:

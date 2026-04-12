@@ -41,6 +41,12 @@ from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
+from tests.small.work_item_repository_contract import (
+    assert_claim_batch_orders_ready_items,
+    assert_enqueue_unique_deduplicates_idempotency_keys,
+    assert_heartbeat_extends_leases_and_allows_expired_reclaim,
+    assert_release_defer_and_complete_items,
+)
 
 
 pytestmark = pytest.mark.medium
@@ -194,6 +200,19 @@ def test_postgres_integration_bootstraps_schema_and_exercises_runtime_primitives
     assert [item.id for item in claimed_repairs] == [repair_item.id]
     assert completed_repair.status == "completed"
     assert [memory_id for memory_id, _score in ranked] == ["memory-1", "memory-2"]
+
+
+def test_postgres_integration_work_item_repository_matches_shared_contract(postgres_storage_config) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        def make_repository() -> PostgresWorkItemRepository:
+            return PostgresWorkItemRepository(manager)
+
+        assert_enqueue_unique_deduplicates_idempotency_keys(make_repository)
+        assert_claim_batch_orders_ready_items(make_repository)
+        assert_heartbeat_extends_leases_and_allows_expired_reclaim(make_repository)
+        assert_release_defer_and_complete_items(make_repository)
 
 
 def test_postgres_search_projection_updates_with_memory_changes(postgres_storage_config) -> None:

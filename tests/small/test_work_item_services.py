@@ -13,9 +13,39 @@ from mcp_memory.work_item_store import (
     SQLiteWorkItemRepository,
     WORK_FAMILY_MEMORY_TAGGING,
 )
+from tests.small.work_item_repository_contract import (
+    assert_claim_batch_orders_ready_items,
+    assert_enqueue_unique_deduplicates_idempotency_keys,
+    assert_heartbeat_extends_leases_and_allows_expired_reclaim,
+    assert_release_defer_and_complete_items,
+)
 
 
 pytestmark = pytest.mark.small
+
+
+def test_sqlite_work_item_repository_deduplicates_idempotency_keys(db_manager) -> None:
+    assert_enqueue_unique_deduplicates_idempotency_keys(
+        lambda: SQLiteWorkItemRepository(db_manager)
+    )
+
+
+def test_sqlite_work_item_repository_claim_batch_orders_ready_items(db_manager) -> None:
+    assert_claim_batch_orders_ready_items(
+        lambda: SQLiteWorkItemRepository(db_manager)
+    )
+
+
+def test_sqlite_work_item_repository_heartbeat_and_reclaim_share_backend_contract(db_manager) -> None:
+    assert_heartbeat_extends_leases_and_allows_expired_reclaim(
+        lambda: SQLiteWorkItemRepository(db_manager)
+    )
+
+
+def test_sqlite_work_item_repository_release_defer_and_complete_share_backend_contract(db_manager) -> None:
+    assert_release_defer_and_complete_items(
+        lambda: SQLiteWorkItemRepository(db_manager)
+    )
 
 
 def _build_ctx(db_manager) -> ApplicationContext:
