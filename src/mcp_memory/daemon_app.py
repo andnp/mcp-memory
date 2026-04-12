@@ -9,7 +9,7 @@ import sys
 import time
 from contextlib import suppress
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,13 @@ _IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
+
+
+@dataclass(frozen=True)
+class _RequestScope:
+    session_id: str | None = None
+    workspace_id: str | None = None
+    workspace_root: Path | None = None
 
 
 def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
@@ -230,7 +237,10 @@ def create_daemon_app(
         hook_service = HookReminderService(runtime.db_manager, None)
 
         zmq_server = DaemonZmqServer(
-            context_factory=lambda arguments: _context_for_request(runtime, arguments),
+            context_factory=lambda arguments: _apply_request_scope_to_context(
+                runtime,
+                _request_scope_for_arguments(arguments),
+            ),
             hook_handlers={
                 "/api/hooks/session-start": lambda arguments: _handle_session_start(app, runtime, hook_service, arguments),
                 "/api/hooks/post-tool-use": lambda arguments: _handle_post_tool_use(runtime, arguments),
@@ -355,28 +365,56 @@ def _resolve_runtime_version() -> str | None:
         return None
 
 
-def _context_for_request(ctx, arguments: dict[str, Any] | None):
+def _request_scope_for_arguments(arguments: dict[str, Any] | None) -> _RequestScope:
     if arguments is None:
-        return ctx
-    request_ctx = ctx
-    session_id_value = arguments.get(_REQUEST_SESSION_ID_KEY) or arguments.get("session_id")
-    if isinstance(session_id_value, str) and session_id_value.strip():
-        request_ctx = replace(request_ctx, session_id=session_id_value.strip())
-    workspace_root_value = arguments.get(_REQUEST_WORKSPACE_ROOT_KEY) or arguments.get("workspace_root")
-    if not isinstance(workspace_root_value, str) or not workspace_root_value.strip():
-        return request_ctx
+        return _RequestScope()
+    session_id = _optional_request_str(arguments, _REQUEST_SESSION_ID_KEY, "session_id")
+    workspace_root_value = _optional_request_str(arguments, _REQUEST_WORKSPACE_ROOT_KEY, "workspace_root")
+    if workspace_root_value is None:
+        return _RequestScope(session_id=session_id)
     workspace_root = resolve_workspace_root(workspace_root=workspace_root_value)
     workspace_id = resolve_workspace_id(workspace_root=workspace_root_value)
-    return replace(request_ctx, workspace_root=workspace_root, workspace_id=workspace_id)
+    return _RequestScope(
+        session_id=session_id,
+        workspace_id=workspace_id,
+        workspace_root=workspace_root,
+    )
+
+
+def _apply_request_scope_to_context(ctx, request_scope: _RequestScope):
+    if request_scope.session_id is None and request_scope.workspace_root is None:
+        return ctx
+    request_ctx = ctx
+    if request_scope.session_id is not None:
+        request_ctx = replace(request_ctx, session_id=request_scope.session_id)
+    if request_scope.workspace_root is None:
+        return request_ctx
+    return replace(
+        request_ctx,
+        workspace_root=request_scope.workspace_root,
+        workspace_id=request_scope.workspace_id,
+    )
+
+
+def _context_for_request(ctx, arguments: dict[str, Any] | None):
+    return _apply_request_scope_to_context(ctx, _request_scope_for_arguments(arguments))
+
+
+def _optional_request_str(arguments: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
-    request_ctx = _context_for_request(ctx, arguments)
-    assert request_ctx.db_manager is not None
+    request_scope = _request_scope_for_arguments(arguments)
+    assert ctx.db_manager is not None
     await _cancel_idle_shutdown_task(app)
     request_timestamp = _hook_payload_timestamp(arguments)
     response: dict[str, Any] = dict(
-        HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_start(
+        HookReminderService(ctx.db_manager, request_scope.workspace_id).record_session_start(
             str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
             arguments,
         )
@@ -387,17 +425,17 @@ async def _handle_session_start(app: FastAPI, ctx, hook_service: HookReminderSer
 
 
 async def _handle_post_tool_use(ctx, arguments: dict[str, Any]) -> dict[str, Any]:
-    request_ctx = _context_for_request(ctx, arguments)
-    assert request_ctx.db_manager is not None
-    return HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_post_tool_use(arguments)
+    request_scope = _request_scope_for_arguments(arguments)
+    assert ctx.db_manager is not None
+    return HookReminderService(ctx.db_manager, request_scope.workspace_id).record_post_tool_use(arguments)
 
 
 async def _handle_session_end(app: FastAPI, ctx, hook_service: HookReminderService, arguments: dict[str, Any]) -> dict[str, Any]:
-    request_ctx = _context_for_request(ctx, arguments)
-    assert request_ctx.db_manager is not None
+    request_scope = _request_scope_for_arguments(arguments)
+    assert ctx.db_manager is not None
     request_timestamp = _hook_payload_timestamp(arguments)
     response: dict[str, Any] = dict(
-        HookReminderService(request_ctx.db_manager, request_ctx.workspace_id).record_session_end(
+        HookReminderService(ctx.db_manager, request_scope.workspace_id).record_session_end(
             str(arguments.get("conversation_id") or arguments.get("sessionId") or arguments.get("session_id") or ""),
             arguments,
         )

@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from mcp_memory.config import resolve_workspace_id
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
-from mcp_memory.daemon_app import _context_for_request, create_daemon_app
+from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.server import MCPServer
@@ -276,6 +278,64 @@ def test_context_for_request_copies_session_id_and_workspace_root(tmp_path) -> N
     assert request_ctx.session_id == "session-123"
     assert request_ctx.workspace_root == workspace
     assert request_ctx.workspace_id is not None
+
+
+def test_request_scope_for_arguments_extracts_request_scoped_identity(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    request_scope = _request_scope_for_arguments(
+        {
+            "__session_id": "session-123",
+            "__workspace_root": str(workspace),
+        }
+    )
+
+    assert request_scope.session_id == "session-123"
+    assert request_scope.workspace_root == workspace
+    assert request_scope.workspace_id == resolve_workspace_id(workspace_root=str(workspace))
+
+
+@pytest.mark.asyncio
+async def test_handle_post_tool_use_uses_request_scope_without_context_overlay(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, Any] = {}
+
+    class FakeHookReminderService:
+        def __init__(self, db_manager, workspace_id: str | None) -> None:
+            captured["db_manager"] = db_manager
+            captured["workspace_id"] = workspace_id
+
+        def record_post_tool_use(self, arguments: dict[str, object]) -> dict[str, object]:
+            captured["arguments"] = arguments
+            return {"status": "ok", "workspace_id": captured["workspace_id"]}
+
+    monkeypatch.setattr("mcp_memory.daemon_app.HookReminderService", FakeHookReminderService)
+    monkeypatch.setattr(
+        "mcp_memory.daemon_app._context_for_request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("hook path should not mutate context")),
+    )
+
+    db_manager = object()
+    response = await _handle_post_tool_use(
+        ApplicationContext(db_manager=db_manager),
+        {
+            "tool_name": "apply_patch",
+            "__workspace_root": str(workspace),
+        },
+    )
+
+    assert response == {
+        "status": "ok",
+        "workspace_id": resolve_workspace_id(workspace_root=str(workspace)),
+    }
+    assert captured["db_manager"] is db_manager
+    assert captured["arguments"] == {
+        "tool_name": "apply_patch",
+        "__workspace_root": str(workspace),
+    }
 
 
 def test_create_daemon_app_uses_global_bootstrap_spec_without_workspace_identity(monkeypatch, tmp_path) -> None:
