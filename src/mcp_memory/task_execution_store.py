@@ -226,8 +226,14 @@ class TaskExecutionAttemptRepository:
                 END,
                 request_id = COALESCE(?, request_id),
                 subprocess_pid = COALESCE(?, subprocess_pid),
-                error_text = COALESCE(?, error_text),
-                termination_reason = COALESCE(?, termination_reason)
+                error_text = CASE
+                    WHEN completed_at IS NULL THEN COALESCE(?, error_text)
+                    ELSE error_text
+                END,
+                termination_reason = CASE
+                    WHEN completed_at IS NULL THEN COALESCE(?, termination_reason)
+                    ELSE termination_reason
+                END
             WHERE task_id = ? AND execution_epoch = ?
             """,
             (

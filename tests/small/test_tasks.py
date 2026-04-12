@@ -319,6 +319,43 @@ def test_sqlite_task_queue_tracks_running_subprocess_and_finalizes_cancellation(
     assert cancelled.last_error == "timeout triage"
 
 
+def test_sqlite_task_queue_fail_clears_stale_cancellation_state_before_retry(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue("retry-after-cancel-race", task_id="retry-after-cancel-race", available_at=0.0)
+
+    claimed = queue.claim_next(now=1.0)
+    assert claimed is not None
+
+    queue.request_cancel(
+        task.id,
+        cancelled_by="cli",
+        reason="operator_cancelled",
+        requested_at=2.0,
+    )
+
+    retried = queue.fail(
+        task.id,
+        "temporary failure",
+        retry_delay_seconds=5.0,
+        failed_at=3.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+
+    assert retried.status == "pending"
+    assert retried.last_error == "temporary failure"
+    assert retried.cancellation_requested_at is None
+    assert retried.cancelled_at is None
+    assert retried.cancellation_reason is None
+    assert retried.cancelled_by is None
+    assert queue.is_cancellation_requested(task.id) is False
+
+    reclaimed = queue.claim_next(now=8.0)
+    assert reclaimed is not None
+    assert reclaimed.id == task.id
+    assert reclaimed.execution_epoch == claimed.execution_epoch + 1
+    assert reclaimed.cancellation_requested_at is None
+
+
 def test_sqlite_task_queue_touch_running_task_refreshes_updated_at(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     task = queue.enqueue("touch-me", task_id="touch-me", available_at=0.0)
@@ -1700,13 +1737,109 @@ async def test_runtime_task_worker_reconciles_attempt_for_recovered_dead_process
 
     await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
 
-    failed = queue.get_task(task.id)
+    retried = queue.get_task(task.id)
     attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
-    assert failed.status == "failed"
-    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.status == "pending"
+    assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.retries_count == 1
     assert attempt.status == "error"
     assert attempt.completed_at == pytest.approx(1000.0)
-    assert attempt.termination_reason == "task_failed"
+    assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert attempt.termination_reason == "provider_subprocess_exited_retry"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_provider_cancellation(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+        workspace_id="workspace-a",
+    )
+    task = queue.enqueue(
+        "late-cancel-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="late-cancel-task",
+    )
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_handler(_ctx: ApplicationContext, queued_task: TaskRecord) -> None:
+        queue.set_running_process(
+            queued_task.id,
+            subprocess_pid=9999,
+            request_id="req-late-cancel",
+            updated_at=2.0,
+            execution_epoch=queued_task.execution_epoch,
+        )
+        attempt_repository.start_attempt(
+            task_id=queued_task.id,
+            execution_epoch=queued_task.execution_epoch,
+            task_name=queued_task.task_name,
+            request_id="req-late-cancel",
+            subprocess_pid=9999,
+            provider_key="gemini-cli",
+            provider_name="Gemini CLI",
+            model_name="gemini-3-flash-preview",
+            started_at=2.0,
+        )
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            attempt_repository.finish_attempt(
+                task_id=queued_task.id,
+                execution_epoch=queued_task.execution_epoch,
+                status="cancelled",
+                completed_at=50.0,
+                request_id="req-late-cancel",
+                subprocess_pid=9999,
+                error_text="Command cancelled",
+                termination_reason="provider_cancelled",
+            )
+            raise
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"late-cancel-task": blocking_handler},
+        poll_interval_seconds=0.01,
+        retry_delay_seconds=45.0,
+        abandoned_recovery_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=0.0,
+    )
+
+    await worker.start()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+        for _ in range(100):
+            retried = queue.get_task(task.id)
+            attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+            if retried.status == "pending" and attempt.termination_reason == "provider_subprocess_exited_retry":
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop(0.05)
+
+    retried = queue.get_task(task.id)
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
+
+    assert retried.status == "pending"
+    assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
+    assert attempt.status == "error"
+    assert attempt.completed_at == pytest.approx(retried.updated_at)
+    assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert attempt.termination_reason == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio

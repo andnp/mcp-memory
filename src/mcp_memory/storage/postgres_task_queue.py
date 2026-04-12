@@ -280,7 +280,11 @@ class PostgresTaskQueue:
                         completed_at = %s,
                         last_error = %s,
                         subprocess_pid = NULL,
-                        active_request_id = NULL
+                        active_request_id = NULL,
+                        cancellation_requested_at = NULL,
+                        cancelled_at = NULL,
+                        cancellation_reason = NULL,
+                        cancelled_by = NULL
                     """,
                     task_id,
                     status,

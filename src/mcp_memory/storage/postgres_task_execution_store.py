@@ -236,8 +236,8 @@ class PostgresTaskExecutionAttemptRepository:
                         started_at=existing.started_at,
                         last_heartbeat_at=existing.last_heartbeat_at,
                         completed_at=existing.completed_at,
-                        error_text=error_text or existing.error_text,
-                        termination_reason=termination_reason or existing.termination_reason,
+                        error_text=existing.error_text,
+                        termination_reason=existing.termination_reason,
                     )
                 self._update_attempt_row(cursor, updated)
             connection.commit()

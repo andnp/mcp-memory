@@ -483,7 +483,14 @@ def test_postgres_task_execution_attempt_repository_records_attempt_lifecycle() 
     heartbeated = repository.heartbeat_attempt(task_id="task-1", execution_epoch=1, heartbeat_at=14.0, request_id="req-1", subprocess_pid=5678)
     finished = repository.finish_attempt(task_id="task-1", execution_epoch=1, status="finished", completed_at=16.0, request_id="req-1", subprocess_pid=5678, termination_reason="provider_finished")
     late_heartbeat = repository.heartbeat_attempt(task_id="task-1", execution_epoch=1, heartbeat_at=99.0, subprocess_pid=9999)
-    duplicate_finish = repository.finish_attempt(task_id="task-1", execution_epoch=1, status="error", completed_at=100.0, error_text="late duplicate finish")
+    duplicate_finish = repository.finish_attempt(
+        task_id="task-1",
+        execution_epoch=1,
+        status="error",
+        completed_at=100.0,
+        error_text="late duplicate finish",
+        termination_reason="late_duplicate_finish",
+    )
 
     assert started.status == "running"
     assert duplicate_start.started_at == 10.0
@@ -496,7 +503,53 @@ def test_postgres_task_execution_attempt_repository_records_attempt_lifecycle() 
     assert late_heartbeat.subprocess_pid == 5678
     assert duplicate_finish.status == "finished"
     assert duplicate_finish.completed_at == 16.0
-    assert duplicate_finish.error_text == "late duplicate finish"
+    assert duplicate_finish.error_text is None
+    assert duplicate_finish.termination_reason == "provider_finished"
+
+
+def test_postgres_task_execution_attempt_repository_preserves_first_terminal_reason_on_late_finish() -> None:
+    session_manager = FakeSessionManager()
+    repository = PostgresTaskExecutionAttemptRepository(session_manager, workspace_id="workspace-a")
+
+    repository.start_attempt(
+        task_id="task-late-finish",
+        execution_epoch=9,
+        task_name="ingest-system1",
+        request_id="req-1",
+        subprocess_pid=31337,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-2.5-pro",
+        started_at=10.0,
+    )
+    finished = repository.finish_attempt(
+        task_id="task-late-finish",
+        execution_epoch=9,
+        status="error",
+        completed_at=12.0,
+        request_id="req-1",
+        subprocess_pid=31337,
+        error_text="Provider subprocess 31337 exited unexpectedly",
+        termination_reason="provider_subprocess_exited_retry",
+    )
+    duplicate_finish = repository.finish_attempt(
+        task_id="task-late-finish",
+        execution_epoch=9,
+        status="cancelled",
+        completed_at=20.0,
+        request_id="req-1",
+        subprocess_pid=31337,
+        error_text="Command cancelled",
+        termination_reason="provider_cancelled",
+    )
+
+    assert finished.status == "error"
+    assert finished.error_text == "Provider subprocess 31337 exited unexpectedly"
+    assert finished.termination_reason == "provider_subprocess_exited_retry"
+    assert duplicate_finish.status == "error"
+    assert duplicate_finish.completed_at == 12.0
+    assert duplicate_finish.error_text == "Provider subprocess 31337 exited unexpectedly"
+    assert duplicate_finish.termination_reason == "provider_subprocess_exited_retry"
 
 
 def test_postgres_task_execution_attempt_repository_reopens_terminal_attempt_for_new_provider_call() -> None:

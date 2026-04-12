@@ -658,6 +658,53 @@ def test_postgres_integration_task_queue_lifecycle_and_task_runs(postgres_storag
         assert summaries[0].total_lines_compressed == 3
 
 
+def test_postgres_integration_task_retry_clears_stale_cancellation_state(postgres_storage_config) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+
+        task = queue.enqueue(
+            "retry-after-cancel-race",
+            workspace_id="workspace-a",
+            available_at=0.0,
+            task_id="postgres-retry-after-cancel-race",
+        )
+        claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+
+        assert claimed is not None
+
+        queue.request_cancel(
+            task.id,
+            cancelled_by="cli",
+            reason="operator_cancelled",
+            requested_at=2.0,
+        )
+
+        retried = queue.fail(
+            task.id,
+            "temporary failure",
+            retry_delay_seconds=5.0,
+            failed_at=3.0,
+            execution_epoch=claimed.execution_epoch,
+        )
+
+        assert retried.status == "pending"
+        assert retried.last_error == "temporary failure"
+        assert retried.cancellation_requested_at is None
+        assert retried.cancelled_at is None
+        assert retried.cancellation_reason is None
+        assert retried.cancelled_by is None
+        assert queue.is_cancellation_requested(task.id) is False
+
+        reclaimed = queue.claim_next(now=8.0, workspace_id="workspace-a")
+
+        assert reclaimed is not None
+        assert reclaimed.id == task.id
+        assert reclaimed.execution_epoch == claimed.execution_epoch + 1
+        assert reclaimed.cancellation_requested_at is None
+
+
 def test_postgres_integration_maintenance_housekeeping_handlers_update_state(
     postgres_storage_config,
     monkeypatch: pytest.MonkeyPatch,
@@ -1132,20 +1179,24 @@ async def test_postgres_integration_runtime_worker_reconciles_attempt_for_recove
                 workspace_id="workspace-a",
             ),
             handlers={"orphaned-attempt-task": lambda context, queued_task: None},
+            retry_delay_seconds=45.0,
         )
 
         monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
 
         await worker._run_reconciliation_pass(now=1000.0, reason="periodic")  # noqa: SLF001
 
-        failed = queue.get_task(task.id)
+        retried = queue.get_task(task.id)
         attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
 
-        assert failed.status == "failed"
-        assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert retried.status == "pending"
+        assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+        assert retried.retries_count == 1
+        assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
         assert attempt.status == "error"
         assert attempt.completed_at == pytest.approx(1000.0)
-        assert attempt.termination_reason == "task_failed"
+        assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
+        assert attempt.termination_reason == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio

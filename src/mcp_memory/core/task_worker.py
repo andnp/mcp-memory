@@ -240,7 +240,7 @@ class RuntimeTaskWorker:
             recovered_task_ids: list[str] = []
             for recovered_task in recovered_tasks:
                 recovered_task_ids.append(recovered_task.id)
-                await asyncio.to_thread(self._reconcile_terminal_task_state, recovered_task)
+                await asyncio.to_thread(self._reconcile_recovered_task_state, recovered_task)
 
             reconciled_conversation_ids = await asyncio.to_thread(
                 self._reconcile_orphaned_running_conversations,
@@ -524,9 +524,10 @@ class RuntimeTaskWorker:
                 )
             return self._recover_terminal_task(
                 task_queue,
-                lambda: task_queue.fail_permanently(
+                lambda: task_queue.fail(
                     task.id,
                     f"Provider subprocess {subprocess_pid} exited unexpectedly",
+                    self._retry_delay_seconds,
                     failed_at=current_time,
                     execution_epoch=task.execution_epoch,
                 ),
@@ -563,6 +564,15 @@ class RuntimeTaskWorker:
         self._reconcile_task_conversations(task)
         self._release_task_work_items(task)
         self._release_task_embedding_repairs(task)
+
+    def _reconcile_recovered_task_state(self, task: TaskRecord) -> None:
+        if task.status == "pending":
+            termination_reason = "task_retried"
+            if isinstance(task.last_error, str) and task.last_error.startswith("Provider subprocess "):
+                termination_reason = "provider_subprocess_exited_retry"
+            self._reconcile_retryable_interruption(task, termination_reason=termination_reason)
+            return
+        self._reconcile_terminal_task_state(task)
 
     def _reconcile_retryable_interruption(self, task: TaskRecord, *, termination_reason: str) -> None:
         self._finish_task_execution_attempt(
