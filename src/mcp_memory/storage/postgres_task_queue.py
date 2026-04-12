@@ -364,6 +364,60 @@ class PostgresTaskQueue:
             connection.commit()
         return self.get_task(task_id)
 
+    def retry_running_task(
+        self,
+        task_id: str,
+        error: str,
+        available_at: float | None = None,
+        execution_epoch: int | None = None,
+    ) -> TaskRecord:
+        if self._sessions is None:
+            raise RuntimeError("task_queue_unavailable")
+        now = time.time() if available_at is None else available_at
+        with self._sessions.open_connection() as connection:
+            row = self._get_running_task_row(connection, task_id, execution_epoch=execution_epoch)
+            if row is None:
+                raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
+            with connection.cursor() as cursor:
+                cursor.execute(*self._running_task_update_statement(
+                    """
+                    UPDATE tasks
+                    SET status = 'pending',
+                        updated_at = %s,
+                        available_at = %s,
+                        claimed_at = NULL,
+                        completed_at = NULL,
+                        last_error = %s,
+                        subprocess_pid = NULL,
+                        active_request_id = NULL,
+                        cancellation_requested_at = NULL,
+                        cancelled_at = NULL,
+                        cancellation_reason = NULL,
+                        cancelled_by = NULL
+                    """,
+                    task_id,
+                    now,
+                    now,
+                    error,
+                    execution_epoch=execution_epoch,
+                ))
+                if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                    connection.rollback()
+                    raise self._running_task_mismatch_error(task_id, execution_epoch=execution_epoch)
+            self._insert_task_run(
+                connection,
+                task_id=task_id,
+                task_name=str(row[1]),
+                workspace_id=None if row[2] is None else str(row[2]),
+                status="retry",
+                started_at=_coalesce_float(row[12], row[13], now),
+                completed_at=now,
+                result={"retry_reason": error},
+                error_text=error,
+            )
+            connection.commit()
+        return self.get_task(task_id)
+
     def set_running_process(
         self,
         task_id: str,

@@ -576,7 +576,7 @@ async def test_postgres_integration_daemon_hooks_persist_conversation_state_and_
 
     assert row is not None
     assert row[0] == "conversation-1"
-    assert isinstance(row[1], str)
+    assert row[1] is None
     assert row[2] == "apply_patch"
     assert row[3] == pytest.approx(401.0)
     assert row[4] == pytest.approx(450.0)
@@ -1567,11 +1567,15 @@ async def test_postgres_integration_runtime_worker_requests_shutdown_cancellatio
             released.set()
 
         task_after_stop = queue.get_task(task.id)
+        task_runs = queue.list_task_runs(task_id=task.id)
 
         assert cancelled.is_set()
-        assert task_after_stop.status == "cancelled"
-        assert task_after_stop.cancellation_reason == "daemon_shutdown"
-        assert task_after_stop.cancelled_by == "daemon"
+        assert task_after_stop.status == "pending"
+        assert task_after_stop.cancellation_reason is None
+        assert task_after_stop.cancelled_by is None
+        assert task_after_stop.last_error == "Task interrupted during daemon shutdown; retrying"
+        assert [run.status for run in task_runs] == ["retry"]
+        assert task_runs[0].result == {"retry_reason": "Task interrupted during daemon shutdown; retrying"}
 
 
 def test_postgres_management_service_uses_backend_safe_noop_provider_usage_fallback_when_storage_backend_hint_is_missing(
