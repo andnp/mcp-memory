@@ -46,6 +46,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
         started_at=1.0,
         status="ready",
     )
+    observed_timeout_seconds: list[float] = []
     metadata_path = resolve_daemon_metadata_path()
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
@@ -53,7 +54,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
     monkeypatch.setattr(
         "mcp_memory.daemon._assess_daemon_health",
-        lambda current, timeout_seconds=3.0: DaemonHealthAssessment(
+        lambda current, timeout_seconds=3.0: observed_timeout_seconds.append(timeout_seconds) or DaemonHealthAssessment(
             healthy=True,
             reason="healthy",
             retryable=False,
@@ -66,6 +67,7 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
 
     assert current.port == 8123
     assert current.daemon_scope == "global"
+    assert observed_timeout_seconds == [pytest.approx(spec.config.daemon.auto_start_timeout_seconds / 3.0)]
 
 
 def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ from mcp_memory.daemon_process import (
     read_daemon_metadata as _read_daemon_metadata,
     spawn_daemon_process as _spawn_daemon_process,
 )
+from mcp_memory.daemon_transport import DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS
 from mcp_memory.daemon_transport import probe_daemon_socket as _probe_daemon_socket
 from mcp_memory.daemon_transport import remove_daemon_socket as _remove_daemon_socket
 from mcp_memory.mcp.runtime import resolve_global_daemon_bootstrap_spec
@@ -77,7 +78,10 @@ def ensure_daemon_started(
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
     probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
     health_confirmation_timeout_seconds = max(
-        min(timeout_seconds / _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS, 0.25),
+        min(
+            timeout_seconds / _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+            DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS,
+        ),
         spec.config.daemon.healthcheck_interval_seconds,
     )
     lock.acquire(timeout_seconds=timeout_seconds)
