@@ -117,6 +117,23 @@ class FakePrimitiveCursor:
             self._result = [(entry["id"],)]
             self.rowcount = 1
             return
+        if normalized.startswith("SELECT id, content, workspace_id, timestamp, status FROM system1_journal WHERE content = %s"):
+            content = str(arguments[0])
+            workspace_id = arguments[1]
+            timestamp = _as_float(arguments[2])
+            row = next(
+                (
+                    candidate for candidate in self._state.system1_journal
+                    if str(candidate["content"]) == content
+                    and candidate["workspace_id"] == workspace_id
+                    and _as_float(candidate["timestamp"]) == timestamp
+                ),
+                None,
+            )
+            self._result = [] if row is None else [
+                (row["id"], row["content"], row["workspace_id"], row["timestamp"], row["status"])
+            ]
+            return
         if normalized.startswith("SELECT id, content, workspace_id, timestamp, status FROM system1_journal"):
             rows = self._filter_journal_rows(normalized, arguments) if " WHERE " in normalized else list(self._state.system1_journal)
             if "ORDER BY timestamp DESC" in normalized:

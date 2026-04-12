@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -96,3 +97,68 @@ def test_flush_record_thought_writeback_outbox_resumes_maintenance_and_schedules
     assert ingest_task.status == "pending"
     assert ingest_task.data["trigger"].startswith("system1_debounce")
     assert ingest_task.data["journal_workspace_id"] == "*"
+
+
+def test_flush_record_thought_writeback_outbox_does_not_duplicate_late_sqlite_completion(
+    db_manager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    unblock_record = Event()
+    completed = Event()
+
+    class SlowDelegatingJournal(System1Journal):
+        def __init__(self) -> None:
+            super().__init__(db_manager)
+
+        def record_with_timestamp(
+            self,
+            content: str,
+            workspace_id: str | None = None,
+            *,
+            timestamp: float | None = None,
+        ):
+            try:
+                assert unblock_record.wait(timeout=1.0)
+                return super().record_with_timestamp(content, workspace_id=workspace_id, timestamp=timestamp)
+            finally:
+                completed.set()
+
+    journal = SlowDelegatingJournal()
+
+    monkeypatch.setattr(
+        journal_operations_module,
+        "_RECORD_THOUGHT_AUTHORITATIVE_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    response = journal_operations_module.RecordThoughtOperation(
+        SlowDelegatingJournal(),
+        task_queue=None,
+        workspace_id="workspace-a",
+        suppression_config=None,
+        writeback_cache=cache,
+        max_outbox_entries=4,
+    ).execute("slow thought")
+
+    assert response["degraded"] is True
+    assert response["cache_status"] == "writeback_queued"
+    assert cache.count_record_thought_outbox_entries() == 1
+
+    unblock_record.set()
+    assert completed.wait(timeout=1.0)
+    assert [entry.content for entry in journal.get_pending(limit=10, workspace_id="workspace-a")] == ["slow thought"]
+
+    flush_result = journal_operations_module.flush_record_thought_writeback_outbox(
+        journal,
+        task_queue=None,
+        suppression_config=None,
+        writeback_cache=cache,
+    )
+
+    pending_entries = journal.get_pending(limit=10, workspace_id="workspace-a")
+    assert flush_result.flushed_count == 1
+    assert flush_result.flushed_workspace_ids == ("workspace-a",)
+    assert cache.count_record_thought_outbox_entries() == 0
+    assert [entry.content for entry in pending_entries] == ["slow thought"]

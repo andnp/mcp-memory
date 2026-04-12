@@ -62,6 +62,25 @@ class System1Journal:
         content = content.strip()
         now = time.time() if timestamp is None else float(timestamp)
         conn = self._db.get_connection()
+        existing = conn.execute(
+            """
+            SELECT id, content, workspace_id, timestamp, status
+            FROM system1_journal
+            WHERE content = ?
+              AND ((workspace_id IS NULL AND ? IS NULL) OR workspace_id = ?)
+              AND timestamp = ?
+            LIMIT 1
+            """,
+            (content, workspace_id, workspace_id, now),
+        ).fetchone()
+        if existing is not None:
+            return JournalEntry(
+                id=int(existing[0]),
+                content=str(existing[1]),
+                workspace_id=None if existing[2] is None else str(existing[2]),
+                timestamp=float(existing[3]),
+                status=str(existing[4]),
+            )
         cursor = conn.execute(
             "INSERT INTO system1_journal (content, workspace_id, timestamp, status) VALUES (?, ?, ?, ?)",
             (content, workspace_id, now, "pending"),
