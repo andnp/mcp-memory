@@ -19,6 +19,7 @@ from mcp_memory.core.maintenance_idle import (
     should_pause_autonomous_recurring_maintenance,
     resume_paused_recurring_maintenance,
 )
+from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_handlers import (
     CURATOR_TASK_NAME,
@@ -718,7 +719,7 @@ def test_runtime_task_worker_classifies_dead_subprocess_recovery_before_applying
     )
 
     assert plan is not None
-    assert plan.action == "retry_dead_subprocess"
+    assert plan.action is RecoveryAction.RETRY_DEAD_SUBPROCESS
     assert plan.error_text == "Provider subprocess 9999 exited unexpectedly"
     assert plan.retry_delay_seconds == pytest.approx(45.0)
     assert queue.get_task(task.id).status == "running"

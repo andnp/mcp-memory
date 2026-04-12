@@ -14,6 +14,7 @@ from mcp_memory.core.maintenance_idle import (
     build_idle_pause_result,
     should_pause_autonomous_recurring_maintenance,
 )
+from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
 from mcp_memory.core.task_handlers import (
@@ -37,7 +38,7 @@ class _RecoveredTaskOutcome:
 
 @dataclass(frozen=True)
 class _RunningTaskRecoveryPlan:
-    action: str
+    action: RecoveryAction
     recovered_at: float
     error_text: str | None = None
     retry_delay_seconds: float | None = None
@@ -45,7 +46,7 @@ class _RunningTaskRecoveryPlan:
 
     @classmethod
     def finalize_cancellation(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
-        return cls(action="finalize_cancellation", recovered_at=recovered_at)
+        return cls(action=RecoveryAction.FINALIZE_CANCELLATION, recovered_at=recovered_at)
 
     @classmethod
     def retry_dead_subprocess(
@@ -56,7 +57,7 @@ class _RunningTaskRecoveryPlan:
         retry_delay_seconds: float,
     ) -> _RunningTaskRecoveryPlan:
         return cls(
-            action="retry_dead_subprocess",
+            action=RecoveryAction.RETRY_DEAD_SUBPROCESS,
             recovered_at=recovered_at,
             error_text=f"Provider subprocess {subprocess_pid} exited unexpectedly",
             retry_delay_seconds=retry_delay_seconds,
@@ -66,7 +67,7 @@ class _RunningTaskRecoveryPlan:
     @classmethod
     def fail_abandoned(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
         return cls(
-            action="fail_abandoned",
+            action=RecoveryAction.FAIL_ABANDONED,
             recovered_at=recovered_at,
             error_text="Task was abandoned without an active provider subprocess",
         )
@@ -600,7 +601,7 @@ class RuntimeTaskWorker:
         task: TaskRecord,
         plan: _RunningTaskRecoveryPlan,
     ) -> _RecoveredTaskOutcome:
-        if plan.action == "finalize_cancellation":
+        if plan.action is RecoveryAction.FINALIZE_CANCELLATION:
             return self._recover_task_outcome(
                 task_queue,
                 lambda: task_queue.finalize_cancellation(
@@ -609,7 +610,7 @@ class RuntimeTaskWorker:
                     execution_epoch=task.execution_epoch,
                 ),
             )
-        if plan.action == "retry_dead_subprocess":
+        if plan.action is RecoveryAction.RETRY_DEAD_SUBPROCESS:
             return self._recover_task_outcome(
                 task_queue,
                 lambda: task_queue.fail(
