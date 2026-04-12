@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from inspect import isawaitable, iscoroutinefunction
 import logging
 import time
@@ -25,6 +26,12 @@ from mcp_memory.provider_usage_store import ProviderUsageRepository
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _RecoveredTaskOutcome:
+    task: TaskRecord
+    retry_termination_reason: str | None = None
 
 
 class RuntimeTaskWorker:
@@ -239,7 +246,7 @@ class RuntimeTaskWorker:
             recovered_tasks = await asyncio.to_thread(self._recover_running_tasks, current_time)
             recovered_task_ids: list[str] = []
             for recovered_task in recovered_tasks:
-                recovered_task_ids.append(recovered_task.id)
+                recovered_task_ids.append(recovered_task.task.id)
                 await asyncio.to_thread(self._reconcile_recovered_task_state, recovered_task)
 
             reconciled_conversation_ids = await asyncio.to_thread(
@@ -463,12 +470,12 @@ class RuntimeTaskWorker:
         await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
         await self._schedule_follow_up(task, completed_task, normalized_result)
 
-    def _recover_running_tasks(self, current_time: float) -> list[TaskRecord]:
+    def _recover_running_tasks(self, current_time: float) -> list[_RecoveredTaskOutcome]:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
             return []
         attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
-        recovered: list[TaskRecord] = []
+        recovered: list[_RecoveredTaskOutcome] = []
         running_tasks = task_queue.list_tasks(status="running", workspace_id=None, limit=200)
         for task in running_tasks:
             recovered_task = self._recover_running_task(
@@ -481,7 +488,14 @@ class RuntimeTaskWorker:
                 recovered.append(recovered_task)
         return recovered
 
-    def _recover_running_task(self, task_queue, task: TaskRecord, *, attempt_repository, current_time: float) -> TaskRecord | None:
+    def _recover_running_task(
+        self,
+        task_queue,
+        task: TaskRecord,
+        *,
+        attempt_repository,
+        current_time: float,
+    ) -> _RecoveredTaskOutcome | None:
         recent_activity_at = max(
             task.updated_at,
             task.started_at or task.updated_at,
@@ -509,7 +523,7 @@ class RuntimeTaskWorker:
             if not is_stale:
                 return None
             if task.cancellation_requested_at is not None:
-                return self._recover_terminal_task(
+                return self._recover_task_outcome(
                     task_queue,
                     lambda: task_queue.finalize_cancellation(
                         task.id,
@@ -517,7 +531,7 @@ class RuntimeTaskWorker:
                         execution_epoch=task.execution_epoch,
                     ),
                 )
-            return self._recover_terminal_task(
+            return self._recover_task_outcome(
                 task_queue,
                 lambda: task_queue.fail(
                     task.id,
@@ -526,9 +540,10 @@ class RuntimeTaskWorker:
                     failed_at=current_time,
                     execution_epoch=task.execution_epoch,
                 ),
+                retry_termination_reason="provider_subprocess_exited_retry",
             )
         if task.cancellation_requested_at is not None:
-            return self._recover_terminal_task(
+            return self._recover_task_outcome(
                 task_queue,
                 lambda: task_queue.finalize_cancellation(
                     task.id,
@@ -538,7 +553,7 @@ class RuntimeTaskWorker:
             )
         if not is_stale:
             return None
-        return self._recover_terminal_task(
+        return self._recover_task_outcome(
             task_queue,
             lambda: task_queue.fail_permanently(
                 task.id,
@@ -546,6 +561,19 @@ class RuntimeTaskWorker:
                 failed_at=current_time,
                 execution_epoch=task.execution_epoch,
             ),
+        )
+
+    def _recover_task_outcome(
+        self,
+        task_queue,
+        callback: Callable[[], TaskRecord],
+        *,
+        retry_termination_reason: str | None = None,
+    ) -> _RecoveredTaskOutcome:
+        task = self._recover_terminal_task(task_queue, callback)
+        return _RecoveredTaskOutcome(
+            task=task,
+            retry_termination_reason=retry_termination_reason if task.status == "pending" else None,
         )
 
     def _recover_terminal_task(self, task_queue, callback: Callable[[], TaskRecord]) -> TaskRecord:
@@ -560,14 +588,14 @@ class RuntimeTaskWorker:
         self._release_task_work_items(task)
         self._release_task_embedding_repairs(task)
 
-    def _reconcile_recovered_task_state(self, task: TaskRecord) -> None:
-        if task.status == "pending":
-            termination_reason = "task_retried"
-            if isinstance(task.last_error, str) and task.last_error.startswith("Provider subprocess "):
-                termination_reason = "provider_subprocess_exited_retry"
-            self._reconcile_retryable_interruption(task, termination_reason=termination_reason)
+    def _reconcile_recovered_task_state(self, outcome: _RecoveredTaskOutcome) -> None:
+        if outcome.retry_termination_reason is not None:
+            self._reconcile_retryable_interruption(
+                outcome.task,
+                termination_reason=outcome.retry_termination_reason,
+            )
             return
-        self._reconcile_terminal_task_state(task)
+        self._reconcile_terminal_task_state(outcome.task)
 
     def _reconcile_retryable_interruption(self, task: TaskRecord, *, termination_reason: str) -> None:
         self._finish_task_execution_attempt(

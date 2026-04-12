@@ -525,6 +525,161 @@ def test_sqlite_task_queue_cancels_dead_stale_subprocess_when_cancellation_reque
     assert cancelled.subprocess_pid is None
 
 
+def test_runtime_task_worker_recover_running_task_marks_dead_subprocess_as_retryable(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "pid-dead-task",
+        workspace_id="workspace-a",
+        task_id="worker-pid-dead-task",
+        available_at=0.0,
+    )
+    claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=9999,
+        request_id="req-dead",
+        updated_at=12.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={},
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=300.0,
+    )
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = worker._recover_running_task(  # noqa: SLF001
+        queue,
+        queue.get_task(task.id),
+        attempt_repository=None,
+        current_time=1000.0,
+    )
+
+    assert recovered is not None
+    assert recovered.task.status == "pending"
+    assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert recovered.retry_termination_reason == "provider_subprocess_exited_retry"
+
+
+def test_runtime_task_worker_recover_running_task_routes_requested_cancellation_to_terminal_path(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "pid-dead-task",
+        workspace_id="workspace-a",
+        task_id="worker-cancelled-task",
+        available_at=0.0,
+    )
+    claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=9999,
+        request_id="req-cancel",
+        updated_at=12.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+    queue.request_cancel(task.id, cancelled_by="cli", reason="operator_cancelled", requested_at=20.0)
+    worker = RuntimeTaskWorker(ctx, handlers={}, abandoned_task_stale_after_seconds=300.0)
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = worker._recover_running_task(  # noqa: SLF001
+        queue,
+        queue.get_task(task.id),
+        attempt_repository=None,
+        current_time=1000.0,
+    )
+
+    assert recovered is not None
+    assert recovered.task.status == "cancelled"
+    assert recovered.task.last_error == "operator_cancelled"
+    assert recovered.retry_termination_reason is None
+
+
+def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_is_terminal_failure(
+    db_manager,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "orphaned-task",
+        workspace_id="workspace-a",
+        task_id="worker-orphaned-task",
+        available_at=0.0,
+    )
+    claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
+    assert claimed is not None
+    worker = RuntimeTaskWorker(ctx, handlers={}, abandoned_task_stale_after_seconds=300.0)
+
+    recovered = worker._recover_running_task(  # noqa: SLF001
+        queue,
+        queue.get_task(task.id),
+        attempt_repository=None,
+        current_time=1000.0,
+    )
+
+    assert recovered is not None
+    assert recovered.task.status == "failed"
+    assert recovered.task.last_error == "Task was abandoned without an active provider subprocess"
+    assert recovered.retry_termination_reason is None
+
+
+def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_after_retry_exhaustion(
+    db_manager,
+    monkeypatch,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "pid-dead-task",
+        workspace_id="workspace-a",
+        task_id="worker-pid-dead-terminal-task",
+        available_at=0.0,
+        max_retries=1,
+    )
+    claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=9999,
+        request_id="req-dead-terminal",
+        updated_at=12.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={},
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=300.0,
+    )
+
+    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
+
+    recovered = worker._recover_running_task(  # noqa: SLF001
+        queue,
+        queue.get_task(task.id),
+        attempt_repository=None,
+        current_time=1000.0,
+    )
+
+    assert recovered is not None
+    assert recovered.task.status == "failed"
+    assert recovered.task.retries_count == 1
+    assert recovered.task.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert recovered.retry_termination_reason is None
+
+
 def test_sqlite_task_queue_retries_recovery_transition_after_transient_database_lock(
     db_manager,
     monkeypatch,
