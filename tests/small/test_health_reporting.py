@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from mcp_memory.embeddings import HashingEmbedder
 from mcp_memory.management.health_reporting import (
+    _coerce_float,
+    _coerce_int,
     build_embedding_status,
     build_execution_attempt_health,
     build_search_health,
@@ -13,6 +16,44 @@ from mcp_memory.management.models import EmbeddingIntegrityEventSummaryPayload, 
 
 
 pytestmark = pytest.mark.small
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, 0.0),
+        (True, 1.0),
+        (2, 2.0),
+        (2.5, 2.5),
+        ("3.25", 3.25),
+    ],
+)
+def test_coerce_float_handles_supported_values(value: object, expected: float) -> None:
+    assert _coerce_float(value) == expected
+
+
+def test_coerce_float_rejects_invalid_type() -> None:
+    with pytest.raises(TypeError, match="Expected float-compatible value"):
+        _coerce_float([1, 2, 3])
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, 0),
+        (False, 0),
+        (7, 7),
+        (7.9, 7),
+        ("12", 12),
+    ],
+)
+def test_coerce_int_handles_supported_values(value: object, expected: int) -> None:
+    assert _coerce_int(value) == expected
+
+
+def test_coerce_int_rejects_invalid_type() -> None:
+    with pytest.raises(TypeError, match="Expected int-compatible value"):
+        _coerce_int({"value": 1})
 
 
 def test_build_execution_attempt_health_returns_defaults_when_no_rows() -> None:
@@ -83,6 +124,37 @@ def test_build_execution_attempt_health_counts_fresh_stale_missing_and_subproces
     assert observed_pids == [101, 202]
 
 
+def test_build_execution_attempt_health_skips_subprocess_liveness_without_pid() -> None:
+    def unexpected_process_check(pid: int) -> bool:
+        raise AssertionError("subprocess liveness should not be checked without a pid")
+
+    payload = build_execution_attempt_health(
+        None,
+        stale_after_seconds=60.0,
+        now=240.0,
+        fetch_running_attempt_rows=lambda db_manager: [
+            {
+                "task_id": "task-running-no-pid",
+                "updated_at": 200.0,
+                "started_at": 180.0,
+                "claimed_at": 181.0,
+                "attempt_started_at": 190.0,
+                "last_heartbeat_at": 220.0,
+                "attempt_subprocess_pid": None,
+            }
+        ],
+        process_is_alive=unexpected_process_check,
+    )
+
+    assert payload.running_task_count == 1
+    assert payload.running_attempt_count == 1
+    assert payload.fresh_attempt_count == 1
+    assert payload.stale_attempt_count == 0
+    assert payload.missing_attempt_count == 0
+    assert payload.live_subprocess_count == 0
+    assert payload.dead_subprocess_count == 0
+
+
 def test_build_embedding_status_uses_vector_store_override_and_integrity_summary() -> None:
     integrity_summary = EmbeddingIntegrityEventSummaryPayload(
         total=2,
@@ -108,6 +180,19 @@ def test_build_embedding_status_uses_vector_store_override_and_integrity_summary
     assert payload.blocked_fallback_write_count == 7
     assert payload.last_blocked_fallback_model_name == "hash:test-model"
     assert payload.integrity_events == integrity_summary
+
+
+def test_build_embedding_status_maps_real_embedder_status() -> None:
+    payload = build_embedding_status(
+        HashingEmbedder(model_name="hash:test-model"),
+        storage_backend="postgres",
+    )
+
+    assert payload.model_name == "hash:test-model"
+    assert payload.configured_model_name is None
+    assert payload.backend == "hashing"
+    assert payload.model_cached is True
+    assert payload.fallback_persistence_policy == "blocked"
 
 
 def test_build_search_health_returns_defaults_when_search_is_missing() -> None:
