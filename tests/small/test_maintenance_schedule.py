@@ -26,7 +26,7 @@ from mcp_memory.core.task_policy import DEFAULT_TASK_CLASS_BY_NAME
 pytestmark = pytest.mark.small
 
 
-LEGACY_MAINTENANCE_TASK_NAMES = (
+REMOVED_MAINTENANCE_TASK_NAMES = (
     "conflict-screening",
     "dedup-prep",
     "tag-normalizer",
@@ -55,13 +55,13 @@ def test_maintenance_family_registry_captures_the_canonical_trio_contract() -> N
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].default_task_class == "cheap_json"
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].default_priority == 60
 
-    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAMES:
-        assert legacy_task_name not in MAINTENANCE_FAMILY_REGISTRY
-        assert legacy_task_name not in RECURRING_TASK_INTERVAL_SECONDS
-        assert legacy_task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
-        assert legacy_task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
-        assert legacy_task_name not in TASK_PRIORITIES
-        assert legacy_task_name not in DEFAULT_TASK_CLASS_BY_NAME
+    for removed_task_name in REMOVED_MAINTENANCE_TASK_NAMES:
+        assert removed_task_name not in MAINTENANCE_FAMILY_REGISTRY
+        assert removed_task_name not in RECURRING_TASK_INTERVAL_SECONDS
+        assert removed_task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+        assert removed_task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+        assert removed_task_name not in TASK_PRIORITIES
+        assert removed_task_name not in DEFAULT_TASK_CLASS_BY_NAME
 
 
 def test_trio_consumers_derive_schedule_priority_and_task_class_from_registry() -> None:
