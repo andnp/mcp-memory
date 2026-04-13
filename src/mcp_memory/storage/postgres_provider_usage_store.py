@@ -1,59 +1,23 @@
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 import time
+from typing import cast
 
-from mcp_memory.provider_usage_store import (
+from mcp_memory.operational_store_rows import (
     AIConversationRecord,
     ProviderAdmissionStateRecord,
+    ProviderUsageSample,
     ProviderUsageSummary,
+    build_provider_usage_summaries,
+    encode_optional_json_object,
+)
+from mcp_memory.provider_usage_store import (
     _ALL_WORKSPACES,
     _UNCHANGED,
-    _mean,
-    _top_reason,
 )
 from mcp_memory.storage.postgres_store_support import optional_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-
-
-def _coerce_int(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
-
-
-def _coerce_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
-
-
-def _bucket_int(bucket: dict[str, object], key: str) -> int:
-    return _coerce_int(bucket.get(key))
-
-
-def _bucket_list(bucket: dict[str, object], key: str) -> list[float]:
-    value = bucket.get(key)
-    if isinstance(value, list):
-        return value
-    raise TypeError(f"Expected list bucket value for {key!r}, got {type(value)!r}")
-
-
-def _bucket_reason_map(bucket: dict[str, object], key: str) -> dict[str, int]:
-    value = bucket.get(key)
-    if isinstance(value, dict):
-        return {str(reason): _coerce_int(count) for reason, count in value.items()}
-    raise TypeError(f"Expected dict bucket value for {key!r}, got {type(value)!r}")
 
 
 class PostgresProviderUsageRepository:
@@ -124,7 +88,7 @@ class PostgresProviderUsageRepository:
         subprocess_pid: int | None,
         prompt_text: str,
         response_text: str,
-        parsed: dict | None,
+        parsed: Mapping[str, object] | None,
         status: str,
         error_text: str | None,
         reason_category: str | None = None,
@@ -183,7 +147,7 @@ class PostgresProviderUsageRepository:
                         subprocess_pid,
                         prompt_text,
                         response_text,
-                        json.dumps(parsed, sort_keys=True) if parsed is not None else None,
+                        encode_optional_json_object(parsed),
                         status,
                         error_text,
                         reason_category,
@@ -250,7 +214,7 @@ class PostgresProviderUsageRepository:
         retry_delay_seconds: float | None = None,
         completed_at: float | None = None,
         response_text: str | object = _UNCHANGED,
-        parsed: dict | None | object = _UNCHANGED,
+        parsed: Mapping[str, object] | None | object = _UNCHANGED,
     ) -> int:
         return self._finalize_running_conversations(
             where_clause="request_id = %s",
@@ -333,15 +297,16 @@ class PostgresProviderUsageRepository:
         retry_delay_seconds: float | None,
         completed_at: float | None,
         response_text: str | object = _UNCHANGED,
-        parsed: dict | None | object = _UNCHANGED,
+        parsed: Mapping[str, object] | None | object = _UNCHANGED,
     ) -> int:
         finalized_at = time.time() if completed_at is None else completed_at
         keep_response_text = response_text is _UNCHANGED
         next_response_text = "" if keep_response_text else str(response_text)
         keep_parsed = parsed is _UNCHANGED
         next_parsed_json = None
-        if not keep_parsed and parsed is not None:
-            next_parsed_json = json.dumps(parsed, sort_keys=True)
+        if not keep_parsed:
+            assert parsed is None or isinstance(parsed, Mapping)
+            next_parsed_json = encode_optional_json_object(parsed)
         with optional_connection(self._sessions) as connection:
             if connection is None:
                 return 0
@@ -379,10 +344,13 @@ class PostgresProviderUsageRepository:
             connection.commit()
         return rowcount
 
-    def summarize_usage(self, *, workspace_id: str | None | object = _ALL_WORKSPACES, now: float | None = None):
+    def summarize_usage(
+        self,
+        *,
+        workspace_id: str | None | object = _ALL_WORKSPACES,
+        now: float | None = None,
+    ) -> list[ProviderUsageSummary]:
         current_time = time.time() if now is None else now
-        last_hour = current_time - 3600
-        last_day = current_time - 86400
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
         query = (
             "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code "
@@ -398,93 +366,12 @@ class PostgresProviderUsageRepository:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
-        active_states = {
-            (state.provider_key, state.model_name): state
-            for state in self.list_active_admission_states(now=current_time)
-        }
-        aggregate: dict[tuple[str | None, str, str, str], dict[str, object]] = {}
-        for row in rows:
-            key = (
-                None if row[0] is None else str(row[0]),
-                str(row[1]),
-                str(row[2]),
-                str(row[3]),
-            )
-            bucket = aggregate.setdefault(
-                key,
-                {
-                    "calls_last_hour": 0,
-                    "calls_last_day": 0,
-                    "failures_last_hour": 0,
-                    "failures_last_day": 0,
-                    "skips_last_hour": 0,
-                    "skips_last_day": 0,
-                    "duration_last_hour": [],
-                    "duration_last_day": [],
-                    "failure_reasons": {},
-                    "skip_reasons": {},
-                },
-            )
-            created_at = _coerce_float(row[6])
-            status = str(row[4])
-            reason_code = None if row[7] is None else str(row[7])
-            in_last_hour = created_at >= last_hour
-            in_last_day = created_at >= last_day
-            executed = status != "skipped"
-            if executed:
-                if in_last_day:
-                    bucket["calls_last_day"] = _bucket_int(bucket, "calls_last_day") + 1
-                    _bucket_list(bucket, "duration_last_day").append(_coerce_float(row[5]))
-                if in_last_hour:
-                    bucket["calls_last_hour"] = _bucket_int(bucket, "calls_last_hour") + 1
-                    _bucket_list(bucket, "duration_last_hour").append(_coerce_float(row[5]))
-                if status != "success" and in_last_day:
-                    bucket["failures_last_day"] = _bucket_int(bucket, "failures_last_day") + 1
-                    failure_key = reason_code or "unclassified_error"
-                    failure_reasons = _bucket_reason_map(bucket, "failure_reasons")
-                    failure_reasons[failure_key] = _coerce_int(failure_reasons.get(failure_key, 0)) + 1
-                    bucket["failure_reasons"] = failure_reasons
-                    if in_last_hour:
-                        bucket["failures_last_hour"] = _bucket_int(bucket, "failures_last_hour") + 1
-            else:
-                if in_last_day:
-                    bucket["skips_last_day"] = _bucket_int(bucket, "skips_last_day") + 1
-                    skip_key = reason_code or "unclassified_skip"
-                    skip_reasons = _bucket_reason_map(bucket, "skip_reasons")
-                    skip_reasons[skip_key] = _coerce_int(skip_reasons.get(skip_key, 0)) + 1
-                    bucket["skip_reasons"] = skip_reasons
-                if in_last_hour:
-                    bucket["skips_last_hour"] = _bucket_int(bucket, "skips_last_hour") + 1
-        summaries: list[ProviderUsageSummary] = []
-        for (task_name, provider_key, provider_name, model_name), bucket in aggregate.items():
-            active_state = active_states.get((provider_key, model_name))
-            duration_last_hour = _bucket_list(bucket, "duration_last_hour")
-            duration_last_day = _bucket_list(bucket, "duration_last_day")
-            failure_reasons = _bucket_reason_map(bucket, "failure_reasons")
-            skip_reasons = _bucket_reason_map(bucket, "skip_reasons")
-            summaries.append(
-                ProviderUsageSummary(
-                    task_name=task_name,
-                    provider_key=provider_key,
-                    provider_name=provider_name,
-                    model_name=model_name,
-                    calls_last_hour=_bucket_int(bucket, "calls_last_hour"),
-                    calls_last_day=_bucket_int(bucket, "calls_last_day"),
-                    failures_last_hour=_bucket_int(bucket, "failures_last_hour"),
-                    failures_last_day=_bucket_int(bucket, "failures_last_day"),
-                    skips_last_hour=_bucket_int(bucket, "skips_last_hour"),
-                    skips_last_day=_bucket_int(bucket, "skips_last_day"),
-                    avg_duration_last_hour=_mean(duration_last_hour),
-                    avg_duration_last_day=_mean(duration_last_day),
-                    top_failure_reason_last_day=_top_reason(failure_reasons),
-                    top_skip_reason_last_day=_top_reason(skip_reasons),
-                    active_admission_reason=None if active_state is None else active_state.reason_code,
-                    active_admission_category=None if active_state is None else active_state.reason_category,
-                    active_retry_delay_seconds=None if active_state is None else max(active_state.active_until - current_time, 0.0),
-                )
-            )
-        summaries.sort(key=lambda item: (-item.calls_last_day, -item.skips_last_day, item.task_name or "", item.provider_key))
-        return summaries
+        samples = [ProviderUsageSample.from_postgres_row(row) for row in rows]
+        return build_provider_usage_summaries(
+            samples=samples,
+            active_states=self.list_active_admission_states(now=current_time),
+            current_time=current_time,
+        )
 
     def upsert_admission_state(
         self,
@@ -577,19 +464,7 @@ class PostgresProviderUsageRepository:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
-        return [
-            ProviderAdmissionStateRecord(
-                provider_key=str(row[0]),
-                model_name=str(row[1]),
-                reason_category=str(row[2]),
-                reason_code=str(row[3]),
-                error_text=None if row[4] is None else str(row[4]),
-                retry_delay_seconds=None if row[5] is None else _coerce_float(row[5]),
-                active_until=_coerce_float(row[6]),
-                updated_at=_coerce_float(row[7]),
-            )
-            for row in rows
-        ]
+        return [ProviderAdmissionStateRecord.from_postgres_row(row) for row in rows]
 
     def count_recent_calls(
         self,
@@ -617,7 +492,7 @@ class PostgresProviderUsageRepository:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
-        return 0 if row is None else _coerce_int(row[0])
+        return 0 if row is None else int(cast(bool | int | float | str, row[0]))
 
     def count_recent_model_calls(
         self,
@@ -645,37 +520,7 @@ class PostgresProviderUsageRepository:
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
                 row = cursor.fetchone()
-        return 0 if row is None else _coerce_int(row[0])
+        return 0 if row is None else int(cast(bool | int | float | str, row[0]))
 
     def _row_to_conversation(self, row: tuple[object, ...]) -> AIConversationRecord:
-        parsed = None
-        if row[12] is not None:
-            if isinstance(row[12], str):
-                decoded = json.loads(row[12]) if row[12].strip() else None
-            else:
-                decoded = row[12]
-            if isinstance(decoded, dict):
-                parsed = {str(key): value for key, value in decoded.items()}
-        return AIConversationRecord(
-            id=_coerce_int(row[0]),
-            request_id=str(row[1]),
-            attempt=_coerce_int(row[2]),
-            workspace_id=None if row[3] is None else str(row[3]),
-            task_name=None if row[4] is None else str(row[4]),
-            task_id=None if row[5] is None else str(row[5]),
-            provider_key=str(row[6]),
-            provider_name=str(row[7]),
-            model_name=str(row[8]),
-            subprocess_pid=None if row[9] is None else _coerce_int(row[9]),
-            prompt_text=str(row[10]),
-            response_text=str(row[11]),
-            parsed=parsed,
-            status=str(row[13]),
-            error_text=None if row[14] is None else str(row[14]),
-            reason_category=None if row[15] is None else str(row[15]),
-            reason_code=None if row[16] is None else str(row[16]),
-            retry_delay_seconds=None if row[17] is None else _coerce_float(row[17]),
-            started_at=_coerce_float(row[18]),
-            completed_at=_coerce_float(row[19]),
-            duration_seconds=_coerce_float(row[20]),
-        )
+        return AIConversationRecord.from_postgres_row(row)

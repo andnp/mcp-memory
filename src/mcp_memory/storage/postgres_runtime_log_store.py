@@ -1,38 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import logging
 import threading
 import time
+from typing import cast
 
 from mcp_memory.config import LoggingConfig, PostgresStorageConfig
-from mcp_memory.runtime_log_store import RuntimeLogRecord, RuntimeLogSummary, _ALL_WORKSPACES, _AllWorkspacesSentinel, _build_log_filters, _decode_log_data
+from mcp_memory.operational_store_rows import RuntimeLogRecord, RuntimeLogSummary, encode_json_object
+from mcp_memory.runtime_log_store import _ALL_WORKSPACES, _AllWorkspacesSentinel, _build_log_filters
 from mcp_memory.storage.buffered_writer import BufferedWriter
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-
-
-def _coerce_int(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
-
-
-def _coerce_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
 
 
 def _normalize_workspace_id(workspace_id: str | None | _AllWorkspacesSentinel) -> str | None:
@@ -41,18 +20,6 @@ def _normalize_workspace_id(workspace_id: str | None | _AllWorkspacesSentinel) -
     if workspace_id is None or isinstance(workspace_id, str):
         return workspace_id
     raise TypeError(f"Expected workspace id, got {type(workspace_id)!r}")
-
-
-@dataclass(frozen=True)
-class _StoredRuntimeLog:
-    id: int
-    workspace_id: str | None
-    source: str
-    logger_name: str
-    level: str
-    message: str
-    created_at: float
-    data_json: object
 
 
 @dataclass(frozen=True)
@@ -115,7 +82,7 @@ class PostgresRuntimeLogRepository:
                     level=level,
                     message=message,
                     created_at=created_at,
-                    data_json=json.dumps(data, sort_keys=True),
+                    data_json=encode_json_object(data),
                 )
             )
         self.apply_retention_policy(now=created_at)
@@ -166,7 +133,7 @@ class PostgresRuntimeLogRepository:
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(query_sql, tuple([*params, limit]))
-                return [self._to_public_record(self._row_to_log(row)) for row in cursor.fetchall()]
+                return [RuntimeLogRecord.from_postgres_row(row) for row in cursor.fetchall()]
 
     def summarize_logs(
         self,
@@ -205,13 +172,13 @@ class PostgresRuntimeLogRepository:
             with connection.cursor() as cursor:
                 cursor.execute(total_sql, tuple(params))
                 total_row = cursor.fetchone()
-                total = 0 if total_row is None else _coerce_int(total_row[0])
+                total = 0 if total_row is None else int(cast(bool | int | float | str, total_row[0]))
 
                 cursor.execute(grouped_sql, tuple(params))
                 for row in cursor.fetchall():
                     level_name = str(row[0])
                     source_name = str(row[1])
-                    count = _coerce_int(row[2])
+                    count = int(cast(bool | int | float | str, row[2]))
                     by_level[level_name] = by_level.get(level_name, 0) + count
                     by_source[source_name] = by_source.get(source_name, 0) + count
 
@@ -259,29 +226,6 @@ class PostgresRuntimeLogRepository:
                     cursor.execute("DELETE FROM runtime_logs WHERE id = %s", (log_id,))
             connection.commit()
         return len(doomed_ids)
-
-    def _row_to_log(self, row: tuple[object, ...]) -> _StoredRuntimeLog:
-        return _StoredRuntimeLog(
-            id=_coerce_int(row[0]),
-            workspace_id=None if row[1] is None else str(row[1]),
-            source=str(row[2]),
-            logger_name=str(row[3]),
-            level=str(row[4]),
-            message=str(row[5]),
-            created_at=_coerce_float(row[6]),
-            data_json=row[7],
-        )
-
-    def _to_public_record(self, log_record: _StoredRuntimeLog) -> RuntimeLogRecord:
-        return RuntimeLogRecord(
-            id=log_record.id,
-            created_at=log_record.created_at,
-            level=log_record.level,
-            logger_name=log_record.logger_name,
-            source=log_record.source,
-            message=log_record.message,
-            data=_decode_log_data(log_record.data_json),
-        )
 
     def _flush_log_batch(self, batch: list[_PendingRuntimeLog]) -> None:
         if self._sessions is None or not batch:

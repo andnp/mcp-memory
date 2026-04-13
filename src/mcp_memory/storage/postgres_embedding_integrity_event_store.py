@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import json
 import time
 from typing import cast
 
 from mcp_memory.embedding_integrity_event_store import (
     EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
     EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
+)
+from mcp_memory.operational_store_rows import (
     EmbeddingIntegrityEventRecord,
     EmbeddingIntegrityEventSummary,
+    encode_json_object,
 )
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
@@ -63,7 +65,7 @@ class PostgresEmbeddingIntegrityEventRepository:
                         scanned_row_count,
                         invalid_row_count,
                         mixed_dimension_group_count,
-                        json.dumps(details or {}, sort_keys=True),
+                        encode_json_object(details or {}),
                         event_time,
                     ),
                 )
@@ -94,11 +96,11 @@ class PostgresEmbeddingIntegrityEventRepository:
                 grouped_rows = cursor.fetchall()
             connection.commit()
         by_kind = {
-            str(row[0]): _coerce_int(row[1])
+            str(row[0]): int(cast(bool | int | float | str, row[1]))
             for row in grouped_rows
         }
         return EmbeddingIntegrityEventSummary(
-            total=0 if total_row is None else _coerce_int(total_row[0]),
+            total=0 if total_row is None else int(cast(bool | int | float | str, total_row[0])),
             by_kind=by_kind,
             last_scan=self._fetch_latest_event(
                 event_kind=EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
@@ -147,45 +149,4 @@ def _workspace_where_clause(workspace_id: str | None) -> tuple[str, list[object]
 
 
 def _row_to_event(row: tuple[object, ...]) -> EmbeddingIntegrityEventRecord:
-    raw_details = row[9]
-    if isinstance(raw_details, str):
-        details = json.loads(raw_details) if raw_details.strip() else {}
-    elif isinstance(raw_details, dict):
-        details = raw_details
-    else:
-        details = {}
-    return EmbeddingIntegrityEventRecord(
-        id=_coerce_int(row[0]),
-        workspace_id=None if row[1] is None else str(row[1]),
-        event_kind=str(row[2]),
-        model_name=None if row[3] is None else str(row[3]),
-        source_kind=None if row[4] is None else str(row[4]),
-        source_id=None if row[5] is None else str(row[5]),
-        scanned_row_count=None if row[6] is None else _coerce_int(row[6]),
-        invalid_row_count=None if row[7] is None else _coerce_int(row[7]),
-        mixed_dimension_group_count=None if row[8] is None else _coerce_int(row[8]),
-        created_at=_coerce_float(row[10]),
-        details={str(key): value for key, value in details.items()} if isinstance(details, dict) else {},
-    )
-
-
-def _coerce_int(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected int-compatible value, got {type(value)!r}")
-
-
-def _coerce_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Expected float-compatible value, got {type(value)!r}")
+    return EmbeddingIntegrityEventRecord.from_postgres_row(row)

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import json
 import time
 from typing import cast
 
 from mcp_memory.config import LoggingConfig
+from mcp_memory.operational_store_rows import (
+    RuntimeLogRecord,
+    RuntimeLogSummary,
+    decode_json_object,
+    encode_json_object,
+)
 from mcp_memory.utils.db import DatabaseManager
-
-
-_ALL_WORKSPACES = object()
 
 
 class _AllWorkspacesSentinel:
@@ -17,24 +18,6 @@ class _AllWorkspacesSentinel:
 
 
 _ALL_WORKSPACES = _AllWorkspacesSentinel()
-
-
-@dataclass(frozen=True)
-class RuntimeLogRecord:
-    id: int
-    created_at: float
-    level: str
-    logger_name: str
-    source: str
-    message: str
-    data: dict[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class RuntimeLogSummary:
-    total: int
-    by_level: dict[str, int] = field(default_factory=dict)
-    by_source: dict[str, int] = field(default_factory=dict)
 
 
 class RuntimeLogRepository:
@@ -76,7 +59,7 @@ class RuntimeLogRepository:
                 level,
                 message,
                 created_at,
-                json.dumps(data, sort_keys=True),
+                encode_json_object(data),
             ),
         )
         conn.commit()
@@ -112,18 +95,7 @@ class RuntimeLogRepository:
             + " ORDER BY created_at DESC, id DESC LIMIT ?",
             [*params, limit],
         ).fetchall()
-        return [
-            RuntimeLogRecord(
-                id=int(row["id"]),
-                created_at=float(row["created_at"]),
-                level=str(row["level"]),
-                logger_name=str(row["logger_name"]),
-                source=str(row["source"]),
-                message=str(row["message"]),
-                data=_decode_log_data(row["data_json"]),
-            )
-            for row in rows
-        ]
+        return [RuntimeLogRecord.from_sqlite_row(row) for row in rows]
 
     def summarize_logs(
         self,
@@ -232,18 +204,7 @@ class RuntimeLogRepository:
 
 
 def _decode_log_data(raw_result: object):
-    if isinstance(raw_result, dict):
-        return {
-            str(key): value
-            for key, value in raw_result.items()
-        }
-    if not isinstance(raw_result, str) or not raw_result.strip():
-        return {}
-    try:
-        decoded = json.loads(raw_result)
-    except ValueError:
-        return {}
-    return decoded if isinstance(decoded, dict) else {}
+    return decode_json_object(raw_result)
 
 
 def _build_log_filters(
