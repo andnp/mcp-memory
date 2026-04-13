@@ -7,6 +7,7 @@ import pytest
 
 from mcp_memory.storage.postgres_provider_usage_store import PostgresProviderUsageRepository
 from tests.small.provider_usage_conversation_contract import (
+    assert_normalizes_invalid_persisted_conversation_payloads,
     assert_preserves_first_terminal_conversation_finalization,
 )
 
@@ -502,6 +503,47 @@ def test_postgres_provider_usage_repository_tracks_conversation_lifecycle() -> N
 def test_postgres_provider_usage_repository_preserves_first_terminal_conversation_finalization() -> None:
     assert_preserves_first_terminal_conversation_finalization(
         lambda: PostgresProviderUsageRepository(FakeSessionManager(), workspace_id="workspace-a")
+    )
+
+
+def test_postgres_provider_usage_repository_normalizes_invalid_persisted_conversation_payloads() -> None:
+    session_manager = FakeSessionManager()
+    repository = PostgresProviderUsageRepository(session_manager, workspace_id="workspace-a")
+
+    def load_conversation(raw_payload: object):
+        conversation_id = session_manager.state.next_conversation_id
+        session_manager.state.next_conversation_id += 1
+        request_id = f"req-invalid-payload-{conversation_id}"
+        session_manager.state.ai_conversations.append(
+            {
+                "id": conversation_id,
+                "request_id": request_id,
+                "attempt": 1,
+                "workspace_id": "workspace-a",
+                "task_name": "memory-curator",
+                "task_id": "task-invalid-payload",
+                "provider_key": "gemini-cli",
+                "provider_name": "Gemini CLI",
+                "model_name": "gemini-2.5-pro",
+                "subprocess_pid": 111,
+                "prompt_text": "prompt",
+                "response_text": "response",
+                "parsed_json": raw_payload,
+                "status": "success",
+                "error_text": None,
+                "reason_category": None,
+                "reason_code": None,
+                "retry_delay_seconds": None,
+                "started_at": 100.0,
+                "completed_at": 100.0,
+                "duration_seconds": 0.0,
+            }
+        )
+        return repository.get_conversation(request_id)[0]
+
+    assert_normalizes_invalid_persisted_conversation_payloads(
+        load_conversation,
+        non_object_payload=["not", "an", "object"],
     )
 
 

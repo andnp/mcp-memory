@@ -48,6 +48,7 @@ class ProviderUsageConversationRepositoryLike(Protocol):
 
 
 RepositoryFactory = Callable[[], ProviderUsageConversationRepositoryLike]
+ConversationLoader = Callable[[object], AIConversationRecord]
 
 
 def assert_preserves_first_terminal_conversation_finalization(make_repository: RepositoryFactory) -> None:
@@ -107,3 +108,20 @@ def assert_preserves_first_terminal_conversation_finalization(make_repository: R
     assert conversation.retry_delay_seconds == 45.0
     assert conversation.response_text == "partial response preserved"
     assert conversation.parsed == {"outcome": "retry"}
+
+
+def assert_normalizes_invalid_persisted_conversation_payloads(
+    load_conversation: ConversationLoader,
+    *,
+    malformed_payload: object = "not-json",
+    non_object_payload: object = "[]",
+) -> None:
+    malformed = load_conversation(malformed_payload)
+    non_object = load_conversation(non_object_payload)
+    missing = load_conversation(None)
+    blank = load_conversation("   ")
+
+    assert malformed.parsed == {}
+    assert non_object.parsed == {}
+    assert missing.parsed is None
+    assert blank.parsed is None

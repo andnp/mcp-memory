@@ -42,6 +42,21 @@ def decode_optional_json_object(raw: object) -> JsonObject | None:
     return decode_json_object(raw)
 
 
+def _decode_ai_conversation_parsed_json(raw: object) -> JsonObject | None:
+    """Decode persisted ``ai_conversations.parsed_json`` payloads.
+
+    Contract:
+    - SQL ``NULL`` and blank strings remain missing payloads (``None``)
+    - malformed JSON and any non-object payload normalize to ``{}``
+    - object payloads normalize to plain JSON-compatible dictionaries
+
+    This keeps legacy/bad rows readable with the same semantics across SQLite text
+    storage and Postgres JSONB reads.
+    """
+
+    return decode_optional_json_object(raw)
+
+
 def _normalize_json_object(raw: object) -> JsonObject:
     if not isinstance(raw, Mapping):
         return {}
@@ -206,7 +221,7 @@ class AIConversationRecord:
             subprocess_pid=_optional_int(row["subprocess_pid"]),
             prompt_text=_require_str(row["prompt_text"], "prompt_text"),
             response_text=_require_str(row["response_text"], "response_text"),
-            parsed=decode_optional_json_object(row["parsed_json"]),
+            parsed=_decode_ai_conversation_parsed_json(row["parsed_json"]),
             status=_require_str(row["status"], "status"),
             error_text=_optional_str(row["error_text"]),
             reason_category=_optional_str(row["reason_category"]),
@@ -232,7 +247,7 @@ class AIConversationRecord:
             subprocess_pid=_optional_int(row[9]),
             prompt_text=_require_str(row[10], "prompt_text"),
             response_text=_require_str(row[11], "response_text"),
-            parsed=decode_optional_json_object(row[12]),
+            parsed=_decode_ai_conversation_parsed_json(row[12]),
             status=_require_str(row[13], "status"),
             error_text=_optional_str(row[14]),
             reason_category=_optional_str(row[15]),
