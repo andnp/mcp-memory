@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
+from mcp_memory.core.task_results import TaskRunResult, TaskRunResultSource, coerce_task_run_result
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -53,8 +54,8 @@ class TaskRunRecord:
     started_at: float
     completed_at: float
     duration_seconds: float
-    result: dict[str, Any]
-    error_text: str | None
+    result: TaskRunResult = field(default_factory=TaskRunResult)
+    error_text: str | None = None
 
 
 @dataclass
@@ -69,7 +70,7 @@ class TaskRunSummary:
     last_started_at: float | None = None
     last_completed_at: float | None = None
     last_error: str | None = None
-    last_result: dict[str, Any] = field(default_factory=dict)
+    last_result: TaskRunResult = field(default_factory=TaskRunResult)
     avg_duration_seconds: float = 0.0
     total_lines_compressed: int = 0
 
@@ -220,10 +221,11 @@ class SQLiteTaskQueue:
         self,
         task_id: str,
         completed_at: float | None = None,
-        run_result: dict[str, Any] | None = None,
+        run_result: TaskRunResultSource = None,
         execution_epoch: int | None = None,
     ) -> TaskRecord:
         now = time.time() if completed_at is None else completed_at
+        normalized_result = coerce_task_run_result(run_result)
         conn = self._db.get_connection()
         row = self._get_running_task_row(conn, task_id, execution_epoch=execution_epoch)
         if row is None:
@@ -255,7 +257,7 @@ class SQLiteTaskQueue:
             status="completed",
             started_at=_coalesce_float(row["claimed_at"], row["started_at"], now),
             completed_at=now,
-            result=run_result or {},
+            result=normalized_result,
             error_text=None,
         )
         conn.commit()
@@ -1078,8 +1080,8 @@ class SQLiteTaskQueue:
             else:
                 summary.retry_runs += 1
 
-            result = _decode_json_object(row["result_json"])
-            summary.total_lines_compressed += _coerce_int(result.get("lines_compressed"), default=0)
+            result = coerce_task_run_result(row["result_json"])
+            summary.total_lines_compressed += result.lines_compressed or 0
 
             if summary.last_completed_at is None:
                 summary.last_status = str(row["status"])
@@ -1138,7 +1140,7 @@ class SQLiteTaskQueue:
             started_at=float(row["started_at"]),
             completed_at=float(row["completed_at"]),
             duration_seconds=float(row["duration_seconds"] or 0.0),
-            result=_decode_json_object(row["result_json"]),
+            result=coerce_task_run_result(row["result_json"]),
             error_text=row["error_text"],
         )
 
@@ -1152,9 +1154,10 @@ class SQLiteTaskQueue:
         status: str,
         started_at: float,
         completed_at: float,
-        result: dict[str, Any],
+        result: TaskRunResultSource,
         error_text: str | None,
     ) -> None:
+        normalized_result = coerce_task_run_result(result)
         duration_seconds = max(completed_at - started_at, 0.0)
         conn.execute(
             """
@@ -1180,7 +1183,7 @@ class SQLiteTaskQueue:
                 started_at,
                 completed_at,
                 duration_seconds,
-                json.dumps(result or {}, sort_keys=True),
+                json.dumps(normalized_result.to_dict(), sort_keys=True),
                 error_text,
             ),
         )
@@ -1200,16 +1203,6 @@ def _coalesce_float(*values: object) -> float:
         if isinstance(value, (int, float, str)):
             return float(value)
     return time.time()
-
-
-def _coerce_int(value: object, default: int = 0) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    return default
 
 
 def _is_process_alive(pid: int) -> bool:

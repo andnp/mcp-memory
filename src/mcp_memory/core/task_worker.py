@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from inspect import isawaitable, iscoroutinefunction
 import logging
@@ -17,6 +17,7 @@ from mcp_memory.core.maintenance_idle import (
 from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
+from mcp_memory.core.task_results import TaskRunResultSource
 from mcp_memory.core.task_handlers import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
     SYSTEM1_INGEST_TASK_NAME,
@@ -514,7 +515,7 @@ class RuntimeTaskWorker:
             await self._schedule_follow_up(task, failed_task)
             return
 
-        normalized_result = result if isinstance(result, dict) else {}
+        normalized_result = result if isinstance(result, Mapping) else {}
         if await asyncio.to_thread(task_queue.is_cancellation_requested, task.id):
             cancelled_task = await asyncio.to_thread(
                 task_queue.finalize_cancellation,
@@ -864,7 +865,7 @@ class RuntimeTaskWorker:
         self,
         task: TaskRecord,
         terminal_task: TaskRecord,
-        run_result: dict[str, Any] | None = None,
+        run_result: TaskRunResultSource = None,
     ) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
@@ -925,8 +926,8 @@ class RuntimeTaskWorker:
         return self._handlers.get(task_name)
 
 
-def _should_schedule_ingest_continuation(run_result: dict[str, Any] | None) -> bool:
-    if not isinstance(run_result, dict):
+def _should_schedule_ingest_continuation(run_result: TaskRunResultSource) -> bool:
+    if not isinstance(run_result, Mapping):
         return False
     pending_remaining = run_result.get("pending_remaining")
     meaningful_actions = run_result.get("meaningful_actions")

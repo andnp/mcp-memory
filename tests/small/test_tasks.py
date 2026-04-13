@@ -21,6 +21,7 @@ from mcp_memory.core.maintenance_idle import (
 )
 from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
+from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import (
     CURATOR_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
@@ -231,6 +232,8 @@ def test_sqlite_task_queue_complete_marks_terminal_state(db_manager) -> None:
     assert len(task_runs) == 1
     assert task_runs[0].status == "completed"
     assert task_runs[0].duration_seconds == 5.0
+    assert isinstance(task_runs[0].result, TaskRunResult)
+    assert task_runs[0].result.copy() == {}
 
 
 def test_sqlite_task_queue_fail_requeues_before_dead_letter(db_manager) -> None:
@@ -789,6 +792,8 @@ def test_sqlite_task_queue_summarize_task_runs_aggregates_status_and_compression
     assert summary.retry_runs == 0
     assert summary.avg_duration_seconds == 4.0
     assert summary.total_lines_compressed == 7
+    assert isinstance(summary.last_result, TaskRunResult)
+    assert summary.last_result.summary == "lines_compressed=7"
 
 
 def test_sqlite_task_queue_rejects_completion_for_non_running_task(db_manager) -> None:

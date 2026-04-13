@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 from typing import TypeAlias, cast
 
 from pydantic import BaseModel, Field, JsonValue
 
+from mcp_memory.core.task_results import TaskRunResult, build_task_run_result_summary, decode_task_run_result_payload
 from mcp_memory.management.models import (
     IngestAuditPayload,
     IngestEntryDispositionPayload,
@@ -102,7 +102,7 @@ class TaskResultView(BaseModel):
         return BaseModel.__eq__(self, other)
 
 
-TaskResultSource: TypeAlias = TaskResultView | Mapping[str, object] | str | None
+TaskResultSource: TypeAlias = TaskResultView | TaskRunResult | Mapping[str, object] | str | None
 
 
 def coerce_task_result_view(raw_result: object) -> TaskResultView:
@@ -114,90 +114,27 @@ def coerce_task_result_view(raw_result: object) -> TaskResultView:
 def build_task_result_view(raw_result: object) -> TaskResultView:
     raw_payload = decode_task_result_payload(raw_result)
     metadata = _build_run_result_metadata(raw_payload)
+    summary = raw_result.summary if isinstance(raw_result, TaskRunResult) else build_task_run_result_summary(raw_payload)
+    meaningful_actions = (
+        raw_result.meaningful_actions if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("meaningful_actions"))
+    )
+    lines_compressed = (
+        raw_result.lines_compressed if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("lines_compressed"))
+    )
+    stale = raw_result.stale if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("stale"))
     return TaskResultView(
         raw_payload=raw_payload,
-        summary=_build_result_summary(raw_payload),
+        summary=summary,
         metadata=metadata,
         ingest_audit=_build_ingest_audit(raw_payload, include_entries=True),
-        meaningful_actions=_coerce_int(raw_payload.get("meaningful_actions")),
-        lines_compressed=_coerce_int(raw_payload.get("lines_compressed")),
-        stale=_coerce_int(raw_payload.get("stale")),
+        meaningful_actions=meaningful_actions,
+        lines_compressed=lines_compressed,
+        stale=stale,
     )
 
 
 def decode_task_result_payload(raw_result: object) -> JsonObject:
-    if isinstance(raw_result, Mapping):
-        return _coerce_json_object(raw_result)
-    if not isinstance(raw_result, str) or not raw_result.strip():
-        return {}
-    try:
-        decoded = json.loads(raw_result)
-    except ValueError:
-        return {}
-    return _coerce_json_object(decoded)
-
-
-def _build_result_summary(result: JsonObject) -> str | None:
-    if not result:
-        return None
-    preferred_keys = (
-        "created",
-        "merged",
-        "updated",
-        "archived",
-        "absorbed_observations",
-        "degraded",
-        "restored",
-        "deleted_tasks",
-        "deleted_journal_entries",
-        "claimed_entry_ids",
-        "recoverable_entry_ids",
-        "deleted_entry_ids",
-        "released_entry_ids",
-        "meaningful_actions",
-        "processed_entry_ids",
-        "created_memory_ids",
-        "lines_compressed",
-        "requested_strategy",
-        "strategy_used",
-        "strategy_fallback_reason",
-        "candidate_count",
-        "sampled_memory_ids",
-        "compatibility_group",
-        "claimed_work_item_count",
-        "provider_calls_used",
-        "tool_calls_executed",
-        "mutations",
-        "work_item_batch_limit",
-        "max_batches_per_run",
-        "requested_grouping_strategy",
-        "grouping_strategy_used",
-        "grouping_fallback_reason",
-        "group_count",
-        "campaign_key",
-        "campaign_origin_family",
-        "campaign_family_keys",
-        "campaign_continuation_supported",
-        "compatible_batch_calls",
-    )
-    formatted_parts: list[str] = []
-    for key in preferred_keys:
-        if key not in result:
-            continue
-        value = result[key]
-        if isinstance(value, list):
-            formatted_parts.append(f"{key}={len(value)}")
-        else:
-            formatted_parts.append(f"{key}={value}")
-
-    if formatted_parts:
-        return ", ".join(formatted_parts)
-
-    for key in sorted(result):
-        value = result[key]
-        if isinstance(value, (str, int, float, bool)):
-            formatted_parts.append(f"{key}={value}")
-    return ", ".join(formatted_parts) if formatted_parts else None
+    return _coerce_json_object(decode_task_run_result_payload(raw_result))
 
 
 def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:

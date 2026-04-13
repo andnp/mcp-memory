@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
+from mcp_memory.core.task_results import TaskRunResult, TaskRunResultSource, coerce_task_run_result
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -61,8 +62,8 @@ class TaskRunRecord:
     started_at: float
     completed_at: float
     duration_seconds: float
-    result: dict[str, Any]
-    error_text: str | None
+    result: TaskRunResult = field(default_factory=TaskRunResult)
+    error_text: str | None = None
 
 
 @dataclass
@@ -77,7 +78,7 @@ class TaskRunSummary:
     last_started_at: float | None = None
     last_completed_at: float | None = None
     last_error: str | None = None
-    last_result: dict[str, Any] = field(default_factory=dict)
+    last_result: TaskRunResult = field(default_factory=TaskRunResult)
     avg_duration_seconds: float = 0.0
     total_lines_compressed: int = 0
 
@@ -204,12 +205,13 @@ class PostgresTaskQueue:
         self,
         task_id: str,
         completed_at: float | None = None,
-        run_result: dict[str, Any] | None = None,
+        run_result: TaskRunResultSource = None,
         execution_epoch: int | None = None,
     ) -> TaskRecord:
         if self._sessions is None:
             raise RuntimeError("task_queue_unavailable")
         now = time.time() if completed_at is None else completed_at
+        normalized_result = coerce_task_run_result(run_result)
         with self._sessions.open_connection() as connection:
             row = self._get_running_task_row(connection, task_id, execution_epoch=execution_epoch)
             if row is None:
@@ -241,7 +243,7 @@ class PostgresTaskQueue:
                 status="completed",
                 started_at=_coalesce_float(row[12], row[13], now),
                 completed_at=now,
-                result=run_result or {},
+                result=normalized_result,
                 error_text=None,
             )
             connection.commit()
@@ -971,8 +973,8 @@ class PostgresTaskQueue:
                 summary.cancelled_runs += 1
             else:
                 summary.retry_runs += 1
-            result = _decode_json_object(row[8])
-            summary.total_lines_compressed += _coerce_int(result.get("lines_compressed"), default=0)
+            result = coerce_task_run_result(row[8])
+            summary.total_lines_compressed += result.lines_compressed or 0
             if summary.last_completed_at is None:
                 summary.last_status = str(row[4])
                 summary.last_started_at = _as_float(row[5])
@@ -1076,7 +1078,7 @@ class PostgresTaskQueue:
             started_at=_as_float(row[5]),
             completed_at=_as_float(row[6]),
             duration_seconds=_as_float(row[7]),
-            result=_decode_json_object(row[8]),
+            result=coerce_task_run_result(row[8]),
             error_text=None if row[9] is None else str(row[9]),
         )
 
@@ -1090,9 +1092,10 @@ class PostgresTaskQueue:
         status: str,
         started_at: float,
         completed_at: float,
-        result: dict[str, Any],
+        result: TaskRunResultSource,
         error_text: str | None,
     ) -> None:
+        normalized_result = coerce_task_run_result(result)
         duration_seconds = max(completed_at - started_at, 0.0)
         with connection.cursor() as cursor:
             cursor.execute(
@@ -1111,7 +1114,7 @@ class PostgresTaskQueue:
                     started_at,
                     completed_at,
                     duration_seconds,
-                    json.dumps(result or {}, sort_keys=True),
+                    json.dumps(normalized_result.to_dict(), sort_keys=True),
                     error_text,
                 ),
             )

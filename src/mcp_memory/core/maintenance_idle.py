@@ -9,6 +9,7 @@ from mcp_memory.core.maintenance_schedule import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
 )
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
+from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
 
 
@@ -84,7 +85,7 @@ def should_preserve_idle_pause(
 ) -> bool:
     if summary.last_status != "completed":
         return False
-    if not isinstance(summary.last_result, dict) or not summary.last_result.get("paused_for_idle"):
+    if not summary.last_result.get("paused_for_idle"):
         return False
 
     idle_state = build_global_idle_state(journal, now=now)
@@ -110,7 +111,7 @@ def resume_paused_recurring_maintenance(
 
     for task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES:
         summary = task_queue.summarize_task_runs([task_name], workspace_id=None)[0]
-        if not isinstance(summary.last_result, dict) or not summary.last_result.get("paused_for_idle"):
+        if not summary.last_result.get("paused_for_idle"):
             continue
 
         existing = task_queue.find_open_task(task_name, None)
@@ -143,7 +144,7 @@ def resume_paused_recurring_maintenance(
     return resumed_tasks
 
 
-def _build_resumed_task_data(task_name: str, last_result: dict[str, Any], *, jitter_seconds: float) -> dict[str, Any]:
+def _build_resumed_task_data(task_name: str, last_result: TaskRunResult, *, jitter_seconds: float) -> dict[str, Any]:
     data: dict[str, Any] = {
         "workspace_id": None,
         "trigger": "recurring_resume",
@@ -171,7 +172,7 @@ def _timestamps_match(left: object, right: object) -> bool:
     return abs(float(left) - float(right)) <= 1e-6
 
 
-def _task_priority_from_result(last_result: dict[str, Any], default: int = 100) -> int:
+def _task_priority_from_result(last_result: TaskRunResult, default: int = 100) -> int:
     raw_priority = last_result.get("task_priority")
     if isinstance(raw_priority, int) and not isinstance(raw_priority, bool):
         return raw_priority
@@ -180,7 +181,7 @@ def _task_priority_from_result(last_result: dict[str, Any], default: int = 100) 
     return default
 
 
-def _interval_seconds_from_result(task_name: str, last_result: dict[str, Any]) -> float:
+def _interval_seconds_from_result(task_name: str, last_result: TaskRunResult) -> float:
     raw_interval_seconds = last_result.get("interval_seconds")
     if isinstance(raw_interval_seconds, (int, float)) and not isinstance(raw_interval_seconds, bool):
         return float(raw_interval_seconds)

@@ -4,6 +4,7 @@ from mcp_memory.management.agent_run_reporting import (
     extract_ingest_audit,
     extract_run_result_metadata,
 )
+from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
 from mcp_memory.management.result_views import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
@@ -120,6 +121,34 @@ def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None
     assert payload.result_metadata.selector_feature_snapshot.candidate_population.metrics["content_chars"].p50 == 22.0
     assert payload.result_metadata.selector_feature_snapshot.selected_population.count == 3
     assert payload.result_metadata.candidate_count == 8
+
+
+def test_build_agent_run_history_payload_accepts_core_task_run_result_wrapper() -> None:
+    result = coerce_task_run_result(
+        {
+            "strategy_used": "semantic",
+            "candidate_count": 3,
+            "claimed_entry_ids": [101],
+        }
+    )
+
+    payload = build_agent_run_history_payload(
+        task_id="task-1",
+        task_name="ingest-system1",
+        status="completed",
+        started_at=10.0,
+        completed_at=12.0,
+        duration_seconds=2.0,
+        error_text=None,
+        result=result,
+        detail_level="full",
+    )
+
+    assert isinstance(result, TaskRunResult)
+    assert payload.result_summary == result.summary
+    assert payload.result_metadata.strategy_used == "semantic"
+    assert payload.result_metadata.candidate_count == 3
+    assert payload.result == {"strategy_used": "semantic", "candidate_count": 3, "claimed_entry_ids": [101]}
 
 
 def test_extract_run_result_metadata_builds_structured_mutation_outcome_from_legacy_delta_keys() -> None:

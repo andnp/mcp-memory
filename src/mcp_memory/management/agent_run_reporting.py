@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
@@ -47,7 +48,8 @@ def build_agent_runs(task_queue, workspace_id: str | None) -> list[AgentRunPaylo
     )
     payloads: list[AgentRunPayload] = []
     for summary in summaries:
-        result_view = coerce_task_result_view(summary.last_result)
+        last_result = summary.last_result
+        result_view = coerce_task_result_view(last_result)
         seconds_since_last_completion = None
         if summary.last_completed_at is not None:
             seconds_since_last_completion = max(now - summary.last_completed_at, 0.0)
@@ -70,7 +72,7 @@ def build_agent_runs(task_queue, workspace_id: str | None) -> list[AgentRunPaylo
                 last_completed_at=summary.last_completed_at,
                 seconds_since_last_completion=seconds_since_last_completion,
                 last_error=summary.last_error,
-                last_result_summary=result_view.summary,
+                last_result_summary=last_result.summary if isinstance(last_result, TaskRunResult) else result_view.summary,
                 last_result_metadata=result_view.metadata_copy(),
                 last_ingest_audit=result_view.compact_ingest_audit(),
                 next_available_at=next_available_at,
@@ -136,6 +138,7 @@ def build_agent_run_history_payload(
 ) -> AgentRunHistoryPayload:
     include_full_result = detail_level == "full"
     result_view = coerce_task_result_view(result)
+    result_summary = result.summary if isinstance(result, TaskRunResult) else result_view.summary
     return AgentRunHistoryPayload(
         task_id=task_id,
         task_name=task_name,
@@ -144,7 +147,7 @@ def build_agent_run_history_payload(
         completed_at=completed_at,
         duration_seconds=duration_seconds,
         error_text=error_text,
-        result_summary=result_view.summary,
+        result_summary=result_summary,
         result_metadata=result_view.metadata_copy(),
         ingest_audit=result_view.full_ingest_audit() if include_full_result else result_view.compact_ingest_audit(),
         result=result_view.raw_payload if include_full_result else None,
@@ -152,6 +155,8 @@ def build_agent_run_history_payload(
 
 
 def format_result_summary(result: TaskResultSource) -> str | None:
+    if isinstance(result, TaskRunResult):
+        return result.summary
     return coerce_task_result_view(result).summary
 
 
