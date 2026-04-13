@@ -26,8 +26,6 @@ from mcp_memory.core.agent_runtime import (
     build_runtime_task_worker,
     handle_defragmenter_task,
     handle_conflict_detector_task,
-    handle_conflict_screening_task,
-    handle_dedup_prep_task,
     handle_memory_curator_task,
     handle_deduplicator_task,
     handle_fact_checker_task,
@@ -35,13 +33,12 @@ from mcp_memory.core.agent_runtime import (
     handle_graph_linker_task,
     handle_ingest_system1_task,
     handle_project_manager_task,
-    handle_tag_normalizer_task,
     handle_summarize_memory_task,
     handle_sweeper_task,
     handle_taxonomist_task,
     _provider_for_task,
 )
-from mcp_memory.core.maintenance_schedule import LEGACY_MAINTENANCE_TASK_NAME_ALIASES, RECURRING_TASK_INTERVAL_SECONDS
+from mcp_memory.core.maintenance_schedule import RECURRING_TASK_INTERVAL_SECONDS
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult
@@ -84,6 +81,11 @@ pytestmark = pytest.mark.medium
 LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
 LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
 LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
+LEGACY_MAINTENANCE_TASK_NAMES = (
+    LEGACY_CONFLICT_SCREENING_TASK_NAME,
+    LEGACY_DEDUP_PREP_TASK_NAME,
+    LEGACY_TAG_NORMALIZER_TASK_NAME,
+)
 
 
 class _BootstrapContextStub:
@@ -1933,81 +1935,42 @@ def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_task
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_keeps_legacy_manual_dedup_prep_rows_runnable_without_follow_up(db_manager) -> None:
+@pytest.mark.parametrize("legacy_task_name", LEGACY_MAINTENANCE_TASK_NAMES)
+async def test_runtime_task_worker_fails_legacy_manual_maintenance_rows_without_registered_handler(
+    db_manager,
+    legacy_task_name: str,
+) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
 
     task = queue.enqueue(
-        LEGACY_DEDUP_PREP_TASK_NAME,
+        legacy_task_name,
         workspace_id=None,
         data={"workspace_id": None},
         available_at=0.0,
-        task_id="manual-dedup-prep",
+        task_id=f"legacy:{legacy_task_name}",
     )
     claimed = queue.claim_next(now=100.0)
     assert claimed is not None
 
     worker = build_runtime_task_worker(ctx)
 
+    assert legacy_task_name not in worker._handlers
+
     await worker._process_task(claimed)  # noqa: SLF001
 
-    completed = queue.get_task(task.id)
-    assert completed.status == "completed"
-    assert queue.find_open_task(LEGACY_DEDUP_PREP_TASK_NAME, None) is None
+    failed = queue.get_task(task.id)
+    assert failed.status == "failed"
+    assert failed.last_error == f"No task handler registered for {legacy_task_name}"
 
 
-@pytest.mark.asyncio
-async def test_build_runtime_task_worker_dispatches_legacy_wrapper_names_to_canonical_handlers(db_manager, monkeypatch) -> None:
+def test_build_runtime_task_worker_does_not_register_legacy_wrapper_names(db_manager) -> None:
     ctx = ApplicationContext(db_manager=db_manager, task_queue=SQLiteTaskQueue(db_manager))
-    calls: list[tuple[str, str, object | None]] = []
-
-    async def fake_conflict_detector(runtime_ctx, task, provider=None):
-        del runtime_ctx
-        calls.append((task.task_name, task.id, provider))
-        return {"handled": task.task_name}
-
-    async def fake_deduplicator(runtime_ctx, task, provider=None):
-        del runtime_ctx
-        calls.append((task.task_name, task.id, provider))
-        return {"handled": task.task_name}
-
-    async def fake_taxonomist(runtime_ctx, task, provider=None):
-        del runtime_ctx
-        calls.append((task.task_name, task.id, provider))
-        return {"handled": task.task_name}
-
-    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_conflict_detector_task", fake_conflict_detector)
-    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_deduplicator_task", fake_deduplicator)
-    monkeypatch.setattr("mcp_memory.core.agent_runtime.handle_taxonomist_task", fake_taxonomist)
 
     worker = build_runtime_task_worker(ctx)
 
-    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES:
-        await worker._handlers[legacy_task_name](
-            ctx,
-            TaskRecord(
-                id=f"legacy:{legacy_task_name}",
-                task_name=legacy_task_name,
-                data={},
-                workspace_id=None,
-                status="running",
-                priority=100,
-                retries_count=0,
-                max_retries=3,
-                created_at=0.0,
-                updated_at=0.0,
-                available_at=0.0,
-                claimed_at=0.0,
-                started_at=0.0,
-                completed_at=None,
-                last_error=None,
-            ),
-        )
-
-    assert calls == [
-        (canonical_task_name, f"legacy:{legacy_task_name}", None)
-        for legacy_task_name, canonical_task_name in LEGACY_MAINTENANCE_TASK_NAME_ALIASES.items()
-    ]
+    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAMES:
+        assert legacy_task_name not in worker._handlers
 
 
 def test_provider_for_task_accepts_provider_selection_capability_view() -> None:
@@ -3502,7 +3465,7 @@ async def test_graph_linker_treats_variant_link_type_spellings_as_existing_links
 
 
 @pytest.mark.asyncio
-async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+async def test_conflict_detector_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3523,11 +3486,11 @@ async def test_conflict_screening_seeds_agentic_review_when_fallback_is_sparse(m
             )
             assert record is not None
 
-        result = await handle_conflict_screening_task(
+        result = await handle_conflict_detector_task(
             runtime,
             TaskRecord(
-                id="conflict-screening-task",
-                task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
+            id="conflict-detector-task",
+            task_name=CONFLICT_DETECTOR_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3586,11 +3549,11 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
             assert record is not None
             records.append(record)
 
-        screening_result = await handle_conflict_screening_task(
+        seed_result = await handle_conflict_detector_task(
             runtime,
             TaskRecord(
-                id="conflict-screening-review-seed",
-                task_name=LEGACY_CONFLICT_SCREENING_TASK_NAME,
+            id="conflict-detector-review-seed",
+            task_name=CONFLICT_DETECTOR_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3606,7 +3569,7 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
                 last_error=None,
             ),
         )
-        assert screening_result["seeded_work_item_count"] == 1
+        assert seed_result["seeded_work_item_count"] == 1
 
         provider = FakeAIProvider(
             responses=[
@@ -3801,7 +3764,7 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
 
 
 @pytest.mark.asyncio
-async def test_defragmenter_and_tag_normalizer_update_memory_state(monkeypatch, tmp_path: Path) -> None:
+async def test_defragmenter_and_taxonomist_update_memory_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3854,11 +3817,11 @@ async def test_defragmenter_and_tag_normalizer_update_memory_state(monkeypatch, 
                 last_error=None,
             ),
         )
-        tax_result = await handle_tag_normalizer_task(
+        tax_result = await handle_taxonomist_task(
             runtime,
             TaskRecord(
-            id="tag-normalizer-task",
-            task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
+            id="taxonomist-task",
+            task_name=TAXONOMIST_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id, "strategy": "never-surfaced"},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -4027,7 +3990,7 @@ async def test_defragmenter_does_not_group_records_from_generic_system_tags_alon
 
 
 @pytest.mark.asyncio
-async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_records(monkeypatch, tmp_path: Path) -> None:
+async def test_taxonomist_skips_provider_and_seeds_enrichment_for_untagged_records(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -4054,11 +4017,11 @@ async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_r
         )
         assert record is not None and untagged is not None
 
-        result = await handle_tag_normalizer_task(
+        result = await handle_taxonomist_task(
             runtime,
             TaskRecord(
-                id="tag-normalizer-deterministic-task",
-                task_name=LEGACY_TAG_NORMALIZER_TASK_NAME,
+            id="taxonomist-deterministic-task",
+            task_name=TAXONOMIST_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -4079,12 +4042,12 @@ async def test_tag_normalizer_skips_provider_and_seeds_enrichment_for_untagged_r
         assert result["strategy_selection_mode"] == "deterministic_scores"
         assert result["strategy_selection_reason"] is not None
         assert result["strategy_selection_scores"] is not None
+        assert result["inline_normalized_count"] == 1
         assert result["updated"] == 1
+        assert result["provider_calls_used"] == 0
+        assert result["claimed_work_item_count"] == 0
         assert updated is not None and updated.tags == ["auth", "testing"]
-        assert result["seeded_enrichment_count"] == 1
-        normalization_items = runtime.work_items.list_items(family_key="memory_tag_normalization", limit=5)
         enrichment_items = runtime.work_items.list_items(family_key="memory_tagging", limit=5)
-        assert [item.status for item in normalization_items] == ["completed"]
         assert [item.status for item in enrichment_items] == ["pending"]
         assert [item.payload for item in enrichment_items] == [
             {"memory_id": untagged.id, "workspace_id": runtime.workspace_id}
@@ -5010,78 +4973,6 @@ async def test_deduplicator_merges_related_facts_and_absorbs_observations(monkey
 
 
 @pytest.mark.asyncio
-async def test_dedup_prep_seeds_agentic_review_work(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
-    assert runtime.repository is not None
-    assert runtime.work_items is not None
-
-    try:
-        first = runtime.repository.create_memory(
-            title="Duplicate auth fact",
-            content="JWTs are required for all clients.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["auth"],
-        )
-        second = runtime.repository.create_memory(
-            title="Duplicate auth fact copy",
-            content="JWTs are required for all clients.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["auth"],
-        )
-        observation = runtime.repository.create_memory(
-            title="Auth observation",
-            content="Observed another note about JWT enforcement.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="observation",
-            tags=["auth"],
-        )
-        assert first is not None and second is not None and observation is not None
-
-        result = await handle_dedup_prep_task(
-            runtime,
-            TaskRecord(
-                id="dedup-prep-task",
-                task_name=LEGACY_DEDUP_PREP_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
-                workspace_id=runtime.workspace_id,
-                status="running",
-                priority=100,
-                retries_count=0,
-                max_retries=3,
-                created_at=0.0,
-                updated_at=0.0,
-                available_at=0.0,
-                claimed_at=0.0,
-                started_at=0.0,
-                completed_at=None,
-                last_error=None,
-            ),
-        )
-
-        review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
-
-        assert result["seeded_work_item_count"] == 1
-        assert result["work_item_family"] == "memory_dedup_review"
-        assert result["work_item_execution_lane"] == "agentic"
-        assert result["seed_source"] == "frontier_seed"
-        assert result["seed_record_count"] >= 3
-        assert [item.status for item in review_items] == ["pending"]
-        assert result["created_work_item_id"] == review_items[0].id
-        assert set(review_items[0].payload["seed_memory_ids"]) >= {first.id, second.id}
-        packet_ids = set(review_items[0].payload["seed_memory_ids"]) | set(review_items[0].payload["support_memory_ids"])
-        assert observation.id in packet_ids
-    finally:
-        runtime.close()
-
-
-@pytest.mark.asyncio
 async def test_deduplicator_seeds_review_work_after_low_yield_direct_pass(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -5184,27 +5075,22 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
         )
         assert first is not None and second is not None
 
-        prep_result = await handle_dedup_prep_task(
-            runtime,
-            TaskRecord(
-                id="dedup-prep-review-seed",
-                task_name=LEGACY_DEDUP_PREP_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id, "strategy": "anomaly"},
-                workspace_id=runtime.workspace_id,
-                status="running",
-                priority=100,
-                retries_count=0,
-                max_retries=3,
-                created_at=0.0,
-                updated_at=0.0,
-                available_at=0.0,
-                claimed_at=0.0,
-                started_at=0.0,
-                completed_at=None,
-                last_error=None,
-            ),
+        review_item, created = runtime.work_items.enqueue_unique(
+            family_key="memory_dedup_review",
+            execution_lane="agentic",
+            workspace_id=runtime.workspace_id,
+            priority=100,
+            idempotency_key=f"memory_dedup_review:{first.id}:{second.id}",
+            payload={
+                "seed_memory_ids": [first.id, second.id],
+                "support_memory_ids": [],
+                "packet_record_count": 2,
+                "strategy_used": "anomaly",
+                "candidate_count": 2,
+            },
         )
-        assert prep_result["seeded_work_item_count"] == 1
+        assert created is True
+        assert review_item.status == "pending"
 
         class _AgenticProvider:
             def __init__(self) -> None:

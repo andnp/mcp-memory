@@ -184,56 +184,6 @@ async def handle_deduplicator_task(
     )
 
 
-async def handle_dedup_prep_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    candidates = [
-        record
-        for record in ctx.repository.list_memories(
-            workspace_id=workspace_id,
-            status="active",
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
-        if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
-    ]
-    seed_batch = _deduplicator_support.select_deduplicator_seed_batch(
-        ctx,
-        candidates,
-        task_id=task.id,
-        strategy=requested_sampling_strategy(task),
-    )
-    seed_records = seed_batch.records
-    facts = [record for record in seed_records if record.type == "fact"]
-    if not facts:
-        return sampling_payload(
-            seed_batch,
-            sampled_records=seed_records,
-            seed_records=seed_records,
-            seeded_work_item_count=0,
-        )
-
-    seeded_review = _seed_dedup_review_from_seed_batch(
-        ctx,
-        task=task,
-        workspace_id=workspace_id,
-        seed_batch=seed_batch,
-        seed_records=seed_records,
-        candidates=candidates,
-    )
-    return sampling_payload(
-        seed_batch,
-        sampled_records=seed_records,
-        seed_records=seeded_review["packet_records"],
-        extra=seeded_review["metadata"],
-        seeded_work_item_count=seeded_review["seeded_work_item_count"],
-    )
-
-
 def _claim_dedup_review_work_batch(
     ctx: ApplicationContext,
     *,

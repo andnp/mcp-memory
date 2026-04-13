@@ -5,7 +5,6 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.constants import (
-    CONFLICT_DETECTOR_TASK_NAME,
     DEFAULT_AGENT_SCAN_LIMIT,
     GRAPH_LINKER_TASK_NAME,
 )
@@ -218,28 +217,6 @@ async def handle_conflict_detector_task(
     )
 
 
-async def handle_conflict_screening_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0, "seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    sampled_batch = _sample_conflict_candidates(ctx, task, workspace_id=workspace_id)
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
-
-    return await _run_conflict_sparse_frontier_task(
-        ctx,
-        task=task,
-        workspace_id=workspace_id,
-        sampled_batch=sampled_batch,
-        candidates=candidates,
-    )
-
-
 async def _run_conflict_sparse_frontier_task(
     ctx: ApplicationContext,
     *,
@@ -288,11 +265,11 @@ def _sample_graph_link_candidates(
     *,
     workspace_id: str | None = None,
 ):
+    sampling_task = task if task.task_name == GRAPH_LINKER_TASK_NAME else replace(task, task_name=GRAPH_LINKER_TASK_NAME)
     return _sample_relationship_review_candidates(
         ctx,
-        task,
+        sampling_task,
         workspace_id=workspace_id,
-        canonical_task_name=GRAPH_LINKER_TASK_NAME,
         allowed_types=None,
         allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,
         strategy_weights=_relationship_review_support.GRAPH_LINKER_STRATEGY_WEIGHTS,
@@ -309,7 +286,6 @@ def _sample_conflict_candidates(
         ctx,
         task,
         workspace_id=workspace_id,
-        canonical_task_name=CONFLICT_DETECTOR_TASK_NAME,
         allowed_types={"fact", "plan"},
         allowed_strategies=_relationship_review_support.CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
         strategy_weights=_relationship_review_support.CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
@@ -321,7 +297,6 @@ def _sample_relationship_review_candidates(
     task: TaskRecord,
     *,
     workspace_id: str | None,
-    canonical_task_name: str,
     allowed_types: set[str] | None,
     allowed_strategies: tuple[str, ...],
     strategy_weights: dict[str, int],
@@ -335,10 +310,9 @@ def _sample_relationship_review_candidates(
     )
     if allowed_types is not None:
         all_candidates = [record for record in all_candidates if record.type in allowed_types]
-    sampling_task = task if task.task_name == canonical_task_name else replace(task, task_name=canonical_task_name)
     return sample_maintenance_candidates(
         ctx,
-        sampling_task,
+        task,
         all_candidates,
         allowed_strategies=allowed_strategies,
         strategy_weights=strategy_weights,

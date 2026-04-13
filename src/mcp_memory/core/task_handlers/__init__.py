@@ -36,8 +36,6 @@ from mcp_memory.core.task_handlers.embedding_repair import handle_embedding_repa
 from mcp_memory.core.task_handlers.ingest import handle_ingest_system1_task
 from mcp_memory.core.task_handlers.maintenance import (
     handle_conflict_detector_task,
-    handle_conflict_screening_task,
-    handle_dedup_prep_task,
     handle_memory_curator_task,
     handle_deduplicator_task,
     handle_defragmenter_task,
@@ -45,7 +43,6 @@ from mcp_memory.core.task_handlers.maintenance import (
     handle_graph_link_discovery_task,
     handle_graph_linker_task,
     handle_project_manager_task,
-    handle_tag_normalizer_task,
     handle_sweeper_task,
     handle_taxonomist_task,
 )
@@ -85,8 +82,6 @@ __all__ = [
     "TRIGGERABLE_BACKGROUND_TASK_NAMES",
     "task_priority",
     "handle_conflict_detector_task",
-    "handle_conflict_screening_task",
-    "handle_dedup_prep_task",
     "handle_memory_curator_task",
     "handle_deduplicator_task",
     "handle_defragmenter_task",
@@ -96,7 +91,6 @@ __all__ = [
     "handle_embedding_repair_task",
     "handle_ingest_system1_task",
     "handle_project_manager_task",
-    "handle_tag_normalizer_task",
     "handle_summarize_memory_task",
     "handle_sweeper_task",
     "handle_taxonomist_task",

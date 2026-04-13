@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from inspect import isawaitable
 import time
 from typing import Any
@@ -23,7 +22,6 @@ from mcp_memory.core.task_handlers.agentic_result_support import (
     extract_agentic_tool_names,
     extract_tool_counts,
 )
-from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_handlers.campaigns import (
     campaign_family_keys,
     campaign_metadata,
@@ -34,8 +32,6 @@ from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
     COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
     EXECUTION_LANE_AGENTIC,
-    EXECUTION_LANE_DETERMINISTIC,
-    WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
     WORK_FAMILY_MEMORY_TAGGING,
 )
 
@@ -72,10 +68,9 @@ def select_taxonomist_sampling_batch(
     *,
     limit: int,
 ) -> SamplingBatch:
-    sampling_task = task if task.task_name == TAXONOMIST_TASK_NAME else replace(task, task_name=TAXONOMIST_TASK_NAME)
     return sample_maintenance_candidates(
         ctx,
-        sampling_task,
+        task,
         candidates,
         allowed_strategies=TAXONOMIST_ALLOWED_STRATEGIES,
         strategy_weights=TAXONOMIST_STRATEGY_WEIGHTS,
@@ -177,25 +172,6 @@ def claim_taxonomist_work_batch(
     )
 
 
-def claim_tag_normalizer_work_batch(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str | None,
-    limit: int,
-) -> list[Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None or limit < 1:
-        return []
-    return work_items.claim_batch(
-        family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
-        execution_lane=EXECUTION_LANE_DETERMINISTIC,
-        lease_owner=task.id,
-        limit=limit,
-        workspace_id=workspace_id,
-    )
-
-
 def seed_taxonomist_work_items(
     ctx: ApplicationContext,
     *,
@@ -214,35 +190,6 @@ def seed_taxonomist_work_items(
             task=task,
             memory_id=record.id,
             workspace_id=workspace_id,
-        )
-        seeded[record.id] = work_item
-    return seeded
-
-
-def seed_tag_normalizer_work_items(
-    ctx: ApplicationContext,
-    *,
-    task: TaskRecord,
-    workspace_id: str | None,
-    candidates: list[Any],
-    normalize_tag_values,
-) -> dict[str, Any]:
-    work_items = getattr(ctx, "work_items", None)
-    if work_items is None:
-        return {}
-    seeded: dict[str, Any] = {}
-    for record in candidates:
-        normalized_tags = normalize_tag_values(record.tags)
-        if normalized_tags == record.tags:
-            continue
-        signature = tag_normalization_signature(record.tags)
-        work_item, _ = work_items.enqueue_unique(
-            family_key=WORK_FAMILY_MEMORY_TAG_NORMALIZATION,
-            execution_lane=EXECUTION_LANE_DETERMINISTIC,
-            workspace_id=workspace_id,
-            priority=task.priority,
-            idempotency_key=f"memory_tag_normalization:{record.id}:{signature}",
-            payload={"memory_id": record.id, "workspace_id": workspace_id, "observed_tags": list(record.tags)},
         )
         seeded[record.id] = work_item
     return seeded
@@ -307,17 +254,6 @@ def inline_normalize_taxonomist_candidates(
         if not refreshed_record.tags:
             untagged_candidates.append(refreshed_record)
     return normalized_candidates, untagged_candidates, updated
-
-
-def needs_tag_normalization(tags: list[str], normalize_tag_values) -> bool:
-    normalized_tags = normalize_tag_values(tags)
-    return bool(tags) and normalized_tags != tags
-
-
-def tag_normalization_signature(tags: list[str]) -> str:
-    if not tags:
-        return "untagged"
-    return "|".join(tag.strip() for tag in tags)
 
 
 def work_memory_id(payload: dict[str, Any]) -> str | None:
@@ -510,25 +446,6 @@ def _extract_agentic_tool_names(value: object) -> list[str]:
 
 def _count_mutating_agentic_tool_calls(value: object) -> int:
     return count_mutating_agentic_tool_calls(value, read_only_tool_names=_TAXONOMIST_READ_ONLY_TOOL_NAMES)
-
-
-def build_tag_normalizer_result(
-    sampled_batch: SamplingBatch,
-    *,
-    sampled_records: list[Any],
-    updated: int,
-    seeded_work_item_count: int,
-    claimed_work_item_count: int,
-    seeded_enrichment_count: int,
-) -> dict[str, Any]:
-    return sampling_payload(
-        sampled_batch,
-        sampled_records=sampled_records,
-        updated=updated,
-        seeded_work_item_count=seeded_work_item_count,
-        claimed_work_item_count=claimed_work_item_count,
-        seeded_enrichment_count=seeded_enrichment_count,
-    )
 
 
 async def provider_normalize_tags(provider: Any, record: Any, normalized_tags: list[str], normalize_tag_values) -> list[str]:

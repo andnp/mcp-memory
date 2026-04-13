@@ -4,12 +4,8 @@ import pytest
 
 from mcp_memory.core.maintenance_schedule import (
     CONFLICT_DETECTOR_TASK_NAME,
-    CONFLICT_SCREENING_TASK_NAME,
     DEDUPLICATOR_TASK_NAME,
-    DEDUP_PREP_TASK_NAME,
-    LEGACY_MAINTENANCE_TASK_NAME_ALIASES,
     MAINTENANCE_FAMILY_REGISTRY,
-    TAG_NORMALIZER_TASK_NAME,
     TAXONOMIST_TASK_NAME,
 )
 from mcp_memory.core.task_handlers import (
@@ -30,35 +26,42 @@ from mcp_memory.core.task_policy import DEFAULT_TASK_CLASS_BY_NAME
 pytestmark = pytest.mark.small
 
 
-def test_maintenance_family_registry_captures_the_trio_contract() -> None:
+LEGACY_MAINTENANCE_TASK_NAMES = (
+    "conflict-screening",
+    "dedup-prep",
+    "tag-normalizer",
+)
+
+
+def test_maintenance_family_registry_captures_the_canonical_trio_contract() -> None:
     assert list(MAINTENANCE_FAMILY_REGISTRY) == [
         CONFLICT_DETECTOR_TASK_NAME,
         DEDUPLICATOR_TASK_NAME,
         TAXONOMIST_TASK_NAME,
     ]
-    assert LEGACY_MAINTENANCE_TASK_NAME_ALIASES == {
-        CONFLICT_SCREENING_TASK_NAME: CONFLICT_DETECTOR_TASK_NAME,
-        DEDUP_PREP_TASK_NAME: DEDUPLICATOR_TASK_NAME,
-        TAG_NORMALIZER_TASK_NAME: TAXONOMIST_TASK_NAME,
-    }
 
-    assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].legacy_aliases == (CONFLICT_SCREENING_TASK_NAME,)
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].recurring_interval_seconds == 21600.0
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].autonomous_recurring is True
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].default_task_class == "cheap_json"
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].default_priority == 60
 
-    assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].legacy_aliases == (DEDUP_PREP_TASK_NAME,)
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].recurring_interval_seconds == 21600.0
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].autonomous_recurring is True
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].default_task_class == "cheap_agentic"
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].default_priority == 70
 
-    assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].legacy_aliases == (TAG_NORMALIZER_TASK_NAME,)
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].recurring_interval_seconds == 7200.0
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].autonomous_recurring is True
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].default_task_class == "cheap_json"
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].default_priority == 60
+
+    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAMES:
+        assert legacy_task_name not in MAINTENANCE_FAMILY_REGISTRY
+        assert legacy_task_name not in RECURRING_TASK_INTERVAL_SECONDS
+        assert legacy_task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+        assert legacy_task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+        assert legacy_task_name not in TASK_PRIORITIES
+        assert legacy_task_name not in DEFAULT_TASK_CLASS_BY_NAME
 
 
 def test_trio_consumers_derive_schedule_priority_and_task_class_from_registry() -> None:
