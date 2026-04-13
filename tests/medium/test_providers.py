@@ -813,30 +813,29 @@ async def test_instrumented_provider_persists_running_conversation_before_finish
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "started_at": 10.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=10.0,
+                )
             )
             started.set()
             await release.wait()
             self._observer(
-                {
-                    "event": "finished",
-                    "attempt": 1,
-                    "status": "success",
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "raw_text": '{"ok": true}',
-                    "parsed": {"ok": True},
-                    "error": None,
-                    "started_at": 10.0,
-                    "completed_at": 12.0,
-                    "duration_seconds": 2.0,
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=10.0,
+                    completed_at=12.0,
+                    duration_seconds=2.0,
+                    status="success",
+                    returncode=0,
+                    raw_text='{"ok": true}',
+                    parsed={"ok": True},
+                    error_text=None,
+                )
             )
             return {"ok": True}
 
@@ -884,42 +883,40 @@ async def test_instrumented_provider_heartbeat_refreshes_task_and_running_conver
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "started_at": started_at,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=started_at,
+                )
             )
             started.set()
             await asyncio.sleep(0)
             self._observer(
-                {
-                    "event": "heartbeat",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "started_at": started_at,
-                    "heartbeat_at": heartbeat_at,
-                    "elapsed_seconds": 2.5,
-                }
+                ProviderAttemptHeartbeatEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=started_at,
+                    heartbeat_at=heartbeat_at,
+                    elapsed_seconds=2.5,
+                )
             )
             await release.wait()
             self._observer(
-                {
-                    "event": "finished",
-                    "attempt": 1,
-                    "status": "success",
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "raw_text": '{"ok": true}',
-                    "parsed": {"ok": True},
-                    "error": None,
-                    "started_at": started_at,
-                    "completed_at": completed_at,
-                    "duration_seconds": 4.0,
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=4.0,
+                    status="success",
+                    returncode=0,
+                    raw_text='{"ok": true}',
+                    parsed={"ok": True},
+                    error_text=None,
+                )
             )
             return {"ok": True}
 
@@ -987,41 +984,39 @@ async def test_instrumented_provider_records_attempt_telemetry_after_recovery_te
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "started_at": 10.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=10.0,
+                )
             )
             started.set()
             await release.wait()
             self._observer(
-                {
-                    "event": "heartbeat",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "started_at": 10.0,
-                    "heartbeat_at": 11.0,
-                    "elapsed_seconds": 1.0,
-                }
+                ProviderAttemptHeartbeatEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=10.0,
+                    heartbeat_at=11.0,
+                    elapsed_seconds=1.0,
+                )
             )
             self._observer(
-                {
-                    "event": "finished",
-                    "attempt": 1,
-                    "status": "success",
-                    "prompt": prompt,
-                    "subprocess_pid": 31337,
-                    "raw_text": '{"ok": true}',
-                    "parsed": {"ok": True},
-                    "error": None,
-                    "started_at": 10.0,
-                    "completed_at": 12.0,
-                    "duration_seconds": 2.0,
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=31337,
+                    started_at=10.0,
+                    completed_at=12.0,
+                    duration_seconds=2.0,
+                    status="success",
+                    returncode=0,
+                    raw_text='{"ok": true}',
+                    parsed={"ok": True},
+                    error_text=None,
+                )
             )
             return {"ok": True}
 
@@ -1083,28 +1078,27 @@ async def test_instrumented_provider_reopens_attempt_for_later_provider_call_in_
             completed_at = 12.0 if call_number == 1 else 24.0
             subprocess_pid = 1111 if call_number == 1 else 2222
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": subprocess_pid,
-                    "started_at": started_at,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=subprocess_pid,
+                    started_at=started_at,
+                )
             )
             self._observer(
-                {
-                    "event": "finished",
-                    "attempt": 1,
-                    "status": "success",
-                    "prompt": prompt,
-                    "subprocess_pid": subprocess_pid,
-                    "raw_text": json.dumps({"call": call_number}),
-                    "parsed": {"call": call_number},
-                    "error": None,
-                    "started_at": started_at,
-                    "completed_at": completed_at,
-                    "duration_seconds": completed_at - started_at,
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=subprocess_pid,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=completed_at - started_at,
+                    status="success",
+                    returncode=0,
+                    raw_text=json.dumps({"call": call_number}),
+                    parsed={"call": call_number},
+                    error_text=None,
+                )
             )
             return {"call": call_number}
 
@@ -1158,13 +1152,12 @@ async def test_instrumented_provider_finalizes_running_conversation_on_success_w
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 2121,
-                    "started_at": 10.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=2121,
+                    started_at=10.0,
+                )
             )
             return {"ok": True}
 
@@ -1199,13 +1192,12 @@ async def test_instrumented_agentic_provider_finalizes_running_conversation_on_s
         async def run_agent(self, prompt: str) -> AgenticRunResult:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 5252,
-                    "started_at": 20.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=5252,
+                    started_at=20.0,
+                )
             )
             return AgenticRunResult(
                 status="success",
@@ -1245,13 +1237,12 @@ async def test_instrumented_provider_finalizes_running_conversation_on_error(db_
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 4242,
-                    "started_at": 10.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=4242,
+                    started_at=10.0,
+                )
             )
             raise RuntimeError("Provider subprocess 4242 exited unexpectedly")
 
@@ -1333,13 +1324,12 @@ async def test_instrumented_provider_finalizes_running_conversation_on_cancellat
         async def ask(self, prompt: str) -> dict[str, object]:
             assert self._observer is not None
             self._observer(
-                {
-                    "event": "started",
-                    "attempt": 1,
-                    "prompt": prompt,
-                    "subprocess_pid": 5151,
-                    "started_at": 20.0,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=5151,
+                    started_at=20.0,
+                )
             )
             started.set()
             await asyncio.sleep(60.0)

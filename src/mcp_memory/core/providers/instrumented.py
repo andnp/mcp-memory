@@ -13,12 +13,10 @@ from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.provider_admission import evaluate_provider_admission
 from mcp_memory.core.provider_admission import should_persist_admission_backoff
 from mcp_memory.core.providers.interfaces import AgenticRunResult
-from mcp_memory.core.providers.interfaces import LegacyProviderObserverPayload
 from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
-from mcp_memory.core.providers.interfaces import ProviderObserverInput
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 
@@ -155,12 +153,17 @@ class InstrumentedAIProvider:
         *,
         prompt: str,
         request_id: str,
-        started_at: float,
         state: _ProviderObserverState,
-    ) -> Callable[[ProviderObserverInput], None]:
-        def _observer(payload: ProviderObserverInput) -> None:
-            event = _coerce_observer_event(payload, default_started_at=started_at)
-            if event is None:
+    ) -> Callable[[ProviderObserverEvent], None]:
+        def _observer(event: ProviderObserverEvent) -> None:
+            if not isinstance(
+                event,
+                (
+                    ProviderAttemptStartedEvent,
+                    ProviderAttemptHeartbeatEvent,
+                    ProviderAttemptFinishedEvent,
+                ),
+            ):
                 return
             state.last_event = event
             self._handle_observer_event(request_id=request_id, prompt=prompt, event=event)
@@ -331,7 +334,6 @@ class InstrumentedAIProvider:
                 self._build_observer(
                     prompt=prompt,
                     request_id=request_id,
-                    started_at=started_at,
                     state=observer_state,
                 )
             )
@@ -503,7 +505,6 @@ class InstrumentedAIProvider:
                 self._build_observer(
                     prompt=prompt,
                     request_id=request_id,
-                    started_at=started_at,
                     state=observer_state,
                 )
             )
@@ -647,102 +648,6 @@ def _safe_task_queue_update(task_queue, *, task_id: str, operation: str, callbac
             "Ignoring provider observer task-state update after task terminalization",
             extra={"task_id": task_id, "operation": operation},
         )
-
-
-def _coerce_pid(value: object) -> int | None:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    return None
-
-
-def _coerce_parsed(value: object) -> dict[str, Any] | None:
-    return cast(dict[str, Any], value) if isinstance(value, dict) else None
-
-
-def _coerce_text(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    return str(value)
-
-
-def _coerce_float(value: object) -> float | None:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, int | float):
-        return float(value)
-    return None
-
-
-def _coerce_observer_event(
-    payload: ProviderObserverInput,
-    *,
-    default_started_at: float,
-) -> ProviderObserverEvent | None:
-    if isinstance(
-        payload,
-        (
-            ProviderAttemptStartedEvent,
-            ProviderAttemptHeartbeatEvent,
-            ProviderAttemptFinishedEvent,
-        ),
-    ):
-        return payload
-    if isinstance(payload, ProviderObserverEvent):
-        return None
-    return _normalize_observer_event(payload, default_started_at=default_started_at)
-
-
-def _normalize_observer_event(
-    payload: LegacyProviderObserverPayload,
-    *,
-    default_started_at: float,
-) -> ProviderObserverEvent | None:
-    event_name = payload.get("event")
-    if event_name == "started":
-        return ProviderAttemptStartedEvent(
-            attempt=int(payload.get("attempt", 1)),
-            prompt=_coerce_text(payload.get("prompt")),
-            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-            started_at=float(payload.get("started_at", default_started_at)),
-        )
-    if event_name == "heartbeat":
-        started = float(payload.get("started_at", default_started_at))
-        heartbeat = float(payload.get("heartbeat_at", time.time()))
-        elapsed_seconds = _coerce_float(payload.get("elapsed_seconds"))
-        return ProviderAttemptHeartbeatEvent(
-            attempt=int(payload.get("attempt", 1)),
-            prompt=_coerce_text(payload.get("prompt")),
-            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-            started_at=started,
-            heartbeat_at=heartbeat,
-            elapsed_seconds=elapsed_seconds if elapsed_seconds is not None else max(heartbeat - started, 0.0),
-        )
-    if event_name == "finished":
-        started = float(payload.get("started_at", default_started_at))
-        completed = float(payload.get("completed_at", time.time()))
-        duration_seconds = _coerce_float(payload.get("duration_seconds"))
-        error_text = _coerce_text(payload.get("error_text"))
-        return ProviderAttemptFinishedEvent(
-            attempt=int(payload.get("attempt", 1)),
-            prompt=_coerce_text(payload.get("prompt")),
-            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-            started_at=started,
-            completed_at=completed,
-            duration_seconds=duration_seconds if duration_seconds is not None else max(completed - started, 0.0),
-            status=_coerce_text(payload.get("status")),
-            returncode=_coerce_pid(payload.get("returncode")),
-            raw_text=_coerce_text(payload.get("raw_text")),
-            parsed=_coerce_parsed(payload.get("parsed")),
-            error_text=error_text if error_text is not None else _coerce_text(payload.get("error")),
-            reason_category=_coerce_text(payload.get("reason_category")),
-            reason_code=_coerce_text(payload.get("reason_code")),
-            retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
-        )
-    return None
 
 
 def _extract_subprocess_pid(event: ProviderObserverEvent | None) -> int | None:

@@ -57,9 +57,10 @@ class ProviderAttemptFinishedEvent(ProviderObserverEvent):
         return self.error_text
 
 
+# Deprecated import-compat aliases. Provider observers accept typed dataclass events only.
 LegacyProviderObserverPayload: TypeAlias = Mapping[str, Any]
-ProviderObserverInput: TypeAlias = ProviderObserverEvent | LegacyProviderObserverPayload
-ProviderObserver: TypeAlias = Callable[[ProviderObserverEvent], None]
+ProviderObserverInput: TypeAlias = ProviderObserverEvent
+ProviderObserver = Callable[[ProviderObserverEvent], None]
 
 
 class ProviderBudgetExceeded(RuntimeError):
