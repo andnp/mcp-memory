@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 import math
 from statistics import mean
 
-from mcp_memory.management.agent_run_reporting import extract_run_result_metadata
 from mcp_memory.management.models import AgentThroughputBucketPayload, ProviderLatencyBucketPayload
 from mcp_memory.management.reporting_rows import ProviderUsageRow, TaskRunRow
 
@@ -84,7 +83,7 @@ def build_nerd_metrics_throughput_rollups(
     compatible_batch_calls = 0
 
     for row in task_rows:
-        result_metadata = extract_run_result_metadata(row.result)
+        result_metadata = row.result.metadata
         provider_calls_used = result_metadata.provider_calls_used or 0
         premium_execution_count += provider_calls_used
         if provider_calls_used > 0:

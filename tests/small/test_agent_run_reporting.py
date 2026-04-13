@@ -1,9 +1,11 @@
 from mcp_memory.management.agent_run_reporting import (
     build_agent_run_history_payload,
     decode_run_result,
+    extract_ingest_audit,
     extract_run_result_metadata,
 )
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
+from mcp_memory.management.result_views import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
 
 
@@ -44,6 +46,28 @@ def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:
     assert payload.ingest_audit.meaningful_actions == 1
     assert payload.ingest_audit.mutations == 1
     assert payload.ingest_audit.entry_dispositions[0].memory_id == "memory-101"
+
+
+def test_build_agent_run_history_payload_compact_mode_keeps_entry_lists_out_of_ingest_audit() -> None:
+    payload = build_agent_run_history_payload(
+        task_id="task-1",
+        task_name="ingest-system1",
+        status="completed",
+        started_at=10.0,
+        completed_at=12.0,
+        duration_seconds=2.0,
+        error_text=None,
+        result={
+            "claimed_entry_ids": [101],
+            "entry_dispositions": [{"entry_id": 101, "disposition": "created"}],
+            "provider_reported_entry_outcomes": [{"entry_id": 101, "disposition": "created"}],
+        },
+        detail_level="compact",
+    )
+
+    assert payload.ingest_audit.claimed_count == 1
+    assert payload.ingest_audit.entry_dispositions == []
+    assert payload.ingest_audit.provider_reported_entry_outcomes == []
 
 
 def test_build_agent_run_history_payload_extracts_selector_diagnostics() -> None:
@@ -143,6 +167,43 @@ def test_extract_run_result_metadata_preserves_premium_execution_ratios_with_der
     assert metadata.mutations_per_premium_execution == 2.0
     assert metadata.work_items_per_premium_execution == 3.0
     assert metadata.tool_calls_per_premium_execution == 4.0
+
+
+def test_task_result_view_helpers_and_payloads_do_not_share_cached_models() -> None:
+    result_view = coerce_task_result_view(
+        {
+            "claimed_entry_ids": [101],
+            "provider_calls_used": 1,
+            "entry_dispositions": [
+                {
+                    "entry_id": 101,
+                    "disposition": "created",
+                    "memory_id": "memory-101",
+                }
+            ],
+        }
+    )
+
+    metadata = extract_run_result_metadata(result_view)
+    metadata.provider_calls_used = 99
+    full_audit = extract_ingest_audit(result_view, include_entries=True)
+    full_audit.entry_dispositions[0].memory_id = "mutated-memory"
+    compact_payload = build_agent_run_history_payload(
+        task_id="task-1",
+        task_name="ingest-system1",
+        status="completed",
+        started_at=10.0,
+        completed_at=12.0,
+        duration_seconds=2.0,
+        error_text=None,
+        result=result_view,
+        detail_level="compact",
+    )
+    compact_payload.ingest_audit.claimed_count = 42
+
+    assert result_view.metadata.provider_calls_used == 1
+    assert result_view.ingest_audit.claimed_count == 1
+    assert result_view.ingest_audit.entry_dispositions[0].memory_id == "memory-101"
 
 
 def test_build_task_sampling_summary_aggregates_selection_utility_metrics() -> None:

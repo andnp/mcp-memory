@@ -4,6 +4,7 @@ import pytest
 
 from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
 from mcp_memory.management.reporting_rows import ProviderUsageRow, TaskRunRow
+from mcp_memory.management.result_views import coerce_task_result_view
 
 
 pytestmark = pytest.mark.small
@@ -16,27 +17,32 @@ def test_build_nerd_metrics_throughput_rollups_aggregates_buckets_and_premium_co
                 completed_at=120.0,
                 status="completed",
                 duration_seconds=2.0,
-                result={
+                result=coerce_task_result_view({
                     "provider_calls_used": 2,
                     "claimed_work_item_count": 6,
                     "mutations": 4,
                     "tool_calls_executed": 3,
                     "compatible_batch_calls": 1,
-                },
+                }),
             ),
             TaskRunRow(
                 completed_at=150.0,
                 status="failed",
                 duration_seconds=4.0,
-                result={
+                result=coerce_task_result_view({
                     "provider_calls_used": 1,
                     "claimed_work_item_count": 2,
                     "mutations": 1,
                     "tool_calls_executed": 5,
                     "compatible_batch_calls": 2,
-                },
+                }),
             ),
-            TaskRunRow(completed_at=170.0, status="retry", duration_seconds=0.0, result={}),
+            TaskRunRow(
+                completed_at=170.0,
+                status="retry",
+                duration_seconds=0.0,
+                result=coerce_task_result_view({}),
+            ),
         ],
         provider_rows=[
             ProviderUsageRow(

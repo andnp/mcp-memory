@@ -9,6 +9,7 @@ from mcp_memory.management.reporting_rows import (
     adapt_scoped_memory_row,
     adapt_task_run_row,
 )
+from mcp_memory.management.result_views import TaskResultView
 
 
 pytestmark = pytest.mark.small
@@ -77,4 +78,6 @@ def test_adapt_task_run_row_coerces_invalid_result_json_to_empty_mapping() -> No
         }
     )
 
+    assert isinstance(row.result, TaskResultView)
     assert row.result == {}
+    assert row.result.raw_payload == {}

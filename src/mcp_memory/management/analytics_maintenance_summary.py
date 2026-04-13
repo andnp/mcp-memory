@@ -21,6 +21,7 @@ from mcp_memory.management.models import (
     NerdMaintenanceSummaryRowPayload,
 )
 from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
+from mcp_memory.management.result_views import TaskResultView
 
 
 _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
@@ -208,9 +209,20 @@ def _maintenance_family_for_task(task_name: str) -> tuple[str, str]:
     return ("other", "Other")
 
 
-def _run_reported_delta_counts(result: dict[str, object]) -> dict[str, int]:
+def _run_reported_delta_counts(result: TaskResultView) -> dict[str, int]:
+    mutation_outcome = result.mutation_outcome
+    value_by_result_key = {
+        "created": mutation_outcome.created,
+        "merged": mutation_outcome.merged,
+        "updated": mutation_outcome.updated,
+        "archived": mutation_outcome.archived,
+        "degraded": mutation_outcome.degraded,
+        "restored": mutation_outcome.restored,
+        "meaningful_actions": result.meaningful_actions,
+        "lines_compressed": result.lines_compressed,
+    }
     return {
-        attribute_name: max(_result_int(result, result_key) or 0, 0)
+        attribute_name: max(value_by_result_key[result_key] or 0, 0)
         for result_key, attribute_name in _RUN_REPORTED_DELTA_KEYS
     }
 
@@ -266,8 +278,3 @@ def _build_agent_yield_payload(
         lines_per_completed_run=0.0 if denominator == 0 else round(accumulator.lines_compressed / denominator, 4),
         delta_per_completed_run=0.0 if denominator == 0 else round(accumulator.delta_total / denominator, 4),
     )
-
-
-def _result_int(result: dict[str, object], key: str) -> int | None:
-    value = result.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None

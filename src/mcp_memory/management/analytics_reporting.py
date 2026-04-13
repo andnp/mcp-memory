@@ -17,11 +17,6 @@ from mcp_memory.management.analytics_quality import (
 from mcp_memory.management.analytics_read_model import load_nerd_metrics_read_model
 from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
 from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
-from mcp_memory.management.agent_run_reporting import (
-    extract_ingest_audit,
-    extract_run_result_metadata,
-    format_result_summary,
-)
 from mcp_memory.management.health_reporting import build_execution_attempt_health, build_search_health
 from mcp_memory.management.models import (
     GraphTopologyPayload,
@@ -60,6 +55,7 @@ from mcp_memory.management.reporting_rows import (
     RuntimeLogRow,
     ScopedMemoryRow,
 )
+from mcp_memory.management.result_views import TaskResultView
 from mcp_memory.management.route_audit import build_task_route_audit
 
 
@@ -744,8 +740,9 @@ def build_maintenance_events(
         if completed_at < cutoff or completed_at > generated_at:
             continue
 
-        result_metadata = extract_run_result_metadata(row.result)
-        ingest_audit = extract_ingest_audit(row.result)
+        result_view = row.result
+        result_metadata = result_view.metadata
+        ingest_audit = result_view.compact_ingest_audit()
         events.append(
             MaintenanceEventPayload(
                 task_id=row.task_id,
@@ -754,18 +751,18 @@ def build_maintenance_events(
                 completed_at=completed_at,
                 bucket_start=float(int(completed_at // bucket_seconds) * bucket_seconds),
                 duration_seconds=row.duration_seconds,
-                result_summary=format_result_summary(row.result) or row.error_text,
+                result_summary=result_view.summary or row.error_text,
                 strategy_used=result_metadata.strategy_used,
-                impact_summary=_build_maintenance_impact_summary(row.result, ingest_audit=ingest_audit),
+                impact_summary=_build_maintenance_impact_summary(result_view, ingest_audit=ingest_audit),
                 candidate_count=result_metadata.candidate_count,
                 group_count=result_metadata.group_count,
-                created_count=_prefer_nonzero_int(_result_int(row.result, "created"), ingest_audit.created_count),
-                merged_count=_result_int(row.result, "merged"),
-                updated_count=_result_int(row.result, "updated"),
-                archived_count=_result_int(row.result, "archived"),
-                lines_compressed=_result_int(row.result, "lines_compressed"),
+                created_count=_prefer_nonzero_int(result_view.created, ingest_audit.created_count),
+                merged_count=result_view.merged,
+                updated_count=result_view.updated,
+                archived_count=result_view.archived,
+                lines_compressed=result_view.lines_compressed,
                 meaningful_actions=_prefer_nonzero_int(
-                    _result_int(row.result, "meaningful_actions"),
+                    result_view.meaningful_actions,
                     ingest_audit.meaningful_actions,
                 ),
             )
@@ -820,8 +817,14 @@ def build_lifecycle_trends(
         if completed_at < cutoff or completed_at > generated_at:
             continue
         bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
+        status_counts = {
+            "stale": row.result.stale,
+            "degraded": row.result.degraded,
+            "archived": row.result.archived,
+            "restored": row.result.restored,
+        }
         for key, _label in _STATUS_EVENT_DEFS:
-            value = _result_int(row.result, key)
+            value = status_counts[key]
             if value is None:
                 continue
             observed_event_keys.add(key)
@@ -1134,19 +1137,18 @@ def _materialize_bucket_counts(bucket_defs, counts: dict[str, int]) -> list[Nerd
     ]
 
 
-def _build_maintenance_impact_summary(result: dict[str, object], *, ingest_audit) -> str | None:
+def _build_maintenance_impact_summary(result: TaskResultView, *, ingest_audit) -> str | None:
     parts: list[str] = []
-    for key, label in (
-        ("created", "created"),
-        ("merged", "merged"),
-        ("updated", "updated"),
-        ("archived", "archived"),
-        ("restored", "restored"),
-        ("degraded", "degraded"),
-        ("lines_compressed", "lines"),
-        ("meaningful_actions", "actions"),
+    for value, label in (
+        (result.created, "created"),
+        (result.merged, "merged"),
+        (result.updated, "updated"),
+        (result.archived, "archived"),
+        (result.restored, "restored"),
+        (result.degraded, "degraded"),
+        (result.lines_compressed, "lines"),
+        (result.meaningful_actions, "actions"),
     ):
-        value = _result_int(result, key)
         if value is not None and value > 0:
             parts.append(f"{label}={value}")
 
@@ -1328,11 +1330,6 @@ def _bucket_key_for_value(value: float, bucket_defs) -> str:
         if maximum is None or value < maximum:
             return key
     return str(bucket_defs[-1][0])
-
-
-def _result_int(result: dict[str, object], key: str) -> int | None:
-    value = result.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _prefer_nonzero_int(primary: int | None, fallback: int | None) -> int | None:

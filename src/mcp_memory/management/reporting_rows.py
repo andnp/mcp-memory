@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import json
 from typing import Mapping
 
+from mcp_memory.management.result_views import TaskResultView, coerce_task_result_view
+
 
 @dataclass(frozen=True)
 class MemoryCountRow:
@@ -51,7 +53,10 @@ class TaskRunRow:
     status: str
     completed_at: float
     duration_seconds: float
-    result: dict[str, object] = field(default_factory=dict)
+    result: TaskResultView = field(default_factory=TaskResultView)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "result", coerce_task_result_view(self.result))
 
 
 @dataclass(frozen=True)
@@ -61,8 +66,11 @@ class MaintenanceTaskRunRow:
     status: str
     completed_at: float
     duration_seconds: float
-    result: dict[str, object] = field(default_factory=dict)
+    result: TaskResultView = field(default_factory=TaskResultView)
     error_text: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "result", coerce_task_result_view(self.result))
 
 
 @dataclass(frozen=True)
@@ -166,8 +174,11 @@ class AgentRunHistoryRow:
     started_at: float
     completed_at: float
     duration_seconds: float
-    result: dict[str, object] = field(default_factory=dict)
+    result: TaskResultView = field(default_factory=TaskResultView)
     error_text: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "result", coerce_task_result_view(self.result))
 
 
 def adapt_memory_count_row(row: Mapping[str, object]) -> MemoryCountRow:
@@ -220,7 +231,7 @@ def adapt_task_run_row(row: Mapping[str, object]) -> TaskRunRow:
         status=_require_str(row, "status"),
         completed_at=_require_float(row, "completed_at"),
         duration_seconds=_require_float(row, "duration_seconds"),
-        result=_coerce_json_mapping(row.get("result_json")),
+        result=coerce_task_result_view(row.get("result_json")),
     )
 
 
@@ -231,7 +242,7 @@ def adapt_maintenance_task_run_row(row: Mapping[str, object]) -> MaintenanceTask
         status=_require_str(row, "status"),
         completed_at=_require_float(row, "completed_at"),
         duration_seconds=_require_float(row, "duration_seconds"),
-        result=_coerce_json_mapping(row.get("result_json")),
+        result=coerce_task_result_view(row.get("result_json")),
         error_text=_optional_str(row, "error_text"),
     )
 
@@ -340,7 +351,7 @@ def adapt_agent_run_history_row(row: Mapping[str, object]) -> AgentRunHistoryRow
         completed_at=_require_float(row, "completed_at"),
         duration_seconds=_require_float(row, "duration_seconds"),
         error_text=_optional_str(row, "error_text"),
-        result=_coerce_json_mapping(row.get("result_json")),
+        result=coerce_task_result_view(row.get("result_json")),
     )
 
 

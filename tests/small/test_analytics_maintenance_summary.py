@@ -4,6 +4,7 @@ import pytest
 
 from mcp_memory.management.analytics_maintenance_summary import build_maintenance_summary
 from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
+from mcp_memory.management.result_views import coerce_task_result_view
 
 
 pytestmark = pytest.mark.small
@@ -18,7 +19,7 @@ def test_build_maintenance_summary_rolls_up_family_agent_and_delta_series() -> N
                 status="completed",
                 completed_at=120.0,
                 duration_seconds=0.0,
-                result={"updated": 2, "meaningful_actions": 2},
+                result=coerce_task_result_view({"updated": 2, "meaningful_actions": 2}),
             ),
             MaintenanceTaskRunRow(
                 task_id="task-verification",
@@ -26,7 +27,7 @@ def test_build_maintenance_summary_rolls_up_family_agent_and_delta_series() -> N
                 status="failed",
                 completed_at=180.0,
                 duration_seconds=0.0,
-                result={"updated": 3, "lines_compressed": 5},
+                result=coerce_task_result_view({"updated": 3, "lines_compressed": 5}),
             ),
             MaintenanceTaskRunRow(
                 task_id="task-compaction",
@@ -34,7 +35,7 @@ def test_build_maintenance_summary_rolls_up_family_agent_and_delta_series() -> N
                 status="completed",
                 completed_at=240.0,
                 duration_seconds=0.0,
-                result={"merged": 4, "archived": 1, "meaningful_actions": 3},
+                result=coerce_task_result_view({"merged": 4, "archived": 1, "meaningful_actions": 3}),
             ),
         ],
         cutoff=100.0,
