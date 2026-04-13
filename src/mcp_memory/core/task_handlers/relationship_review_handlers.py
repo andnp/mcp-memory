@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.constants import (
     DEFAULT_AGENT_SCAN_LIMIT,
-    GRAPH_LINKER_TASK_NAME,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import (
     sample_maintenance_candidates,
@@ -93,28 +91,6 @@ async def handle_graph_linker_task(
         ),
         created=created,
         seeded_work_item_count=seeded_work_item_count,
-    )
-
-
-async def handle_graph_link_discovery_task(
-    ctx: ApplicationContext,
-    task: TaskRecord,
-) -> dict[str, Any]:
-    if ctx.repository is None:
-        return {"created": 0, "seeded_work_item_count": 0}
-
-    workspace_id = _resolve_workspace_id(ctx, task)
-    sampled_batch = _sample_graph_link_candidates(ctx, task, workspace_id=workspace_id)
-    candidates = sampled_batch.records
-    if len(candidates) < 2:
-        return sampling_payload(sampled_batch, sampled_records=candidates, created=0, seeded_work_item_count=0)
-
-    return await _run_graph_link_sparse_frontier_task(
-        ctx,
-        task=task,
-        workspace_id=workspace_id,
-        sampled_batch=sampled_batch,
-        candidates=candidates,
     )
 
 
@@ -265,10 +241,9 @@ def _sample_graph_link_candidates(
     *,
     workspace_id: str | None = None,
 ):
-    sampling_task = task if task.task_name == GRAPH_LINKER_TASK_NAME else replace(task, task_name=GRAPH_LINKER_TASK_NAME)
     return _sample_relationship_review_candidates(
         ctx,
-        sampling_task,
+        task,
         workspace_id=workspace_id,
         allowed_types=None,
         allowed_strategies=_relationship_review_support.GRAPH_LINKER_ALLOWED_STRATEGIES,

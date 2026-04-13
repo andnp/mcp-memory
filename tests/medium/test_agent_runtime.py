@@ -15,7 +15,6 @@ from mcp_memory.core.agent_runtime import (
     DEDUPLICATOR_TASK_NAME,
     DEFRAGMENTER_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
-    GRAPH_LINK_DISCOVERY_TASK_NAME,
     GRAPH_LINKER_TASK_NAME,
     PROJECT_MANAGER_TASK_NAME,
     SUMMARIZE_MEMORY_TASK_NAME,
@@ -29,7 +28,6 @@ from mcp_memory.core.agent_runtime import (
     handle_memory_curator_task,
     handle_deduplicator_task,
     handle_fact_checker_task,
-    handle_graph_link_discovery_task,
     handle_graph_linker_task,
     handle_ingest_system1_task,
     handle_project_manager_task,
@@ -81,10 +79,15 @@ pytestmark = pytest.mark.medium
 LEGACY_CONFLICT_SCREENING_TASK_NAME = "conflict-screening"
 LEGACY_DEDUP_PREP_TASK_NAME = "dedup-prep"
 LEGACY_TAG_NORMALIZER_TASK_NAME = "tag-normalizer"
+REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME = "graph-link-discovery"
 LEGACY_MAINTENANCE_TASK_NAMES = (
     LEGACY_CONFLICT_SCREENING_TASK_NAME,
     LEGACY_DEDUP_PREP_TASK_NAME,
     LEGACY_TAG_NORMALIZER_TASK_NAME,
+)
+UNSUPPORTED_RUNTIME_MAINTENANCE_TASK_NAMES = (
+    *LEGACY_MAINTENANCE_TASK_NAMES,
+    REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME,
 )
 
 
@@ -1882,7 +1885,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert queue.count_by_status() == {"pending": 9}
     assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
     assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
-    assert queue.find_open_task(GRAPH_LINK_DISCOVERY_TASK_NAME, None) is None
+    assert queue.find_open_task(REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME, None) is None
     assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
     assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
     assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
@@ -1925,52 +1928,53 @@ def test_low_yield_maintenance_tasks_use_the_updated_recurring_cadence() -> None
 
 
 def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
-    assert GRAPH_LINK_DISCOVERY_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_CONFLICT_SCREENING_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_DEDUP_PREP_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_TAG_NORMALIZER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_CONFLICT_SCREENING_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_DEDUP_PREP_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
     assert LEGACY_TAG_NORMALIZER_TASK_NAME not in RECURRING_TASK_INTERVAL_SECONDS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_task_name", LEGACY_MAINTENANCE_TASK_NAMES)
-async def test_runtime_task_worker_fails_legacy_manual_maintenance_rows_without_registered_handler(
+@pytest.mark.parametrize("unsupported_task_name", UNSUPPORTED_RUNTIME_MAINTENANCE_TASK_NAMES)
+async def test_runtime_task_worker_fails_unsupported_manual_maintenance_rows_without_registered_handler(
     db_manager,
-    legacy_task_name: str,
+    unsupported_task_name: str,
 ) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
 
     task = queue.enqueue(
-        legacy_task_name,
+        unsupported_task_name,
         workspace_id=None,
         data={"workspace_id": None},
         available_at=0.0,
-        task_id=f"legacy:{legacy_task_name}",
+        task_id=f"legacy:{unsupported_task_name}",
     )
     claimed = queue.claim_next(now=100.0)
     assert claimed is not None
 
     worker = build_runtime_task_worker(ctx)
 
-    assert legacy_task_name not in worker._handlers
+    assert unsupported_task_name not in worker._handlers
 
     await worker._process_task(claimed)  # noqa: SLF001
 
     failed = queue.get_task(task.id)
     assert failed.status == "failed"
-    assert failed.last_error == f"No task handler registered for {legacy_task_name}"
+    assert failed.last_error == f"No task handler registered for {unsupported_task_name}"
 
 
-def test_build_runtime_task_worker_does_not_register_legacy_wrapper_names(db_manager) -> None:
+def test_build_runtime_task_worker_does_not_register_unsupported_removed_task_names(db_manager) -> None:
     ctx = ApplicationContext(db_manager=db_manager, task_queue=SQLiteTaskQueue(db_manager))
 
     worker = build_runtime_task_worker(ctx)
 
-    for legacy_task_name in LEGACY_MAINTENANCE_TASK_NAMES:
-        assert legacy_task_name not in worker._handlers
+    for unsupported_task_name in UNSUPPORTED_RUNTIME_MAINTENANCE_TASK_NAMES:
+        assert unsupported_task_name not in worker._handlers
 
 
 def test_provider_for_task_accepts_provider_selection_capability_view() -> None:
@@ -3129,7 +3133,7 @@ async def test_graph_linker_seeds_agentic_review_when_fallback_is_sparse(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_graph_link_discovery_seeds_agentic_review_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+async def test_graph_linker_without_provider_seeds_agentic_review_when_sparse_frontier_is_sparse(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3150,11 +3154,11 @@ async def test_graph_link_discovery_seeds_agentic_review_when_fallback_is_sparse
             )
             assert record is not None
 
-        result = await handle_graph_link_discovery_task(
+        result = await handle_graph_linker_task(
             runtime,
             TaskRecord(
-                id="graph-link-discovery-task",
-                task_name=GRAPH_LINK_DISCOVERY_TASK_NAME,
+                id="graph-linker-sparse-frontier-task",
+                task_name=GRAPH_LINKER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3213,11 +3217,11 @@ async def test_graph_linker_consumes_seeded_review_work_items(monkeypatch, tmp_p
             assert record is not None
             records.append(record)
 
-        discovery_result = await handle_graph_link_discovery_task(
+        seed_result = await handle_graph_linker_task(
             runtime,
             TaskRecord(
-                id="graph-link-discovery-review-seed",
-                task_name=GRAPH_LINK_DISCOVERY_TASK_NAME,
+            id="graph-linker-review-seed",
+            task_name=GRAPH_LINKER_TASK_NAME,
                 data={"workspace_id": runtime.workspace_id},
                 workspace_id=runtime.workspace_id,
                 status="running",
@@ -3233,7 +3237,7 @@ async def test_graph_linker_consumes_seeded_review_work_items(monkeypatch, tmp_p
                 last_error=None,
             ),
         )
-        assert discovery_result["seeded_work_item_count"] == 1
+        assert seed_result["seeded_work_item_count"] == 1
 
         provider = FakeAIProvider(
             responses=[
