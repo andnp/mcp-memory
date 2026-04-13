@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, cast
 from uuid import uuid4
 
@@ -12,11 +13,22 @@ from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.provider_admission import evaluate_provider_admission
 from mcp_memory.core.provider_admission import should_persist_admission_backoff
 from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.providers.interfaces import LegacyProviderObserverPayload
+from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
+from mcp_memory.core.providers.interfaces import ProviderObserverEvent
+from mcp_memory.core.providers.interfaces import ProviderObserverInput
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ProviderObserverState:
+    last_event: ProviderObserverEvent | None = None
 
 
 class InstrumentedAIProvider:
@@ -84,31 +96,30 @@ class InstrumentedAIProvider:
             block_test_execution=self._block_test_execution,
         )
 
-    def _record_attempt_start(self, *, request_id: str, payload: dict, started_at: float) -> None:
+    def _record_attempt_start(self, *, request_id: str, event: ProviderAttemptStartedEvent) -> None:
         if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
             return
-        started_value = float(payload.get("started_at", started_at))
         self._task_execution_attempts.start_attempt(
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
             task_name=self._task_name,
             request_id=request_id,
-            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            subprocess_pid=event.subprocess_pid,
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,
-            started_at=started_value,
+            started_at=event.started_at,
         )
 
-    def _record_attempt_heartbeat(self, *, request_id: str, payload: dict) -> None:
+    def _record_attempt_heartbeat(self, *, request_id: str, event: ProviderAttemptHeartbeatEvent) -> None:
         if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
             return
         self._task_execution_attempts.heartbeat_attempt(
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
-            heartbeat_at=float(payload.get("heartbeat_at", time.time())),
+            heartbeat_at=event.heartbeat_at,
             request_id=request_id,
-            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            subprocess_pid=event.subprocess_pid,
         )
 
     def _finish_attempt(
@@ -138,6 +149,105 @@ class InstrumentedAIProvider:
         if not self._block_test_execution:
             return
         raise RuntimeError("provider_execution_blocked_in_tests")
+
+    def _build_observer(
+        self,
+        *,
+        prompt: str,
+        request_id: str,
+        started_at: float,
+        state: _ProviderObserverState,
+    ) -> Callable[[ProviderObserverInput], None]:
+        def _observer(payload: ProviderObserverInput) -> None:
+            event = _coerce_observer_event(payload, default_started_at=started_at)
+            if event is None:
+                return
+            state.last_event = event
+            self._handle_observer_event(request_id=request_id, prompt=prompt, event=event)
+
+        return _observer
+
+    def _handle_observer_event(
+        self,
+        *,
+        request_id: str,
+        prompt: str,
+        event: ProviderObserverEvent,
+    ) -> None:
+        if isinstance(event, ProviderAttemptStartedEvent):
+            self._record_attempt_start(request_id=request_id, event=event)
+            self._usage_repository.record_conversation(
+                request_id=request_id,
+                attempt=event.attempt,
+                task_name=self._task_name,
+                task_id=self._task_id,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                subprocess_pid=event.subprocess_pid,
+                prompt_text=prompt,
+                response_text="",
+                parsed=None,
+                status="running",
+                error_text=None,
+                reason_category=None,
+                reason_code=None,
+                retry_delay_seconds=None,
+                started_at=event.started_at,
+                completed_at=event.started_at,
+            )
+            return
+        if isinstance(event, ProviderAttemptHeartbeatEvent):
+            self._record_attempt_heartbeat(request_id=request_id, event=event)
+            if self._task_queue is not None and self._task_id is not None:
+                task_queue = self._task_queue
+                task_id = self._task_id
+                _safe_task_queue_update(
+                    task_queue,
+                    task_id=task_id,
+                    operation="touch_running_task",
+                    callback=lambda: task_queue.touch_running_task(
+                        task_id,
+                        updated_at=event.heartbeat_at,
+                        execution_epoch=self._execution_epoch,
+                    ),
+                )
+            self._usage_repository.touch_running_conversation(
+                request_id=request_id,
+                completed_at=event.heartbeat_at,
+                subprocess_pid=event.subprocess_pid,
+            )
+            return
+
+        assert isinstance(event, ProviderAttemptFinishedEvent)
+        self._finish_attempt(
+            request_id=request_id,
+            status=event.status if event.status is not None else "finished",
+            completed_at=event.completed_at,
+            subprocess_pid=event.subprocess_pid,
+            error_text=event.error_text,
+            termination_reason=event.reason_code,
+        )
+        self._usage_repository.record_conversation(
+            request_id=request_id,
+            attempt=event.attempt,
+            task_name=self._task_name,
+            task_id=self._task_id,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            subprocess_pid=event.subprocess_pid,
+            prompt_text=prompt,
+            response_text=event.raw_text if event.raw_text is not None else "",
+            parsed=event.parsed,
+            status=event.status if event.status is not None else "error",
+            error_text=event.error_text,
+            reason_category=event.reason_category,
+            reason_code=event.reason_code,
+            retry_delay_seconds=event.retry_delay_seconds,
+            started_at=event.started_at,
+            completed_at=event.completed_at,
+        )
 
     def admission_decision(self, *, now: float | None = None):
         return evaluate_provider_admission(
@@ -189,7 +299,7 @@ class InstrumentedAIProvider:
     async def ask_json(self, prompt: str) -> dict:
         started_at = time.time()
         request_id = str(uuid4())
-        last_event: dict | None = None
+        observer_state = _ProviderObserverState()
         self._guard_test_execution()
 
         try:
@@ -214,90 +324,17 @@ class InstrumentedAIProvider:
             )
             raise
 
-        def _observer(payload: dict) -> None:
-            nonlocal last_event
-            last_event = payload
-            if payload.get("event") == "started":
-                self._record_attempt_start(request_id=request_id, payload=payload, started_at=started_at)
-                started_value = float(payload.get("started_at", started_at))
-                self._usage_repository.record_conversation(
-                    request_id=request_id,
-                    attempt=int(payload.get("attempt", 1)),
-                    task_name=self._task_name,
-                    task_id=self._task_id,
-                    provider_key=self._provider_key,
-                    provider_name=self._provider_name,
-                    model_name=self._model_name,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                    prompt_text=prompt,
-                    response_text="",
-                    parsed=None,
-                    status="running",
-                    error_text=None,
-                    reason_category=None,
-                    reason_code=None,
-                    retry_delay_seconds=None,
-                    started_at=started_value,
-                    completed_at=started_value,
-                )
-                return
-            if payload.get("event") == "heartbeat":
-                heartbeat_at = float(payload.get("heartbeat_at", time.time()))
-                self._record_attempt_heartbeat(request_id=request_id, payload=payload)
-                if self._task_queue is not None and self._task_id is not None:
-                    task_queue = self._task_queue
-                    task_id = self._task_id
-                    _safe_task_queue_update(
-                        task_queue,
-                        task_id=task_id,
-                        operation="touch_running_task",
-                        callback=lambda: task_queue.touch_running_task(
-                            task_id,
-                            updated_at=heartbeat_at,
-                            execution_epoch=self._execution_epoch,
-                        ),
-                    )
-                self._usage_repository.touch_running_conversation(
-                    request_id=request_id,
-                    completed_at=heartbeat_at,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                )
-                return
-            if payload.get("event") != "finished":
-                return
-            self._finish_attempt(
-                request_id=request_id,
-                status=str(payload.get("status", "finished")),
-                completed_at=float(payload.get("completed_at", time.time())),
-                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                error_text=_coerce_text(payload.get("error")),
-                termination_reason=_coerce_text(payload.get("reason_code")),
-            )
-            self._usage_repository.record_conversation(
-                request_id=request_id,
-                attempt=int(payload.get("attempt", 1)),
-                task_name=self._task_name,
-                task_id=self._task_id,
-                provider_key=self._provider_key,
-                provider_name=self._provider_name,
-                model_name=self._model_name,
-                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                prompt_text=prompt,
-                response_text=str(payload.get("raw_text", "")),
-                parsed=_coerce_parsed(payload.get("parsed")),
-                status=str(payload.get("status", "error")),
-                error_text=_coerce_text(payload.get("error")),
-                reason_category=_coerce_text(payload.get("reason_category")),
-                reason_code=_coerce_text(payload.get("reason_code")),
-                retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
-                started_at=float(payload.get("started_at", started_at)),
-                completed_at=float(payload.get("completed_at", time.time())),
-            )
-
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
         if callable(binder):
-            provider = binder(_observer)
+            provider = binder(
+                self._build_observer(
+                    prompt=prompt,
+                    request_id=request_id,
+                    started_at=started_at,
+                    state=observer_state,
+                )
+            )
         try:
             ask_json = getattr(provider, "ask_json", None)
             if callable(ask_json):
@@ -310,11 +347,11 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 request_id=request_id,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
-                status=_extract_status(last_event, fallback="cancelled"),
+                status=_extract_status(observer_state.last_event, fallback="cancelled"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text="Command cancelled",
@@ -324,7 +361,7 @@ class InstrumentedAIProvider:
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="cancelled"),
+                status=_extract_status(observer_state.last_event, fallback="cancelled"),
                 error_text="Command cancelled",
                 reason_category="cancellation",
                 reason_code="provider_cancelled",
@@ -335,7 +372,7 @@ class InstrumentedAIProvider:
                 request_id=request_id,
                 status="cancelled",
                 completed_at=completed_at,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 error_text="Command cancelled",
                 termination_reason="provider_cancelled",
             )
@@ -344,18 +381,18 @@ class InstrumentedAIProvider:
             completed_at = time.time()
             classification = classify_provider_failure(
                 exc,
-                event_status=_extract_status(last_event, fallback="error"),
-                raw_text=_extract_raw_text(last_event),
+                event_status=_extract_status(observer_state.last_event, fallback="error"),
+                raw_text=_extract_raw_text(observer_state.last_event),
             )
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
                 request_id=request_id,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text=classification.error_text,
@@ -365,7 +402,7 @@ class InstrumentedAIProvider:
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 error_text=classification.error_text,
                 reason_category=classification.reason_category,
                 reason_code=classification.reason_code,
@@ -385,9 +422,9 @@ class InstrumentedAIProvider:
                 )
             self._finish_attempt(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 completed_at=completed_at,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 error_text=classification.error_text,
                 termination_reason=classification.reason_code,
             )
@@ -396,21 +433,21 @@ class InstrumentedAIProvider:
         completed_at = time.time()
         self._usage_repository.finalize_running_conversation(
             request_id=request_id,
-            status=_extract_status(last_event, fallback="success"),
+            status=_extract_status(observer_state.last_event, fallback="success"),
             error_text=None,
             completed_at=completed_at,
-            response_text=_extract_raw_text(last_event) or json.dumps(response, sort_keys=True),
+            response_text=_extract_raw_text(observer_state.last_event) or json.dumps(response, sort_keys=True),
             parsed=response,
         )
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
             request_id=request_id,
-            subprocess_pid=_extract_subprocess_pid(last_event),
+            subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,
-            status=_extract_status(last_event, fallback="success"),
+            status=_extract_status(observer_state.last_event, fallback="success"),
             duration_seconds=max(completed_at - started_at, 0.0),
             created_at=completed_at,
             error_text=None,
@@ -420,9 +457,9 @@ class InstrumentedAIProvider:
         )
         self._finish_attempt(
             request_id=request_id,
-            status=_extract_status(last_event, fallback="success"),
+            status=_extract_status(observer_state.last_event, fallback="success"),
             completed_at=completed_at,
-            subprocess_pid=_extract_subprocess_pid(last_event),
+            subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             error_text=None,
             termination_reason=None,
         )
@@ -434,7 +471,7 @@ class InstrumentedAIProvider:
     async def run_agent(self, prompt: str) -> AgenticRunResult:
         started_at = time.time()
         request_id = str(uuid4())
-        last_event: dict | None = None
+        observer_state = _ProviderObserverState()
         self._guard_test_execution()
 
         try:
@@ -459,90 +496,17 @@ class InstrumentedAIProvider:
             )
             raise
 
-        def _observer(payload: dict) -> None:
-            nonlocal last_event
-            last_event = payload
-            if payload.get("event") == "started":
-                self._record_attempt_start(request_id=request_id, payload=payload, started_at=started_at)
-                started_value = float(payload.get("started_at", started_at))
-                self._usage_repository.record_conversation(
-                    request_id=request_id,
-                    attempt=int(payload.get("attempt", 1)),
-                    task_name=self._task_name,
-                    task_id=self._task_id,
-                    provider_key=self._provider_key,
-                    provider_name=self._provider_name,
-                    model_name=self._model_name,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                    prompt_text=prompt,
-                    response_text="",
-                    parsed=None,
-                    status="running",
-                    error_text=None,
-                    reason_category=None,
-                    reason_code=None,
-                    retry_delay_seconds=None,
-                    started_at=started_value,
-                    completed_at=started_value,
-                )
-                return
-            if payload.get("event") == "heartbeat":
-                heartbeat_at = float(payload.get("heartbeat_at", time.time()))
-                self._record_attempt_heartbeat(request_id=request_id, payload=payload)
-                if self._task_queue is not None and self._task_id is not None:
-                    task_queue = self._task_queue
-                    task_id = self._task_id
-                    _safe_task_queue_update(
-                        task_queue,
-                        task_id=task_id,
-                        operation="touch_running_task",
-                        callback=lambda: task_queue.touch_running_task(
-                            task_id,
-                            updated_at=heartbeat_at,
-                            execution_epoch=self._execution_epoch,
-                        ),
-                    )
-                self._usage_repository.touch_running_conversation(
-                    request_id=request_id,
-                    completed_at=heartbeat_at,
-                    subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                )
-                return
-            if payload.get("event") != "finished":
-                return
-            self._finish_attempt(
-                request_id=request_id,
-                status=str(payload.get("status", "finished")),
-                completed_at=float(payload.get("completed_at", time.time())),
-                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                error_text=_coerce_text(payload.get("error")),
-                termination_reason=_coerce_text(payload.get("reason_code")),
-            )
-            self._usage_repository.record_conversation(
-                request_id=request_id,
-                attempt=int(payload.get("attempt", 1)),
-                task_name=self._task_name,
-                task_id=self._task_id,
-                provider_key=self._provider_key,
-                provider_name=self._provider_name,
-                model_name=self._model_name,
-                subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
-                prompt_text=prompt,
-                response_text=str(payload.get("raw_text", "")),
-                parsed=_coerce_parsed(payload.get("parsed")),
-                status=str(payload.get("status", "error")),
-                error_text=_coerce_text(payload.get("error")),
-                reason_category=_coerce_text(payload.get("reason_category")),
-                reason_code=_coerce_text(payload.get("reason_code")),
-                retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
-                started_at=float(payload.get("started_at", started_at)),
-                completed_at=float(payload.get("completed_at", time.time())),
-            )
-
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
         if callable(binder):
-            provider = binder(_observer)
+            provider = binder(
+                self._build_observer(
+                    prompt=prompt,
+                    request_id=request_id,
+                    started_at=started_at,
+                    state=observer_state,
+                )
+            )
         run_agent = getattr(provider, "run_agent", None)
         if not callable(run_agent):
             raise RuntimeError("agentic_provider_not_configured")
@@ -554,11 +518,11 @@ class InstrumentedAIProvider:
                 task_name=self._task_name,
                 task_id=self._task_id,
                 request_id=request_id,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
-                status=_extract_status(last_event, fallback="cancelled"),
+                status=_extract_status(observer_state.last_event, fallback="cancelled"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text="Command cancelled",
@@ -568,7 +532,7 @@ class InstrumentedAIProvider:
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="cancelled"),
+                status=_extract_status(observer_state.last_event, fallback="cancelled"),
                 error_text="Command cancelled",
                 reason_category="cancellation",
                 reason_code="provider_cancelled",
@@ -579,7 +543,7 @@ class InstrumentedAIProvider:
                 request_id=request_id,
                 status="cancelled",
                 completed_at=completed_at,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 error_text="Command cancelled",
                 termination_reason="provider_cancelled",
             )
@@ -588,18 +552,18 @@ class InstrumentedAIProvider:
             completed_at = time.time()
             classification = classify_provider_failure(
                 exc,
-                event_status=_extract_status(last_event, fallback="error"),
-                raw_text=_extract_raw_text(last_event),
+                event_status=_extract_status(observer_state.last_event, fallback="error"),
+                raw_text=_extract_raw_text(observer_state.last_event),
             )
             self._usage_repository.record_call(
                 task_name=self._task_name,
                 task_id=self._task_id,
                 request_id=request_id,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 provider_key=self._provider_key,
                 provider_name=self._provider_name,
                 model_name=self._model_name,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 duration_seconds=max(completed_at - started_at, 0.0),
                 created_at=completed_at,
                 error_text=classification.error_text,
@@ -609,7 +573,7 @@ class InstrumentedAIProvider:
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 error_text=classification.error_text,
                 reason_category=classification.reason_category,
                 reason_code=classification.reason_code,
@@ -629,9 +593,9 @@ class InstrumentedAIProvider:
                 )
             self._finish_attempt(
                 request_id=request_id,
-                status=_extract_status(last_event, fallback="error"),
+                status=_extract_status(observer_state.last_event, fallback="error"),
                 completed_at=completed_at,
-                subprocess_pid=_extract_subprocess_pid(last_event),
+                subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
                 error_text=classification.error_text,
                 termination_reason=classification.reason_code,
             )
@@ -640,21 +604,21 @@ class InstrumentedAIProvider:
         completed_at = time.time()
         self._usage_repository.finalize_running_conversation(
             request_id=request_id,
-            status=_extract_status(last_event, fallback=result.status),
+            status=_extract_status(observer_state.last_event, fallback=result.status),
             error_text=None if result.status == "success" else result.summary,
             completed_at=completed_at,
-            response_text=_extract_raw_text(last_event) or result.raw_text or result.summary or "",
+            response_text=_extract_raw_text(observer_state.last_event) or result.raw_text or result.summary or "",
             parsed=result.parsed,
         )
         self._usage_repository.record_call(
             task_name=self._task_name,
             task_id=self._task_id,
             request_id=request_id,
-            subprocess_pid=_extract_subprocess_pid(last_event),
+            subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             provider_key=self._provider_key,
             provider_name=self._provider_name,
             model_name=self._model_name,
-            status=_extract_status(last_event, fallback=result.status),
+            status=_extract_status(observer_state.last_event, fallback=result.status),
             duration_seconds=max(completed_at - started_at, 0.0),
             created_at=completed_at,
             error_text=None if result.status == "success" else result.summary,
@@ -664,9 +628,9 @@ class InstrumentedAIProvider:
         )
         self._finish_attempt(
             request_id=request_id,
-            status=_extract_status(last_event, fallback=result.status),
+            status=_extract_status(observer_state.last_event, fallback=result.status),
             completed_at=completed_at,
-            subprocess_pid=_extract_subprocess_pid(last_event),
+            subprocess_pid=_extract_subprocess_pid(observer_state.last_event),
             error_text=None if result.status == "success" else result.summary,
             termination_reason=None if result.status == "success" else "agent_run_unsuccessful",
         )
@@ -693,8 +657,8 @@ def _coerce_pid(value: object) -> int | None:
     return None
 
 
-def _coerce_parsed(value: object) -> dict | None:
-    return value if isinstance(value, dict) else None
+def _coerce_parsed(value: object) -> dict[str, Any] | None:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else None
 
 
 def _coerce_text(value: object) -> str | None:
@@ -713,21 +677,87 @@ def _coerce_float(value: object) -> float | None:
     return None
 
 
-def _extract_subprocess_pid(event: dict | None) -> int | None:
+def _coerce_observer_event(
+    payload: ProviderObserverInput,
+    *,
+    default_started_at: float,
+) -> ProviderObserverEvent | None:
+    if isinstance(
+        payload,
+        (
+            ProviderAttemptStartedEvent,
+            ProviderAttemptHeartbeatEvent,
+            ProviderAttemptFinishedEvent,
+        ),
+    ):
+        return payload
+    if isinstance(payload, ProviderObserverEvent):
+        return None
+    return _normalize_observer_event(payload, default_started_at=default_started_at)
+
+
+def _normalize_observer_event(
+    payload: LegacyProviderObserverPayload,
+    *,
+    default_started_at: float,
+) -> ProviderObserverEvent | None:
+    event_name = payload.get("event")
+    if event_name == "started":
+        return ProviderAttemptStartedEvent(
+            attempt=int(payload.get("attempt", 1)),
+            prompt=_coerce_text(payload.get("prompt")),
+            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            started_at=float(payload.get("started_at", default_started_at)),
+        )
+    if event_name == "heartbeat":
+        started = float(payload.get("started_at", default_started_at))
+        heartbeat = float(payload.get("heartbeat_at", time.time()))
+        elapsed_seconds = _coerce_float(payload.get("elapsed_seconds"))
+        return ProviderAttemptHeartbeatEvent(
+            attempt=int(payload.get("attempt", 1)),
+            prompt=_coerce_text(payload.get("prompt")),
+            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            started_at=started,
+            heartbeat_at=heartbeat,
+            elapsed_seconds=elapsed_seconds if elapsed_seconds is not None else max(heartbeat - started, 0.0),
+        )
+    if event_name == "finished":
+        started = float(payload.get("started_at", default_started_at))
+        completed = float(payload.get("completed_at", time.time()))
+        duration_seconds = _coerce_float(payload.get("duration_seconds"))
+        error_text = _coerce_text(payload.get("error_text"))
+        return ProviderAttemptFinishedEvent(
+            attempt=int(payload.get("attempt", 1)),
+            prompt=_coerce_text(payload.get("prompt")),
+            subprocess_pid=_coerce_pid(payload.get("subprocess_pid")),
+            started_at=started,
+            completed_at=completed,
+            duration_seconds=duration_seconds if duration_seconds is not None else max(completed - started, 0.0),
+            status=_coerce_text(payload.get("status")),
+            returncode=_coerce_pid(payload.get("returncode")),
+            raw_text=_coerce_text(payload.get("raw_text")),
+            parsed=_coerce_parsed(payload.get("parsed")),
+            error_text=error_text if error_text is not None else _coerce_text(payload.get("error")),
+            reason_category=_coerce_text(payload.get("reason_category")),
+            reason_code=_coerce_text(payload.get("reason_code")),
+            retry_delay_seconds=_coerce_float(payload.get("retry_delay_seconds")),
+        )
+    return None
+
+
+def _extract_subprocess_pid(event: ProviderObserverEvent | None) -> int | None:
     if event is None:
         return None
-    return _coerce_pid(event.get("subprocess_pid"))
+    return event.subprocess_pid
 
 
-def _extract_status(event: dict | None, *, fallback: str) -> str:
-    if event is None:
+def _extract_status(event: ProviderObserverEvent | None, *, fallback: str) -> str:
+    if not isinstance(event, ProviderAttemptFinishedEvent):
         return fallback
-    status = event.get("status")
-    return str(status) if isinstance(status, str) and status else fallback
+    return event.status if event.status else fallback
 
 
-def _extract_raw_text(event: dict | None) -> str | None:
-    if event is None:
+def _extract_raw_text(event: ProviderObserverEvent | None) -> str | None:
+    if not isinstance(event, ProviderAttemptFinishedEvent):
         return None
-    raw_text = event.get("raw_text")
-    return raw_text if isinstance(raw_text, str) else None
+    return event.raw_text

@@ -8,7 +8,13 @@ import re
 import signal
 from dataclasses import dataclass
 import time
-from typing import Any, Callable
+from typing import Any
+
+from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
+from mcp_memory.core.providers.interfaces import ProviderObserver
+from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +29,7 @@ _RESET_AFTER_RE = re.compile(
 @dataclass
 class AIResponse:
     raw_text: str
-    parsed: dict | None
+    parsed: dict[str, Any] | None
     error: str | None = None
     subprocess_pid: int | None = None
     returncode: int | None = None
@@ -61,7 +67,7 @@ class JSONCLIProvider:
         timeout_seconds: float,
         max_retries: int,
         cwd: str | None = None,
-        observer: Callable[[dict[str, Any]], None] | None = None,
+        observer: ProviderObserver | None = None,
     ) -> None:
         self._command = command
         self._model = model
@@ -70,7 +76,7 @@ class JSONCLIProvider:
         self._cwd = cwd
         self._observer = observer
 
-    def with_observer(self, observer: Callable[[dict[str, Any]], None]):
+    def with_observer(self, observer: ProviderObserver):
         clone = copy.copy(self)
         existing = getattr(self, "_observer", None)
         if existing is None:
@@ -79,7 +85,7 @@ class JSONCLIProvider:
             clone._observer = _chain_observers(existing, observer)
         return clone
 
-    async def ask_json(self, prompt: str) -> dict:
+    async def ask_json(self, prompt: str) -> dict[str, Any]:
         last_error: str | None = None
         for attempt in range(self._max_retries + 1):
             response = await self._execute(prompt, attempt=attempt + 1)
@@ -100,7 +106,7 @@ class JSONCLIProvider:
             last_error,
         )
 
-    async def ask(self, prompt: str) -> dict:
+    async def ask(self, prompt: str) -> dict[str, Any]:
         return await self.ask_json(prompt)
 
     def build_command(self, prompt: str) -> tuple[str, ...]:
@@ -123,13 +129,12 @@ class JSONCLIProvider:
                     cwd=self._cwd,
                 )
             self._notify(
-                {
-                    "event": "started",
-                    "attempt": attempt,
-                    "prompt": prompt,
-                    "subprocess_pid": proc.pid,
-                    "started_at": started_at,
-                }
+                ProviderAttemptStartedEvent(
+                    attempt=attempt,
+                    prompt=prompt,
+                    subprocess_pid=proc.pid,
+                    started_at=started_at,
+                )
             )
             communicate_task = asyncio.create_task(proc.communicate())
             deadline = time.monotonic() + self._timeout_seconds
@@ -150,15 +155,14 @@ class JSONCLIProvider:
                             break
                         heartbeat_at = time.time()
                         self._notify(
-                            {
-                                "event": "heartbeat",
-                                "attempt": attempt,
-                                "prompt": prompt,
-                                "subprocess_pid": proc.pid,
-                                "started_at": started_at,
-                                "heartbeat_at": heartbeat_at,
-                                "elapsed_seconds": max(heartbeat_at - started_at, 0.0),
-                            }
+                            ProviderAttemptHeartbeatEvent(
+                                attempt=attempt,
+                                prompt=prompt,
+                                subprocess_pid=proc.pid,
+                                started_at=started_at,
+                                heartbeat_at=heartbeat_at,
+                                elapsed_seconds=max(heartbeat_at - started_at, 0.0),
+                            )
                         )
             except asyncio.CancelledError:
                 communicate_task.cancel()
@@ -167,20 +171,19 @@ class JSONCLIProvider:
                 await asyncio.gather(communicate_task, return_exceptions=True)
                 completed_at = time.time()
                 self._notify(
-                    {
-                        "event": "finished",
-                        "attempt": attempt,
-                        "status": "cancelled",
-                        "prompt": prompt,
-                        "subprocess_pid": proc.pid,
-                        "returncode": proc.returncode,
-                        "raw_text": "",
-                        "parsed": None,
-                        "error": "Command cancelled",
-                        "started_at": started_at,
-                        "completed_at": completed_at,
-                        "duration_seconds": max(completed_at - started_at, 0.0),
-                    }
+                    ProviderAttemptFinishedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=proc.pid,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration_seconds=max(completed_at - started_at, 0.0),
+                        status="cancelled",
+                        returncode=proc.returncode,
+                        raw_text="",
+                        parsed=None,
+                        error_text="Command cancelled",
+                    )
                 )
                 raise
             except asyncio.TimeoutError:
@@ -191,20 +194,19 @@ class JSONCLIProvider:
                 completed_at = time.time()
                 response = AIResponse(raw_text="", parsed=None, error="Command timed out", subprocess_pid=proc.pid)
                 self._notify(
-                    {
-                        "event": "finished",
-                        "attempt": attempt,
-                        "status": "timeout",
-                        "prompt": prompt,
-                        "subprocess_pid": proc.pid,
-                        "returncode": proc.returncode,
-                        "raw_text": response.raw_text,
-                        "parsed": response.parsed,
-                        "error": response.error,
-                        "started_at": started_at,
-                        "completed_at": completed_at,
-                        "duration_seconds": max(completed_at - started_at, 0.0),
-                    }
+                    ProviderAttemptFinishedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=proc.pid,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration_seconds=max(completed_at - started_at, 0.0),
+                        status="timeout",
+                        returncode=proc.returncode,
+                        raw_text=response.raw_text,
+                        parsed=response.parsed,
+                        error_text=response.error,
+                    )
                 )
                 return response
 
@@ -225,20 +227,19 @@ class JSONCLIProvider:
                 )
                 completed_at = time.time()
                 self._notify(
-                    {
-                        "event": "finished",
-                        "attempt": attempt,
-                        "status": "error",
-                        "prompt": prompt,
-                        "subprocess_pid": proc.pid,
-                        "returncode": returncode,
-                        "raw_text": response.raw_text,
-                        "parsed": response.parsed,
-                        "error": response.error,
-                        "started_at": started_at,
-                        "completed_at": completed_at,
-                        "duration_seconds": max(completed_at - started_at, 0.0),
-                    }
+                    ProviderAttemptFinishedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=proc.pid,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration_seconds=max(completed_at - started_at, 0.0),
+                        status="error",
+                        returncode=returncode,
+                        raw_text=response.raw_text,
+                        parsed=response.parsed,
+                        error_text=response.error,
+                    )
                 )
                 return response
             if looks_like_interactive_auth_prompt(stdout_text) or looks_like_interactive_auth_prompt(stderr_text):
@@ -251,22 +252,21 @@ class JSONCLIProvider:
                 )
                 completed_at = time.time()
                 self._notify(
-                    {
-                        "event": "finished",
-                        "attempt": attempt,
-                        "status": "auth_required",
-                        "prompt": prompt,
-                        "subprocess_pid": proc.pid,
-                        "returncode": returncode,
-                        "raw_text": response.raw_text,
-                        "parsed": response.parsed,
-                        "error": response.error,
-                        "reason_category": "auth",
-                        "reason_code": "interactive_auth_required",
-                        "started_at": started_at,
-                        "completed_at": completed_at,
-                        "duration_seconds": max(completed_at - started_at, 0.0),
-                    }
+                    ProviderAttemptFinishedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=proc.pid,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration_seconds=max(completed_at - started_at, 0.0),
+                        status="auth_required",
+                        returncode=returncode,
+                        raw_text=response.raw_text,
+                        parsed=response.parsed,
+                        error_text=response.error,
+                        reason_category="auth",
+                        reason_code="interactive_auth_required",
+                    )
                 )
                 return response
             response = self._parse_response(stdout_text)
@@ -274,64 +274,61 @@ class JSONCLIProvider:
             response.returncode = returncode
             completed_at = time.time()
             self._notify(
-                {
-                    "event": "finished",
-                    "attempt": attempt,
-                    "status": "success" if response.success else "parse_error",
-                    "prompt": prompt,
-                    "subprocess_pid": proc.pid,
-                    "returncode": returncode,
-                    "raw_text": response.raw_text,
-                    "parsed": response.parsed,
-                    "error": response.error,
-                    "started_at": started_at,
-                    "completed_at": completed_at,
-                    "duration_seconds": max(completed_at - started_at, 0.0),
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=attempt,
+                    prompt=prompt,
+                    subprocess_pid=proc.pid,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=max(completed_at - started_at, 0.0),
+                    status="success" if response.success else "parse_error",
+                    returncode=returncode,
+                    raw_text=response.raw_text,
+                    parsed=response.parsed,
+                    error_text=response.error,
+                )
             )
             return response
         except FileNotFoundError:
             completed_at = time.time()
             response = AIResponse(raw_text="", parsed=None, error=f"Command not found: {self._command}")
             self._notify(
-                {
-                    "event": "finished",
-                    "attempt": attempt,
-                    "status": "error",
-                    "prompt": prompt,
-                    "subprocess_pid": None,
-                    "returncode": None,
-                    "raw_text": response.raw_text,
-                    "parsed": response.parsed,
-                    "error": response.error,
-                    "started_at": started_at,
-                    "completed_at": completed_at,
-                    "duration_seconds": max(completed_at - started_at, 0.0),
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=attempt,
+                    prompt=prompt,
+                    subprocess_pid=None,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=max(completed_at - started_at, 0.0),
+                    status="error",
+                    returncode=None,
+                    raw_text=response.raw_text,
+                    parsed=response.parsed,
+                    error_text=response.error,
+                )
             )
             return response
         except OSError as exc:
             completed_at = time.time()
             response = AIResponse(raw_text="", parsed=None, error=f"OS error: {exc}")
             self._notify(
-                {
-                    "event": "finished",
-                    "attempt": attempt,
-                    "status": "error",
-                    "prompt": prompt,
-                    "subprocess_pid": None,
-                    "returncode": None,
-                    "raw_text": response.raw_text,
-                    "parsed": response.parsed,
-                    "error": response.error,
-                    "started_at": started_at,
-                    "completed_at": completed_at,
-                    "duration_seconds": max(completed_at - started_at, 0.0),
-                }
+                ProviderAttemptFinishedEvent(
+                    attempt=attempt,
+                    prompt=prompt,
+                    subprocess_pid=None,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=max(completed_at - started_at, 0.0),
+                    status="error",
+                    returncode=None,
+                    raw_text=response.raw_text,
+                    parsed=response.parsed,
+                    error_text=response.error,
+                )
             )
             return response
 
-    def _notify(self, payload: dict[str, Any]) -> None:
+    def _notify(self, payload: ProviderObserverEvent) -> None:
         observer = getattr(self, "_observer", None)
         if observer is None:
             return
@@ -365,8 +362,8 @@ class JSONCLIProvider:
         return AIResponse(raw_text=text, parsed=parsed)
 
 
-def _chain_observers(*observers: Callable[[dict[str, Any]], None]):
-    def _notify(payload: dict[str, Any]) -> None:
+def _chain_observers(*observers: ProviderObserver) -> ProviderObserver:
+    def _notify(payload: ProviderObserverEvent) -> None:
         for observer in observers:
             observer(payload)
 

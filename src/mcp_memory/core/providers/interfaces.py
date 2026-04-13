@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Callable, ClassVar, Mapping, Protocol, TypeAlias
 
 
 @dataclass(slots=True)
@@ -9,8 +9,57 @@ class AgenticRunResult:
     status: str
     summary: str | None = None
     raw_text: str | None = None
-    parsed: dict | None = None
+    parsed: dict[str, Any] | None = None
     subprocess_pid: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderObserverEvent:
+    attempt: int
+    prompt: str | None
+    subprocess_pid: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptStartedEvent(ProviderObserverEvent):
+    event: ClassVar[str] = "started"
+
+    started_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptHeartbeatEvent(ProviderObserverEvent):
+    event: ClassVar[str] = "heartbeat"
+
+    started_at: float
+    heartbeat_at: float
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderAttemptFinishedEvent(ProviderObserverEvent):
+    event: ClassVar[str] = "finished"
+
+    started_at: float
+    completed_at: float
+    duration_seconds: float
+    status: str | None = None
+    returncode: int | None = None
+    raw_text: str | None = None
+    parsed: dict[str, Any] | None = None
+    error_text: str | None = None
+    reason_category: str | None = None
+    reason_code: str | None = None
+    retry_delay_seconds: float | None = None
+
+    @property
+    def error(self) -> str | None:
+        return self.error_text
+
+
+LegacyProviderObserverPayload: TypeAlias = Mapping[str, Any]
+ProviderObserverInput: TypeAlias = ProviderObserverEvent | LegacyProviderObserverPayload
+ProviderObserver: TypeAlias = Callable[[ProviderObserverEvent], None]
 
 
 class ProviderBudgetExceeded(RuntimeError):
@@ -86,7 +135,7 @@ class ProviderAuthenticationRequired(RuntimeError):
 
 
 class JSONTaskProvider(Protocol):
-    async def ask_json(self, prompt: str) -> dict:
+    async def ask_json(self, prompt: str) -> dict[str, Any]:
         ...
 
 

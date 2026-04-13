@@ -20,6 +20,9 @@ from mcp_memory.core.providers import (
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
+from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
+from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
 from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
@@ -211,19 +214,19 @@ async def test_gemini_cli_provider_emits_heartbeat_while_waiting(
         "mcp_memory.core.providers._json_cli.PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS",
         0.01,
     )
-    events: list[dict[str, object]] = []
+    events: list[object] = []
 
     provider = GeminiCLIProvider(command="gemini", max_retries=0).with_observer(events.append)
 
     result = await provider.ask("wait for heartbeat")
 
-    heartbeat_events = [event for event in events if event.get("event") == "heartbeat"]
+    heartbeat_events = [event for event in events if isinstance(event, ProviderAttemptHeartbeatEvent)]
     assert result == {"actions": []}
+    assert isinstance(events[0], ProviderAttemptStartedEvent)
     assert heartbeat_events
-    assert heartbeat_events[0]["subprocess_pid"] == 8888
-    elapsed_seconds = heartbeat_events[0]["elapsed_seconds"]
-    assert isinstance(elapsed_seconds, int | float)
-    assert float(elapsed_seconds) >= 0.0
+    assert isinstance(events[-1], ProviderAttemptFinishedEvent)
+    assert heartbeat_events[0].subprocess_pid == 8888
+    assert heartbeat_events[0].elapsed_seconds >= 0.0
 
 
 @pytest.mark.asyncio
