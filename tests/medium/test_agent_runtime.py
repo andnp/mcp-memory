@@ -47,14 +47,16 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.sampling import SamplingBatch
 import mcp_memory.core.task_handlers.curator_support as _curator_support
-from mcp_memory.core.task_worker import RuntimeTaskWorker
-from mcp_memory.core.task_handlers.maintenance import (
+from mcp_memory.core.task_handlers.curator_support import (
     CURATOR_MAX_MEMORY_CHARS,
     CURATOR_MAX_SEED_RECORDS,
-    DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
-    _select_curator_seed_records,
+    select_curator_seed_records as _select_curator_seed_records,
 )
-from mcp_memory.core.task_handlers.deduplicator_support import build_deduplicator_agent_prompt
+from mcp_memory.core.task_worker import RuntimeTaskWorker
+from mcp_memory.core.task_handlers.deduplicator_support import (
+    DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
+    build_deduplicator_agent_prompt,
+)
 from mcp_memory.core.task_handlers.ingest import (
     INGEST_APPEND_TOOL_NAME,
     INGEST_CREATE_TOOL_NAME,
@@ -2670,7 +2672,12 @@ def test_project_manager_fact_checker_and_sweeper_tasks_update_state(
 async def test_runtime_task_worker_periodically_recovers_dead_subprocess_tasks(db_manager, monkeypatch) -> None:
     queue = SQLiteTaskQueue(db_manager)
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
-    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        provider_usage=repository,
+        workspace_id="workspace-a",
+    )
     task = queue.enqueue(
         SYSTEM1_INGEST_TASK_NAME,
         workspace_id="workspace-a",
@@ -2697,44 +2704,36 @@ async def test_runtime_task_worker_periodically_recovers_dead_subprocess_tasks(d
         completed_at=1.0,
     )
 
-    calls = 0
-    original = SQLiteTaskQueue.recover_abandoned_running_tasks
-
-    def recover(self, *args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return []
-        kwargs.pop("stale_after_seconds", None)
-        kwargs.pop("now", None)
-        return original(self, stale_after_seconds=0.0, now=5.0)
-
     monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
-    monkeypatch.setattr(SQLiteTaskQueue, "recover_abandoned_running_tasks", recover)
     worker = RuntimeTaskWorker(
         ctx,
         handlers={SYSTEM1_INGEST_TASK_NAME: lambda context, queued_task: None},
         poll_interval_seconds=0.01,
         abandoned_recovery_interval_seconds=0.01,
         abandoned_task_stale_after_seconds=0.0,
+        retry_delay_seconds=45.0,
     )
 
     await worker.start()
     try:
         for _ in range(30):
-            if queue.get_task(task.id).status == "failed":
+            if queue.get_task(task.id).status == "pending":
                 break
             await asyncio.sleep(0.01)
     finally:
         await worker.stop(0.05)
 
-    failed = queue.get_task(task.id)
+    retried = queue.get_task(task.id)
     conversation = repository.get_conversation("req-midrun-dead")[0]
 
-    assert failed.status == "failed"
-    assert failed.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.status == "pending"
+    assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert retried.retries_count == 1
+    assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
     assert conversation.status == "error"
     assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
+    assert conversation.reason_category == "recovery"
+    assert conversation.reason_code == "provider_subprocess_exited_retry"
 
 
 @pytest.mark.asyncio

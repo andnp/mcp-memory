@@ -9,14 +9,12 @@ from mcp_memory.core.sampling import (
     SEMANTIC_STRATEGY,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import (
-    requested_sampling_strategy,
     sample_maintenance_candidates,
     sampling_payload,
 )
 import mcp_memory.core.task_handlers.curator_handlers as _curator_handlers
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 import mcp_memory.core.task_handlers.deduplicator_handlers as _deduplicator_handlers
-import mcp_memory.core.task_handlers.deduplicator_support as _deduplicator_support
 import mcp_memory.core.task_handlers.defragmenter_support as _defragmenter_support
 import mcp_memory.core.task_handlers.maintenance_housekeeping as _maintenance_housekeeping
 from mcp_memory.core.task_handlers.maintenance_normalization import normalize_tag_values
@@ -64,21 +62,21 @@ async def handle_defragmenter_task(
     all_candidates = [
         record
         for record in ctx.repository.list_memories(
-            workspace_id=_resolve_workspace_id(ctx, task),
+            workspace_id=_maintenance_housekeeping._resolve_workspace_id(ctx, task),
             status="active",
             limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
         )
         if record.type in {"journal", "observation"}
         and not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
-    sampled_batch = _sample_maintenance_candidates(
+    sampled_batch = sample_maintenance_candidates(
         ctx,
         task,
         all_candidates,
-        allowed_strategies=DEFRAGMENTER_ALLOWED_STRATEGIES,
-        strategy_weights=DEFRAGMENTER_STRATEGY_WEIGHTS,
+        allowed_strategies=_defragmenter_support.DEFRAGMENTER_ALLOWED_STRATEGIES,
+        strategy_weights=_defragmenter_support.DEFRAGMENTER_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
-        support_counts=_build_support_counts(ctx, all_candidates),
+        support_counts=_curator_support.build_support_counts(ctx, all_candidates),
     )
     candidates = sampled_batch.records
     groups = _defragmenter_support.collect_defragment_groups(candidates)
@@ -98,7 +96,10 @@ async def handle_defragmenter_task(
         record = ctx.repository.create_memory(
             title=title,
             content=content,
-            workspace_ids=_defragmenter_support.resolve_group_workspace_ids(group, _resolve_workspace_id(ctx, task)),
+            workspace_ids=_defragmenter_support.resolve_group_workspace_ids(
+                group,
+                _maintenance_housekeeping._resolve_workspace_id(ctx, task),
+            ),
             tags=normalize_tag_values([tag for item in group for tag in item.tags] + ["auto-defragmented"]),
             memory_type="reflection",
             metadata={"source_memory_ids": [item.id for item in group], "defragmenter_task_id": task.id},
@@ -119,22 +120,3 @@ async def handle_defragmenter_task(
         archived=archived,
         lines_compressed=lines_compressed,
     )
-
-
-# Temporary compatibility aliases for the extraction slices.
-CURATOR_MAX_MEMORY_CHARS = _curator_support.CURATOR_MAX_MEMORY_CHARS
-CURATOR_MAX_SEED_RECORDS = _curator_support.CURATOR_MAX_SEED_RECORDS
-DEFRAGMENTER_ALLOWED_STRATEGIES = _defragmenter_support.DEFRAGMENTER_ALLOWED_STRATEGIES
-DEFRAGMENTER_STRATEGY_WEIGHTS = _defragmenter_support.DEFRAGMENTER_STRATEGY_WEIGHTS
-_select_curator_seed_records = _curator_support.select_curator_seed_records
-_build_support_counts = _curator_support.build_support_counts
-_requested_sampling_strategy = requested_sampling_strategy
-_sample_maintenance_candidates = sample_maintenance_candidates
-_select_deduplicator_seed_batch = _deduplicator_support.select_deduplicator_seed_batch
-_build_deduplicator_agent_prompt = _deduplicator_support.build_deduplicator_agent_prompt
-_normalize_deduplicator_agentic_result = _deduplicator_support.normalize_deduplicator_agentic_result
-_purge_recoverable_journal_entries = _maintenance_housekeeping._purge_recoverable_journal_entries
-_cleanup_deleted_thought_embeddings = _maintenance_housekeeping._cleanup_deleted_thought_embeddings
-_resolve_workspace_id = _maintenance_housekeeping._resolve_workspace_id
-_resolve_workspace_root = _maintenance_housekeeping._resolve_workspace_root
-_normalize_tag_values = normalize_tag_values
