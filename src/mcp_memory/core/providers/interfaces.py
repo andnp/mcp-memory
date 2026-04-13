@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, ClassVar, Mapping, Protocol, TypeAlias
+from typing import Any, Callable, ClassVar, Protocol
 
 
 @dataclass(slots=True)
@@ -56,10 +56,6 @@ class ProviderAttemptFinishedEvent(ProviderObserverEvent):
     def error(self) -> str | None:
         return self.error_text
 
-
-# Deprecated import-compat aliases. Provider observers accept typed dataclass events only.
-LegacyProviderObserverPayload: TypeAlias = Mapping[str, Any]
-ProviderObserverInput: TypeAlias = ProviderObserverEvent
 ProviderObserver = Callable[[ProviderObserverEvent], None]
 
 
