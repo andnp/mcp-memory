@@ -22,6 +22,13 @@ TASK_CLASS_CHEAP_AGENTIC = "cheap_agentic"
 TASK_CLASS_CHEAP_JSON = "cheap_json"
 TASK_CLASS_DETERMINISTIC = "deterministic"
 
+RUNTIME_PROVIDERLESS_TASK_NAMES = frozenset(
+    {
+        CONFLICT_DETECTOR_TASK_NAME,
+        DEDUPLICATOR_TASK_NAME,
+    }
+)
+
 DEFAULT_TASK_CLASS_BY_NAME = {
     SYSTEM1_INGEST_TASK_NAME: TASK_CLASS_CHEAP_AGENTIC,
     CURATOR_TASK_NAME: TASK_CLASS_PREMIUM_AGENTIC,
@@ -60,6 +67,8 @@ DEFAULT_LOW_PRIORITY_TASK_NAMES = frozenset(
 
 
 def task_class_for_task(config: Config | None, task_name: str) -> str:
+    if task_name in RUNTIME_PROVIDERLESS_TASK_NAMES:
+        return TASK_CLASS_DETERMINISTIC
     routing = None if config is None else config.provider_routing
     if routing is not None and task_name in routing.task_classes:
         return routing.task_classes[task_name]

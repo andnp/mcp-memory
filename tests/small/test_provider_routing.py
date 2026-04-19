@@ -132,12 +132,12 @@ def test_provider_for_task_falls_back_to_legacy_default_when_routed_profile_is_u
     assert selected is None
 
 
-def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic() -> None:
+def test_provider_for_taxonomist_uses_next_json_route_before_legacy_default() -> None:
     ctx = ApplicationContext(
         config=Config(
             ai=AIConfig(provider="none"),
             provider_routing=ProviderRoutingConfig(
-                task_routes={"deduplicator": ["copilot-mini", "gemini-cheap"]},
+                task_routes={"taxonomist": ["copilot-mini", "gemini-cheap"]},
                 profiles={
                     "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
                     "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
@@ -145,17 +145,13 @@ def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic(
             ),
         ),
         ai_provider_registry={
-            "copilot-mini": {
-                "agentic": _FakeProvider("copilot-mini-agentic", available=False),
-            },
-            "gemini-cheap": {
-                "agentic": _FakeProvider("gemini-cheap-agentic", available=True),
-            }
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=False)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=True)},
         },
     )
     task = TaskRecord(
-        id="dedup-task",
-        task_name="deduplicator",
+        id="taxonomist-task",
+        task_name="taxonomist",
         data={},
         workspace_id="workspace-a",
         status="pending",
@@ -171,12 +167,12 @@ def test_provider_for_agentic_task_uses_next_agentic_route_before_deterministic(
         last_error=None,
     )
 
-    selected = _provider_for_task(ctx, None, None, "deduplicator", task)
+    selected = _provider_for_task(ctx, None, None, "taxonomist", task)
 
     assert selected == {
-        "provider": "gemini-cheap-agentic",
-        "task_name": "deduplicator",
-        "task_id": "dedup-task",
+        "provider": "gemini-cheap",
+        "task_name": "taxonomist",
+        "task_id": "taxonomist-task",
         "workspace_id": "workspace-a",
     }
 
@@ -186,7 +182,7 @@ def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -
         config=Config(
             ai=AIConfig(provider="none"),
             provider_routing=ProviderRoutingConfig(
-                task_routes={"deduplicator": ["copilot-mini", "gemini-cheap"]},
+                task_routes={"taxonomist": ["copilot-mini", "gemini-cheap"]},
                 profiles={
                     "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
                     "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
@@ -196,13 +192,13 @@ def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -
             ),
         ),
         ai_provider_registry={
-            "copilot-mini": {"agentic": _FakeProvider("copilot-mini-agentic", available=False)},
-            "gemini-cheap": {"agentic": _FakeProvider("gemini-cheap-agentic", available=True)},
+            "copilot-mini": {"json": _FakeProvider("copilot-mini", available=False)},
+            "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=True)},
         },
     )
     task = TaskRecord(
-        id="dedup-task",
-        task_name="deduplicator",
+        id="taxonomist-task",
+        task_name="taxonomist",
         data={},
         workspace_id="workspace-a",
         status="pending",
@@ -218,14 +214,106 @@ def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -
         last_error=None,
     )
 
-    selected = _provider_for_task(ctx, None, None, "deduplicator", task)
+    selected = _provider_for_task(ctx, None, None, "taxonomist", task)
 
     assert selected == {
-        "provider": "gemini-cheap-agentic",
-        "task_name": "deduplicator",
-        "task_id": "dedup-task",
+        "provider": "gemini-cheap",
+        "task_name": "taxonomist",
+        "task_id": "taxonomist-task",
         "workspace_id": "workspace-a",
     }
+
+
+def test_provider_for_runtime_providerless_structural_seeders_returns_none_even_with_routes() -> None:
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                task_routes={
+                    "deduplicator": ["gemini-cheap"],
+                    "conflict-detector": ["gemini-cheap"],
+                },
+                profiles={
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "gemini-cheap": {
+                "agentic": _FakeProvider("gemini-cheap-agentic", available=True),
+                "json": _FakeProvider("gemini-cheap", available=True),
+            }
+        },
+    )
+
+    for task_name in ("deduplicator", "conflict-detector"):
+        task = TaskRecord(
+            id=f"{task_name}-task",
+            task_name=task_name,
+            data={},
+            workspace_id="workspace-a",
+            status="pending",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        )
+
+        assert _provider_for_task(ctx, None, None, task_name, task) is None
+
+
+def test_provider_for_runtime_providerless_structural_seeders_ignores_task_class_overrides() -> None:
+    ctx = ApplicationContext(
+        config=Config(
+            ai=AIConfig(provider="none"),
+            provider_routing=ProviderRoutingConfig(
+                task_classes={
+                    "deduplicator": "cheap_agentic",
+                    "conflict-detector": "cheap_json",
+                },
+                task_routes={
+                    "deduplicator": ["gemini-cheap"],
+                    "conflict-detector": ["gemini-cheap"],
+                },
+                profiles={
+                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                },
+            ),
+        ),
+        ai_provider_registry={
+            "gemini-cheap": {
+                "agentic": _FakeProvider("gemini-cheap-agentic", available=True),
+                "json": _FakeProvider("gemini-cheap", available=True),
+            }
+        },
+    )
+
+    for task_name in ("deduplicator", "conflict-detector"):
+        task = TaskRecord(
+            id=f"override:{task_name}",
+            task_name=task_name,
+            data={},
+            workspace_id="workspace-a",
+            status="pending",
+            priority=100,
+            retries_count=0,
+            max_retries=3,
+            created_at=0.0,
+            updated_at=0.0,
+            available_at=0.0,
+            claimed_at=None,
+            started_at=None,
+            completed_at=None,
+            last_error=None,
+        )
+
+        assert _provider_for_task(ctx, None, None, task_name, task) is None
 
 
 def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budget(caplog) -> None:
@@ -495,18 +583,18 @@ def test_select_provider_for_inputs_matches_context_wrapper_for_route_selection(
     config = Config(
         ai=AIConfig(provider="none"),
         provider_routing=ProviderRoutingConfig(
-            task_routes={"deduplicator": ["gemini-cheap"]},
+            task_routes={"taxonomist": ["gemini-cheap"]},
             profiles={
                 "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
             },
         ),
     )
     registry = {
-        "gemini-cheap": {"agentic": _FakeProvider("gemini-cheap-agentic", available=True)},
+        "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=True)},
     }
     task = TaskRecord(
-        id="dedup-task",
-        task_name="deduplicator",
+        id="taxonomist-task",
+        task_name="taxonomist",
         data={},
         workspace_id="workspace-a",
         status="pending",
@@ -526,15 +614,15 @@ def test_select_provider_for_inputs_matches_context_wrapper_for_route_selection(
         ProviderSelectionInputs(config=config, ai_provider_registry=registry),
         None,
         None,
-        "deduplicator",
+        "taxonomist",
         task,
-        agentic_task_names={"deduplicator"},
+        agentic_task_names=set(),
     )
 
     assert selected == {
-        "provider": "gemini-cheap-agentic",
-        "task_name": "deduplicator",
-        "task_id": "dedup-task",
+        "provider": "gemini-cheap",
+        "task_name": "taxonomist",
+        "task_id": "taxonomist-task",
         "workspace_id": "workspace-a",
     }
 
@@ -543,18 +631,18 @@ def test_select_provider_for_request_matches_task_wrapper_for_route_selection() 
     config = Config(
         ai=AIConfig(provider="none"),
         provider_routing=ProviderRoutingConfig(
-            task_routes={"deduplicator": ["gemini-cheap"]},
+            task_routes={"taxonomist": ["gemini-cheap"]},
             profiles={
                 "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
             },
         ),
     )
     registry = {
-        "gemini-cheap": {"agentic": _FakeProvider("gemini-cheap-agentic", available=True)},
+        "gemini-cheap": {"json": _FakeProvider("gemini-cheap", available=True)},
     }
     task = TaskRecord(
-        id="dedup-task",
-        task_name="deduplicator",
+        id="taxonomist-task",
+        task_name="taxonomist",
         data={},
         workspace_id="workspace-a",
         status="pending",
@@ -575,16 +663,16 @@ def test_select_provider_for_request_matches_task_wrapper_for_route_selection() 
         inputs,
         None,
         None,
-        "deduplicator",
+        "taxonomist",
         task,
-        agentic_task_names={"deduplicator"},
+        agentic_task_names=set(),
     )
     selected_from_request = select_provider_for_request(
         inputs,
         None,
         None,
-        ProviderSelectionRequest(task_name="deduplicator", task_id="dedup-task", workspace_id="workspace-a"),
-        agentic_task_names={"deduplicator"},
+        ProviderSelectionRequest(task_name="taxonomist", task_id="taxonomist-task", workspace_id="workspace-a"),
+        agentic_task_names=set(),
     )
 
     assert selected_from_request == selected_from_task
@@ -626,7 +714,10 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
     config = Config(
         ai=AIConfig(provider="none"),
         provider_routing=ProviderRoutingConfig(
-            task_routes={"deduplicator": ["gemini-cheap"]},
+            task_routes={
+                "deduplicator": ["gemini-cheap"],
+                "taxonomist": ["gemini-cheap"],
+            },
             profiles={
                 "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
             },
@@ -643,22 +734,140 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
         provider_usage_repo=provider_usage_repo,
         ai_json_provider=None,
         ai_agent_provider=None,
-        ai_provider_registry={"gemini-cheap": {"agentic": provider}},
+        ai_provider_registry={
+            "gemini-cheap": {
+                "agentic": provider,
+                "json": provider,
+            }
+        },
     )
 
     deduplicator_audit = next(item for item in audits if item.task_name == "deduplicator")
+    taxonomist_audit = next(item for item in audits if item.task_name == "taxonomist")
 
-    assert deduplicator_audit.resolved_provider_key == "gemini-cheap"
-    assert deduplicator_audit.resolved_model_name == "gemini-3-flash-preview"
-    assert deduplicator_audit.resolved_provider_type == "_AuditProvider"
-    assert deduplicator_audit.resolved_supports_agentic is True
+    assert deduplicator_audit.resolved_provider_key is None
+    assert deduplicator_audit.resolved_model_name is None
+    assert deduplicator_audit.resolved_provider_type is None
+    assert deduplicator_audit.resolved_supports_agentic is None
+    assert taxonomist_audit.resolved_provider_key == "gemini-cheap"
+    assert taxonomist_audit.resolved_model_name == "gemini-3-flash-preview"
+    assert taxonomist_audit.resolved_provider_type == "_AuditProvider"
+    assert taxonomist_audit.resolved_supports_agentic is True
     assert {
         (call["task_name"], call["task_id"], call["workspace_id"])
         for call in provider.bound_calls
     } == {
-        ("deduplicator", "audit:deduplicator", "workspace-a"),
         ("taxonomist", "audit:taxonomist", "workspace-a"),
     }
+
+
+def test_build_task_route_audit_suppresses_runtime_only_structural_seeder_provider_resolution() -> None:
+    class _AuditProvider:
+        def __init__(self) -> None:
+            self.bound_calls: list[dict[str, str | None]] = []
+
+        def supports_agentic(self) -> bool:
+            return True
+
+        def with_usage_context(
+            self,
+            *,
+            task_name: str | None,
+            task_id: str | None = None,
+            execution_epoch: int | None = None,
+            workspace_id: str | None = None,
+        ):
+            self.bound_calls.append(
+                {
+                    "task_name": task_name,
+                    "task_id": task_id,
+                    "workspace_id": workspace_id,
+                }
+            )
+            return SimpleNamespace(
+                _provider_key="gemini-cheap",
+                _model_name="gemini-3-flash-preview",
+                _provider=self,
+                supports_agentic=self.supports_agentic,
+            )
+
+    provider = _AuditProvider()
+    config = Config(
+        ai=AIConfig(provider="none"),
+        provider_routing=ProviderRoutingConfig(
+            task_routes={
+                "deduplicator": ["gemini-cheap"],
+                "conflict-detector": ["gemini-cheap"],
+            },
+            profiles={
+                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            },
+        ),
+    )
+    provider_usage_repo = SimpleNamespace(
+        summarize_usage=lambda workspace_id=None: [],
+        list_conversations=lambda task_name, limit=1: [],
+    )
+
+    audits = build_task_route_audit(
+        config=config,
+        workspace_id="workspace-a",
+        provider_usage_repo=provider_usage_repo,
+        ai_json_provider=None,
+        ai_agent_provider=None,
+        ai_provider_registry={"gemini-cheap": {"agentic": provider, "json": provider}},
+    )
+
+    suppressed_task_names = {"deduplicator", "conflict-detector"}
+    suppressed_audits = [item for item in audits if item.task_name in suppressed_task_names]
+
+    assert {item.task_name for item in suppressed_audits} == suppressed_task_names
+    assert all(item.resolved_provider_key is None for item in suppressed_audits)
+    assert all(item.resolved_model_name is None for item in suppressed_audits)
+    assert all(item.resolved_provider_type is None for item in suppressed_audits)
+    assert all(item.resolved_supports_agentic is None for item in suppressed_audits)
+    assert all(call["task_name"] not in suppressed_task_names for call in provider.bound_calls)
+
+
+def test_build_task_route_audit_keeps_providerless_structural_seeders_deterministic_under_overrides() -> None:
+    provider = _FakeProvider("gemini-cheap", available=True)
+    config = Config(
+        ai=AIConfig(provider="none"),
+        provider_routing=ProviderRoutingConfig(
+            task_classes={
+                "deduplicator": "cheap_agentic",
+                "conflict-detector": "cheap_json",
+            },
+            task_routes={
+                "deduplicator": ["gemini-cheap"],
+                "conflict-detector": ["gemini-cheap"],
+            },
+            profiles={
+                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+            },
+        ),
+    )
+    provider_usage_repo = SimpleNamespace(
+        summarize_usage=lambda workspace_id=None: [],
+        list_conversations=lambda task_name, limit=1: [],
+    )
+
+    audits = build_task_route_audit(
+        config=config,
+        workspace_id="workspace-a",
+        provider_usage_repo=provider_usage_repo,
+        ai_json_provider=None,
+        ai_agent_provider=None,
+        ai_provider_registry={"gemini-cheap": {"agentic": provider, "json": provider}},
+    )
+
+    for task_name in ("deduplicator", "conflict-detector"):
+        audit = next(item for item in audits if item.task_name == task_name)
+        assert audit.task_class == "deterministic"
+        assert audit.execution_kind == "deterministic"
+        assert audit.configured_primary_route is None
+        assert audit.configured_fallback_routes == []
+        assert audit.resolved_provider_key is None
 
 
 def test_select_provider_for_request_records_real_route_skip_but_route_audit_does_not() -> None:

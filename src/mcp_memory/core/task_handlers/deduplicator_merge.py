@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from inspect import isawaitable
 import re
-from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.embeddings import cosine_similarity
-from mcp_memory.core.task_handlers.agentic_guardrails import build_deduplicator_guardrails
-from mcp_memory.core.task_handlers.deduplicator_support import (
-    DEDUPLICATOR_AI_MIN_COMBINED_LINES,
-    DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD,
-)
 from mcp_memory.core.tasks import TaskRecord
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
@@ -75,7 +68,6 @@ async def run_deterministic_deduplicator_pass(
     task: TaskRecord,
     candidates: list,
     seed_records: list,
-    provider: Any = None,
 ) -> dict[str, int]:
     facts = [record for record in seed_records if record.type == "fact"]
     observations = [record for record in seed_records if record.type == "observation"]
@@ -94,7 +86,7 @@ async def run_deterministic_deduplicator_pass(
         for source in group:
             if source.id == canonical.id or source.id in claimed_sources:
                 continue
-            canonical = await _merge_into_canonical_fact(ctx, canonical, source, task, provider)
+            canonical = await _merge_into_canonical_fact(ctx, canonical, source, task)
             claimed_sources.add(source.id)
             merged += 1
             archived += 1
@@ -107,7 +99,7 @@ async def run_deterministic_deduplicator_pass(
         if target is None:
             continue
         refreshed = active_facts_by_id.get(target.id, target)
-        merged_target = await _merge_into_canonical_fact(ctx, refreshed, observation, task, provider)
+        merged_target = await _merge_into_canonical_fact(ctx, refreshed, observation, task)
         active_facts_by_id[merged_target.id] = merged_target
         active_facts = list(active_facts_by_id.values())
         claimed_sources.add(observation.id)
@@ -182,14 +174,9 @@ async def _merge_into_canonical_fact(
     canonical,
     source,
     task: TaskRecord,
-    provider: Any = None,
 ):
     assert ctx.repository is not None
-    merged_title, merged_content = await _build_merged_fact_content(
-        canonical,
-        source,
-        provider if _should_use_provider_for_merge(canonical, source) else None,
-    )
+    merged_title, merged_content = await _build_merged_fact_content(canonical, source)
     merged_tags = _normalize_tag_values([*canonical.tags, *source.tags])
     merged_metadata = dict(canonical.metadata)
     merged_source_ids = merged_metadata.get("merged_source_ids", [])
@@ -212,23 +199,7 @@ async def _merge_into_canonical_fact(
     return updated
 
 
-async def _build_merged_fact_content(canonical, source, provider: Any = None) -> tuple[str, str]:
-    if provider is not None:
-        prompt = (
-            "Merge these two memories into one canonical fact. Return JSON with title and content.\n"
-            f"{build_deduplicator_guardrails()}\n"
-            'Return only: {"title": "...", "content": "..."}\n\n'
-            f"Canonical title: {canonical.title}\nCanonical content:\n{canonical.content}\n\n"
-            f"Incoming title: {source.title}\nIncoming content:\n{source.content}"
-        )
-        response = provider.ask(prompt)
-        if isawaitable(response):
-            response = await response
-        title = str(response.get("title", "")).strip()
-        content = str(response.get("content", "")).strip()
-        if title and content:
-            return title, content
-
+async def _build_merged_fact_content(canonical, source) -> tuple[str, str]:
     if source.content.strip() in canonical.content:
         return canonical.title, canonical.content
 
@@ -249,26 +220,6 @@ def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> 
         semantic_similarity = 0.0
     tag_bonus = 0.15 if shared_tags else 0.0
     return max(lexical_similarity, semantic_similarity + tag_bonus)
-
-
-def _should_use_provider_for_merge(canonical, source) -> bool:
-    if getattr(source, "type", None) == "observation":
-        return False
-
-    canonical_content = canonical.content.strip()
-    source_content = source.content.strip()
-    if not canonical_content or not source_content:
-        return False
-    if source_content in canonical_content or canonical_content in source_content:
-        return False
-    combined_lines = _count_text_lines(canonical_content) + _count_text_lines(source_content)
-    if combined_lines < DEDUPLICATOR_AI_MIN_COMBINED_LINES:
-        return False
-    overlap = _token_overlap(
-        canonical.title + " " + canonical_content,
-        source.title + " " + source_content,
-    )
-    return overlap < DEDUPLICATOR_HIGH_OVERLAP_THRESHOLD
 
 
 def _record_embedding_text(record) -> str:
@@ -341,10 +292,3 @@ def _normalize_tag_values(tags: list[str]) -> list[str]:
         seen.add(normalized_tag)
         normalized.append(normalized_tag)
     return sorted(normalized)
-
-
-def _count_text_lines(value: str) -> int:
-    text = value.strip()
-    if not text:
-        return 0
-    return text.count("\n") + 1

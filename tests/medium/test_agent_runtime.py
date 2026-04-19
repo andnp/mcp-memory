@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+import mcp_memory.core.agent_runtime as _agent_runtime_module
 from mcp_memory.core.agent_runtime import (
     AGENTIC_TASK_NAMES,
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
@@ -67,8 +68,11 @@ from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.work_item_store import (
+    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_CONFLICT_REVIEW,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
+    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
 from tests.sdk.providers import FakeAIProvider
 
@@ -1977,6 +1981,53 @@ def test_build_runtime_task_worker_does_not_register_unsupported_removed_task_na
         assert unsupported_task_name not in worker._handlers
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_name", "handler_name", "expect_direct_provider"),
+    [
+        (DEDUPLICATOR_TASK_NAME, "handle_deduplicator_task", False),
+        (CONFLICT_DETECTOR_TASK_NAME, "handle_conflict_detector_task", False),
+        (CURATOR_TASK_NAME, "handle_memory_curator_task", True),
+    ],
+)
+async def test_runtime_task_worker_provider_routing_keeps_structural_seeders_providerless(
+    monkeypatch,
+    db_manager,
+    task_name: str,
+    handler_name: str,
+    expect_direct_provider: bool,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+    task = queue.enqueue(
+        task_name,
+        workspace_id=None,
+        data={},
+        available_at=0.0,
+        task_id=f"provider-routing:{task_name}",
+    )
+    direct_provider = object()
+    captured: dict[str, object | None] = {"provider": None}
+
+    async def _stub_handler(stub_ctx, stub_task, provider=None):
+        assert stub_ctx is ctx
+        assert stub_task.id == task.id
+        captured["provider"] = provider
+        return {"status": "ok"}
+
+    monkeypatch.setattr(_agent_runtime_module, handler_name, _stub_handler)
+
+    worker = build_runtime_task_worker(ctx, provider=direct_provider)
+
+    result = await worker._handlers[task_name](ctx, task)  # noqa: SLF001
+
+    assert result == {"status": "ok"}
+    if expect_direct_provider:
+        assert captured["provider"] is direct_provider
+    else:
+        assert captured["provider"] is None
+
+
 def test_provider_for_task_accepts_provider_selection_capability_view() -> None:
     class _AgenticProvider:
         def __init__(self) -> None:
@@ -3530,7 +3581,7 @@ async def test_conflict_detector_seeds_agentic_review_when_fallback_is_sparse(mo
 
 
 @pytest.mark.asyncio
-async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, tmp_path: Path) -> None:
+async def test_conflict_detector_ignores_provider_and_leaves_seeded_review_for_curator(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3541,7 +3592,6 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
     assert runtime.work_items is not None
 
     try:
-        records = []
         for index in range(16):
             record = runtime.repository.create_memory(
                 title=f"isolated-conflict-topic-{index}",
@@ -3551,7 +3601,6 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
                 tags=[f"tag-{index}"],
             )
             assert record is not None
-            records.append(record)
 
         seed_result = await handle_conflict_detector_task(
             runtime,
@@ -3575,19 +3624,7 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
         )
         assert seed_result["seeded_work_item_count"] == 1
 
-        provider = FakeAIProvider(
-            responses=[
-                {
-                    "conflicts": [
-                        {
-                            "left_id": records[0].id,
-                            "right_id": records[1].id,
-                            "context": "provider detected semantic conflict",
-                        }
-                    ]
-                }
-            ]
-        )
+        provider = FakeAIProvider(responses=[{"conflicts": []}])
 
         result = await handle_conflict_detector_task(
             runtime,
@@ -3611,28 +3648,23 @@ async def test_conflict_detector_consumes_seeded_review_work_items(monkeypatch, 
             provider,
         )
 
-        outgoing = runtime.repository.get_links(records[0].id, direction="outgoing")
-        incoming = runtime.repository.get_links(records[1].id, direction="incoming")
         review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
 
-        assert result["created"] == 2
-        assert result["claimed_work_item_count"] == 1
-        assert result["execution_mode"] == "agentic_review"
+        assert result["created"] == 0
+        assert result["seeded_work_item_count"] == 0
         assert result["work_item_family"] == "conflict_review"
         assert result["work_item_execution_lane"] == "agentic"
-        assert result["seed_source"] == "claimed_review_work_item"
+        assert result["seed_source"] == "frontier_seed"
         assert result["seed_record_count"] == 16
-        assert result["claimed_work_item_id"] == review_items[0].id
-        assert provider.call_count == 1
-        assert any(link.target_id == records[1].id and link.link_type == "CONTRADICTS" for link in outgoing)
-        assert any(link.source_id == records[0].id and link.link_type == "CONTRADICTS" for link in incoming)
-        assert [item.status for item in review_items] == ["completed"]
+        assert "created_work_item_id" not in result
+        assert provider.call_count == 0
+        assert [item.status for item in review_items] == ["pending"]
     finally:
         runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_conflict_detector_seeds_agentic_review_when_direct_detection_is_sparse(monkeypatch, tmp_path: Path) -> None:
+async def test_conflict_detector_ignores_provider_during_sparse_frontier_seeding(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3689,7 +3721,7 @@ async def test_conflict_detector_seeds_agentic_review_when_direct_detection_is_s
         assert result["seed_source"] == "frontier_seed"
         assert result["seed_record_count"] == 16
         assert result["created_work_item_id"] == review_items[0].id
-        assert provider.call_count == 1
+        assert provider.call_count == 0
         assert [item.status for item in review_items] == ["pending"]
         assert len(review_items[0].payload["candidate_memory_ids"]) == 16
     finally:
@@ -3697,7 +3729,7 @@ async def test_conflict_detector_seeds_agentic_review_when_direct_detection_is_s
 
 
 @pytest.mark.asyncio
-async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(monkeypatch, tmp_path: Path) -> None:
+async def test_conflict_detector_keeps_sparse_frontier_review_for_curator(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -3705,9 +3737,9 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
     workspace.mkdir(parents=True, exist_ok=True)
     runtime = create_runtime(workspace_root_override=None, cwd=workspace)
     assert runtime.repository is not None
+    assert runtime.work_items is not None
 
     try:
-        records = []
         for index in range(16):
             record = runtime.repository.create_memory(
                     title=f"topic{index}",
@@ -3717,21 +3749,8 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
                     tags=[f"tag{index}"],
             )
             assert record is not None
-            records.append(record)
 
-        provider = FakeAIProvider(
-            responses=[
-                {
-                    "conflicts": [
-                        {
-                            "left_id": records[0].id,
-                            "right_id": records[1].id,
-                            "context": "provider detected semantic conflict",
-                        }
-                    ]
-                }
-            ]
-        )
+        provider = FakeAIProvider(responses=[{"conflicts": []}])
 
         result = await handle_conflict_detector_task(
             runtime,
@@ -3755,14 +3774,14 @@ async def test_conflict_detector_escalates_to_provider_when_fallback_is_sparse(m
             provider,
         )
 
-        assert result["created"] == 2
+        review_items = runtime.work_items.list_items(family_key="conflict_review", limit=5)
+
+        assert result["created"] == 0
         assert result["strategy_used"] == "conflict-frontier"
-        assert provider.call_count == 1
-        assert provider.prompts
-        assert "Available internal tools:" in provider.prompts[0]
-        assert "internal_search_memory_records" in provider.prompts[0]
-        assert "required_fields" in provider.prompts[0]
-        assert "materially incompatible claims" in provider.prompts[0]
+        assert result["seeded_work_item_count"] == 1
+        assert result["created_work_item_id"] == review_items[0].id
+        assert provider.call_count == 0
+        assert [item.status for item in review_items] == ["pending"]
     finally:
         runtime.close()
 
@@ -5052,7 +5071,7 @@ async def test_deduplicator_seeds_review_work_after_low_yield_direct_pass(monkey
 
 
 @pytest.mark.asyncio
-async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: Path) -> None:
+async def test_deduplicator_ignores_provider_and_leaves_seeded_review_for_curator(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -5064,15 +5083,15 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
 
     try:
         first = runtime.repository.create_memory(
-            title="Duplicate auth fact",
-            content="JWTs are required for all clients.",
+            title="JWT rollout plan",
+            content="JWT rollout starts on Monday for client applications.",
             workspace_ids=[runtime.workspace_id or "global"],
             memory_type="fact",
             tags=["auth"],
         )
         second = runtime.repository.create_memory(
-            title="Duplicate auth fact copy",
-            content="JWTs are required for all clients.",
+            title="Device code expiry",
+            content="Device authorization codes expire after fifteen minutes.",
             workspace_ids=[runtime.workspace_id or "global"],
             memory_type="fact",
             tags=["auth"],
@@ -5105,30 +5124,7 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
 
             async def run_agent(self, prompt: str) -> AgenticRunResult:
                 self.prompts.append(prompt)
-                await call_internal_memory_tool(
-                    runtime,
-                    "internal_merge_memory_into_canonical",
-                    {
-                        "canonical_memory_id": first.id,
-                        "source_memory_id": second.id,
-                        "metadata": {"deduplicator_task_id": "deduplicator-seeded-review"},
-                    },
-                )
-                return AgenticRunResult(
-                    status="success",
-                    summary="Deduplicator merged duplicate facts via seeded MCP review.",
-                    parsed={
-                        "response": json.dumps(
-                            {
-                                "summary": "Deduplicator merged duplicate facts via seeded MCP review.",
-                                "merged": 1,
-                                "archived": 1,
-                                "absorbed_observations": 0,
-                            }
-                        ),
-                        "stats": {"tools": {"totalCalls": 0, "byName": {}}},
-                    },
-                )
+                return AgenticRunResult(status="success", summary="should not run")
 
         provider = _AgenticProvider()
         result = await handle_deduplicator_task(
@@ -5153,22 +5149,16 @@ async def test_deduplicator_consumes_seeded_review_work(monkeypatch, tmp_path: P
             provider,
         )
 
-        canonical = runtime.repository.get_memory(first.id)
-        archived = runtime.repository.get_memory(second.id)
         review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
 
-        assert result["merged"] == 1
-        assert result["archived"] == 1
-        assert result["claimed_work_item_count"] == 1
-        assert result["execution_mode"] == "agentic_mcp"
-        assert result["tool_calls_executed"] == 1
-        assert result["mutations"] == 1
-        assert result["tool_names_used"] == ["internal_merge_memory_into_canonical"]
-        assert canonical is not None
-        assert archived is not None and archived.status == "archived"
-        assert [item.status for item in review_items] == ["completed"]
-        assert provider.prompts
-        assert "internal_get_next_dedup_batch" in provider.prompts[0]
+        assert result["merged"] == 0
+        assert result["archived"] == 0
+        assert result["absorbed_observations"] == 0
+        assert result["work_item_family"] == "memory_dedup_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert any(item.id == review_item.id and item.status == "pending" for item in review_items)
+        assert provider.prompts == []
     finally:
         runtime.close()
 
@@ -5437,7 +5427,7 @@ async def test_deduplicator_limits_observation_absorption_to_seed_subset(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path) -> None:
+async def test_deduplicator_ignores_provider_while_seeding_structural_review(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -5452,42 +5442,19 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
 
         async def run_agent(self, prompt: str) -> AgenticRunResult:
             self.prompts.append(prompt)
-            return AgenticRunResult(
-                status="success",
-                summary="Deduplicator merged duplicate facts via MCP tools.",
-                parsed={
-                    "response": json.dumps(
-                        {
-                            "summary": "Deduplicator merged duplicate facts via MCP tools.",
-                            "merged": 1,
-                            "archived": 1,
-                            "absorbed_observations": 0,
-                        }
-                    ),
-                    "stats": {
-                        "tools": {
-                            "totalCalls": 4,
-                            "byName": {
-                                "mcp_mcp-memory-internal_internal_get_next_dedup_batch": {"count": 1},
-                                "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 2},
-                                "mcp_mcp-memory-internal_internal_read_memory_record": {"count": 1},
-                            },
-                        }
-                    },
-                },
-            )
+            return AgenticRunResult(status="success", summary="should not run")
 
     try:
         canonical = runtime.repository.create_memory(
-            title="Canonical auth fact",
-            content="JWTs are required.",
+            title="JWT rollout plan",
+            content="JWT rollout starts on Monday for client applications.",
             workspace_ids=[runtime.workspace_id or "global"],
             memory_type="fact",
             tags=["auth"],
         )
         duplicate = runtime.repository.create_memory(
-            title="Duplicate auth fact",
-            content="JWTs must be required for all clients.",
+            title="Device code expiry",
+            content="Device authorization codes expire after fifteen minutes.",
             workspace_ids=[runtime.workspace_id or "global"],
             memory_type="fact",
             tags=["auth"],
@@ -5518,28 +5485,18 @@ async def test_deduplicator_can_use_agentic_provider(monkeypatch, tmp_path: Path
             provider,
         )
 
-        assert result["summary"] == "Deduplicator merged duplicate facts via MCP tools."
-        assert result["merged"] == 1
-        assert result["archived"] == 1
+        review_items = runtime.work_items.list_items(family_key="memory_dedup_review", limit=5)
+
+        assert result["merged"] == 0
+        assert result["archived"] == 0
         assert result["absorbed_observations"] == 0
-        assert result["execution_mode"] == "agentic_mcp"
-        assert result["tool_calls_executed"] == 4
-        assert result["mutations"] == 2
-        assert result["tool_names_used"] == [
-            "mcp_mcp-memory-internal_internal_get_next_dedup_batch",
-            "mcp_mcp-memory-internal_internal_merge_memory_into_canonical",
-            "mcp_mcp-memory-internal_internal_read_memory_record",
-        ]
-        assert provider.prompts
-        assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
-        assert "internal_get_next_dedup_batch" in provider.prompts[0]
-        assert "internal_merge_memory_into_canonical" in provider.prompts[0]
-        assert "task_complete" in provider.prompts[0]
-        assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
-        assert "Merge only when the records describe the same durable concept" in provider.prompts[0]
-        assert "deduplicator_task_id='deduplicator-agentic-task'" in provider.prompts[0]
-        assert canonical.id in provider.prompts[0]
-        assert duplicate.id in provider.prompts[0]
+        assert result["seeded_work_item_count"] == 1
+        assert result["work_item_family"] == "memory_dedup_review"
+        assert result["work_item_execution_lane"] == "agentic"
+        assert result["seed_source"] == "frontier_seed"
+        assert result["created_work_item_id"] == review_items[0].id
+        assert [item.status for item in review_items] == ["pending"]
+        assert provider.prompts == []
     finally:
         runtime.close()
 
@@ -5610,7 +5567,7 @@ async def test_deduplicator_does_not_merge_cross_project_generic_architecture_fa
 
 
 @pytest.mark.asyncio
-async def test_deduplicator_accepts_copilot_style_agentic_payload_without_tool_stats(
+async def test_deduplicator_ignores_direct_agentic_provider_and_runs_deterministically(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -5680,16 +5637,15 @@ async def test_deduplicator_accepts_copilot_style_agentic_payload_without_tool_s
             provider,
         )
 
-        assert result["summary"] == "Deduplicator merged duplicate facts via Copilot agentic MCP."
         assert result["merged"] == 1
         assert result["archived"] == 1
         assert result["absorbed_observations"] == 0
-        assert result["execution_mode"] == "agentic_mcp"
-        assert result["tool_calls_executed"] == 0
-        assert result["mutations"] == 0
-        assert result["tool_names_used"] == []
-        assert provider.prompts
-        assert "internal_get_next_dedup_batch" in provider.prompts[0]
+        assert "summary" not in result
+        assert "execution_mode" not in result
+        assert "tool_calls_executed" not in result
+        assert "mutations" not in result
+        assert "tool_names_used" not in result
+        assert provider.prompts == []
     finally:
         runtime.close()
 
@@ -5770,7 +5726,7 @@ async def test_memory_curator_can_use_internal_tools_to_merge_memories(monkeypat
         assert "You are the curator maintenance agent for the global memory store." in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
         assert "task_complete" in provider.prompts[0]
-        assert "Treat the seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
+        assert "Treat seed memories as a starting frontier, not a hard boundary" in provider.prompts[0]
         assert "Seed memories (compact view):" in provider.prompts[0]
         assert "inputSchema" not in provider.prompts[0]
         assert "read_count" in provider.prompts[0]
@@ -6745,7 +6701,11 @@ async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one
         assert result["compatibility_group"] == "structural_review"
         assert result["campaign_key"] == "structural_review"
         assert result["campaign_origin_family"] == "memory_curation_review"
-        assert result["campaign_family_keys"] == ["memory_curation_review", "memory_dedup_review"]
+        assert result["campaign_family_keys"] == [
+            WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+            WORK_FAMILY_CONFLICT_REVIEW,
+        ]
         assert result["campaign_continuation_supported"] is True
         assert result["tool_calls_executed"] == 3
         assert result["mutations"] == 2
@@ -6756,10 +6716,168 @@ async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one
         assert "internal_get_compatible_work_batch" in provider.prompts[0]
         assert "structural_review" in provider.prompts[0]
         assert "memory_dedup_review" in provider.prompts[0]
+        assert "conflict_review" in provider.prompts[0]
         assert "Treat this run as a structural-review campaign" in provider.prompts[0]
         assert "Your workflow is a loop, not a single batch." in provider.prompts[0]
         assert "you must spend some budget on adjacency discovery before concluding no-op" in provider.prompts[0]
         assert "Keep looping until internal_get_next_curator_batch returns no more records worth processing." in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_curator_can_execute_structural_follow_on_conflict_work_in_one_run(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def supports_agentic(self) -> bool:
+            return True
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            batch_result = await call_internal_memory_tool(
+                runtime,
+                "internal_get_compatible_work_batch",
+                {
+                    "task_id": "memory-curator-structural-conflict-task",
+                    "compatibility_group": COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
+                    "allowed_families": [WORK_FAMILY_CONFLICT_REVIEW],
+                    "execution_lane": EXECUTION_LANE_AGENTIC,
+                    "workspace_id": runtime.workspace_id,
+                    "limit": 1,
+                },
+            )
+            batch_payload = json.loads(batch_result[0].text)
+            assert batch_payload["claimed_count"] == 1
+            work_item = batch_payload["records"][0]
+            left_id, right_id = work_item["payload"]["candidate_memory_ids"]
+            for source_id, target_id in ((left_id, right_id), (right_id, left_id)):
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_create_memory_link",
+                    {
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "link_type": "CONTRADICTS",
+                        "context": "Conflicting rollout guidance identified during structural follow-on review.",
+                    },
+                )
+            await call_internal_memory_tool(
+                runtime,
+                "internal_complete_work_item",
+                {"work_item_id": work_item["id"]},
+            )
+            return AgenticRunResult(
+                status="success",
+                summary="Curator completed conflict-review structural follow-on work in one run.",
+                parsed={
+                    "stats": {
+                        "tools": {
+                            "totalCalls": 4,
+                            "byName": {
+                                "mcp_mcp-memory-internal_internal_get_compatible_work_batch": {"count": 1},
+                                "mcp_mcp-memory-internal_internal_create_memory_link": {"count": 2},
+                                "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 1},
+                            },
+                        }
+                    }
+                },
+            )
+
+    try:
+        oversized = runtime.repository.create_memory(
+            title="Oversized architecture record",
+            content="Oversized architecture detail. " * 220,
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["architecture", "oversized"],
+        )
+        left = runtime.repository.create_memory(
+            title="Rollout guidance A",
+            content="The migration must be completed before enabling shared-mode reads.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["rollout", "shared-mode"],
+        )
+        right = runtime.repository.create_memory(
+            title="Rollout guidance B",
+            content="Shared-mode reads can be enabled before the migration is completed.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["rollout", "shared-mode"],
+        )
+        assert oversized is not None and left is not None and right is not None
+
+        work_item, created = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_CONFLICT_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            priority=90,
+            idempotency_key=f"{WORK_FAMILY_CONFLICT_REVIEW}:{left.id}:{right.id}",
+            payload={
+                "workspace_id": runtime.workspace_id,
+                "candidate_memory_ids": [left.id, right.id],
+                "strategy_used": "semantic",
+                "candidate_count": 2,
+            },
+        )
+        assert created is True
+
+        provider = _AgenticProvider()
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id="memory-curator-structural-conflict-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=95,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            provider,
+        )
+
+        refreshed_work_item = runtime.work_items.get_item(work_item.id)
+        left_links = runtime.repository.get_links(left.id, direction="outgoing", link_type="CONTRADICTS")
+        right_links = runtime.repository.get_links(right.id, direction="outgoing", link_type="CONTRADICTS")
+
+        assert result["summary"] == "Curator completed conflict-review structural follow-on work in one run."
+        assert result["execution_mode"] == "agentic_mcp"
+        assert result["compatibility_group"] == COMPATIBILITY_GROUP_STRUCTURAL_REVIEW
+        assert result["campaign_family_keys"] == [
+            WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+            WORK_FAMILY_CONFLICT_REVIEW,
+        ]
+        assert result["tool_calls_executed"] == 4
+        assert result["mutations"] == 3
+        assert result["compatible_batch_calls"] == 1
+        assert refreshed_work_item.status == "completed"
+        assert {link.target_id for link in left_links} == {right.id}
+        assert {link.target_id for link in right_links} == {left.id}
+        assert provider.prompts
+        assert "For claimed conflict_review items" in provider.prompts[0]
+        assert "payload.candidate_memory_ids" in provider.prompts[0]
+        assert "internal_create_memory_link" in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -7115,8 +7233,8 @@ async def test_memory_curator_does_not_same_run_failover_on_retry_delay_error(mo
         runtime.close()
 
 
-def test_agentic_task_names_contains_curator_deduplicator_and_ingest() -> None:
-    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, DEDUPLICATOR_TASK_NAME, SYSTEM1_INGEST_TASK_NAME}
+def test_agentic_task_names_contains_curator_and_ingest_only() -> None:
+    assert AGENTIC_TASK_NAMES == {CURATOR_TASK_NAME, SYSTEM1_INGEST_TASK_NAME}
 
 
 @pytest.mark.asyncio
@@ -7171,7 +7289,7 @@ async def test_memory_curator_prompt_truncates_large_seed_summaries(monkeypatch,
         assert "Very long architecture reflection title that should be shortened before being s" in prompt
         assert "Very long architecture reflection title that should be shortened before being sent to Gemini for curator work" not in prompt
         assert "…" in prompt
-        assert len(prompt) < 7000
+        assert len(prompt) < 7050
     finally:
         runtime.close()
 
@@ -7235,8 +7353,8 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         assert "Your workflow is a loop, not a one-shot response." in prompt
         assert "Immediately call internal_get_next_curator_batch" in prompt
         assert "you must spend some budget on adjacency discovery before concluding no-op" in prompt
-        assert "Build a shortlist of concrete possible mutations" in prompt
-        assert "high-confidence and at least medium-impact" in prompt
+        assert "Build a shortlist of concrete mutations" in prompt
+        assert "high-confidence/medium-impact bar" in prompt
         assert "Do not report incremental results between batches." in prompt
         assert "Size policy: target band is" in prompt
         assert "Rewrite or trim when it is still one takeaway but the acceptable band carries filler" in prompt

@@ -42,12 +42,12 @@ def test_maintenance_family_registry_captures_the_canonical_trio_contract() -> N
 
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].recurring_interval_seconds == 21600.0
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].autonomous_recurring is True
-    assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].default_task_class == "cheap_json"
+    assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].default_task_class == "deterministic"
     assert MAINTENANCE_FAMILY_REGISTRY[CONFLICT_DETECTOR_TASK_NAME].default_priority == 60
 
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].recurring_interval_seconds == 21600.0
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].autonomous_recurring is True
-    assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].default_task_class == "cheap_agentic"
+    assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].default_task_class == "deterministic"
     assert MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].default_priority == 70
 
     assert MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].recurring_interval_seconds == 7200.0

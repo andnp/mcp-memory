@@ -28,14 +28,14 @@ MAINTENANCE_FAMILY_REGISTRY = {
         canonical_task_name=CONFLICT_DETECTOR_TASK_NAME,
         recurring_interval_seconds=21600.0,
         autonomous_recurring=True,
-        default_task_class="cheap_json",
+        default_task_class="deterministic",
         default_priority=60,
     ),
     DEDUPLICATOR_TASK_NAME: MaintenanceFamilyRegistryEntry(
         canonical_task_name=DEDUPLICATOR_TASK_NAME,
         recurring_interval_seconds=21600.0,
         autonomous_recurring=True,
-        default_task_class="cheap_agentic",
+        default_task_class="deterministic",
         default_priority=70,
     ),
     TAXONOMIST_TASK_NAME: MaintenanceFamilyRegistryEntry(
