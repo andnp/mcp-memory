@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -51,19 +52,24 @@ def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> 
     class FakeSocket:
         def __init__(self) -> None:
             self.linger: int | None = None
-            self.rcvtimeo: int | None = None
-            self.sndtimeo: int | None = None
             self.connected_to: str | None = None
             self.sent_payloads: list[dict[str, object | None]] = []
             self.closed_with: int | None = None
+            self.poll_calls: list[tuple[int, int]] = []
 
         def connect(self, endpoint: str) -> None:
             self.connected_to = endpoint
 
-        def send_json(self, payload: dict[str, object | None]) -> None:
+        def poll(self, timeout: int, *, flags: int) -> int:
+            self.poll_calls.append((timeout, flags))
+            return flags
+
+        def send_json(self, payload: dict[str, object | None], *, flags: int = 0) -> None:
+            assert flags == daemon_transport.zmq.DONTWAIT
             self.sent_payloads.append(payload)
 
-        def recv_json(self) -> dict[str, str]:
+        def recv_json(self, *, flags: int = 0) -> dict[str, str]:
+            assert flags == daemon_transport.zmq.DONTWAIT
             return {"status": "ok"}
 
         def close(self, linger: int) -> None:
@@ -110,16 +116,110 @@ def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> 
     assert second_socket.connected_to == "ipc:///tmp/daemon.sock"
     assert first_socket.linger == 0
     assert second_socket.linger == 0
-    assert first_socket.rcvtimeo == 500
-    assert first_socket.sndtimeo == 500
-    assert second_socket.rcvtimeo == 250
-    assert second_socket.sndtimeo == 250
+    assert first_socket.poll_calls == [
+        (100, daemon_transport.zmq.POLLOUT),
+        (100, daemon_transport.zmq.POLLIN),
+    ]
+    assert second_socket.poll_calls == [
+        (100, daemon_transport.zmq.POLLOUT),
+        (100, daemon_transport.zmq.POLLIN),
+    ]
     assert first_socket.sent_payloads == [{"path": "/internal/health", "payload": None}]
     assert second_socket.sent_payloads == [{"path": "/internal/tools/search_memory_records", "payload": {"query": "auth"}}]
     assert first_socket.closed_with == 0
     assert second_socket.closed_with == 0
     assert created_contexts[0].terminated is True
     assert created_contexts[1].terminated is True
+
+
+def test_suspend_aware_now_prefers_boottime_and_falls_back_to_monotonic(monkeypatch) -> None:
+    daemon_transport = _daemon_transport_module()
+
+    class FakeTimeWithBoottime:
+        CLOCK_BOOTTIME = 7
+
+        def __init__(self) -> None:
+            self.clock_ids: list[int] = []
+
+        def clock_gettime(self, clock_id: int) -> float:
+            self.clock_ids.append(clock_id)
+            return 12.5
+
+        def monotonic(self) -> float:
+            raise AssertionError("monotonic should not be used when CLOCK_BOOTTIME is available")
+
+    with_boottime = FakeTimeWithBoottime()
+    monkeypatch.setattr("mcp_memory.daemon_transport.time_module", with_boottime)
+    assert daemon_transport.suspend_aware_now() == 12.5
+    assert with_boottime.clock_ids == [7]
+
+    class FakeTimeWithoutBoottime:
+        def monotonic(self) -> float:
+            return 22.0
+
+    monkeypatch.setattr("mcp_memory.daemon_transport.time_module", FakeTimeWithoutBoottime())
+    assert daemon_transport.suspend_aware_now() == 22.0
+
+
+def test_request_zmq_json_uses_short_poll_slices_until_deadline(monkeypatch) -> None:
+    daemon_transport = _daemon_transport_module()
+
+    created_contexts: list[FakeContext] = []
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.linger: int | None = None
+            self.poll_calls: list[tuple[int, int]] = []
+            self.closed_with: int | None = None
+
+        def connect(self, endpoint: str) -> None:
+            assert endpoint == "ipc:///tmp/daemon.sock"
+
+        def poll(self, timeout: int, *, flags: int) -> int:
+            self.poll_calls.append((timeout, flags))
+            return 0
+
+        def send_json(self, payload: dict[str, object | None], *, flags: int = 0) -> None:
+            raise AssertionError(f"send_json should not be reached before timeout: {payload}, {flags}")
+
+        def recv_json(self, *, flags: int = 0) -> dict[str, str]:
+            raise AssertionError(f"recv_json should not be reached before timeout: {flags}")
+
+        def close(self, linger: int) -> None:
+            self.closed_with = linger
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.socket_instance = FakeSocket()
+            self.terminated = False
+
+        def socket(self, socket_type: int) -> FakeSocket:
+            assert socket_type == daemon_transport.zmq.DEALER
+            return self.socket_instance
+
+        def term(self) -> None:
+            self.terminated = True
+
+    def _fake_context_factory() -> FakeContext:
+        context = FakeContext()
+        created_contexts.append(context)
+        return context
+
+    now_values = iter([0.0, 0.0, 0.05, 0.11])
+
+    monkeypatch.setattr("mcp_memory.daemon_transport.zmq.Context", _fake_context_factory)
+    monkeypatch.setattr("mcp_memory.daemon_transport.suspend_aware_now", lambda: next(now_values))
+
+    with pytest.raises(TimeoutError, match="daemon_request_timed_out"):
+        daemon_transport._request_zmq_json("/tmp/daemon.sock", "/internal/health", None, timeout_seconds=0.1)
+
+    assert len(created_contexts) == 1
+    assert created_contexts[0].socket_instance.poll_calls == [
+        (100, daemon_transport.zmq.POLLOUT),
+        (50, daemon_transport.zmq.POLLOUT),
+    ]
+    assert created_contexts[0].socket_instance.closed_with == 0
+    assert created_contexts[0].terminated is True
 
 
 @pytest.mark.asyncio
@@ -245,6 +345,30 @@ def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> 
     assert captured["timeout_seconds"] is None
 
 
+def test_mcp_server_request_json_with_recovery_supports_legacy_request_override(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    server._daemon = DaemonMetadata(
+        host="127.0.0.1",
+        port=4242,
+        pid=1,
+        started_at=0.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-test.sock",
+    )
+    server._session_id = "session-123"
+
+    def _legacy_request_override(path: str, payload: dict | None) -> dict[str, object]:
+        assert path == "/internal/tools/search_memory_records"
+        assert payload == {"query": "auth"}
+        return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_request_json", _legacy_request_override)
+
+    result = server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"})
+
+    assert result == {"status": "ok"}
+
+
 def test_mcp_server_request_json_refreshes_daemon_metadata_after_timeout(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     stale_metadata = DaemonMetadata(
@@ -340,6 +464,83 @@ def test_mcp_server_request_json_raises_after_bounded_retries(monkeypatch) -> No
     assert request_calls == [initial_metadata.pid, refreshed_metadata.pid, refreshed_metadata.pid]
     assert ensure_calls == ["demo-workspace", "demo-workspace"]
     assert server._daemon == refreshed_metadata
+
+
+def test_mcp_server_request_json_with_recovery_respects_overall_client_deadline(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    initial_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4242,
+        pid=1,
+        started_at=0.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-initial.sock",
+    )
+    refreshed_metadata = DaemonMetadata(
+        host="127.0.0.1",
+        port=4343,
+        pid=2,
+        started_at=1.0,
+        status="ready",
+        socket_path="/tmp/mcp-memory-refreshed.sock",
+    )
+    server._daemon = initial_metadata
+
+    request_timeouts: list[float | None] = []
+    remaining_values = iter([0.04, 0.01, 0.0])
+
+    def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        del metadata, path, payload
+        request_timeouts.append(timeout_seconds)
+        raise TimeoutError("daemon_request_timed_out")
+
+    def _fake_ensure_daemon_started(workspace_root, cwd=None):
+        del workspace_root, cwd
+        return refreshed_metadata
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", _fake_ensure_daemon_started)
+    monkeypatch.setattr("mcp_memory.server.remaining_suspend_aware_seconds", lambda _deadline: next(remaining_values))
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"}, timeout_deadline=60.0)
+
+    assert request_timeouts == [0.04]
+    assert server._daemon == refreshed_metadata
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_request_daemon_json_with_client_timeout_supports_legacy_recovery_override(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+
+    def _legacy_recovery_override(path: str, payload: dict | None) -> dict[str, object]:
+        assert path == "/internal/tools"
+        assert payload is None
+        return {"tools": []}
+
+    monkeypatch.setattr(server, "_request_json_with_recovery", _legacy_recovery_override)
+
+    payload = await server._request_daemon_json_with_client_timeout("/internal/tools", None)
+
+    assert payload == {"tools": []}
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_request_daemon_json_with_client_timeout_bounds_blocking_recovery(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    stall = threading.Event()
+
+    def _blocking_recovery_override(path: str, payload: dict | None) -> dict[str, object]:
+        assert path == "/internal/tools"
+        assert payload is None
+        stall.wait(0.05)
+        return {"tools": []}
+
+    monkeypatch.setattr(server, "_request_json_with_recovery", _blocking_recovery_override)
+    monkeypatch.setattr("mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
+        await server._request_daemon_json_with_client_timeout("/internal/tools", None)
 
 
 def test_context_for_request_copies_session_id_and_workspace_root(tmp_path) -> None:

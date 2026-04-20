@@ -4,9 +4,11 @@ import asyncio
 from collections import deque
 import json
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
+import time as time_module
 from time import perf_counter, time
 from types import TracebackType
 from typing import Any, Awaitable, Callable, cast
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS = 5.0
 EXTENDED_DAEMON_REQUEST_TIMEOUT_SECONDS = 60.0
 _SOCKET_PROBE_TIMEOUT_SECONDS = 0.1
+_ZMQ_REQUEST_POLL_SLICE_SECONDS = 0.1
 _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
     "/api/admin/search/repair",
@@ -103,6 +106,8 @@ class DaemonTransportDiagnosticsSnapshot:
     recent_execution_max_ms: float = 0.0
     active_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
     recent_requests: tuple[DaemonTransportRequestDiagnostic, ...] = ()
+
+
 def request_daemon_json(
     metadata,
     path: str,
@@ -155,16 +160,11 @@ def _request_zmq_json(
     try:
         socket = context.socket(zmq.DEALER)
         socket.linger = 0
-        timeout_ms = max(int(timeout_seconds * 1000), 1)
-        socket.rcvtimeo = timeout_ms
-        socket.sndtimeo = timeout_ms
         socket.connect(_socket_endpoint(socket_path))
         try:
-            try:
-                socket.send_json({"path": path, "payload": payload})
-                response = socket.recv_json()
-            except zmq.error.Again as exc:
-                raise TimeoutError("daemon_request_timed_out") from exc
+            deadline = suspend_aware_deadline(timeout_seconds)
+            _send_zmq_json_before_deadline(socket, {"path": path, "payload": payload}, deadline)
+            response = _recv_zmq_json_before_deadline(socket, deadline)
         finally:
             socket.close(0)
     finally:
@@ -172,6 +172,56 @@ def _request_zmq_json(
     if not isinstance(response, dict):
         raise ValueError("daemon_response_must_be_object")
     return cast(dict[str, Any], response)
+
+
+def suspend_aware_now() -> float:
+    clock_boottime = getattr(time_module, "CLOCK_BOOTTIME", None)
+    if clock_boottime is None:
+        return time_module.monotonic()
+    return time_module.clock_gettime(clock_boottime)
+
+
+def suspend_aware_deadline(timeout_seconds: float) -> float:
+    return suspend_aware_now() + max(timeout_seconds, 0.0)
+
+
+def remaining_suspend_aware_seconds(deadline: float) -> float:
+    return max(deadline - suspend_aware_now(), 0.0)
+
+
+def _send_zmq_json_before_deadline(socket: zmq.Socket, payload: dict[str, object | None], deadline: float) -> None:
+    _wait_for_socket_event_before_deadline(socket, zmq.POLLOUT, deadline)
+    while True:
+        try:
+            socket.send_json(payload, flags=zmq.DONTWAIT)
+            return
+        except zmq.error.Again:
+            _wait_for_socket_event_before_deadline(socket, zmq.POLLOUT, deadline)
+
+
+def _recv_zmq_json_before_deadline(socket: zmq.Socket, deadline: float) -> dict[str, Any]:
+    _wait_for_socket_event_before_deadline(socket, zmq.POLLIN, deadline)
+    while True:
+        try:
+            response = socket.recv_json(flags=zmq.DONTWAIT)
+            if not isinstance(response, dict):
+                raise ValueError("daemon_response_must_be_object")
+            return cast(dict[str, Any], response)
+        except zmq.error.Again:
+            _wait_for_socket_event_before_deadline(socket, zmq.POLLIN, deadline)
+
+
+def _wait_for_socket_event_before_deadline(socket: zmq.Socket, event: int, deadline: float) -> None:
+    while True:
+        remaining_seconds = remaining_suspend_aware_seconds(deadline)
+        if remaining_seconds <= 0.0:
+            raise TimeoutError("daemon_request_timed_out")
+        if socket.poll(_poll_timeout_milliseconds(remaining_seconds), flags=event) & event:
+            return
+
+
+def _poll_timeout_milliseconds(remaining_seconds: float) -> int:
+    return max(min(math.ceil(remaining_seconds * 1000.0), math.ceil(_ZMQ_REQUEST_POLL_SLICE_SECONDS * 1000.0)), 1)
 
 
 class DaemonZmqServer:
