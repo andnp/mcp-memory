@@ -774,6 +774,103 @@ async def test_mcp_server_failed_background_recovery_logs_warning(monkeypatch, c
 
 
 @pytest.mark.asyncio
+async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_force_recovery(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    sentinel_daemon = object()
+    server._daemon = sentinel_daemon
+    server._consecutive_client_timeout_failures = 3
+
+    recovery_started = threading.Event()
+    allow_recovery = threading.Event()
+    refreshed_daemon = object()
+
+    def fake_recovery(workspace_root: str | None, cwd=None):
+        recovery_started.set()
+        allow_recovery.wait(2)
+        return refreshed_daemon
+
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_recovery)
+    monkeypatch.setattr("mcp_memory.server.stop_daemon", lambda *a, **kw: None)
+
+    # Simulate a large CLOCK_BOOTTIME jump on the second call (machine slept for 60s).
+    boottime_calls = [0]
+    mono_calls = [0]
+
+    def fake_boottime() -> float:
+        boottime_calls[0] += 1
+        return 0.0 if boottime_calls[0] == 1 else 61.0
+
+    def fake_monotonic() -> float:
+        mono_calls[0] += 1
+        return 0.0 if mono_calls[0] == 1 else 0.001
+
+    monkeypatch.setattr("mcp_memory.server.suspend_aware_now", fake_boottime)
+    monkeypatch.setattr("mcp_memory.server._time_module", type("_t", (), {"monotonic": staticmethod(fake_monotonic)})())
+    monkeypatch.setattr("mcp_memory.server._SUSPEND_RESUME_CHECK_INTERVAL_SECONDS", 0.01)
+
+    task = asyncio.create_task(server._monitor_suspend_resume())
+    try:
+        # Wait for recovery to start (confirms monitor fired and invalidated the daemon).
+        assert await asyncio.to_thread(recovery_started.wait, 1)
+        # While recovery is in-flight, daemon is cleared.
+        assert server._daemon is None
+        assert server._consecutive_client_timeout_failures == 0
+        # A recovery task was scheduled.
+        assert server._daemon_recovery_task is not None
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        allow_recovery.set()
+        if server._daemon_recovery_task is not None:
+            await asyncio.wait_for(server._daemon_recovery_task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_suspend_monitor_does_not_trigger_without_sleep(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    sentinel_daemon = object()
+    server._daemon = sentinel_daemon
+
+    recovery_started = threading.Event()
+
+    def fake_recovery(workspace_root: str | None, cwd=None):
+        recovery_started.set()
+        return object()
+
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_recovery)
+
+    # Both boottime and monotonic advance by ~1s per call (no sleep occurred).
+    call_count = [0]
+
+    def fake_boottime() -> float:
+        call_count[0] += 1
+        return float(call_count[0])
+
+    def fake_monotonic() -> float:
+        return float(call_count[0])
+
+    monkeypatch.setattr("mcp_memory.server.suspend_aware_now", fake_boottime)
+    monkeypatch.setattr("mcp_memory.server._time_module", type("_t", (), {"monotonic": staticmethod(fake_monotonic)})())
+    monkeypatch.setattr("mcp_memory.server._SUSPEND_RESUME_CHECK_INTERVAL_SECONDS", 0.01)
+
+    task = asyncio.create_task(server._monitor_suspend_resume())
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert server._daemon is sentinel_daemon
+    assert not recovery_started.is_set()
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_handlers_succeed_with_client_timeout_wrapper(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     server._daemon = object()

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import os
+import time as _time_module
 from typing import Any, Callable, cast
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from mcp_memory.daemon import ensure_daemon_started, stop_daemon
-from mcp_memory.daemon_transport import request_daemon_json, remaining_suspend_aware_seconds, suspend_aware_deadline
+from mcp_memory.daemon_transport import request_daemon_json, remaining_suspend_aware_seconds, suspend_aware_deadline, suspend_aware_now
 
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -27,6 +28,8 @@ _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD = 2
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_POLL_SLICE_SECONDS = 0.1
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 _REQUEST_RECOVERY_RETRY_COUNT = 2
+_SUSPEND_RESUME_CHECK_INTERVAL_SECONDS = 1.0
+_SUSPEND_RESUME_DETECT_THRESHOLD_SECONDS = 2.0
 
 
 class _DaemonRequestTimeout(Exception):
@@ -53,6 +56,7 @@ class MCPServer:
         self._consecutive_client_timeout_failures = 0
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
+        self._suspend_monitor_task: asyncio.Task[None] | None = None
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -182,11 +186,38 @@ class MCPServer:
         if self._daemon_recovery_task is recovery_task:
             self._daemon_recovery_task = None
 
+    async def _monitor_suspend_resume(self) -> None:
+        last_boottime = suspend_aware_now()
+        last_monotonic = _time_module.monotonic()
+        while True:
+            try:
+                await asyncio.sleep(_SUSPEND_RESUME_CHECK_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                return
+            now_boottime = suspend_aware_now()
+            now_monotonic = _time_module.monotonic()
+            boottime_elapsed = now_boottime - last_boottime
+            monotonic_elapsed = now_monotonic - last_monotonic
+            last_boottime = now_boottime
+            last_monotonic = now_monotonic
+            if boottime_elapsed - monotonic_elapsed > _SUSPEND_RESUME_DETECT_THRESHOLD_SECONDS:
+                logger.warning(
+                    "Suspend/resume detected; invalidating daemon connection and scheduling recovery",
+                    extra={
+                        "boottime_elapsed_seconds": round(boottime_elapsed, 1),
+                        "monotonic_elapsed_seconds": round(monotonic_elapsed, 3),
+                    },
+                )
+                self._daemon = None
+                self._consecutive_client_timeout_failures = 0
+                self._start_background_daemon_recovery(force_restart=True)
+
     async def run(self) -> None:
         logger.info("Initializing MCP Memory Server proxy...")
         self._daemon = await asyncio.to_thread(ensure_daemon_started, self.workspace_root, None)
         self._session_id = str(uuid4())
         await asyncio.to_thread(self._send_session_hook, "session-start")
+        self._suspend_monitor_task = asyncio.create_task(self._monitor_suspend_resume())
         try:
             async with stdio_server() as (read_stream, write_stream):
                 await self.server.run(
@@ -195,6 +226,13 @@ class MCPServer:
                     self.server.create_initialization_options(),
                 )
         finally:
+            if self._suspend_monitor_task is not None:
+                self._suspend_monitor_task.cancel()
+                try:
+                    await self._suspend_monitor_task
+                except asyncio.CancelledError:
+                    pass
+                self._suspend_monitor_task = None
             await asyncio.to_thread(self._send_session_hook, "session-end")
 
     def _request_json(
