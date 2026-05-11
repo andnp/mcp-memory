@@ -1591,3 +1591,74 @@ def test_admin_log_help_lists_nested_log_commands() -> None:
     assert "list" in result.output
     assert "summary" in result.output
     assert "prune" in result.output
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_health_monitor_clears_daemon_and_starts_recovery_on_probe_failure(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    sentinel_daemon = object()
+    server._daemon = sentinel_daemon
+
+    recovery_started = threading.Event()
+    allow_recovery = threading.Event()
+    refreshed_daemon = object()
+
+    def fake_recovery(workspace_root: str | None, cwd=None):
+        recovery_started.set()
+        allow_recovery.wait(2)
+        return refreshed_daemon
+
+    def fake_probe(metadata, path: str, payload, *, timeout_seconds=None):
+        raise TimeoutError("daemon_request_timed_out")
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_probe)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_recovery)
+    monkeypatch.setattr("mcp_memory.server._DAEMON_HEALTH_POLL_INTERVAL_SECONDS", 0.01)
+
+    task = asyncio.create_task(server._monitor_daemon_health())
+    try:
+        assert await asyncio.to_thread(recovery_started.wait, 1)
+        assert server._daemon is None
+        assert server._daemon_recovery_task is not None
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        allow_recovery.set()
+        if server._daemon_recovery_task is not None:
+            await asyncio.wait_for(server._daemon_recovery_task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_health_monitor_does_not_trigger_when_probe_succeeds(monkeypatch) -> None:
+    server = MCPServer(workspace_root="demo-workspace")
+    sentinel_daemon = object()
+    server._daemon = sentinel_daemon
+
+    recovery_started = threading.Event()
+
+    def fake_recovery(workspace_root: str | None, cwd=None):
+        recovery_started.set()
+        return object()
+
+    def fake_probe(metadata, path: str, payload, *, timeout_seconds=None):
+        return {"status": "ready"}
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_probe)
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_recovery)
+    monkeypatch.setattr("mcp_memory.server._DAEMON_HEALTH_POLL_INTERVAL_SECONDS", 0.01)
+
+    task = asyncio.create_task(server._monitor_daemon_health())
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert server._daemon is sentinel_daemon
+    assert not recovery_started.is_set()

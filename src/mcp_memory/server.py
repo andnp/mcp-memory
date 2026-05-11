@@ -30,6 +30,8 @@ _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 _REQUEST_RECOVERY_RETRY_COUNT = 2
 _SUSPEND_RESUME_CHECK_INTERVAL_SECONDS = 1.0
 _SUSPEND_RESUME_DETECT_THRESHOLD_SECONDS = 2.0
+_DAEMON_HEALTH_POLL_INTERVAL_SECONDS = 10.0
+_DAEMON_HEALTH_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 class _DaemonRequestTimeout(Exception):
@@ -57,6 +59,7 @@ class MCPServer:
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
         self._suspend_monitor_task: asyncio.Task[None] | None = None
+        self._health_monitor_task: asyncio.Task[None] | None = None
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -212,12 +215,40 @@ class MCPServer:
                 self._consecutive_client_timeout_failures = 0
                 self._start_background_daemon_recovery(force_restart=True)
 
+    async def _monitor_daemon_health(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(_DAEMON_HEALTH_POLL_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                return
+            daemon = self._daemon
+            if daemon is None:
+                continue
+            try:
+                await asyncio.to_thread(
+                    request_daemon_json,
+                    daemon,
+                    "/internal/health",
+                    None,
+                    timeout_seconds=_DAEMON_HEALTH_PROBE_TIMEOUT_SECONDS,
+                )
+            except (OSError, TimeoutError, ValueError):
+                logger.warning(
+                    "Daemon health probe failed; invalidating cached connection and scheduling recovery",
+                )
+                self._daemon = None
+                self._start_background_daemon_recovery()
+
     async def run(self) -> None:
         logger.info("Initializing MCP Memory Server proxy...")
-        self._daemon = await asyncio.to_thread(ensure_daemon_started, self.workspace_root, None)
         self._session_id = str(uuid4())
-        await asyncio.to_thread(self._send_session_hook, "session-start")
         self._suspend_monitor_task = asyncio.create_task(self._monitor_suspend_resume())
+        self._health_monitor_task = asyncio.create_task(self._monitor_daemon_health())
+        # Start daemon in background so stdio_server starts immediately.
+        # This prevents VSCode's MCP initialize from timing out when the daemon is slow
+        # to start (e.g., when the database is unreachable after a network change or
+        # sleep/wake cycle).
+        self._start_background_daemon_recovery()
         try:
             async with stdio_server() as (read_stream, write_stream):
                 await self.server.run(
@@ -233,6 +264,23 @@ class MCPServer:
                 except asyncio.CancelledError:
                     pass
                 self._suspend_monitor_task = None
+            if self._health_monitor_task is not None:
+                self._health_monitor_task.cancel()
+                try:
+                    await self._health_monitor_task
+                except asyncio.CancelledError:
+                    pass
+                self._health_monitor_task = None
+            # Wait for background daemon startup to complete (up to 5 s) so that
+            # the session-start hook can be sent before session-end.
+            _pending_recovery = self._daemon_recovery_task
+            if _pending_recovery is not None and not _pending_recovery.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(_pending_recovery), timeout=5.0)
+                except Exception:
+                    pass
+            if self._daemon is not None:
+                await asyncio.to_thread(self._send_session_hook, "session-start")
             await asyncio.to_thread(self._send_session_hook, "session-end")
 
     def _request_json(

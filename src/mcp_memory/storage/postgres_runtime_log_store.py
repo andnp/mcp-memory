@@ -279,9 +279,10 @@ class PostgresStructuredLogHandler(logging.Handler):
         )
         self._source = source
         self._closed = False
+        self._failed = False
 
     def emit(self, record: logging.LogRecord) -> None:
-        if self._closed:
+        if self._closed or self._failed:
             return
         try:
             from mcp_memory.runtime_logging import _build_log_data
@@ -295,6 +296,7 @@ class PostgresStructuredLogHandler(logging.Handler):
                 data=_build_log_data(record),
             )
         except Exception:
+            self._failed = True
             self.handleError(record)
 
     def close(self) -> None:
