@@ -78,7 +78,7 @@ def configure_workspace_logging(
     handlers: list[logging.Handler] = []
     if console_output:
         handlers.append(RichHandler(rich_tracebacks=True, console=_LOG_CONSOLE))
-    if spec.config.storage.backend == "postgres":
+    if spec.config.storage.backend == "postgres" and source == "daemon":
         handlers.append(
             PostgresStructuredLogHandler(
                 config=spec.config.storage.postgres,
