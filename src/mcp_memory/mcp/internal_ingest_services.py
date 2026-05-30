@@ -17,7 +17,7 @@ from mcp_memory.core.ingest_provenance import (
     build_ingest_appended_metadata,
     build_ingest_created_metadata,
 )
-from mcp_memory.core.task_handlers.ingest_claim_batch_support import build_next_ingest_batch_payload
+from mcp_memory.core.task_handlers.ingest import build_next_ingest_batch_payload
 from mcp_memory.mcp.internal_service_support import (
     _append_content,
     _memory_write_quality_error,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.core.task_handlers.relationship_proposal_support import (
+from mcp_memory.core.task_handlers.relationship_proposals import (
     normalize_conflict_proposals,
     normalize_graph_link_proposals,
 )

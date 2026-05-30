@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.core.task_handlers.ingest_run_support import (
+from mcp_memory.core.task_handlers.ingest import (
     IngestRunAccumulator,
     should_continue_ingest_run,
 )

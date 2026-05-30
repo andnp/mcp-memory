@@ -49,7 +49,7 @@ from mcp_memory.core.task_handlers.curator_support import (
     select_curator_seed_records as _select_curator_seed_records,
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
-from mcp_memory.core.task_handlers.deduplicator_support import (
+from mcp_memory.core.task_handlers.deduplicator_handlers import (
     DEDUPLICATOR_OBSERVATION_SEED_RECORDS,
     build_deduplicator_agent_prompt,
 )
@@ -59,7 +59,7 @@ from mcp_memory.core.task_handlers.ingest import (
     _build_ingest_agent_prompt,
     _normalize_ingest_agentic_result,
 )
-import mcp_memory.core.task_handlers.ingest_agentic_support as _ingest_agentic_support
+import mcp_memory.core.task_handlers.ingest as _ingest_agentic_support
 from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, task_priority
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal

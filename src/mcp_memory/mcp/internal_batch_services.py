@@ -26,7 +26,7 @@ def internal_get_next_dedup_batch_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "repository_not_initialized"}
 
     from mcp_memory.core.task_handlers.constants import DEDUPLICATOR_TASK_NAME
-    from mcp_memory.core.task_handlers.deduplicator_support import select_deduplicator_seed_batch
+    from mcp_memory.core.task_handlers.deduplicator_handlers import select_deduplicator_seed_batch
 
     task_id = optional_string(arguments, "task_id") or f"{DEDUPLICATOR_TASK_NAME}:internal"
     strategy = optional_string(arguments, "strategy")
