@@ -514,7 +514,7 @@ def _default_provider_routing_data() -> dict[str, Any]:
             },
             "copilot-strong": {
                 "provider": "copilot-cli",
-                "model": "gpt-5.4",
+                "model": "gpt-5.4-mini",
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },
@@ -526,9 +526,9 @@ def _default_provider_routing_data() -> dict[str, Any]:
             },
         },
         "task_routes": {
-            "ingest-system1": ["gemini-cheap", "copilot-mini"],
-            "deduplicator": ["gemini-cheap", "copilot-mini"],
-            "memory-curator": ["gemini-strong", "copilot-strong", "gemini-cheap"],
+            "ingest-system1": ["copilot-mini", "gemini-cheap"],
+            "deduplicator": ["copilot-mini", "gemini-cheap"],
+            "memory-curator": ["copilot-strong", "gemini-strong", "gemini-cheap"],
         },
         "task_classes": {
             "ingest-system1": "cheap_agentic",
@@ -551,8 +551,8 @@ def _default_provider_routing_data() -> dict[str, Any]:
         },
         "model_burst_call_limit": 2,
         "model_burst_window_seconds": 300.0,
-        "default_json_route": ["gemini-cheap", "copilot-mini"],
-        "default_agentic_route": ["gemini-cheap", "copilot-mini"],
+        "default_json_route": ["copilot-mini", "gemini-cheap"],
+        "default_agentic_route": ["copilot-mini", "gemini-cheap"],
         "fallback_to_json_only": False,
         "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
     }
