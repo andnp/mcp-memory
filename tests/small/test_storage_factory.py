@@ -538,7 +538,6 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
     spec = WorkspaceRuntimeSpec(
         memory_path=tmp_path / "memories",
         config=Config(
-            ai=AIConfig(provider="none"),
             provider_routing=ProviderRoutingConfig(
                 profiles={
                     "gemini-cheap": AIConfig(

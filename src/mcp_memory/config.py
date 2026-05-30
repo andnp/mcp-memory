@@ -384,7 +384,6 @@ class SearchRankingConfig:
 @dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    ai: AIConfig = field(default_factory=AIConfig)
     gemini_cli: GeminiCLIConfig = field(default_factory=GeminiCLIConfig)
     copilot_cli: CopilotCLIConfig = field(default_factory=CopilotCLIConfig)
     opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
@@ -641,12 +640,6 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
 
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     document = tomlkit.document()
-    document["ai"] = {
-        "provider": "gemini-cli",
-        "model": "gemini-3-flash-preview",
-        "timeout_seconds": 900,
-        "max_retries": 0,
-    }
     document["gemini_cli"] = {"command": "gemini"}
     document["copilot_cli"] = {"command": "copilot"}
     document["opencode"] = {"command": "opencode"}
@@ -763,7 +756,6 @@ def load_config(config_path: Path | None = None) -> Config:
 
     return Config(
         memory=_load_memory_config(raw.get("memory", {})),
-        ai=_load_dataclass_from_dict(AIConfig, raw.get("ai", {})),
         gemini_cli=_load_dataclass_from_dict(GeminiCLIConfig, raw.get("gemini_cli", {})),
         copilot_cli=_load_dataclass_from_dict(CopilotCLIConfig, raw.get("copilot_cli", {})),
         opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),

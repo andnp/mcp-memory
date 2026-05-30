@@ -126,7 +126,10 @@ def create_runtime_from_spec(
         workspace_id=workspace_id,
         storage=storage,
     )
-    default_profile_key = _default_profile_key(spec.config)
+    default_profile_key = next(
+        (k for k in spec.config.provider_routing.default_json_route if k in provider_registry),
+        next(iter(provider_registry), None),
+    )
     default_bundle = {} if default_profile_key is None else provider_registry.get(default_profile_key, {})
     ai_json_provider = default_bundle.get("json")
     ai_agent_provider = default_bundle.get("agentic")
@@ -166,12 +169,6 @@ def create_runtime(
 ) -> ApplicationContext:
     spec = resolve_workspace_runtime_spec(workspace_root_override, cwd)
     return create_runtime_from_spec(spec)
-
-
-def _default_profile_key(config: Config) -> str | None:
-    if config.ai.provider == "none":
-        return None
-    return config.ai.provider
 
 
 def _build_provider_registry(
@@ -226,10 +223,6 @@ def _build_provider_registry(
             )
         if bundle:
             registry[profile_key] = bundle
-
-    default_profile_key = _default_profile_key(config)
-    if default_profile_key is not None:
-        add_profile(default_profile_key, config.ai)
 
     for profile_key, ai_config in config.provider_routing.profiles.items():
         add_profile(profile_key, ai_config)

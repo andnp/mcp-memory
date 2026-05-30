@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
+from mcp_memory.config import AIConfig, Config
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers.copilot import CopilotCLIAgenticProvider
 from mcp_memory.core.providers.copilot import CopilotCLIProvider
@@ -19,20 +19,6 @@ from mcp_memory.core.providers.opencode_cli import OpenCodeCLIProvider
 class AIProvider(Protocol):
     async def ask(self, prompt: str) -> dict:
         ...
-
-
-def build_ai_provider(ai_config: AIConfig, gemini_cli: GeminiCLIConfig, workspace_root: Path | None = None):
-    if ai_config.provider == "none":
-        return None
-    if ai_config.provider == "gemini-cli":
-        return GeminiCLIProvider(
-            command=gemini_cli.command,
-            model=ai_config.model,
-            timeout_seconds=ai_config.timeout_seconds,
-            max_retries=ai_config.max_retries,
-            cwd=None if workspace_root is None else str(workspace_root),
-        )
-    raise ValueError(f"Unsupported AI provider: {ai_config.provider}")
 
 
 def build_json_ai_provider(ai_config: AIConfig, config: Config, workspace_root: Path | None = None):
@@ -91,18 +77,6 @@ def build_agentic_ai_provider(ai_config: AIConfig, config: Config, workspace_roo
     return None
 
 
-def build_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    return build_json_ai_provider(config.ai, config, workspace_root)
-
-
-def build_json_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    return build_json_ai_provider(config.ai, config, workspace_root)
-
-
-def build_agentic_ai_provider_from_config(config: Config, workspace_root: Path | None = None):
-    return build_agentic_ai_provider(config.ai, config, workspace_root)
-
-
 __all__ = [
     "AIProvider",
     "AIResponse",
@@ -115,10 +89,6 @@ __all__ = [
     "JSONTaskProvider",
     "OllamaCLIProvider",
     "OpenCodeCLIProvider",
-    "build_agentic_ai_provider_from_config",
     "build_agentic_ai_provider",
-    "build_ai_provider",
-    "build_ai_provider_from_config",
     "build_json_ai_provider",
-    "build_json_ai_provider_from_config",
 ]

@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcp_memory.config import Config
 from mcp_memory.context import MemoryPipelineContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
@@ -17,8 +16,6 @@ class RuntimeInfoFacade:
     workspace_root: Path | None
     memory_path: Path | None
     db_path: Path | None
-    ai_provider_name: str | None
-    ai_model_name: str | None
     runtime_active: bool
     client_count: int
     task_queue_enabled: bool
@@ -29,15 +26,12 @@ class RuntimeInfoFacade:
         ctx: MemoryPipelineContext,
         controller: Any | None = None,
     ) -> RuntimeInfoFacade:
-        config: Config | None = ctx.config
         db_manager: DatabaseManager | Any | None = ctx.db_manager
         return cls(
             workspace_id=ctx.workspace_id,
             workspace_root=ctx.workspace_root,
             memory_path=ctx.memory_path,
             db_path=getattr(db_manager, "db_path", None) if db_manager is not None else None,
-            ai_provider_name=config.ai.provider if config is not None else None,
-            ai_model_name=config.ai.model if config is not None else None,
             runtime_active=bool(getattr(controller, "has_runtime", False)),
             client_count=int(getattr(controller, "client_count", 0)),
             task_queue_enabled=ctx.task_queue is not None,

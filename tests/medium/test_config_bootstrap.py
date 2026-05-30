@@ -21,15 +21,13 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
 
     config = load_config(config_path)
 
-    assert config.ai.provider == "gemini-cli"
-    assert config.ai.model == "gemini-3-flash-preview"
     assert config.daemon.host == "127.0.0.1"
     assert config.search_ranking.calibration_threshold == 0.035
-    assert config.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
-    assert config.provider_routing.task_routes["deduplicator"] == ["gemini-cheap", "copilot-mini"]
-    assert config.provider_routing.task_routes["memory-curator"] == ["gemini-strong", "copilot-strong", "gemini-cheap"]
-    assert config.provider_routing.default_json_route == ["gemini-cheap", "copilot-mini"]
-    assert config.provider_routing.default_agentic_route == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-strong", "gemini-cheap"]
+    assert config.provider_routing.default_json_route == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.default_agentic_route == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.fallback_to_json_only is False
     assert config.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
@@ -37,7 +35,7 @@ def test_load_config_prefers_created_default(tmp_path: Path) -> None:
     assert config.provider_routing.model_burst_call_limit == 2
     assert config.provider_routing.model_burst_window_seconds == 300.0
     assert config.provider_routing.profiles["gemini-strong"].model == "gemini-3.1-pro-preview"
-    assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
+    assert config.provider_routing.profiles["copilot-strong"].model == "gpt-5.4-mini"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
     assert config.provider_routing.profiles["gemini-cheap"].model == "gemini-3-flash-preview"
     assert config.ingest_suppression.enabled is False

@@ -38,8 +38,6 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
 
     assert created == config_path
     assert config_path.exists()
-    assert loaded.ai.provider == "gemini-cli"
-    assert loaded.ai.max_retries == 0
     assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
     assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
     assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-strong", "gemini-cheap"]

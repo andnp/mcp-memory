@@ -5,7 +5,6 @@ import time
 
 import pytest
 
-from mcp_memory.config import AIConfig, Config, CopilotCLIConfig, GeminiCLIConfig, OllamaCLIConfig, OpenCodeCLIConfig
 from mcp_memory.core.providers import (
     AgenticRunResult,
     CopilotCLIAgenticProvider,
@@ -14,9 +13,6 @@ from mcp_memory.core.providers import (
     GeminiCLIProvider,
     OllamaCLIProvider,
     OpenCodeCLIProvider,
-    build_agentic_ai_provider_from_config,
-    build_ai_provider_from_config,
-    build_json_ai_provider_from_config,
 )
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
@@ -361,46 +357,6 @@ async def test_other_cli_providers_use_expected_commands(install_fake_subprocess
         "llama3.1:8b",
         "detect conflicts",
     )
-
-
-def test_build_ai_provider_from_config_supports_expanded_providers() -> None:
-    gemini = build_ai_provider_from_config(
-        Config(ai=AIConfig(provider="gemini-cli"), gemini_cli=GeminiCLIConfig(command="gemini"))
-    )
-    copilot = build_ai_provider_from_config(
-        Config(ai=AIConfig(provider="copilot-cli"), copilot_cli=CopilotCLIConfig(command="copilot"))
-    )
-    opencode = build_ai_provider_from_config(
-        Config(ai=AIConfig(provider="opencode"), opencode=OpenCodeCLIConfig(command="opencode"))
-    )
-    ollama = build_ai_provider_from_config(
-        Config(ai=AIConfig(provider="ollama"), ollama=OllamaCLIConfig(command="ollama"))
-    )
-
-    assert isinstance(gemini, GeminiCLIProvider)
-    assert isinstance(copilot, CopilotCLIProvider)
-    assert isinstance(opencode, OpenCodeCLIProvider)
-    assert isinstance(ollama, OllamaCLIProvider)
-
-
-def test_split_provider_builders_keep_json_and_agentic_paths_distinct() -> None:
-    config = Config(ai=AIConfig(provider="gemini-cli"), gemini_cli=GeminiCLIConfig(command="gemini"))
-
-    json_provider = build_json_ai_provider_from_config(config)
-    agentic_provider = build_agentic_ai_provider_from_config(config)
-
-    assert isinstance(json_provider, GeminiCLIProvider)
-    assert isinstance(agentic_provider, GeminiCLIAgenticProvider)
-
-
-def test_split_provider_builders_support_copilot_agentic() -> None:
-    config = Config(ai=AIConfig(provider="copilot-cli"), copilot_cli=CopilotCLIConfig(command="copilot"))
-
-    json_provider = build_json_ai_provider_from_config(config)
-    agentic_provider = build_agentic_ai_provider_from_config(config, workspace_root=None)
-
-    assert isinstance(json_provider, CopilotCLIProvider)
-    assert isinstance(agentic_provider, CopilotCLIAgenticProvider)
 
 
 @pytest.mark.asyncio
