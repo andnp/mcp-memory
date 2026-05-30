@@ -5,10 +5,10 @@ from typing import Protocol
 
 from mcp_memory.config import AIConfig, Config, GeminiCLIConfig
 from mcp_memory.core.providers._json_cli import AIResponse
-from mcp_memory.core.providers.copilot_agentic import CopilotCLIAgenticProvider
-from mcp_memory.core.providers.copilot_cli import CopilotCLIProvider
-from mcp_memory.core.providers.gemini_agentic import GeminiCLIAgenticProvider
-from mcp_memory.core.providers.gemini_cli import GeminiCLIProvider
+from mcp_memory.core.providers.copilot import CopilotCLIAgenticProvider
+from mcp_memory.core.providers.copilot import CopilotCLIProvider
+from mcp_memory.core.providers.gemini import GeminiCLIAgenticProvider
+from mcp_memory.core.providers.gemini import GeminiCLIProvider
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider
 from mcp_memory.core.providers.interfaces import JSONTaskProvider
