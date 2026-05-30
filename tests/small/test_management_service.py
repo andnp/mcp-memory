@@ -45,7 +45,6 @@ class _ManagementContextStub:
     task_queue: object = None
     ai_json_provider: object = None
     ai_agent_provider: object = None
-    ai_provider: object = None
     ai_provider_registry: dict[str, object] | None = None
     provider_usage: object = None
     runtime_logs: object = None

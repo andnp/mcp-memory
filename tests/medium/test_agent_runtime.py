@@ -7831,7 +7831,6 @@ async def test_runtime_worker_uses_configured_provider_for_ingest(monkeypatch, t
             ]
         )
         runtime.ai_json_provider = fake_provider
-        runtime.ai_provider = fake_provider
         task = runtime.task_queue.enqueue(
             SYSTEM1_INGEST_TASK_NAME,
             workspace_id=runtime.workspace_id,

@@ -189,9 +189,9 @@ class ManagementService:
         self._vector_store = getattr(ctx, "vector_store", None)
         self._relational_search = ctx.relational_search
         self._config = ctx.config
-        self._ai_json_provider = getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
-        self._ai_agent_provider = getattr(ctx, "ai_agent_provider", None)
-        self._ai_provider_registry = getattr(ctx, "ai_provider_registry", None) or {}
+        self._ai_json_provider = ctx.ai_json_provider
+        self._ai_agent_provider = ctx.ai_agent_provider
+        self._ai_provider_registry = ctx.ai_provider_registry or {}
         self._dashboard_static_root = Path(__file__).with_name("static")
         self._dashboard_static_path = self._dashboard_static_root / "index.html"
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"

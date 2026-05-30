@@ -57,7 +57,6 @@ class _TaskRuntimeContextStub:
     task_queue: object = None
     ai_json_provider: object = None
     ai_agent_provider: object = None
-    ai_provider: object = None
     ai_provider_registry: dict[str, object] | None = None
     provider_usage: object = None
     provider_policy_events: object = None

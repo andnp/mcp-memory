@@ -72,7 +72,6 @@ class ManagementContext(MemoryPipelineContext, Protocol):
     read_cache: Any
     ai_json_provider: Any
     ai_agent_provider: Any
-    ai_provider: Any
     ai_provider_registry: dict[str, Any] | None
     provider_usage: Any
     runtime_logs: Any
@@ -85,7 +84,6 @@ class ManagementContext(MemoryPipelineContext, Protocol):
 class TaskRuntimeContext(MemoryPipelineContext, Protocol):
     ai_json_provider: Any
     ai_agent_provider: Any
-    ai_provider: Any
     ai_provider_registry: dict[str, Any] | None
     provider_usage: Any
     provider_policy_events: Any
@@ -122,7 +120,6 @@ class ApplicationContext:
     task_queue: Any = None
     ai_json_provider: Any = None
     ai_agent_provider: Any = None
-    ai_provider: Any = None
     ai_provider_registry: dict[str, Any] | None = None
     provider_usage: Any = None
     runtime_logs: Any = None

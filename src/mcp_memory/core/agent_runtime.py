@@ -58,9 +58,9 @@ def build_runtime_task_worker(
     active_json_provider = (
         provider
         if provider is not None
-        else getattr(ctx, "ai_json_provider", None) or getattr(ctx, "ai_provider", None)
+        else ctx.ai_json_provider
     )
-    active_agentic_provider = getattr(ctx, "ai_agent_provider", None)
+    active_agentic_provider = ctx.ai_agent_provider
     handlers = build_default_task_handlers(active_json_provider, active_agentic_provider, provider_selection_inputs=provider_selection_inputs)
     expected_handlers = {
         SYSTEM1_INGEST_TASK_NAME,
@@ -125,8 +125,8 @@ def build_default_task_handlers(
 def _provider_selection_inputs_from_context(ctx: ProviderSelectionContext) -> ProviderSelectionInputs:
     return ProviderSelectionInputs(
         config=ctx.config,
-        ai_provider_registry=getattr(ctx, "ai_provider_registry", None),
-        provider_policy_events=getattr(ctx, "provider_policy_events", None),
+        ai_provider_registry=ctx.ai_provider_registry,
+        provider_policy_events=ctx.provider_policy_events,
     )
 
 
