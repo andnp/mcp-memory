@@ -12,8 +12,8 @@ from mcp_memory.core.providers.gemini import GeminiCLIProvider
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider
 from mcp_memory.core.providers.interfaces import JSONTaskProvider
-from mcp_memory.core.providers.ollama_cli import OllamaCLIProvider
-from mcp_memory.core.providers.opencode_cli import OpenCodeCLIProvider
+from mcp_memory.core.providers.small_json_cli import OllamaCLIProvider
+from mcp_memory.core.providers.small_json_cli import OpenCodeCLIProvider
 
 
 class AIProvider(Protocol):
