@@ -3,7 +3,7 @@ from __future__ import annotations
 from statistics import mean
 import time
 
-from mcp_memory.management.analytics_reporting import build_provider_policy_rollups
+from mcp_memory.management.analytics_provider_policy import build_provider_policy_rollups
 from mcp_memory.management.models import (
     MemoryToolLatencyMetricPayload,
     MemoryToolLatencyPayload,
