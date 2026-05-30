@@ -19,14 +19,16 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
-from mcp_memory.cli_admin_agent_commands import build_admin_agent_command_family
-from mcp_memory.cli_admin_conversation_commands import build_admin_conversation_command_family
-from mcp_memory.cli_admin_dashboard_commands import build_admin_dashboard_command_family
-from mcp_memory.cli_admin_log_commands import build_admin_log_command_family
-from mcp_memory.cli_admin_operator_commands import build_admin_operator_command_cluster
-from mcp_memory.cli_admin_search_commands import build_admin_search_command_family
-from mcp_memory.cli_admin_task_commands import build_admin_task_command_family
-from mcp_memory.cli_admin_utility_commands import build_admin_utility_command_cluster
+from mcp_memory.cli_admin_commands import (
+    build_admin_agent_command_family,
+    build_admin_conversation_command_family,
+    build_admin_dashboard_command_family,
+    build_admin_log_command_family,
+    build_admin_operator_command_cluster,
+    build_admin_search_command_family,
+    build_admin_task_command_family,
+    build_admin_utility_command_cluster,
+)
 from mcp_memory.cli_daemon_commands import build_daemon_command_family
 from mcp_memory.cli_hook_runner_commands import build_hook_runner_command
 from mcp_memory.cli_memory import build_memory_group

@@ -307,7 +307,7 @@ def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_c
         ),
     ]
 
-    without_priors = RouletteProvider(task_name="memory-curator", task_id="task-live-only", candidates=candidates).get_batch(
+    without_priors = RouletteProvider(task_name="memory-curator", task_id="task-live-only", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
         limit=1,
@@ -317,6 +317,7 @@ def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_c
         task_id="task-live-with-priors",
         candidates=candidates,
         strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
+        now_timestamp=1_776_211_200.0,
     ).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
@@ -353,7 +354,7 @@ def test_taxonomist_prefers_never_surfaced_when_signal_dominates() -> None:
         ),
     ]
 
-    batch = RouletteProvider(task_name="taxonomist", task_id="task-never", candidates=candidates).get_batch(
+    batch = RouletteProvider(task_name="taxonomist", task_id="task-never", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
         limit=1,
@@ -383,7 +384,7 @@ def test_taxonomist_utility_priors_can_shift_close_strategy_choice() -> None:
         ),
     ]
 
-    without_priors = RouletteProvider(task_name="taxonomist", task_id="task-live-only", candidates=candidates).get_batch(
+    without_priors = RouletteProvider(task_name="taxonomist", task_id="task-live-only", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
         limit=1,
@@ -393,6 +394,7 @@ def test_taxonomist_utility_priors_can_shift_close_strategy_choice() -> None:
         task_id="task-live-with-priors",
         candidates=candidates,
         strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
+        now_timestamp=1_776_211_200.0,
     ).get_batch(
         strategy=None,
         allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
