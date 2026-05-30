@@ -26,6 +26,46 @@ def memory_record_payload(record: RelationalMemoryRecord) -> dict:
     }
 
 
+_AUTO_LINK_PREFIX = "Auto-linked from shared tags"
+
+
+def agent_memory_record_payload(record: RelationalMemoryRecord) -> dict:
+    """Stripped-down record payload for agent consumption.
+
+    Omits internal maintenance fields (metadata, access_score, sampling
+    timestamps, workspace routing) that burn context window without adding
+    agent-useful information.
+    """
+    return {
+        "id": record.id,
+        "title": record.title,
+        "content": record.content,
+        "summary": record.summary,
+        "type": record.type,
+        "status": record.status,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "tags": list(record.tags),
+    }
+
+
+def agent_link_payload(link: MemoryLink) -> dict:
+    """Link payload for agent consumption.
+
+    Compresses verbose auto-link context strings (which merely repeat the
+    tag list already present on the record) to a short sentinel.
+    """
+    context = link.context
+    if context and context.startswith(_AUTO_LINK_PREFIX):
+        context = "auto-linked"
+    return {
+        "source_id": link.source_id,
+        "target_id": link.target_id,
+        "link_type": link.link_type,
+        "context": context,
+    }
+
+
 def compact_memory_record_payload(record: RelationalMemoryRecord) -> CompactMemoryRecord:
     return CompactMemoryRecord(
         id=record.id,

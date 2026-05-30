@@ -6,7 +6,7 @@ from mcp_memory.management.agent_run_reporting import (
 )
 from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
-from mcp_memory.management.result_views import coerce_task_result_view
+from mcp_memory.management.reporting_rows import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
 
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.management.analytics_maintenance_summary import build_maintenance_summary
+from mcp_memory.management.analytics_reporting import build_maintenance_summary
 from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
-from mcp_memory.management.result_views import coerce_task_result_view
+from mcp_memory.management.reporting_rows import coerce_task_result_view
 
 
 pytestmark = pytest.mark.small

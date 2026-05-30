@@ -12,7 +12,7 @@ from mcp_memory.management.models import (
 )
 from mcp_memory.management.query_runner import ManagementQueryRunner
 from mcp_memory.management.reporting_rows import AgentRunHistoryRow, adapt_agent_run_history_row
-from mcp_memory.management.result_views import (
+from mcp_memory.management.reporting_rows import (
     JsonObject,
     TaskResultSource,
     coerce_task_result_view,

@@ -14,8 +14,8 @@ from mcp_memory.management.models import (
     OperatorTaskDigestPayload,
     OperatorWarningDigestPayload,
 )
-from mcp_memory.management.reporting_queries import list_memory_tool_event_rows_since
-from mcp_memory.management.reporting_queries import list_provider_policy_event_rows_since, list_provider_usage_rows_since, list_runtime_log_rows_since
+from mcp_memory.management.reporting_rows import list_memory_tool_event_rows_since
+from mcp_memory.management.reporting_rows import list_provider_policy_event_rows_since, list_provider_usage_rows_since, list_runtime_log_rows_since
 
 
 def _percentile(values: list[float], percentile: float) -> float:

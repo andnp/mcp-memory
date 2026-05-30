@@ -9,7 +9,7 @@ from mcp_memory.management.reporting_rows import (
     adapt_scoped_memory_row,
     adapt_task_run_row,
 )
-from mcp_memory.management.result_views import TaskResultView
+from mcp_memory.management.reporting_rows import TaskResultView
 
 
 pytestmark = pytest.mark.small

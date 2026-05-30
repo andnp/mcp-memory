@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.management.analytics_retrieval import build_retrieval_analytics
+from mcp_memory.management.analytics_reporting import build_retrieval_analytics
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.reporting_rows import MemoryToolEventRow, ScopedMemoryRow
 from mcp_memory.mcp.internal_services import internal_search_memory_records_service

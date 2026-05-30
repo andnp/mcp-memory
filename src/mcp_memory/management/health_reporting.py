@@ -11,7 +11,7 @@ from mcp_memory.management.models import (
     ExecutionAttemptHealthPayload,
     SearchHealthPayload,
 )
-from mcp_memory.management.reporting_queries import fetch_running_task_attempt_rows
+from mcp_memory.management.reporting_rows import fetch_running_task_attempt_rows
 from mcp_memory.management.reporting_rows import RunningTaskAttemptRow
 
 

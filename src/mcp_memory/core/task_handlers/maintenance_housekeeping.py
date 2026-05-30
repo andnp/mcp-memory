@@ -132,7 +132,7 @@ def handle_sweeper_task(
     task: TaskRecord,
 ) -> dict[str, Any]:
     if ctx.db_manager is None:
-        return {"deleted_tasks": 0, "deleted_journal_entries": 0}
+        return {"deleted_tasks": 0, "deleted_journal_entries": 0, "gc_metadata_records": 0}
 
     cutoff = datetime.now(UTC) - timedelta(days=DEFAULT_SWEEP_RETENTION_DAYS)
     cutoff_timestamp = cutoff.timestamp()
@@ -158,11 +158,57 @@ def handle_sweeper_task(
             "DELETE FROM system1_journal WHERE status IN ('processed', 'archived') AND timestamp < {}",
             (cutoff_timestamp,),
         ) + len(deleted_recoverable_entry_ids)
+        gc_metadata_records = _gc_dead_metadata_keys(connection, sqlite_mode)
         connection.commit()
     return {
         "deleted_tasks": deleted_tasks,
         "deleted_journal_entries": deleted_journal_entries,
+        "gc_metadata_records": gc_metadata_records,
     }
+
+
+_DEAD_METADATA_KEYS = (
+    "ingest_task_id",
+    "appended_via_ingest",
+    "created_via_ingest",
+    "defragmenter_task_id",
+    "deduplicator_task_id",
+    "split_group_id",
+    "split_child_memory_ids",
+    "split_from_memory_title",
+    "split_sibling_memory_ids",
+    "split_part_index",
+    "split_part_count",
+    "split_child_count",
+)
+
+
+def _gc_dead_metadata_keys(
+    connection: BackendConnection,
+    sqlite_mode: bool,
+) -> int:
+    """Strip dead internal maintenance keys from memory metadata. Postgres only."""
+    if sqlite_mode:
+        return 0
+    removal_expr = " - ".join(
+        ["metadata"] + [f"'{key}'" for key in _DEAD_METADATA_KEYS]
+    )
+    key_array = ", ".join(f"'{key}'" for key in _DEAD_METADATA_KEYS)
+    query = f"""
+        UPDATE memories
+        SET metadata = {removal_expr}
+        WHERE metadata IS NOT NULL
+          AND metadata != '{{}}'::jsonb
+          AND metadata ?| ARRAY[{key_array}]
+    """
+    cursor = cast(CursorLike, connection.cursor())
+    try:
+        cursor.execute(query)
+        return int(getattr(cursor, "rowcount", 0) or 0)
+    finally:
+        close = getattr(cursor, "close", None)
+        if callable(close):
+            close()
 
 
 def _purge_recoverable_journal_entries(

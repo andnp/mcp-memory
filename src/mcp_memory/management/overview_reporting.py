@@ -16,7 +16,7 @@ from mcp_memory.management.models import (
     StorageSummary,
     TaskStatusSummary,
 )
-from mcp_memory.management.reporting_queries import (
+from mcp_memory.management.reporting_rows import (
     build_queue_diagnostics,
     fetch_memory_count_rows,
     fetch_memory_metrics_row,

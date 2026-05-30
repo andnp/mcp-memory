@@ -63,7 +63,7 @@ from mcp_memory.management.models import (
     TaskListPayload,
     TransportDiagnosticsPayload,
 )
-from mcp_memory.management.reporting_queries import count_recent_conversation_statuses, count_recent_memory_updates
+from mcp_memory.management.reporting_rows import count_recent_conversation_statuses, count_recent_memory_updates
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit

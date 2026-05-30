@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_memory.management.analytics_throughput import build_nerd_metrics_throughput_rollups
+from mcp_memory.management.analytics_reporting import build_nerd_metrics_throughput_rollups
 from mcp_memory.management.reporting_rows import ProviderUsageRow, TaskRunRow
-from mcp_memory.management.result_views import coerce_task_result_view
+from mcp_memory.management.reporting_rows import coerce_task_result_view
 
 
 pytestmark = pytest.mark.small

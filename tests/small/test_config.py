@@ -40,9 +40,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert config_path.exists()
     assert loaded.ai.provider == "gemini-cli"
     assert loaded.ai.max_retries == 0
-    assert loaded.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
-    assert loaded.provider_routing.task_routes["deduplicator"] == ["gemini-cheap", "copilot-mini"]
-    assert loaded.provider_routing.task_routes["memory-curator"] == ["gemini-strong", "copilot-strong", "gemini-cheap"]
+    assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
+    assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-strong", "gemini-cheap"]
     assert loaded.provider_routing.fallback_to_json_only is False
     assert loaded.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert loaded.provider_routing.task_classes["summarize-memory"] == "deterministic"
@@ -53,7 +53,7 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.provider_routing.model_burst_call_limit == 2
     assert loaded.provider_routing.model_burst_window_seconds == 300.0
     assert loaded.provider_routing.profiles["copilot-strong"].provider == "copilot-cli"
-    assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4"
+    assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4-mini"
     assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
     assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
     assert loaded.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mcp_memory.management.analytics_quality import (
+from mcp_memory.management.analytics_reporting import (
     build_memory_quality_signals,
     build_quality_drilldown,
     build_quality_remediation,

@@ -22,8 +22,8 @@ from mcp_memory.relational.operations import (
 from mcp_memory.relational.search import RelationalSearchResult
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 from mcp_memory.serialization import (
-    link_payload,
-    memory_record_payload,
+    agent_link_payload,
+    agent_memory_record_payload,
     search_result_payload,
 )
 from mcp_memory.storage.shared_read_cache import (
@@ -713,12 +713,12 @@ def read_memory_record_service(
 
     payload = {
         "status": "ok",
-        "record": memory_record_payload(result.record),
+        "record": agent_memory_record_payload(result.record),
         "relationships": {
-            direction: [link_payload(link) for link in links]
+            direction: [agent_link_payload(link) for link in links]
             for direction, links in result.relationships.items()
         },
-        "superseded": [memory_record_payload(record) for record in result.superseded],
+        "superseded": [agent_memory_record_payload(record) for record in result.superseded],
     }
     if _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
         if authoritative_validation_token is None:

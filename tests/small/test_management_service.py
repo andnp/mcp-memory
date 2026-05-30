@@ -14,7 +14,7 @@ from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
-from mcp_memory.management.reporting_queries import extract_copilot_premium_requests
+from mcp_memory.management.reporting_rows import extract_copilot_premium_requests
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
