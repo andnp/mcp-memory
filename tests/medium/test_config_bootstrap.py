@@ -141,10 +141,10 @@ def test_load_config_backfills_provider_routing_defaults_for_legacy_config(tmp_p
 
     config = load_config(config_path)
 
-    assert config.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
-    assert config.provider_routing.task_routes["memory-curator"] == ["gemini-strong", "copilot-strong", "gemini-cheap"]
-    assert config.provider_routing.default_json_route == ["gemini-cheap", "copilot-mini"]
-    assert config.provider_routing.default_agentic_route == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-strong", "gemini-cheap"]
+    assert config.provider_routing.default_json_route == ["copilot-mini", "gemini-cheap"]
+    assert config.provider_routing.default_agentic_route == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"
     assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
 
@@ -164,7 +164,7 @@ def test_load_config_merges_partial_provider_routing_override_with_defaults(tmp_
 
     assert config.provider_routing.default_json_route == ["copilot-mini"]
     assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong"]
-    assert config.provider_routing.task_routes["ingest-system1"] == ["gemini-cheap", "copilot-mini"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
     assert config.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"
 
 
