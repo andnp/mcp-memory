@@ -71,14 +71,32 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
 
         assert [result["memory_id"] for result in search_payload["results"]] == [first.id]
         assert search_payload["recommended_follow_up_tool"] == "read_memory_record"
-        assert search_payload["guidance"] == (
-            "Use these summary-first results to identify the most promising memories, then call read_memory_record for full context on the specific memory_id values you want to inspect."
-        )
+        assert search_payload["guidance"] == "Read promising memory_id values with read_memory_record."
         assert search_payload["results"][0]["summary"] == "Summary-first auth search plan."
+        assert "workspace_ids" not in search_payload["results"][0]
+        assert "score" not in search_payload["results"][0]
         assert read_payload["record"]["id"] == first.id
-        assert read_payload["record"]["read_count"] == 1
-        assert [record["id"] for record in read_payload["superseded"]] == [second.id]
-        assert read_payload["relationships"]["outgoing"][0]["link_type"] == "SUPERSEDES"
+        assert "read_count" not in read_payload["record"]
+        assert read_payload["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+        assert "superseded" not in read_payload
+        assert "relationships" not in read_payload
+
+        expanded_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "read_memory_record",
+                    {
+                        "memory_id": first.id,
+                        "include_relationships": True,
+                        "include_superseded": True,
+                    },
+                )
+            )[0].text
+        )
+
+        assert [record["id"] for record in expanded_payload["superseded"]] == [second.id]
+        assert expanded_payload["relationships"]["outgoing"][0]["link_type"] == "SUPERSEDES"
     finally:
         runtime.close()
 
@@ -119,6 +137,8 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
 
         assert payload["status"] == "ok"
         assert payload["timing_ms"]["total"] >= 0.0
+        assert payload["results"][0]["workspace_ids"] == [runtime.workspace_id or "workspace-local"]
+        assert payload["results"][0]["score"] >= 0.0
         assert payload["search_diagnostics"]["timing_ms"]["semantic_selection"] >= 0.0
         assert payload["search_diagnostics"]["timing_ms"]["semantic_candidate_pool"] >= 0.0
         assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration"] >= 0.0

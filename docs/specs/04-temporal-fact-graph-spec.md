@@ -23,8 +23,9 @@ Relationships live in SQLite.
 
 ### 2.2 Active Retrieval Behavior
 - `search_memory_records` hides superseded memories by default
-- `read_memory_record` returns incoming/outgoing relationships
-- `read_memory_record` also returns superseded breadcrumbs
+- `read_memory_record` returns compact relationship counts by default
+- `read_memory_record` returns incoming/outgoing relationships when `include_relationships` is requested
+- `read_memory_record` returns superseded breadcrumbs when `include_superseded` is requested
 
 ### 2.3 Current Link Authoring Boundary
 The runtime stores typed links relationally, but link authoring is not part of the minimal public MCP surface.

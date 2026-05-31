@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import logging
 from time import perf_counter, time
 from uuid import uuid4
@@ -24,7 +24,9 @@ from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 from mcp_memory.serialization import (
     agent_link_payload,
     agent_memory_record_payload,
+    agent_memory_record_payload_with_metadata,
     search_result_payload,
+    search_result_payload_with_debug_fields,
 )
 from mcp_memory.storage.shared_read_cache import (
     SharedReadCacheInFlightSearch,
@@ -36,7 +38,7 @@ from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 SEARCH_READ_GUIDANCE = (
-    "Use these summary-first results to identify the most promising memories, then call read_memory_record for full context on the specific memory_id values you want to inspect."
+    "Read promising memory_id values with read_memory_record."
 )
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
@@ -75,6 +77,81 @@ def _annotate_cached_fallback(
     return payload | {"cache_status": cache_status, "degraded": True}
 
 
+def _compact_cached_search_payload(payload: dict[str, object]) -> dict[str, object]:
+    compact_payload = dict(payload)
+    results = compact_payload.get("results")
+    if isinstance(results, list):
+        compact_payload["results"] = [
+            _compact_cached_search_result(result)
+            for result in results
+            if isinstance(result, dict)
+        ]
+    return compact_payload
+
+
+def _compact_cached_search_result(result: dict[str, object]) -> dict[str, object]:
+    return {
+        key: result[key]
+        for key in ("memory_id", "title", "summary", "memory_type", "status", "tags")
+        if key in result
+    }
+
+
+def _compact_cached_read_payload(
+    payload: dict[str, object],
+    *,
+    include_relationships: bool,
+    include_superseded: bool,
+    include_metadata: bool,
+) -> dict[str, object]:
+    compact_payload = dict(payload)
+    relationships = compact_payload.get("relationships")
+    superseded = compact_payload.get("superseded")
+    if isinstance(relationships, dict) or isinstance(superseded, list):
+        compact_payload.setdefault(
+            "related_counts",
+            _read_related_counts(
+                relationships if isinstance(relationships, dict) else {},
+                superseded if isinstance(superseded, list) else [],
+            ),
+        )
+    if not include_relationships:
+        compact_payload.pop("relationships", None)
+    if not include_superseded:
+        compact_payload.pop("superseded", None)
+    if not include_metadata:
+        _strip_cached_record_noise(compact_payload.get("record"))
+    compact_superseded = compact_payload.get("superseded")
+    if not include_metadata and isinstance(compact_superseded, list):
+        for record in compact_superseded:
+            _strip_cached_record_noise(record)
+    return compact_payload
+
+
+def _strip_cached_record_noise(record: object) -> None:
+    if not isinstance(record, dict):
+        return
+    for key in (
+        "read_count",
+        "access_score",
+        "last_accessed_at",
+        "last_surfaced_at",
+        "metadata",
+        "workspace_ids",
+    ):
+        record.pop(key, None)
+
+
+def _read_related_counts(relationships: Mapping[str, object], superseded: Sequence[object]) -> dict[str, int]:
+    outgoing = relationships.get("outgoing") or relationships.get("outbound") or []
+    incoming = relationships.get("incoming") or relationships.get("inbound") or []
+    return {
+        "outgoing": len(outgoing) if isinstance(outgoing, list) else 0,
+        "incoming": len(incoming) if isinstance(incoming, list) else 0,
+        "superseded": len(superseded),
+    }
+
+
 def _load_cached_search_fallback(
     ctx: ApplicationContext,
     request: SharedReadCacheSearchRequest,
@@ -88,7 +165,7 @@ def _load_cached_search_fallback(
     if payload is None:
         return None
     logger.warning("Serving cached stale search response after authoritative failure", exc_info=error)
-    return _annotate_cached_fallback(payload, cache_status="stale_fallback")
+    return _annotate_cached_fallback(_compact_cached_search_payload(payload), cache_status="stale_fallback")
 
 
 def _load_projection_search_fallback(
@@ -108,7 +185,7 @@ def _load_projection_search_fallback(
         {
             "status": "ok",
             "recommended_follow_up_tool": "read_memory_record",
-            "results": result_payloads,
+            "results": [_compact_cached_search_result(payload) for payload in result_payloads],
             "guidance": SEARCH_READ_GUIDANCE,
         },
         cache_status="projection_fallback",
@@ -127,7 +204,10 @@ def _load_fresh_cached_search_hit(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    return cache.load_fresh_search_response(request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS)
+    payload = cache.load_fresh_search_response(request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS)
+    if payload is None:
+        return None
+    return _compact_cached_search_payload(payload)
 
 
 def _load_cached_read_fallback(ctx: ApplicationContext, memory_id: str, *, error: Exception) -> dict | None:
@@ -219,8 +299,13 @@ def _build_search_result_payloads(
     payloads: list[dict[str, object]] = []
     for result in results:
         ranking_debug = getattr(result, "ranking_debug", None)
+        base_payload = (
+            search_result_payload_with_debug_fields(result)
+            if debug_enabled
+            else search_result_payload(result)
+        )
         payloads.append(
-            search_result_payload(result)
+            base_payload
             | ({"ranking_debug": ranking_debug} if debug_enabled and ranking_debug is not None else {})
         )
     return payloads
@@ -674,18 +759,37 @@ def read_memory_record_service(
 
     operation = ReadMemoryRecordOperation(ctx.relational_search)
     memory_id = require_string(arguments, "memory_id")
+    include_relationships = optional_bool(arguments, "include_relationships", caller_kind == "internal")
+    include_superseded = optional_bool(arguments, "include_superseded", caller_kind == "internal")
+    include_metadata = optional_bool(arguments, "include_metadata", False)
+    default_external_read_shape = (
+        caller_kind == "external"
+        and not include_relationships
+        and not include_superseded
+        and not include_metadata
+    )
     started_at = perf_counter()
     _increment_shared_read_cache_metric(
         ctx,
         "read_requests",
         caller_kind=caller_kind,
     )
-    cached_payload, authoritative_validation_token = _load_validated_cached_read_hit(
-        ctx,
-        memory_id,
-        caller_kind=caller_kind,
+    cached_payload, authoritative_validation_token = (
+        _load_validated_cached_read_hit(
+            ctx,
+            memory_id,
+            caller_kind=caller_kind,
+        )
+        if default_external_read_shape
+        else (None, None)
     )
     if cached_payload is not None:
+        cached_payload = _compact_cached_read_payload(
+            cached_payload,
+            include_relationships=include_relationships,
+            include_superseded=include_superseded,
+            include_metadata=include_metadata,
+        )
         _record_read_invocation(
             ctx,
             caller_kind=caller_kind,
@@ -699,7 +803,12 @@ def read_memory_record_service(
         if _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
             cached_payload = _load_cached_read_fallback(ctx, memory_id, error=error)
             if cached_payload is not None:
-                return cached_payload
+                return _compact_cached_read_payload(
+                    cached_payload,
+                    include_relationships=include_relationships,
+                    include_superseded=include_superseded,
+                    include_metadata=include_metadata,
+                )
         raise
     duration_ms = (perf_counter() - started_at) * 1000.0
     if result is None:
@@ -711,16 +820,32 @@ def read_memory_record_service(
         duration_ms=duration_ms,
     )
 
+    relationships_payload = {
+        direction: [agent_link_payload(link) for link in links]
+        for direction, links in result.relationships.items()
+    }
+    superseded_payload = [
+        (
+            agent_memory_record_payload_with_metadata(record)
+            if include_metadata
+            else agent_memory_record_payload(record)
+        )
+        for record in result.superseded
+    ]
     payload = {
         "status": "ok",
-        "record": agent_memory_record_payload(result.record),
-        "relationships": {
-            direction: [agent_link_payload(link) for link in links]
-            for direction, links in result.relationships.items()
-        },
-        "superseded": [agent_memory_record_payload(record) for record in result.superseded],
+        "record": (
+            agent_memory_record_payload_with_metadata(result.record)
+            if include_metadata
+            else agent_memory_record_payload(result.record)
+        ),
+        "related_counts": _read_related_counts(relationships_payload, superseded_payload),
     }
-    if _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
+    if include_relationships:
+        payload["relationships"] = relationships_payload
+    if include_superseded:
+        payload["superseded"] = superseded_payload
+    if default_external_read_shape and _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
         if authoritative_validation_token is None:
             try:
                 authoritative_validation_token = _resolve_read_cache_validation_token(ctx, memory_id)

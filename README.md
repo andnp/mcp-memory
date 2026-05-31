@@ -105,8 +105,8 @@ The following tools are exposed via the MCP server:
 
 ### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the system-1 journal. In shared Postgres `writeback` mode, this can degrade into a durable local outbox queue when the authoritative write times out or connectivity fails.
-- `search_memory_records`: Search relational memory records with summary-first results and staged ranking over weighted keyword + optional semantic retrieval.
-- `read_memory_record`: Read a relational memory record with relationships and superseded breadcrumbs.
+- `search_memory_records`: Search relational memory records with compact summary-first results and staged ranking over weighted keyword + optional semantic retrieval. Debug mode exposes score/workspace/ranking details.
+- `read_memory_record`: Read one memory record with compact related-counts by default. Relationships, superseded breadcrumbs, and metadata are explicit opt-ins.
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the daemon management surface or CLI, not in the assistant-facing protocol.
 

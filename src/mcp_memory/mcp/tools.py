@@ -22,7 +22,7 @@ def get_memory_tools() -> list[Tool]:
             name="search_memory_records",
             description=(
                 "Search relational memory records with summary-first results. "
-                "Use the returned summaries to identify promising memories, then follow up with read_memory_record for full context. "
+                "Use summaries to choose promising memory_id values, then read only those records. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             inputSchema={
@@ -44,11 +44,26 @@ def get_memory_tools() -> list[Tool]:
         ),
         Tool(
             name="read_memory_record",
-            description="Read a relational memory record with relationships and superseded breadcrumbs.",
+            description=(
+                "Read one memory record. Returns compact content by default; request relationships, "
+                "superseded breadcrumbs, or metadata only when needed."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
+                    "include_relationships": {
+                        "type": "boolean",
+                        "description": "Include incoming/outgoing relationship edges. Defaults to false to save tokens.",
+                    },
+                    "include_superseded": {
+                        "type": "boolean",
+                        "description": "Include superseded record breadcrumbs. Defaults to false to save tokens.",
+                    },
+                    "include_metadata": {
+                        "type": "boolean",
+                        "description": "Include maintenance metadata and workspace IDs. Defaults to false to save tokens.",
+                    },
                 },
                 "required": ["memory_id"],
             },

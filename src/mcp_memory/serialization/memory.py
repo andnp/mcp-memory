@@ -49,6 +49,19 @@ def agent_memory_record_payload(record: RelationalMemoryRecord) -> dict:
     }
 
 
+def agent_memory_record_payload_with_metadata(record: RelationalMemoryRecord) -> dict:
+    """Agent-facing record payload with explicit audit metadata included.
+
+    This is intentionally opt-in for MCP tools: metadata can be useful for
+    maintenance/debugging, but routine reads should not spend tokens on lineage,
+    counters, workspace routing, or cache bookkeeping.
+    """
+    return agent_memory_record_payload(record) | {
+        "metadata": record.metadata,
+        "workspace_ids": list(record.workspace_ids),
+    }
+
+
 def agent_link_payload(link: MemoryLink) -> dict:
     """Link payload for agent consumption.
 
@@ -97,6 +110,11 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
         "memory_type": result.memory_type,
         "status": result.status,
         "tags": list(result.tags),
+    }
+
+
+def search_result_payload_with_debug_fields(result: RelationalSearchResult) -> dict:
+    return search_result_payload(result) | {
         "workspace_ids": list(result.workspace_ids),
         "score": result.score,
     }

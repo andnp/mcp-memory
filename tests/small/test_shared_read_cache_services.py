@@ -360,6 +360,14 @@ def _projection_payload(
     }
 
 
+def _compact_projection_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: payload[key]
+        for key in ("memory_id", "title", "summary", "memory_type", "status", "tags")
+        if key in payload
+    }
+
+
 def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     ctx = _build_context(read_cache=cache, relational_search=SuccessfulSearchService())
@@ -571,7 +579,7 @@ def test_search_memory_records_service_serves_stale_cache_on_authoritative_failu
     assert response["status"] == "ok"
     assert response["cache_status"] == "stale_fallback"
     assert response["degraded"] is True
-    assert response["results"] == cached_payload["results"]
+    assert response["results"] == [_compact_projection_payload(cached_payload["results"][0])]
     assert ctx.retrieval_telemetry.search_calls == []
 
 
@@ -584,7 +592,21 @@ def test_read_memory_record_service_validated_cached_hit_short_circuits_authorit
 
     response = read_memory_record_service(ctx, {"memory_id": "memory-1"})
 
-    assert response == cached_payload
+    assert response["status"] == "ok"
+    assert response["record"] == {
+        "id": "memory-1",
+        "title": "Warm cache",
+        "content": "Cached content",
+        "summary": "Cached validated record",
+        "type": "fact",
+        "status": "active",
+        "created_at": "2026-03-28T00:00:00Z",
+        "updated_at": "2026-03-28T00:00:00Z",
+        "tags": ["cache"],
+    }
+    assert response["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+    assert "relationships" not in response
+    assert "superseded" not in response
     assert read_service.validation_calls == 1
     assert read_service.read_calls == 0
     assert len(ctx.retrieval_telemetry.read_calls) == 1
@@ -592,7 +614,7 @@ def test_read_memory_record_service_validated_cached_hit_short_circuits_authorit
     assert ctx.retrieval_telemetry.read_calls[0]["memory_id"] == "memory-1"
 
 
-def test_read_memory_record_service_external_compacts_large_record_and_superseded(tmp_path: Path) -> None:
+def test_read_memory_record_service_external_compacts_large_record_and_hides_superseded_by_default(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     read_result = _build_read_result(summary="Large authoritative record")
     read_result.record.content = "A" * 1500
@@ -604,6 +626,20 @@ def test_read_memory_record_service_external_compacts_large_record_and_supersede
 
     assert response["status"] == "ok"
     assert response["record"]["content"] == "A" * 1500
+    assert response["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+    assert "superseded" not in response
+
+
+def test_read_memory_record_service_external_can_expand_superseded(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    read_result = _build_read_result(summary="Large authoritative record")
+    read_result.superseded[0].content = "B" * 900
+    read_service = ConfigurableReadService(read_result=read_result)
+    ctx = _build_context(read_cache=cache, relational_search=read_service)
+
+    response = read_memory_record_service(ctx, {"memory_id": "memory-1", "include_superseded": True})
+
+    assert response["status"] == "ok"
     assert response["superseded"][0]["content"] == "B" * 900
 
 
@@ -671,7 +707,11 @@ def test_read_memory_record_service_validator_failure_and_read_failure_serve_sta
     assert response["status"] == "ok"
     assert response["cache_status"] == "stale_fallback"
     assert response["degraded"] is True
-    assert response["record"] == cached_payload["record"]
+    cached_record = cached_payload["record"]
+    assert isinstance(cached_record, dict)
+    assert response["record"]["summary"] == cached_record["summary"]
+    assert "metadata" not in response["record"]
+    assert "workspace_ids" not in response["record"]
     assert read_service.validation_calls == 1
     assert read_service.read_calls == 1
     assert ctx.retrieval_telemetry.read_calls == []
@@ -811,7 +851,12 @@ def test_search_memory_records_service_short_circuits_on_fresh_cache_hit(
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
     response = search_memory_records_service(ctx, {"query": "warm cache"})
 
-    assert response == cached_payload
+    assert response == {
+        "status": "ok",
+        "results": [_compact_projection_payload(cached_payload["results"][0])],
+        "recommended_follow_up_tool": "read_memory_record",
+        "guidance": "cached guidance",
+    }
     assert search_service.calls == 0
     assert ctx.retrieval_telemetry.search_calls == []
 
@@ -983,7 +1028,7 @@ def test_search_memory_records_service_uses_stale_fallback_after_hot_hit_ttl_exp
     assert response["status"] == "ok"
     assert response["cache_status"] == "stale_fallback"
     assert response["degraded"] is True
-    assert response["results"] == cached_payload["results"]
+    assert response["results"] == [_compact_projection_payload(cached_payload["results"][0])]
     assert search_service.calls == 1
 
 
@@ -1028,7 +1073,7 @@ def test_search_memory_records_service_stale_exact_fallback_takes_precedence_ove
     response = search_memory_records_service(ctx, {"query": "warm cache"})
 
     assert response["cache_status"] == "stale_fallback"
-    assert response["results"] == stale_payload["results"]
+    assert response["results"] == [_compact_projection_payload(stale_payload["results"][0])]
 
 
 def test_search_memory_records_service_projection_fallback_activates_when_authoritative_fails_without_stale_exact_cache(

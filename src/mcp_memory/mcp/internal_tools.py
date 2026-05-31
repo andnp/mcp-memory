@@ -7,7 +7,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
             name="internal_search_memory_records",
             description=(
                 "Search memory records for maintenance and organization tasks. "
-                "Use the returned summaries to identify promising memories, then follow up with internal_read_memory_record for full context. "
+                "Use summaries to choose promising memory_id values, then read only those records. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             inputSchema={
@@ -29,10 +29,18 @@ def get_internal_maintenance_tools() -> list[Tool]:
         ),
         Tool(
             name="internal_read_memory_record",
-            description="Read one memory record with relationships and superseded breadcrumbs.",
+            description=(
+                "Read one memory record for maintenance. Internal calls include relationships and superseded "
+                "breadcrumbs by default; pass false for compact reads. Metadata remains opt-in."
+            ),
             inputSchema={
                 "type": "object",
-                "properties": {"memory_id": {"type": "string"}},
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "include_relationships": {"type": "boolean"},
+                    "include_superseded": {"type": "boolean"},
+                    "include_metadata": {"type": "boolean"},
+                },
                 "required": ["memory_id"],
             },
         ),
