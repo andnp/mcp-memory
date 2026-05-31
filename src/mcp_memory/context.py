@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from mcp_memory.config import Config
 
@@ -104,6 +104,92 @@ class BackgroundTaskBootstrapContext(Protocol):
     task_queue: Any
 
 
+class _ApplicationContextView:
+    def __init__(self, source: ApplicationContext, allowed_fields: frozenset[str]) -> None:
+        object.__setattr__(self, "_source", source)
+        object.__setattr__(self, "_allowed_fields", allowed_fields)
+
+    def __getattr__(self, name: str) -> Any:
+        allowed_fields = object.__getattribute__(self, "_allowed_fields")
+        if name in allowed_fields:
+            source = object.__getattribute__(self, "_source")
+            return getattr(source, name)
+        raise AttributeError(f"{type(self).__name__} does not expose attribute {name!r}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in {"_source", "_allowed_fields"}:
+            object.__setattr__(self, name, value)
+            return
+        allowed_fields = object.__getattribute__(self, "_allowed_fields")
+        if name not in allowed_fields:
+            raise AttributeError(f"{type(self).__name__} does not expose attribute {name!r}")
+        source = object.__getattribute__(self, "_source")
+        setattr(source, name, value)
+
+    def __dir__(self) -> list[str]:
+        return sorted(object.__getattribute__(self, "_allowed_fields"))
+
+
+_MEMORY_PIPELINE_FIELDS = frozenset(
+    {
+        "config",
+        "workspace_id",
+        "workspace_root",
+        "memory_path",
+        "db_manager",
+        "journal",
+        "repository",
+        "relational_search",
+        "task_queue",
+    }
+)
+
+_MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
+    {
+        "storage_backend",
+        "read_cache",
+        "ai_json_provider",
+        "ai_agent_provider",
+        "ai_provider_registry",
+        "provider_usage",
+        "runtime_logs",
+        "retrieval_telemetry",
+        "embedding_integrity_events",
+        "embedder",
+        "vector_store",
+    }
+)
+
+_TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
+    {
+        "ai_json_provider",
+        "ai_agent_provider",
+        "ai_provider_registry",
+        "provider_usage",
+        "provider_policy_events",
+        "task_execution_attempts",
+        "work_items",
+        "embedding_repair_queue",
+    }
+)
+
+_PROVIDER_SELECTION_FIELDS = frozenset(
+    {
+        "config",
+        "ai_provider_registry",
+        "provider_policy_events",
+    }
+)
+
+_BACKGROUND_TASK_BOOTSTRAP_FIELDS = frozenset(
+    {
+        "config",
+        "journal",
+        "task_queue",
+    }
+)
+
+
 @dataclass
 class ApplicationContext:
     config: Config | None = None
@@ -133,6 +219,21 @@ class ApplicationContext:
     vector_store: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
+
+    def memory_pipeline_view(self) -> MemoryPipelineContext:
+        return cast(MemoryPipelineContext, _ApplicationContextView(self, _MEMORY_PIPELINE_FIELDS))
+
+    def management_view(self) -> ManagementContext:
+        return cast(ManagementContext, _ApplicationContextView(self, _MANAGEMENT_FIELDS))
+
+    def task_runtime_view(self) -> TaskRuntimeContext:
+        return cast(TaskRuntimeContext, _ApplicationContextView(self, _TASK_RUNTIME_FIELDS))
+
+    def provider_selection_view(self) -> ProviderSelectionContext:
+        return cast(ProviderSelectionContext, _ApplicationContextView(self, _PROVIDER_SELECTION_FIELDS))
+
+    def background_task_bootstrap_view(self) -> BackgroundTaskBootstrapContext:
+        return cast(BackgroundTaskBootstrapContext, _ApplicationContextView(self, _BACKGROUND_TASK_BOOTSTRAP_FIELDS))
 
     def close(self) -> None:
         for resource in (

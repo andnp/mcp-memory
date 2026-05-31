@@ -158,7 +158,7 @@ class MemoryMonitorApp(App):
 
 def _build_management_service(runtime, workspace_id: str | None | object = ...) -> ManagementService:
     ctx = runtime if workspace_id is ... else replace(runtime, workspace_id=workspace_id)
-    return ManagementService(ctx, SimpleNamespace(has_runtime=True, client_count=1))
+    return ManagementService(ctx.management_view(), SimpleNamespace(has_runtime=True, client_count=1))
 
 
 def _fetch_monitor_snapshot(runtime):

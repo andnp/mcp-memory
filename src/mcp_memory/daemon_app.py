@@ -295,8 +295,8 @@ def create_daemon_app(
 
         runtime = create_runtime_from_spec(spec)
         assert runtime.db_manager is not None
-        bootstrap_background_tasks(runtime)
-        worker = build_runtime_task_worker(runtime)
+        bootstrap_background_tasks(runtime.background_task_bootstrap_view())
+        worker = build_runtime_task_worker(runtime.task_runtime_view())
         warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
         warmup_task.add_done_callback(_consume_embedding_warmup_result)
         backup_task = asyncio.create_task(_run_periodic_backup_loop(runtime))
@@ -324,7 +324,7 @@ def create_daemon_app(
         routes = DaemonRoutes(
             ctx=runtime,
             service=ManagementService(
-                runtime,
+                runtime.management_view(),
                 controller=DaemonControllerView(hook_service=hook_service, transport_server=zmq_server),
             ),
             hook_service=hook_service,
