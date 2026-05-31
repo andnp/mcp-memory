@@ -18,11 +18,11 @@
 1. **`search_memories`**:
     - **Inputs**: `query`, `limit`, with optional `memory_type` / `status`.
     - **Workspace Context**: caller workspace is runtime context supplied by the client/proxy layer, not an agent-controlled search argument.
-    - **Outputs**: Returns metadata and summary-first matches.
+    - **Outputs**: Returns compact summary-first matches by default: `memory_id`, title, summary, type, status, and tags. Ranking scores, workspace IDs, and diagnostics are debug/audit fields, not routine agent context.
     - **Telemetry**: Updates `last_surfaced_at` for all returned results in one batch write.
 2. **`read_memory`**:
     - **Inputs**: `memory_id`.
-    - **Outputs**: Returns full content, relationships, and a superseded breadcrumb trail.
+    - **Outputs**: Returns full record content plus compact `related_counts` by default. Relationship edges, superseded breadcrumbs, and metadata/workspace routing fields are explicit opt-ins for callers that need traceability.
     - **Side Effect**: Decays `access_score` and adds `+1.0` (Working Memory boost).
 3. **`record_thought`**: Quickly stashes raw context into System 1.
 
@@ -100,6 +100,10 @@ Suggested initial assignment:
 7. **The Fact Checker**: Verifies `ext:` file paths still exist; marks memories as `degraded` if missing.
 8. **The Project Manager**: Flags `plan` memories older than 60 days as `stale`.
 9. **The Sweeper**: Purges telemetry (`tasks`, `journal`) older than 7 days.
+    - Also reports lineage/relationship hotspots before cleanup: active split originals, oversized lineage metadata, and high relationship-density memories.
+    - Metadata garbage collection for dead internal maintenance keys must stay backend-parity across SQLite and Postgres.
+
+Potential future addition: **The Metadata Hygienist**. This should be a bounded maintenance task, not an always-on request-path cleaner. It may normalize lineage metadata, prune obsolete bookkeeping keys, and compact oversized audit payloads when doing so improves retrieval/dashboard quality. It must preserve auditability for ingest, merge, split, and workspace-routing decisions.
 
 Trusted maintenance agents currently include fully agentic curator, deduplicator, and ingest workflows backed by the internal MCP maintenance surface.
 
@@ -122,3 +126,4 @@ Trusted maintenance agents currently include fully agentic curator, deduplicator
 - `memory-curator` currently adds limited anomaly pressure for oversized memories, including a periodic larger-memory pass keyed from task identity
 - deduplicator observation absorption now stays deterministic; provider-assisted rewriting is reserved for fact-to-fact merges
 - split maintenance preserves richer lineage structure through shared split-group metadata, part ordering, sibling ids, and original child-set metadata
+- sweeper diagnostics now surface lineage churn warning signs before metadata GC so operators can see whether oversized metadata or dense auto-linking may be driving token pressure

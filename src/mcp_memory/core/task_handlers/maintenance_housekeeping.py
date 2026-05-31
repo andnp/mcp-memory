@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 import sqlite3
 from typing import Any, ContextManager, cast
@@ -17,6 +18,10 @@ from mcp_memory.storage.session import CursorLike, DbConnectionLike
 
 
 BackendConnection = sqlite3.Connection | DbConnectionLike
+_LINEAGE_METADATA_WARNING_BYTES = 2_000
+_LINEAGE_METADATA_LIST_WARNING_COUNT = 10
+_RELATIONSHIP_DENSITY_WARNING_COUNT = 20
+_LINEAGE_HOTSPOT_EXAMPLE_LIMIT = 10
 
 
 def handle_project_manager_task(
@@ -138,6 +143,7 @@ def handle_sweeper_task(
     cutoff_timestamp = cutoff.timestamp()
     with _open_backend_connection(ctx) as connection:
         sqlite_mode = _uses_sqlite_backend(ctx)
+        lineage_hotspots = _scan_lineage_hotspots(connection, sqlite_mode)
         deleted_tasks = _execute_write(
             connection,
             sqlite_mode,
@@ -164,6 +170,7 @@ def handle_sweeper_task(
         "deleted_tasks": deleted_tasks,
         "deleted_journal_entries": deleted_journal_entries,
         "gc_metadata_records": gc_metadata_records,
+        "lineage_hotspots": lineage_hotspots,
     }
 
 
@@ -187,9 +194,9 @@ def _gc_dead_metadata_keys(
     connection: BackendConnection,
     sqlite_mode: bool,
 ) -> int:
-    """Strip dead internal maintenance keys from memory metadata. Postgres only."""
+    """Strip dead internal maintenance keys from memory metadata."""
     if sqlite_mode:
-        return 0
+        return _gc_dead_metadata_keys_sqlite(connection)
     removal_expr = " - ".join(
         ["metadata"] + [f"'{key}'" for key in _DEAD_METADATA_KEYS]
     )
@@ -209,6 +216,149 @@ def _gc_dead_metadata_keys(
         close = getattr(cursor, "close", None)
         if callable(close):
             close()
+
+
+def _gc_dead_metadata_keys_sqlite(connection: BackendConnection) -> int:
+    if not isinstance(connection, sqlite3.Connection):
+        return 0
+    rows = connection.execute(
+        """
+        SELECT id, metadata
+        FROM memories
+        WHERE metadata IS NOT NULL AND metadata != '{}'
+        """
+    ).fetchall()
+    updated = 0
+    for memory_id, raw_metadata in rows:
+        metadata = _decode_metadata(raw_metadata)
+        if not metadata:
+            continue
+        pruned = {key: value for key, value in metadata.items() if key not in _DEAD_METADATA_KEYS}
+        if pruned == metadata:
+            continue
+        connection.execute(
+            "UPDATE memories SET metadata = ? WHERE id = ?",
+            (json.dumps(pruned, sort_keys=True), memory_id),
+        )
+        updated += 1
+    return updated
+
+
+def _scan_lineage_hotspots(
+    connection: BackendConnection,
+    sqlite_mode: bool,
+) -> dict[str, Any]:
+    metadata_rows = _fetchall_rows(
+        connection,
+        sqlite_mode,
+        """
+        SELECT id, status, metadata
+        FROM memories
+        WHERE status != 'archived'
+        """,
+    )
+    relationship_rows = _fetchall_rows(
+        connection,
+        sqlite_mode,
+        """
+        SELECT memories.id,
+               COALESCE(outgoing.link_count, 0) AS outgoing_count,
+               COALESCE(incoming.link_count, 0) AS incoming_count
+        FROM memories
+        LEFT JOIN (
+            SELECT source_id AS memory_id, COUNT(*) AS link_count
+            FROM links
+            GROUP BY source_id
+        ) outgoing ON outgoing.memory_id = memories.id
+        LEFT JOIN (
+            SELECT target_id AS memory_id, COUNT(*) AS link_count
+            FROM links
+            GROUP BY target_id
+        ) incoming ON incoming.memory_id = memories.id
+        WHERE memories.status != 'archived'
+        """,
+    )
+    relationship_counts = {
+        str(memory_id): _coerce_int(outgoing) + _coerce_int(incoming)
+        for memory_id, outgoing, incoming in relationship_rows
+    }
+
+    active_split_original_count = 0
+    oversized_metadata_count = 0
+    high_relationship_density_count = 0
+    examples: list[dict[str, Any]] = []
+
+    for memory_id_raw, status_raw, raw_metadata in metadata_rows:
+        memory_id = str(memory_id_raw)
+        metadata = _decode_metadata(raw_metadata)
+        metadata_bytes = len(json.dumps(metadata, sort_keys=True)) if metadata else 0
+        relationship_count = relationship_counts.get(memory_id, 0)
+        reasons: list[str] = []
+
+        if status_raw == "active" and isinstance(metadata.get("split_child_memory_ids"), list):
+            active_split_original_count += 1
+            reasons.append("active_split_original")
+
+        if _metadata_exceeds_lineage_budget(metadata, metadata_bytes=metadata_bytes):
+            oversized_metadata_count += 1
+            reasons.append("oversized_lineage_metadata")
+
+        if relationship_count >= _RELATIONSHIP_DENSITY_WARNING_COUNT:
+            high_relationship_density_count += 1
+            reasons.append("high_relationship_density")
+
+        if reasons and len(examples) < _LINEAGE_HOTSPOT_EXAMPLE_LIMIT:
+            examples.append(
+                {
+                    "memory_id": memory_id,
+                    "reasons": reasons,
+                    "metadata_bytes": metadata_bytes,
+                    "relationship_count": relationship_count,
+                }
+            )
+
+    return {
+        "active_split_original_records": active_split_original_count,
+        "oversized_lineage_metadata_records": oversized_metadata_count,
+        "high_relationship_density_records": high_relationship_density_count,
+        "examples": examples,
+    }
+
+
+def _metadata_exceeds_lineage_budget(metadata: dict[str, object], *, metadata_bytes: int) -> bool:
+    if metadata_bytes >= _LINEAGE_METADATA_WARNING_BYTES:
+        return True
+    for key in ("split_child_memory_ids", "split_sibling_memory_ids", "merged_source_ids"):
+        value = metadata.get(key)
+        if isinstance(value, list) and len(value) >= _LINEAGE_METADATA_LIST_WARNING_COUNT:
+            return True
+    return False
+
+
+def _coerce_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+def _decode_metadata(raw_metadata: object) -> dict[str, object]:
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if raw_metadata is None:
+        return {}
+    try:
+        decoded = json.loads(str(raw_metadata) or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(decoded, dict):
+        return {}
+    return dict(decoded)
 
 
 def _purge_recoverable_journal_entries(

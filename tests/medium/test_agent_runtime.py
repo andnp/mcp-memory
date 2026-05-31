@@ -2527,8 +2527,14 @@ def test_sweeper_preserves_unexpired_recoverable_entries_and_is_idempotent(
             "SELECT id FROM system1_journal WHERE status = 'recoverable' ORDER BY id ASC"
         ).fetchall()
 
-        assert first == {"deleted_tasks": 1, "deleted_journal_entries": 2}
-        assert second == {"deleted_tasks": 0, "deleted_journal_entries": 0}
+        assert first["deleted_tasks"] == 1
+        assert first["deleted_journal_entries"] == 2
+        assert first["gc_metadata_records"] == 0
+        assert first["lineage_hotspots"]["examples"] == []
+        assert second["deleted_tasks"] == 0
+        assert second["deleted_journal_entries"] == 0
+        assert second["gc_metadata_records"] == 0
+        assert second["lineage_hotspots"]["examples"] == []
         assert [row[0] for row in remaining_recoverable] == [preserved_id]
         assert runtime.journal.count_by_status() == {"recoverable": 1}
         assert runtime.vector_store.deleted == [("thought", str(expired_id), None)]
