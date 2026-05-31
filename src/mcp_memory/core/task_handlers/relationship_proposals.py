@@ -75,6 +75,26 @@ TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 GRAPH_LINKER_AI_MIN_CANDIDATES = 12
 GRAPH_LINKER_FALLBACK_LINK_TARGET = 2
 CONFLICT_DETECTOR_AI_MIN_CANDIDATES = 15
+FALLBACK_GRAPH_LINK_MIN_TOKEN_OVERLAP = 0.5
+FALLBACK_GRAPH_LINK_MIN_BROAD_TAG_TOKEN_OVERLAP = 0.7
+FALLBACK_GRAPH_LINK_MAX_RELATIONSHIP_COUNT = 8
+_AUTO_LINK_BROAD_TAGS = frozenset(
+    {
+        "agentic-mcp",
+        "architecture",
+        "backlog",
+        "cleanup",
+        "maintenance",
+        "meta",
+        "mcp-memory",
+        "process",
+        "refactor",
+        "refactoring",
+        "testing",
+        "tooling",
+        "workflow",
+    }
+)
 
 
 async def propose_graph_links(
@@ -82,7 +102,7 @@ async def propose_graph_links(
     candidates: list,
     provider: Any = None,
 ) -> list[tuple[str, str, str, str]]:
-    fallback = _fallback_graph_links(candidates)
+    fallback = _fallback_graph_links(ctx, candidates)
     if (
         provider is None
         or len(fallback) >= GRAPH_LINKER_FALLBACK_LINK_TARGET
@@ -134,22 +154,63 @@ async def propose_conflicts(
     return []
 
 
-def _fallback_graph_links(candidates: list) -> list[tuple[str, str, str, str]]:
+def _fallback_graph_links(ctx: ApplicationContext, candidates: list) -> list[tuple[str, str, str, str]]:
     proposals: list[tuple[str, str, str, str]] = []
+    relationship_counts: dict[str, int] = {}
     for source, target in _iter_candidate_pairs(candidates):
         shared_tags = sorted(set(source.tags) & set(target.tags))
         token_overlap = _token_overlap(source.title, target.title)
-        if not shared_tags and token_overlap < 0.34:
+        if _relationship_count(ctx, source, relationship_counts) > FALLBACK_GRAPH_LINK_MAX_RELATIONSHIP_COUNT:
             continue
+        if _relationship_count(ctx, target, relationship_counts) > FALLBACK_GRAPH_LINK_MAX_RELATIONSHIP_COUNT:
+            continue
+        if not _should_auto_link_candidate_pair(shared_tags, token_overlap):
+            continue
+        informative_shared_tags = [tag for tag in shared_tags if not _is_broad_auto_link_tag(tag)]
         newer, older = _sort_newer_first(source, target)
         link_type = "AMENDS" if newer.type == older.type else "DEPENDS_ON"
         context = (
-            f"Auto-linked from shared tags ({', '.join(shared_tags)})"
-            if shared_tags
+            f"Auto-linked from shared tags ({', '.join(informative_shared_tags)})"
+            if informative_shared_tags
             else "Auto-linked from title similarity."
         )
         proposals.append((newer.id, older.id, link_type, context))
     return proposals[:10]
+
+
+def _should_auto_link_candidate_pair(shared_tags: list[str], token_overlap: float) -> bool:
+    if not shared_tags:
+        return token_overlap >= FALLBACK_GRAPH_LINK_MIN_TOKEN_OVERLAP
+    informative_shared_tags = [tag for tag in shared_tags if not _is_broad_auto_link_tag(tag)]
+    if informative_shared_tags:
+        return True
+    return token_overlap >= FALLBACK_GRAPH_LINK_MIN_BROAD_TAG_TOKEN_OVERLAP
+
+
+def _is_broad_auto_link_tag(tag: str) -> bool:
+    normalized = tag.strip().lower()
+    if not normalized:
+        return True
+    return normalized in _AUTO_LINK_BROAD_TAGS
+
+
+def _relationship_count(
+    ctx: ApplicationContext,
+    record: Any,
+    cache: dict[str, int],
+) -> int:
+    cached_count = cache.get(record.id)
+    if cached_count is not None:
+        return cached_count
+    repository = getattr(ctx, "repository", None)
+    if repository is None:
+        cache[record.id] = 0
+        return 0
+    outgoing = repository.get_links(record.id, direction="outgoing")
+    incoming = repository.get_links(record.id, direction="incoming")
+    count = len(outgoing) + len(incoming)
+    cache[record.id] = count
+    return count
 
 
 def _fallback_conflicts(candidates: list) -> list[tuple[str, str, str]]:
