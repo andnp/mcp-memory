@@ -98,6 +98,10 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_get_next_dedup_batch_service,
         internal_list_memory_records_service,
     )
+    from mcp_memory.mcp.internal_read_services import (
+        internal_read_memory_record_service,
+        internal_search_memory_records_service,
+    )
     from mcp_memory.mcp.internal_mutation_services import (
         internal_append_memory_content_service,
         internal_archive_memory_record_service,
@@ -109,12 +113,12 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_split_memory_record_service,
         internal_update_memory_record_service,
     )
-    from mcp_memory.mcp.internal_services import (
+    from mcp_memory.mcp.internal_ingest_services import (
         internal_append_to_existing_memory_for_ingest_service,
         internal_create_memory_record_for_ingest_service,
         internal_get_next_ingest_batch_service,
-        internal_read_memory_record_service,
-        internal_search_memory_records_service,
+    )
+    from mcp_memory.mcp.internal_task_services import (
         internal_task_complete_service,
     )
     from mcp_memory.mcp.internal_work_item_services import (
