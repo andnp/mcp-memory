@@ -169,26 +169,6 @@ _PROVENANCE_PROCESS_TAGS: frozenset[str] = frozenset(
 )
 
 
-@dataclass
-class _ProviderPolicyTaskAccumulator:
-    route_exhaustion_count: int = 0
-    legacy_fallback_denied_count: int = 0
-    admission_skip_count: int = 0
-    skip_provider_counts: Counter[tuple[str, str, str | None]] = field(default_factory=Counter)
-    active_admission_providers: set[tuple[str, str]] = field(default_factory=set)
-
-
-@dataclass
-class _ProviderPolicyProviderAccumulator:
-    provider_name: str
-    admission_skip_count: int = 0
-    task_counts: Counter[str] = field(default_factory=Counter)
-    reason_counts: Counter[str] = field(default_factory=Counter)
-    active_admission_reason: str | None = None
-    active_admission_category: str | None = None
-    active_retry_delay_seconds: float | None = None
-
-
 def build_nerd_metrics(
     *,
     db_manager,
