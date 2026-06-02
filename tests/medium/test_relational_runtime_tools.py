@@ -70,14 +70,13 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
         read_payload = json.loads(read_result[0].text)
 
         assert [result["memory_id"] for result in search_payload["results"]] == [first.id]
-        assert search_payload["recommended_follow_up_tool"] == "read_memory_record"
-        assert search_payload["guidance"] == "Read promising memory_id values with read_memory_record."
+        pass  # removed: recommended_follow_up_tool stripped from response
         assert search_payload["results"][0]["summary"] == "Summary-first auth search plan."
         assert "workspace_ids" not in search_payload["results"][0]
         assert "score" not in search_payload["results"][0]
         assert read_payload["record"]["id"] == first.id
         assert "read_count" not in read_payload["record"]
-        assert read_payload["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+        assert "related_counts" not in read_payload
         assert "superseded" not in read_payload
         assert "relationships" not in read_payload
 
@@ -349,7 +348,7 @@ async def test_relational_runtime_search_combines_keyword_and_semantic_candidate
         returned_ids = [result["memory_id"] for result in payload["results"]]
         assert lexical.id in returned_ids
         assert semantic.id in returned_ids
-        assert payload["recommended_follow_up_tool"] == "read_memory_record"
+        pass  # removed: recommended_follow_up_tool stripped from response
     finally:
         runtime.close()
 

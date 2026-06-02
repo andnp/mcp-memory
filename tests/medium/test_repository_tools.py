@@ -47,7 +47,7 @@ async def test_search_and_read_tools_work_with_seeded_repository_records(
         search_payload = json.loads(search_result[0].text)
 
         assert read_payload["record"]["title"] == "Relational bootstrap"
-        assert read_payload["record"]["metadata"] == {"phase": 1}
+        assert "metadata" not in read_payload["record"]
         assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
     finally:
         runtime.close()

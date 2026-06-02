@@ -30,22 +30,18 @@ _AUTO_LINK_PREFIX = "Auto-linked from shared tags"
 
 
 def agent_memory_record_payload(record: RelationalMemoryRecord) -> dict:
-    """Stripped-down record payload for agent consumption.
+    """Minimal record payload for agent consumption.
 
-    Omits internal maintenance fields (metadata, access_score, sampling
-    timestamps, workspace routing) that burn context window without adding
-    agent-useful information.
+    Contains only the fields a model needs to understand the memory:
+    id for referencing, title for identity, content for the body.
+    Summary is dropped because it's auto-generated from content.
+    Everything else (type, status, timestamps, tags, internal fields)
+    burns context without adding agent-useful information.
     """
     return {
         "id": record.id,
         "title": record.title,
         "content": record.content,
-        "summary": record.summary,
-        "type": record.type,
-        "status": record.status,
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-        "tags": list(record.tags),
     }
 
 
@@ -79,7 +75,9 @@ def agent_link_payload(link: MemoryLink) -> dict:
     }
 
 
-def compact_memory_record_payload(record: RelationalMemoryRecord) -> CompactMemoryRecord:
+def compact_memory_record_payload(
+    record: RelationalMemoryRecord,
+) -> CompactMemoryRecord:
     return CompactMemoryRecord(
         id=record.id,
         title=record.title,
@@ -113,6 +111,20 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
     }
 
 
+def search_result_payload_compact(result: RelationalSearchResult) -> dict:
+    """Minimal search result for agent consumption.
+
+    Returns only the fields needed to decide whether to read a record:
+    memory_id, title, summary. Omits type, status, tags, and ranking
+    fields that burn context without helping the selection decision.
+    """
+    return {
+        "memory_id": result.memory_id,
+        "title": result.title,
+        "summary": result.summary,
+    }
+
+
 def search_result_payload_with_debug_fields(result: RelationalSearchResult) -> dict:
     return search_result_payload(result) | {
         "workspace_ids": list(result.workspace_ids),
@@ -125,8 +137,12 @@ def task_payload(task: TaskRecord) -> dict:
         "id": task.id,
         "task_name": task.task_name,
         "trigger": task.data.get("trigger") if isinstance(task.data, dict) else None,
-        "strategy": task.data.get("strategy") if isinstance(task.data.get("strategy"), str) else None,
-        "grouping_strategy": task.data.get("grouping_strategy") if isinstance(task.data.get("grouping_strategy"), str) else None,
+        "strategy": task.data.get("strategy")
+        if isinstance(task.data.get("strategy"), str)
+        else None,
+        "grouping_strategy": task.data.get("grouping_strategy")
+        if isinstance(task.data.get("grouping_strategy"), str)
+        else None,
         "workspace_id": task.workspace_id,
         "status": task.status,
         "priority": task.priority,

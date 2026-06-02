@@ -25,7 +25,7 @@ from mcp_memory.serialization import (
     agent_link_payload,
     agent_memory_record_payload,
     agent_memory_record_payload_with_metadata,
-    search_result_payload,
+    search_result_payload_compact,
     search_result_payload_with_debug_fields,
 )
 from mcp_memory.storage.shared_read_cache import (
@@ -37,9 +37,7 @@ from mcp_memory.storage.shared_read_cache import (
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
-SEARCH_READ_GUIDANCE = (
-    "Read promising memory_id values with read_memory_record."
-)
+SEARCH_READ_GUIDANCE = "Read promising memory_id values with read_memory_record."
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 
@@ -47,8 +45,14 @@ _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 logger = logging.getLogger(__name__)
 
 
-def _shared_read_cache_enabled(ctx: ApplicationContext, *, caller_kind: str, debug_enabled: bool = False) -> bool:
-    return caller_kind == "external" and not debug_enabled and getattr(ctx, "read_cache", None) is not None
+def _shared_read_cache_enabled(
+    ctx: ApplicationContext, *, caller_kind: str, debug_enabled: bool = False
+) -> bool:
+    return (
+        caller_kind == "external"
+        and not debug_enabled
+        and getattr(ctx, "read_cache", None) is not None
+    )
 
 
 def _increment_shared_read_cache_metric(
@@ -59,7 +63,9 @@ def _increment_shared_read_cache_metric(
     caller_kind: str,
     debug_enabled: bool = False,
 ) -> None:
-    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if not _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         return
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
@@ -91,9 +97,7 @@ def _compact_cached_search_payload(payload: dict[str, object]) -> dict[str, obje
 
 def _compact_cached_search_result(result: dict[str, object]) -> dict[str, object]:
     return {
-        key: result[key]
-        for key in ("memory_id", "title", "summary", "memory_type", "status", "tags")
-        if key in result
+        key: result[key] for key in ("memory_id", "title", "summary") if key in result
     }
 
 
@@ -117,6 +121,7 @@ def _compact_cached_read_payload(
         )
     if not include_relationships:
         compact_payload.pop("relationships", None)
+        compact_payload.pop("related_counts", None)
     if not include_superseded:
         compact_payload.pop("superseded", None)
     if not include_metadata:
@@ -138,11 +143,19 @@ def _strip_cached_record_noise(record: object) -> None:
         "last_surfaced_at",
         "metadata",
         "workspace_ids",
+        "summary",
+        "type",
+        "status",
+        "created_at",
+        "updated_at",
+        "tags",
     ):
         record.pop(key, None)
 
 
-def _read_related_counts(relationships: Mapping[str, object], superseded: Sequence[object]) -> dict[str, int]:
+def _read_related_counts(
+    relationships: Mapping[str, object], superseded: Sequence[object]
+) -> dict[str, int]:
     outgoing = relationships.get("outgoing") or relationships.get("outbound") or []
     incoming = relationships.get("incoming") or relationships.get("inbound") or []
     return {
@@ -164,8 +177,13 @@ def _load_cached_search_fallback(
     payload = cache.load_search_response(request)
     if payload is None:
         return None
-    logger.warning("Serving cached stale search response after authoritative failure", exc_info=error)
-    return _annotate_cached_fallback(_compact_cached_search_payload(payload), cache_status="stale_fallback")
+    logger.warning(
+        "Serving cached stale search response after authoritative failure",
+        exc_info=error,
+    )
+    return _annotate_cached_fallback(
+        _compact_cached_search_payload(payload), cache_status="stale_fallback"
+    )
 
 
 def _load_projection_search_fallback(
@@ -180,13 +198,16 @@ def _load_projection_search_fallback(
     result_payloads = cache.search_projection_payloads(request)
     if not result_payloads:
         return None
-    logger.warning("Serving projection-backed degraded search response after authoritative failure", exc_info=error)
+    logger.warning(
+        "Serving projection-backed degraded search response after authoritative failure",
+        exc_info=error,
+    )
     return _annotate_cached_fallback(
         {
             "status": "ok",
-            "recommended_follow_up_tool": "read_memory_record",
-            "results": [_compact_cached_search_result(payload) for payload in result_payloads],
-            "guidance": SEARCH_READ_GUIDANCE,
+            "results": [
+                _compact_cached_search_result(payload) for payload in result_payloads
+            ],
         },
         cache_status="projection_fallback",
     )
@@ -199,25 +220,33 @@ def _load_fresh_cached_search_hit(
     caller_kind: str,
     debug_enabled: bool,
 ) -> dict | None:
-    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if not _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         return None
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    payload = cache.load_fresh_search_response(request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS)
+    payload = cache.load_fresh_search_response(
+        request, ttl_seconds=_FRESH_SEARCH_CACHE_HIT_TTL_SECONDS
+    )
     if payload is None:
         return None
     return _compact_cached_search_payload(payload)
 
 
-def _load_cached_read_fallback(ctx: ApplicationContext, memory_id: str, *, error: Exception) -> dict | None:
+def _load_cached_read_fallback(
+    ctx: ApplicationContext, memory_id: str, *, error: Exception
+) -> dict | None:
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
     payload = cache.load_read_response(memory_id)
     if payload is None:
         return None
-    logger.warning("Serving cached stale read response after authoritative failure", exc_info=error)
+    logger.warning(
+        "Serving cached stale read response after authoritative failure", exc_info=error
+    )
     return _annotate_cached_fallback(payload, cache_status="stale_fallback")
 
 
@@ -238,7 +267,9 @@ def _begin_inflight_search_coalescing(
     caller_kind: str,
     debug_enabled: bool,
 ) -> SharedReadCacheInFlightSearch | None:
-    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if not _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         return None
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
@@ -287,7 +318,9 @@ def _resolve_read_cache_validation_tokens(
     }
 
 
-def _resolve_read_cache_validation_token(ctx: ApplicationContext, memory_id: str) -> str | None:
+def _resolve_read_cache_validation_token(
+    ctx: ApplicationContext, memory_id: str
+) -> str | None:
     return _resolve_read_cache_validation_tokens(ctx, [memory_id]).get(memory_id)
 
 
@@ -302,11 +335,15 @@ def _build_search_result_payloads(
         base_payload = (
             search_result_payload_with_debug_fields(result)
             if debug_enabled
-            else search_result_payload(result)
+            else search_result_payload_compact(result)
         )
         payloads.append(
             base_payload
-            | ({"ranking_debug": ranking_debug} if debug_enabled and ranking_debug is not None else {})
+            | (
+                {"ranking_debug": ranking_debug}
+                if debug_enabled and ranking_debug is not None
+                else {}
+            )
         )
     return payloads
 
@@ -340,7 +377,9 @@ def _warm_cached_search_projections(
     caller_kind: str,
     debug_enabled: bool,
 ) -> int:
-    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if not _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         return 0
     warmed_payloads = [
         payload
@@ -360,9 +399,13 @@ def _warm_cached_search_projections(
                 exc_info=True,
             )
     try:
-        _store_cached_projection_entries(ctx, warmed_payloads, validation_tokens=validation_tokens)
+        _store_cached_projection_entries(
+            ctx, warmed_payloads, validation_tokens=validation_tokens
+        )
     except Exception:
-        logger.warning("Projection cache warming failed after authoritative search", exc_info=True)
+        logger.warning(
+            "Projection cache warming failed after authoritative search", exc_info=True
+        )
         return 0
     return len(warmed_payloads)
 
@@ -374,7 +417,9 @@ def _load_validated_cached_projection_entries(
     caller_kind: str,
     debug_enabled: bool = False,
 ) -> list[SharedReadCacheProjectionEntry]:
-    if not _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if not _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         return []
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
@@ -382,7 +427,9 @@ def _load_validated_cached_projection_entries(
     entries = cache.load_projection_entries(memory_ids)
     if not entries:
         return []
-    entries_with_tokens = [entry for entry in entries if entry.validation_token is not None]
+    entries_with_tokens = [
+        entry for entry in entries if entry.validation_token is not None
+    ]
     if not entries_with_tokens:
         cache.delete_projection_entries([entry.memory_id for entry in entries])
         return []
@@ -401,7 +448,10 @@ def _load_validated_cached_projection_entries(
     stale_ids: list[str] = []
     for entry in entries:
         authoritative_token = authoritative_tokens.get(entry.memory_id)
-        if authoritative_token is not None and authoritative_token == entry.validation_token:
+        if (
+            authoritative_token is not None
+            and authoritative_token == entry.validation_token
+        ):
             valid_entries.append(entry)
             continue
         stale_ids.append(entry.memory_id)
@@ -432,7 +482,10 @@ def _load_validated_cached_read_hit(
             "read_validation_failures",
             caller_kind=caller_kind,
         )
-        logger.warning("Read cache validation failed; falling back to authoritative read", exc_info=True)
+        logger.warning(
+            "Read cache validation failed; falling back to authoritative read",
+            exc_info=True,
+        )
         return (None, None)
     if authoritative_token is None or authoritative_token != entry.validation_token:
         _increment_shared_read_cache_metric(
@@ -479,13 +532,18 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
         writeback_cache=cache_state.writeback_cache,
         max_outbox_entries=cache_state.max_outbox_entries,
     )
-    return operation.execute(require_string(arguments, "content"))
+    operation.execute(require_string(arguments, "content"))
+    return {"status": "recorded"}
 
 
-def _retrieval_telemetry_repository(ctx: ApplicationContext) -> RetrievalTelemetryRepository:
+def _retrieval_telemetry_repository(
+    ctx: ApplicationContext,
+) -> RetrievalTelemetryRepository:
     repository = ctx.retrieval_telemetry
     if repository is None:
-        repository = RetrievalTelemetryRepository(ctx.db_manager, workspace_id=ctx.workspace_id)
+        repository = RetrievalTelemetryRepository(
+            ctx.db_manager, workspace_id=ctx.workspace_id
+        )
         ctx.retrieval_telemetry = repository
     return repository
 
@@ -508,11 +566,18 @@ def _log_slow_memory_tool_operation(
                 level="WARNING",
                 message=f"Slow {tool_name} operation",
                 created_at=time(),
-                data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)} | data,
+                data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)}
+                | data,
             )
             return
-        except Exception:  # pragma: no cover - defensive fallback for locked telemetry/log stores
-            logger.warning("Failed to persist slow %s log; falling back to process logger", tool_name, exc_info=True)
+        except (
+            Exception
+        ):  # pragma: no cover - defensive fallback for locked telemetry/log stores
+            logger.warning(
+                "Failed to persist slow %s log; falling back to process logger",
+                tool_name,
+                exc_info=True,
+            )
     logger.warning("Slow %s operation: %.3fms %s", tool_name, duration_ms, data)
 
 
@@ -561,7 +626,10 @@ def _record_read_invocation(
     try:
         repository.flush()
     except Exception:
-        logger.debug("Read telemetry flush failed; continuing without blocking the read response", exc_info=True)
+        logger.debug(
+            "Read telemetry flush failed; continuing without blocking the read response",
+            exc_info=True,
+        )
     _log_slow_memory_tool_operation(
         ctx,
         tool_name="read_memory_record",
@@ -636,8 +704,12 @@ def search_memory_records_service(
         try:
             payload = ctx.read_cache.wait_for_inflight_search(inflight_search)
         except Exception as error:
-            if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
-                cached_payload = _load_cached_search_fallback(ctx, cache_request, error=error)
+            if _shared_read_cache_enabled(
+                ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+            ):
+                cached_payload = _load_cached_search_fallback(
+                    ctx, cache_request, error=error
+                )
                 if cached_payload is not None:
                     _increment_shared_read_cache_metric(
                         ctx,
@@ -646,7 +718,9 @@ def search_memory_records_service(
                         debug_enabled=debug_enabled,
                     )
                     return cached_payload
-                projection_payload = _load_projection_search_fallback(ctx, cache_request, error=error)
+                projection_payload = _load_projection_search_fallback(
+                    ctx, cache_request, error=error
+                )
                 if projection_payload is not None:
                     _increment_shared_read_cache_metric(
                         ctx,
@@ -673,13 +747,19 @@ def search_memory_records_service(
     diagnostics = None
     try:
         if debug_enabled:
-            results, diagnostics = operation.execute_with_diagnostics(**execution_arguments)
+            results, diagnostics = operation.execute_with_diagnostics(
+                **execution_arguments
+            )
         else:
             results = operation.execute(**execution_arguments)
     except Exception as error:
         _finish_inflight_search_coalescing(ctx, inflight_search, error=error)
-        if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
-            cached_payload = _load_cached_search_fallback(ctx, cache_request, error=error)
+        if _shared_read_cache_enabled(
+            ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+        ):
+            cached_payload = _load_cached_search_fallback(
+                ctx, cache_request, error=error
+            )
             if cached_payload is not None:
                 _increment_shared_read_cache_metric(
                     ctx,
@@ -688,7 +768,9 @@ def search_memory_records_service(
                     debug_enabled=debug_enabled,
                 )
                 return cached_payload
-            projection_payload = _load_projection_search_fallback(ctx, cache_request, error=error)
+            projection_payload = _load_projection_search_fallback(
+                ctx, cache_request, error=error
+            )
             if projection_payload is not None:
                 _increment_shared_read_cache_metric(
                     ctx,
@@ -707,12 +789,12 @@ def search_memory_records_service(
         surfaced_memory_ids=surfaced_memory_ids,
         duration_ms=duration_ms,
     )
-    result_payloads = _build_search_result_payloads(results, debug_enabled=debug_enabled)
+    result_payloads = _build_search_result_payloads(
+        results, debug_enabled=debug_enabled
+    )
     payload = {
         "status": "ok",
-        "recommended_follow_up_tool": "read_memory_record",
         "results": result_payloads,
-        "guidance": SEARCH_READ_GUIDANCE,
     }
     if debug_enabled:
         timing_ms = {"total": round(duration_ms, 3)}
@@ -742,7 +824,9 @@ def search_memory_records_service(
             caller_kind=caller_kind,
             debug_enabled=debug_enabled,
         )
-    if _shared_read_cache_enabled(ctx, caller_kind=caller_kind, debug_enabled=debug_enabled):
+    if _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
         _store_cached_search_response(ctx, cache_request, payload)
     _finish_inflight_search_coalescing(ctx, inflight_search, payload=payload)
     return payload
@@ -759,8 +843,12 @@ def read_memory_record_service(
 
     operation = ReadMemoryRecordOperation(ctx.relational_search)
     memory_id = require_string(arguments, "memory_id")
-    include_relationships = optional_bool(arguments, "include_relationships", caller_kind == "internal")
-    include_superseded = optional_bool(arguments, "include_superseded", caller_kind == "internal")
+    include_relationships = optional_bool(
+        arguments, "include_relationships", caller_kind == "internal"
+    )
+    include_superseded = optional_bool(
+        arguments, "include_superseded", caller_kind == "internal"
+    )
     include_metadata = optional_bool(arguments, "include_metadata", False)
     default_external_read_shape = (
         caller_kind == "external"
@@ -839,16 +927,22 @@ def read_memory_record_service(
             if include_metadata
             else agent_memory_record_payload(result.record)
         ),
-        "related_counts": _read_related_counts(relationships_payload, superseded_payload),
     }
     if include_relationships:
         payload["relationships"] = relationships_payload
+        payload["related_counts"] = _read_related_counts(
+            relationships_payload, superseded_payload
+        )
     if include_superseded:
         payload["superseded"] = superseded_payload
-    if default_external_read_shape and _shared_read_cache_enabled(ctx, caller_kind=caller_kind):
+    if default_external_read_shape and _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind
+    ):
         if authoritative_validation_token is None:
             try:
-                authoritative_validation_token = _resolve_read_cache_validation_token(ctx, memory_id)
+                authoritative_validation_token = _resolve_read_cache_validation_token(
+                    ctx, memory_id
+                )
             except Exception:
                 logger.warning(
                     "Read cache validation token refresh failed after authoritative read",

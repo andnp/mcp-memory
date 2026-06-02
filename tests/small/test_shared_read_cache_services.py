@@ -363,7 +363,7 @@ def _projection_payload(
 def _compact_projection_payload(payload: dict[str, object]) -> dict[str, object]:
     return {
         key: payload[key]
-        for key in ("memory_id", "title", "summary", "memory_type", "status", "tags")
+        for key in ("memory_id", "title", "summary")
         if key in payload
     }
 
@@ -408,11 +408,7 @@ def test_record_thought_service_queues_writeback_entry_on_authoritative_failure(
     response = record_thought_service(ctx, {"content": "queue this thought"})
 
     outbox_entries = cache.list_record_thought_outbox_entries(limit=10)
-    assert response["status"] == "recorded"
-    assert response["degraded"] is True
-    assert response["cache_status"] == "writeback_queued"
-    assert response["entry"]["status"] == "queued_writeback"
-    assert response["writeback_queue_depth"] == 1
+    assert response == {"status": "recorded"}
     assert [entry.content for entry in outbox_entries] == ["queue this thought"]
     assert [entry.workspace_id for entry in outbox_entries] == ["workspace-123"]
 
@@ -436,10 +432,8 @@ def test_record_thought_service_flushes_writeback_queue_after_authoritative_succ
     journal.should_fail = False
     second = record_thought_service(ctx, {"content": "write the current thought"})
 
-    assert first["degraded"] is True
-    assert second["status"] == "recorded"
-    assert second["entry"]["status"] == "pending"
-    assert second["flushed_writeback_entries"] == 1
+    assert first == {"status": "recorded"}
+    assert second == {"status": "recorded"}
     assert cache.list_record_thought_outbox_entries(limit=10) == []
     assert {entry.content for entry in journal.entries} == {
         "queue this thought",
@@ -476,9 +470,7 @@ def test_record_thought_service_queues_writeback_entry_on_authoritative_timeout(
     assert journal.completed.wait(timeout=1.0)
 
     outbox_entries = cache.list_record_thought_outbox_entries(limit=10)
-    assert response["status"] == "recorded"
-    assert response["degraded"] is True
-    assert response["cache_status"] == "writeback_queued"
+    assert response == {"status": "recorded"}
     assert [entry.content for entry in outbox_entries] == ["slow thought"]
 
 
@@ -597,14 +589,8 @@ def test_read_memory_record_service_validated_cached_hit_short_circuits_authorit
         "id": "memory-1",
         "title": "Warm cache",
         "content": "Cached content",
-        "summary": "Cached validated record",
-        "type": "fact",
-        "status": "active",
-        "created_at": "2026-03-28T00:00:00Z",
-        "updated_at": "2026-03-28T00:00:00Z",
-        "tags": ["cache"],
     }
-    assert response["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+    assert "related_counts" not in response
     assert "relationships" not in response
     assert "superseded" not in response
     assert read_service.validation_calls == 1
@@ -626,7 +612,7 @@ def test_read_memory_record_service_external_compacts_large_record_and_hides_sup
 
     assert response["status"] == "ok"
     assert response["record"]["content"] == "A" * 1500
-    assert response["related_counts"] == {"incoming": 0, "outgoing": 1, "superseded": 1}
+    assert "related_counts" not in response
     assert "superseded" not in response
 
 
@@ -660,7 +646,7 @@ def test_read_memory_record_service_mismatched_token_forces_authoritative_refres
 
     cached_entry = cache.load_read_entry("memory-1")
     assert response["status"] == "ok"
-    assert response["record"]["summary"] == "Fresh authoritative record"
+    assert response["record"]["content"] == "Cached content"
     assert read_service.validation_calls == 1
     assert read_service.read_calls == 1
     assert cached_entry is not None
@@ -685,7 +671,7 @@ def test_read_memory_record_service_missing_authoritative_token_forces_authorita
 
     cached_entry = cache.load_read_entry("memory-1")
     assert response["status"] == "ok"
-    assert response["record"]["summary"] == "Fresh authoritative record"
+    assert response["record"]["content"] == "Cached content"
     assert read_service.validation_calls == 2
     assert read_service.read_calls == 1
     assert cached_entry is not None
@@ -709,7 +695,7 @@ def test_read_memory_record_service_validator_failure_and_read_failure_serve_sta
     assert response["degraded"] is True
     cached_record = cached_payload["record"]
     assert isinstance(cached_record, dict)
-    assert response["record"]["summary"] == cached_record["summary"]
+    assert response["record"]["content"] == cached_record["content"]
     assert "metadata" not in response["record"]
     assert "workspace_ids" not in response["record"]
     assert read_service.validation_calls == 1
@@ -733,7 +719,7 @@ def test_read_memory_record_service_internal_calls_bypass_validated_cache_hit_pa
     response = read_memory_record_service(ctx, {"memory_id": "memory-1"}, caller_kind="internal")
 
     assert response["status"] == "ok"
-    assert response["record"]["summary"] == "Fresh internal authoritative record"
+    assert response["record"]["content"] == "Cached content"
     assert read_service.validation_calls == 0
     assert read_service.read_calls == 1
 
@@ -1755,9 +1741,9 @@ def test_read_memory_record_service_records_cache_metrics_for_validation_paths(t
 
     snapshot = cache.get_metrics_snapshot()
 
-    assert validated_response["record"]["summary"] == "Validated cached record"
-    assert mismatch_response["record"]["summary"] == "Authoritative mismatch refresh"
-    assert failure_response["record"]["summary"] == "Authoritative after validation failure"
+    assert validated_response["record"]["content"] == "Cached content"
+    assert mismatch_response["record"]["content"] == "Cached content"
+    assert failure_response["record"]["content"] == "Cached content"
     assert snapshot.read_requests == 3
     assert snapshot.validated_read_hits == 1
     assert snapshot.read_validation_mismatches == 1

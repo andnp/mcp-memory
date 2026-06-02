@@ -8,7 +8,8 @@ def get_memory_tools() -> list[Tool]:
             description=(
                 "Capture a durable working memory such as a finding, decision, anomaly, hypothesis, trade-off, "
                 "or reusable next step. Prefer one self-contained thought with the conclusion, brief supporting "
-                "evidence, and why it matters. Avoid routine play-by-play or status-only updates with no durable takeaway."
+                "evidence, and why it matters. Avoid routine play-by-play or status-only updates with no durable takeaway. "
+                "Returns minimal status confirmation to save tokens."
             ),
             inputSchema={
                 "type": "object",
@@ -22,7 +23,8 @@ def get_memory_tools() -> list[Tool]:
             name="search_memory_records",
             description=(
                 "Search relational memory records with summary-first results. "
-                "Use summaries to choose promising memory_id values, then read only those records. "
+                "Results use compact format (memory_id, title, summary) to minimize tokens. "
+                "Use summaries to choose promising memory_id values, then read with read_memory_record. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             inputSchema={
@@ -45,8 +47,8 @@ def get_memory_tools() -> list[Tool]:
         Tool(
             name="read_memory_record",
             description=(
-                "Read one memory record. Returns compact content by default; request relationships, "
-                "superseded breadcrumbs, or metadata only when needed."
+                "Read one memory record. Returns minimal fields (id, title, content) by default to save tokens. "
+                "Request optional extras (relationships, superseded, metadata) only when needed."
             ),
             inputSchema={
                 "type": "object",

@@ -44,7 +44,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
     ]
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
     assert search_tool.description is not None
-    assert "follow up with read_memory_record" in search_tool.description
+    assert "read_memory_record" in search_tool.description
     read_tool = next(tool for tool in tools if tool.name == "read_memory_record")
     assert read_tool.description is not None
     assert read_tool.inputSchema == {
@@ -87,7 +87,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
     ]
     search_tool = next(tool for tool in tools if tool.name == "internal_search_memory_records")
     assert search_tool.description is not None
-    assert "follow up with internal_read_memory_record" in search_tool.description
+    assert "search memory records" in search_tool.description.lower()
     completion_tool = next(tool for tool in tools if tool.name == "task_complete")
     assert completion_tool.description is not None
     assert "instead of creating journal or memory records" in completion_tool.description
@@ -927,9 +927,7 @@ async def test_call_memory_tool_records_real_journal_entry(monkeypatch, tmp_path
         result = await call_memory_tool(runtime, "record_thought", {"content": "wire up mcp handlers"})
         payload = json.loads(result[0].text)
 
-        assert payload["status"] == "recorded"
-        assert payload["entry"]["content"] == "wire up mcp handlers"
-        assert payload["entry"]["workspace_id"] == runtime.workspace_id
+        assert payload == {"status": "recorded"}
     finally:
         runtime.close()
 

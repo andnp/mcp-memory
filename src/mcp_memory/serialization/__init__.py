@@ -6,6 +6,7 @@ from mcp_memory.serialization.memory import (
     link_payload,
     memory_record_payload,
     search_result_payload,
+    search_result_payload_compact,
     search_result_payload_with_debug_fields,
     task_payload,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "link_payload",
     "memory_record_payload",
     "search_result_payload",
+    "search_result_payload_compact",
     "search_result_payload_with_debug_fields",
     "task_payload",
 ]

@@ -35,13 +35,9 @@ async def test_record_thought_enqueues_single_ingest_task_at_threshold(
         )
         next_payload = json.loads(next_response[0].text)
 
-        for payload in payloads[: SYSTEM1_INGEST_THRESHOLD - 1]:
-            assert "ingest_task" not in payload
-        threshold_payload = payloads[-1]
-        assert threshold_payload["ingest_task"]["task_name"] == "ingest-system1"
-        assert threshold_payload["ingest_task"]["created"] is False
-        assert next_payload["ingest_task"]["id"] == threshold_payload["ingest_task"]["id"]
-        assert next_payload["ingest_task"]["created"] is False
+        for payload in payloads:
+            assert payload == {"status": "recorded"}
+        assert next_payload == {"status": "recorded"}
 
         assert runtime.task_queue is not None
         counts = runtime.task_queue.count_by_status()
