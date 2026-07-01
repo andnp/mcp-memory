@@ -96,3 +96,53 @@ class FakeSubprocessInstaller:
         if not self.processes:
             raise AssertionError("No fake subprocesses configured")
         return self.processes.popleft()
+
+
+@dataclass
+class FakeCopilotSessionEvent:
+    data: Any
+
+
+@dataclass
+class FakeCopilotSession:
+    events: deque[Any] = field(default_factory=deque)
+    error: Exception | None = None
+    sent_prompts: list[str] = field(default_factory=list)
+    disconnected: bool = False
+
+    async def send_and_wait(self, prompt: str, *, timeout: float = 60.0) -> Any:
+        self.sent_prompts.append(prompt)
+        if self.error is not None:
+            raise self.error
+        if not self.events:
+            return None
+        return self.events.popleft()
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+
+
+@dataclass
+class FakeCopilotClient:
+    session: FakeCopilotSession
+    create_session_calls: list[dict[str, Any]] = field(default_factory=list)
+
+    async def __aenter__(self) -> "FakeCopilotClient":
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> bool:
+        return False
+
+    async def create_session(self, **kwargs: Any) -> FakeCopilotSession:
+        self.create_session_calls.append(kwargs)
+        return self.session
+
+
+@dataclass
+class FakeCopilotClientFactory:
+    client: FakeCopilotClient
+    init_calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def __call__(self, **kwargs: Any) -> FakeCopilotClient:
+        self.init_calls.append(kwargs)
+        return self.client

@@ -2,8 +2,12 @@ import asyncio
 import json
 import signal
 import time
+from collections import deque
 
 import pytest
+
+from copilot.session_events import AssistantMessageData
+from copilot.session_events import SessionErrorData
 
 from mcp_memory.core.providers import (
     AgenticRunResult,
@@ -14,6 +18,9 @@ from mcp_memory.core.providers import (
     OllamaCLIProvider,
     OpenCodeCLIProvider,
 )
+from mcp_memory.core.providers import copilot_sdk as copilot_sdk_module
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
+from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers._json_cli import ProviderBackoffError
 from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
@@ -27,6 +34,10 @@ from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from tests.sdk.providers import FakeAsyncProcess
+from tests.sdk.providers import FakeCopilotClient
+from tests.sdk.providers import FakeCopilotClientFactory
+from tests.sdk.providers import FakeCopilotSession
+from tests.sdk.providers import FakeCopilotSessionEvent
 
 
 pytestmark = pytest.mark.medium
@@ -439,6 +450,81 @@ async def test_copilot_agentic_provider_prefers_json_result_over_trailing_non_js
 
     assert result.summary == "Structured answer."
     assert result.parsed == {"summary": "Structured answer."}
+
+
+def _patch_copilot_client(monkeypatch, client: FakeCopilotClient) -> FakeCopilotClientFactory:
+    factory = FakeCopilotClientFactory(client=client)
+    monkeypatch.setattr(copilot_sdk_module, "CopilotClient", factory)
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_provider_returns_parsed_json(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content='{"actions": []}', message_id="m1"))])
+    )
+    factory = _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKProvider(model="gpt-5.4-mini", max_retries=0, cwd="/tmp/workspace")
+    result = await provider.ask("summarize these memories")
+
+    assert result == {"actions": []}
+    assert factory.client.create_session_calls[0]["model"] == "gpt-5.4-mini"
+    assert session.sent_prompts == ["summarize these memories"]
+    assert session.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_provider_retries_after_session_error(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque(
+            [
+                FakeCopilotSessionEvent(data=SessionErrorData(error_type="rate_limit", message="temporary failure")),
+                FakeCopilotSessionEvent(data=AssistantMessageData(content='{"actions": []}', message_id="m2")),
+            ]
+        )
+    )
+    _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKProvider(model="gpt-5.4-mini", max_retries=1)
+    result = await provider.ask("retry this request")
+
+    assert result == {"actions": []}
+    assert len(session.sent_prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_provider_raises_after_exhausting_retries(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=SessionErrorData(error_type="rate_limit", message="still failing"))])
+    )
+    _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKProvider(model="gpt-5.4-mini", max_retries=0)
+
+    with pytest.raises(RuntimeError, match="still failing"):
+        await provider.ask("give up")
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_agentic_provider_scopes_mcp_tools_to_workspace(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content='{"summary": "Performed maintenance."}', message_id="m3"))])
+    )
+    factory = _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKAgenticProvider(model="gpt-5.4-mini", max_retries=0, cwd="/tmp/workspace")
+    result = await provider.run_agent("Clean up the memory store.")
+
+    assert result.status == "success"
+    assert result.summary == "Performed maintenance."
+    mcp_servers = factory.client.create_session_calls[0]["mcp_servers"]
+    server_config = mcp_servers["mcp-memory-internal"]
+    assert server_config["command"] == "uv"
+    assert server_config["args"] == ["run", "mcp-memory", "internal-run", "--workspace-root", "/tmp/workspace"]
+    assert server_config["cwd"] == "/tmp/workspace"
+    assert "internal_search_memory_records" in server_config["tools"]
+    assert "internal_get_next_curator_batch" in server_config["tools"]
 
 
 @pytest.mark.asyncio

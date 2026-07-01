@@ -3,6 +3,10 @@ from tests.sdk.providers import (
     ConsolidationResponseFactory,
     FakeAIProvider,
     FakeAsyncProcess,
+    FakeCopilotClient,
+    FakeCopilotClientFactory,
+    FakeCopilotSession,
+    FakeCopilotSessionEvent,
 )
 
 __all__ = [
@@ -11,4 +15,8 @@ __all__ = [
     "ConsolidationResponseFactory",
     "FakeAIProvider",
     "FakeAsyncProcess",
+    "FakeCopilotClient",
+    "FakeCopilotClientFactory",
+    "FakeCopilotSession",
+    "FakeCopilotSessionEvent",
 ]
