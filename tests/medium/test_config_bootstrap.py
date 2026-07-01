@@ -101,12 +101,12 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
         'gemini-cheap = 20\n'
         "\n"
         "[provider_routing.profiles.copilot-mini]\n"
-        'provider = "copilot-cli"\n'
+        'provider = "copilot-sdk"\n'
         'model = "gpt-5-mini"\n'
         'max_retries = 0\n'
         "\n"
         "[provider_routing.profiles.gemini-cheap]\n"
-        'provider = "gemini-cli"\n'
+        'provider = "copilot-sdk"\n'
         'model = "gemini-3-flash-preview"\n'
         'max_retries = 0\n',
         encoding="utf-8",
@@ -124,7 +124,7 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
     assert config.provider_routing.task_classes["ingest-system1"] == "cheap_agentic"
     assert config.provider_routing.task_classes["summarize-memory"] == "deterministic"
     assert config.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
-    assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
+    assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-sdk"
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
 
 

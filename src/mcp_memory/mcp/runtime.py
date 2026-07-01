@@ -188,7 +188,7 @@ def _build_provider_registry(
     def add_profile(profile_key: str, ai_config) -> None:
         budget_limit = config.provider_routing.profile_daily_call_limits.get(profile_key)
         bundle: dict[str, object] = {}
-        json_provider = build_json_ai_provider(ai_config, config, workspace_root)
+        json_provider = build_json_ai_provider(ai_config, workspace_root)
         if json_provider is not None and _provider_command_available(json_provider):
             bundle["json"] = InstrumentedAIProvider(
                 json_provider,
@@ -204,7 +204,7 @@ def _build_provider_registry(
                 model_burst_call_limit=config.provider_routing.model_burst_call_limit,
                 model_burst_window_seconds=config.provider_routing.model_burst_window_seconds,
             )
-        agentic_provider = build_agentic_ai_provider(ai_config, config, workspace_root)
+        agentic_provider = build_agentic_ai_provider(ai_config, workspace_root)
         if agentic_provider is not None and _provider_command_available(agentic_provider):
             bundle["agentic"] = InstrumentedAIProvider(
                 agentic_provider,

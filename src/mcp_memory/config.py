@@ -82,10 +82,8 @@ class AIConfig:
     max_retries: int = 0
 
     def __post_init__(self) -> None:
-        if self.provider not in {"none", "gemini-cli", "copilot-cli", "copilot-sdk", "opencode", "ollama"}:
-            raise ValueError(
-                "ai.provider must be one of 'none', 'gemini-cli', 'copilot-cli', 'copilot-sdk', 'opencode', or 'ollama'"
-            )
+        if self.provider not in {"none", "copilot-sdk"}:
+            raise ValueError("ai.provider must be one of 'none' or 'copilot-sdk'")
         if self.timeout_seconds <= 0:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
@@ -181,25 +179,6 @@ class IngestEscalationConfig:
         if self.preview_entry_limit < 1:
             raise ValueError("ingest_escalation.preview_entry_limit must be >= 1")
 
-
-@dataclass
-class GeminiCLIConfig:
-    command: str = "gemini"
-
-
-@dataclass
-class CopilotCLIConfig:
-    command: str = "copilot"
-
-
-@dataclass
-class OpenCodeCLIConfig:
-    command: str = "opencode"
-
-
-@dataclass
-class OllamaCLIConfig:
-    command: str = "ollama"
 
 
 @dataclass
@@ -386,10 +365,6 @@ class SearchRankingConfig:
 @dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    gemini_cli: GeminiCLIConfig = field(default_factory=GeminiCLIConfig)
-    copilot_cli: CopilotCLIConfig = field(default_factory=CopilotCLIConfig)
-    opencode: OpenCodeCLIConfig = field(default_factory=OpenCodeCLIConfig)
-    ollama: OllamaCLIConfig = field(default_factory=OllamaCLIConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     backups: BackupsConfig = field(default_factory=BackupsConfig)
@@ -628,10 +603,6 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
 
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     document = tomlkit.document()
-    document["gemini_cli"] = {"command": "gemini"}
-    document["copilot_cli"] = {"command": "copilot"}
-    document["opencode"] = {"command": "opencode"}
-    document["ollama"] = {"command": "ollama"}
     document["storage"] = {
         "backend": "sqlite",
         "sqlite": {
@@ -744,10 +715,6 @@ def load_config(config_path: Path | None = None) -> Config:
 
     return Config(
         memory=_load_memory_config(raw.get("memory", {})),
-        gemini_cli=_load_dataclass_from_dict(GeminiCLIConfig, raw.get("gemini_cli", {})),
-        copilot_cli=_load_dataclass_from_dict(CopilotCLIConfig, raw.get("copilot_cli", {})),
-        opencode=_load_dataclass_from_dict(OpenCodeCLIConfig, raw.get("opencode", {})),
-        ollama=_load_dataclass_from_dict(OllamaCLIConfig, raw.get("ollama", {})),
         storage=_load_storage_config(raw.get("storage", {})),
         daemon=_load_dataclass_from_dict(DaemonConfig, raw.get("daemon", {})),
         backups=_load_dataclass_from_dict(BackupsConfig, raw.get("backups", {})),

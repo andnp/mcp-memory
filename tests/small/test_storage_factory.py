@@ -540,9 +540,9 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         config=Config(
             provider_routing=ProviderRoutingConfig(
                 profiles={
-                    "gemini-cheap": AIConfig(
-                        provider="gemini-cli",
-                        model="gemini-2.5-pro",
+                    "copilot-mini": AIConfig(
+                        provider="copilot-sdk",
+                        model="gpt-5-mini",
                     )
                 },
             ),
@@ -585,10 +585,10 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         storage=storage,
     )
 
-    assert set(registry) == {"gemini-cheap"}
-    assert set(registry["gemini-cheap"]) == {"json", "agentic"}
-    json_instrumented = registry["gemini-cheap"]["json"]
-    agentic_instrumented = registry["gemini-cheap"]["agentic"]
+    assert set(registry) == {"copilot-mini"}
+    assert set(registry["copilot-mini"]) == {"json", "agentic"}
+    json_instrumented = registry["copilot-mini"]["json"]
+    agentic_instrumented = registry["copilot-mini"]["agentic"]
     assert isinstance(json_instrumented, InstrumentedAIProvider)
     assert isinstance(agentic_instrumented, InstrumentedAIProvider)
     assert json_instrumented._task_queue is None

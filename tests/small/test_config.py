@@ -53,10 +53,6 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4-mini"
     assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-sdk"
     assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
-    assert loaded.gemini_cli.command == "gemini"
-    assert loaded.copilot_cli.command == "copilot"
-    assert loaded.opencode.command == "opencode"
-    assert loaded.ollama.command == "ollama"
     assert loaded.storage.backend == "sqlite"
     assert loaded.storage.sqlite.path == ""
     assert loaded.storage.postgres.pool_min == 1

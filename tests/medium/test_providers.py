@@ -1,6 +1,5 @@
 import asyncio
 import json
-import signal
 import time
 from collections import deque
 
@@ -9,15 +8,7 @@ import pytest
 from copilot.session_events import AssistantMessageData
 from copilot.session_events import SessionErrorData
 
-from mcp_memory.core.providers import (
-    AgenticRunResult,
-    CopilotCLIAgenticProvider,
-    CopilotCLIProvider,
-    GeminiCLIAgenticProvider,
-    GeminiCLIProvider,
-    OllamaCLIProvider,
-    OpenCodeCLIProvider,
-)
+from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.providers import copilot_sdk as copilot_sdk_module
 from mcp_memory.core.providers.copilot_sdk import CopilotSDKAgenticProvider
 from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
@@ -33,7 +24,6 @@ from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
-from tests.sdk.providers import FakeAsyncProcess
 from tests.sdk.providers import FakeCopilotClient
 from tests.sdk.providers import FakeCopilotClientFactory
 from tests.sdk.providers import FakeCopilotSession
@@ -42,414 +32,6 @@ from tests.sdk.providers import FakeCopilotSessionEvent
 
 pytestmark = pytest.mark.medium
 
-
-class _DelayedFakeProcess(FakeAsyncProcess):
-    def __init__(self, *, delay_seconds: float, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.delay_seconds = delay_seconds
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        await asyncio.sleep(self.delay_seconds)
-        return await super().communicate()
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_returns_parsed_json(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stdout_text='{"session_id":"abc","response":"{\\"actions\\": []}"}')
-    )
-
-    provider = GeminiCLIProvider(
-        command="gemini",
-        model="gemini-3-flash-preview",
-        max_retries=0,
-    )
-
-    result = await provider.ask("summarize these memories")
-
-    assert result == {"actions": []}
-    assert len(install_fake_subprocess.calls) == 1
-    args, kwargs = install_fake_subprocess.calls[0]
-    assert args[:6] == (
-        "gemini",
-        "--model",
-        "gemini-3-flash-preview",
-        "--output-format",
-        "json",
-        "--prompt",
-    )
-    assert args[6] == "summarize these memories"
-    assert kwargs == {"stdout": -1, "stderr": -1}
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_preserves_plain_json_objects(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(FakeAsyncProcess(stdout_text='{"actions": []}'))
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    result = await provider.ask("plain json still works")
-
-    assert result == {"actions": []}
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_parses_embedded_json(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stdout_text='debug output\n{"actions": [{"type": "ignore", "entry_indices": [0]}]}\n')
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    result = await provider.ask("decide what to ignore")
-
-    assert result["actions"][0]["type"] == "ignore"
-    assert result["actions"][0]["entry_indices"] == [0]
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_retries_after_failed_process(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stderr_text="temporary failure", returncode=1),
-        FakeAsyncProcess(stdout_text='{"actions": []}'),
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=1)
-
-    result = await provider.ask("retry this request")
-
-    assert result == {"actions": []}
-    assert len(install_fake_subprocess.calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_reports_signal_name_for_negative_exit(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stderr_text="terminated externally", returncode=-signal.SIGTERM)
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    with pytest.raises(RuntimeError, match="failed after 1 attempts") as exc_info:
-        await provider.ask("retry this request")
-
-    assert str(exc_info.value) == (
-        "Gemini CLI failed after 1 attempts: "
-        "Terminated by signal SIGTERM (15): terminated externally"
-    )
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_reports_unknown_negative_exit_signal_number(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stderr_text="terminated externally", returncode=-999)
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    with pytest.raises(RuntimeError, match="failed after 1 attempts") as exc_info:
-        await provider.ask("retry this request")
-
-    assert str(exc_info.value) == (
-        "Gemini CLI failed after 1 attempts: "
-        "Terminated by signal 999: terminated externally"
-    )
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_raises_backoff_error_for_quota_exhaustion(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stderr_text=(
-                "TerminalQuotaError: You have exhausted your capacity on this model. "
-                "Your quota will reset after 3h50m47s.\nretryDelayMs: 13847179.189666"
-            ),
-            returncode=1,
-        )
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    with pytest.raises(ProviderBackoffError) as exc_info:
-        await provider.ask("retry this request")
-
-    assert exc_info.value.retry_delay_seconds == pytest.approx(13847.179189666)
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_raises_authentication_required_for_browser_auth_prompt(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stdout_text="Opening authentication page in your browser. Do you want to continue? [Y/n]:"
-        )
-    )
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0)
-
-    with pytest.raises(ProviderAuthenticationRequired) as exc_info:
-        await provider.ask("retry this request")
-
-    assert exc_info.value.provider_name == "Gemini CLI"
-    assert exc_info.value.error_text == "Interactive authentication required"
-
-
-@pytest.mark.asyncio
-async def test_gemini_cli_provider_emits_heartbeat_while_waiting(
-    install_fake_subprocess,
-    monkeypatch,
-) -> None:
-    install_fake_subprocess.add(
-        _DelayedFakeProcess(delay_seconds=0.03, pid=8888, stdout_text='{"actions": []}')
-    )
-    monkeypatch.setattr(
-        "mcp_memory.core.providers._json_cli.PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS",
-        0.01,
-    )
-    events: list[object] = []
-
-    provider = GeminiCLIProvider(command="gemini", max_retries=0).with_observer(events.append)
-
-    result = await provider.ask("wait for heartbeat")
-
-    heartbeat_events = [event for event in events if isinstance(event, ProviderAttemptHeartbeatEvent)]
-    assert result == {"actions": []}
-    assert isinstance(events[0], ProviderAttemptStartedEvent)
-    assert heartbeat_events
-    assert isinstance(events[-1], ProviderAttemptFinishedEvent)
-    assert heartbeat_events[0].subprocess_pid == 8888
-    assert heartbeat_events[0].elapsed_seconds >= 0.0
-
-
-@pytest.mark.asyncio
-async def test_gemini_agentic_provider_uses_yolo_mode_and_allowed_mcp_server(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stdout_text='{"summary": "Performed maintenance."}')
-    )
-
-    provider = GeminiCLIAgenticProvider(
-        command="gemini",
-        model="gemini-3-flash-preview",
-        max_retries=0,
-        cwd="/tmp/workspace",
-    )
-
-    result = await provider.run_agent("Clean up the memory store.")
-
-    assert result.status == "success"
-    assert result.summary == "Performed maintenance."
-    assert len(install_fake_subprocess.calls) == 1
-    args, kwargs = install_fake_subprocess.calls[0]
-    assert args == (
-        "gemini",
-        "--model",
-        "gemini-3-flash-preview",
-        "--prompt",
-        "Clean up the memory store.",
-        "--output-format",
-        "json",
-        "--approval-mode",
-        "yolo",
-        "--allowed-mcp-server-names",
-        "mcp-memory-internal",
-    )
-    assert kwargs == {"stdout": -1, "stderr": -1, "cwd": "/tmp/workspace"}
-
-
-@pytest.mark.asyncio
-async def test_gemini_agentic_provider_extracts_nested_summary_from_mixed_response(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stdout_text=json.dumps(
-                {
-                    "response": (
-                        "I performed maintenance.\n\n"
-                        '{"summary": "Split oversized records into focused entries."}'
-                    )
-                }
-            )
-        )
-    )
-
-    provider = GeminiCLIAgenticProvider(
-        command="gemini",
-        model="gemini-3-flash-preview",
-        max_retries=0,
-    )
-
-    result = await provider.run_agent("Clean up the memory store.")
-
-    assert result.status == "success"
-    assert result.summary == "Split oversized records into focused entries."
-
-
-@pytest.mark.asyncio
-async def test_gemini_agentic_provider_raises_backoff_error_for_quota_exhaustion(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stderr_text=(
-                "TerminalQuotaError: You have exhausted your capacity on this model. "
-                "Your quota will reset after 59m59s.\nretryDelayMs: 3599000"
-            ),
-            returncode=1,
-        )
-    )
-
-    provider = GeminiCLIAgenticProvider(command="gemini", max_retries=0)
-
-    with pytest.raises(ProviderBackoffError) as exc_info:
-        await provider.run_agent("Clean up the memory store.")
-
-    assert exc_info.value.retry_delay_seconds == pytest.approx(3599.0)
-
-
-@pytest.mark.asyncio
-async def test_other_cli_providers_use_expected_commands(install_fake_subprocess) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(stdout_text='{"type":"assistant.message","data":{"content":"{\\"ok\\": true}"}}'),
-        FakeAsyncProcess(stdout_text='{"ok": true}'),
-        FakeAsyncProcess(stdout_text='{"ok": true}'),
-    )
-
-    copilot = CopilotCLIProvider(command="copilot", model="gpt-5.4", max_retries=0)
-    opencode = OpenCodeCLIProvider(command="opencode", model="gpt-5.4-mini", max_retries=0)
-    ollama = OllamaCLIProvider(command="ollama", model="llama3.1:8b", max_retries=0)
-
-    assert await copilot.ask("link these memories") == {"ok": True}
-    assert await opencode.ask("summarize this") == {"ok": True}
-    assert await ollama.ask("detect conflicts") == {"ok": True}
-
-    assert install_fake_subprocess.calls[0][0] == (
-        "copilot",
-        "--model",
-        "gpt-5.4",
-        "--output-format",
-        "json",
-        "--stream",
-        "off",
-        "--silent",
-        "--no-ask-user",
-        "--no-custom-instructions",
-        "--prompt",
-        "link these memories",
-    )
-    assert install_fake_subprocess.calls[1][0] == (
-        "opencode",
-        "ask",
-        "--model",
-        "gpt-5.4-mini",
-        "--json",
-        "summarize this",
-    )
-    assert install_fake_subprocess.calls[2][0] == (
-        "ollama",
-        "run",
-        "llama3.1:8b",
-        "detect conflicts",
-    )
-
-
-@pytest.mark.asyncio
-async def test_copilot_agentic_provider_uses_inline_mcp_config_without_autopilot(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stdout_text='{"type":"assistant.message","data":{"content":"{\\"summary\\": \\\"Performed maintenance.\\\"}"}}'
-        )
-    )
-
-    provider = CopilotCLIAgenticProvider(
-        command="copilot",
-        model="gpt-5-mini",
-        max_retries=0,
-        cwd="/tmp/workspace",
-    )
-
-    result = await provider.run_agent("Clean up the memory store.")
-
-    assert result.status == "success"
-    assert result.summary == "Performed maintenance."
-    args, kwargs = install_fake_subprocess.calls[0]
-    assert args[:11] == (
-        "copilot",
-        "--model",
-        "gpt-5-mini",
-        "--output-format",
-        "json",
-        "--stream",
-        "off",
-        "--silent",
-        "--no-ask-user",
-        "--no-custom-instructions",
-        "--allow-all-tools",
-    )
-    assert args[11] == "--available-tools"
-    available_tools = args[12]
-    assert "mcp-memory-internal-task_complete" in available_tools
-    assert "mcp-memory-internal-internal_task_complete" in available_tools
-    assert "mcp-memory-internal-internal_search_memory_records" in available_tools
-    assert "mcp-memory-internal-internal_read_memory_record" in available_tools
-    assert "mcp-memory-internal-internal_get_compatible_work_batch" in available_tools
-    assert "mcp-memory-internal-internal_complete_work_item" in available_tools
-    assert args[13] == "--additional-mcp-config"
-    mcp_config = json.loads(args[14])
-    assert mcp_config["mcpServers"]["mcp-memory-internal"]["type"] == "stdio"
-    assert mcp_config["mcpServers"]["mcp-memory-internal"]["command"] == "uv"
-    assert mcp_config["mcpServers"]["mcp-memory-internal"]["args"] == [
-        "run",
-        "mcp-memory",
-        "internal-run",
-        "--workspace-root",
-        "/tmp/workspace",
-    ]
-    assert args[15:17] == ("--prompt", "Clean up the memory store.")
-    assert kwargs == {"stdout": -1, "stderr": -1, "cwd": "/tmp/workspace"}
-
-
-@pytest.mark.asyncio
-async def test_copilot_agentic_provider_prefers_json_result_over_trailing_non_json_messages(
-    install_fake_subprocess,
-) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stdout_text="\n".join(
-                [
-                    '{"type":"assistant.message","data":{"content":"planning to search"}}',
-                    '{"type":"assistant.message","data":{"content":"{\\"summary\\": \\\"Structured answer.\\\"}"}}',
-                    '{"type":"assistant.message","data":{"content":"Task completed but no task_complete tool exists."}}',
-                ]
-            )
-        )
-    )
-
-    provider = CopilotCLIAgenticProvider(command="copilot", max_retries=0)
-
-    result = await provider.run_agent("Return a structured answer.")
-
-    assert result.summary == "Structured answer."
-    assert result.parsed == {"summary": "Structured answer."}
 
 
 def _patch_copilot_client(monkeypatch, client: FakeCopilotClient) -> FakeCopilotClientFactory:
@@ -785,9 +367,35 @@ async def test_instrumented_provider_persists_upstream_backoff_and_later_reports
 @pytest.mark.asyncio
 async def test_instrumented_provider_records_subprocess_and_conversation(
     db_manager,
-    install_fake_subprocess,
 ) -> None:
-    install_fake_subprocess.add(FakeAsyncProcess(pid=7777, stdout_text='{"actions": []}'))
+    class _SubprocessBackedProvider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _SubprocessBackedProvider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                ProviderAttemptStartedEvent(attempt=1, prompt=prompt, subprocess_pid=7777, started_at=10.0)
+            )
+            self._observer(
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=7777,
+                    started_at=10.0,
+                    completed_at=10.5,
+                    duration_seconds=0.5,
+                    status="success",
+                    returncode=0,
+                    raw_text='{"actions": []}',
+                    parsed={"actions": []},
+                    error_text=None,
+                )
+            )
+            return {"actions": []}
 
     queue = SQLiteTaskQueue(db_manager)
     task = queue.enqueue("graph-linker", workspace_id="workspace-a", available_at=0.0, task_id="graph-linker-1")
@@ -796,11 +404,11 @@ async def test_instrumented_provider_records_subprocess_and_conversation(
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
     attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
     provider = InstrumentedAIProvider(
-        GeminiCLIProvider(command="gemini", model="gemini-3-flash-preview", max_retries=0),
+        _SubprocessBackedProvider(),
         usage_repository=repository,
-        provider_key="gemini-cli",
-        provider_name="Gemini CLI",
-        model_name="gemini-3-flash-preview",
+        provider_key="copilot-strong",
+        provider_name="Copilot SDK Agentic",
+        model_name="gpt-5.4-mini",
         task_queue=queue,
         task_execution_attempts=attempt_repository,
     ).with_usage_context(
@@ -1316,21 +924,47 @@ async def test_instrumented_provider_finalizes_running_conversation_on_error(db_
 @pytest.mark.asyncio
 async def test_instrumented_provider_records_auth_required_reason_for_browser_auth_prompt(
     db_manager,
-    install_fake_subprocess,
 ) -> None:
-    install_fake_subprocess.add(
-        FakeAsyncProcess(
-            stdout_text="Opening authentication page in your browser. Do you want to continue? [Y/n]:"
-        )
-    )
+    class _AuthRequiredProvider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _AuthRequiredProvider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                ProviderAttemptStartedEvent(attempt=1, prompt=prompt, subprocess_pid=None, started_at=10.0)
+            )
+            self._observer(
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=None,
+                    started_at=10.0,
+                    completed_at=10.1,
+                    duration_seconds=0.1,
+                    status="auth_required",
+                    returncode=None,
+                    raw_text="Opening authentication page in your browser. Do you want to continue? [Y/n]:",
+                    parsed=None,
+                    error_text="Interactive authentication required",
+                    reason_category="auth",
+                    reason_code="interactive_auth_required",
+                )
+            )
+            raise ProviderAuthenticationRequired(
+                "Copilot SDK Agentic", error_text="Interactive authentication required"
+            )
 
     repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
     provider = InstrumentedAIProvider(
-        GeminiCLIProvider(command="gemini", model="gemini-3-flash-preview", max_retries=0),
+        _AuthRequiredProvider(),
         usage_repository=repository,
-        provider_key="gemini-cli",
-        provider_name="Gemini CLI",
-        model_name="gemini-3-flash-preview",
+        provider_key="copilot-mini",
+        provider_name="Copilot SDK Agentic",
+        model_name="gpt-5-mini",
     ).with_usage_context(task_name="taxonomist", task_id="task-auth", workspace_id="workspace-a")
 
     with pytest.raises(ProviderAuthenticationRequired):

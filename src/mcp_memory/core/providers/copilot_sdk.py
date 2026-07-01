@@ -14,6 +14,7 @@ from copilot.session_events import SessionErrorData
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers._json_cli import PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS
 from mcp_memory.core.providers._json_cli import build_cli_failure_exception
+from mcp_memory.core.providers._json_cli import chain_observers
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
@@ -51,7 +52,7 @@ class CopilotSDKProvider:
         if existing is None:
             clone._observer = observer
         else:
-            clone._observer = _chain_observers(existing, observer)
+            clone._observer = chain_observers(existing, observer)
         return clone
 
     async def ask_json(self, prompt: str) -> dict[str, Any]:
@@ -280,11 +281,3 @@ def _extract_summary(parsed: dict[str, Any] | None) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _chain_observers(*observers: ProviderObserver) -> ProviderObserver:
-    def _notify(payload: ProviderObserverEvent) -> None:
-        for observer in observers:
-            observer(payload)
-
-    return _notify

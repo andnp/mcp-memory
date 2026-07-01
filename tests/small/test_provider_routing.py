@@ -63,8 +63,8 @@ def test_provider_for_task_uses_fallback_route_when_first_provider_is_over_budge
             provider_routing=ProviderRoutingConfig(
                 task_routes={"summarize-memory": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -102,7 +102,7 @@ def test_provider_for_task_falls_back_to_legacy_default_when_routed_profile_is_u
         config=Config(
             provider_routing=ProviderRoutingConfig(
                 task_routes={"summarize-memory": ["copilot-mini"]},
-                profiles={"copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini")},
+                profiles={"copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini")},
             ),
         ),
         ai_provider_registry={},
@@ -136,8 +136,8 @@ def test_provider_for_taxonomist_uses_next_json_route_before_legacy_default() ->
             provider_routing=ProviderRoutingConfig(
                 task_routes={"taxonomist": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -180,8 +180,8 @@ def test_provider_for_task_uses_next_route_when_first_model_is_burst_limited() -
             provider_routing=ProviderRoutingConfig(
                 task_routes={"taxonomist": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
                 model_burst_call_limit=1,
                 model_burst_window_seconds=600.0,
@@ -229,7 +229,7 @@ def test_provider_for_runtime_providerless_structural_seeders_returns_none_even_
                     "conflict-detector": ["gemini-cheap"],
                 },
                 profiles={
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -276,7 +276,7 @@ def test_provider_for_runtime_providerless_structural_seeders_ignores_task_class
                     "conflict-detector": ["gemini-cheap"],
                 },
                 profiles={
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -317,8 +317,8 @@ def test_provider_for_task_returns_none_when_all_routed_providers_are_over_budge
             provider_routing=ProviderRoutingConfig(
                     task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -357,7 +357,7 @@ def test_provider_for_taxonomist_prefers_default_non_agentic_routes() -> None:
         config=Config(
             provider_routing=ProviderRoutingConfig(
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
                 },
             ),
         ),
@@ -418,8 +418,8 @@ def test_provider_for_task_records_first_class_route_events_when_routes_exhauste
             provider_routing=ProviderRoutingConfig(
                 task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -455,8 +455,8 @@ def test_provider_for_task_throttles_duplicate_routed_warning_logs(caplog) -> No
             provider_routing=ProviderRoutingConfig(
                 task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
                 profiles={
-                    "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                    "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                    "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                    "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
                 },
             ),
         ),
@@ -570,7 +570,7 @@ def test_select_provider_for_inputs_matches_context_wrapper_for_route_selection(
         provider_routing=ProviderRoutingConfig(
             task_routes={"taxonomist": ["gemini-cheap"]},
             profiles={
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
@@ -617,7 +617,7 @@ def test_select_provider_for_request_matches_task_wrapper_for_route_selection() 
         provider_routing=ProviderRoutingConfig(
             task_routes={"taxonomist": ["gemini-cheap"]},
             profiles={
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
@@ -702,7 +702,7 @@ def test_build_task_route_audit_selects_provider_without_fabricated_task_record(
                 "taxonomist": ["gemini-cheap"],
             },
             profiles={
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
@@ -782,7 +782,7 @@ def test_build_task_route_audit_suppresses_runtime_only_structural_seeder_provid
                 "conflict-detector": ["gemini-cheap"],
             },
             profiles={
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
@@ -824,7 +824,7 @@ def test_build_task_route_audit_keeps_providerless_structural_seeders_determinis
                 "conflict-detector": ["gemini-cheap"],
             },
             profiles={
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
@@ -879,8 +879,8 @@ def test_select_provider_for_request_records_real_route_skip_but_route_audit_doe
         provider_routing=ProviderRoutingConfig(
             task_routes={"graph-linker": ["copilot-mini", "gemini-cheap"]},
             profiles={
-                "copilot-mini": AIConfig(provider="copilot-cli", model="gpt-5-mini"),
-                "gemini-cheap": AIConfig(provider="gemini-cli", model="gemini-3-flash-preview"),
+                "copilot-mini": AIConfig(provider="copilot-sdk", model="gpt-5-mini"),
+                "gemini-cheap": AIConfig(provider="copilot-sdk", model="gemini-3-flash-preview"),
             },
         ),
     )
