@@ -38,24 +38,21 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
 
     assert created == config_path
     assert config_path.exists()
-    assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini", "gemini-cheap"]
-    assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini", "gemini-cheap"]
-    assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "gemini-strong", "gemini-cheap"]
+    assert loaded.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
+    assert loaded.provider_routing.task_routes["deduplicator"] == ["copilot-mini"]
+    assert loaded.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "copilot-mini"]
     assert loaded.provider_routing.fallback_to_json_only is False
     assert loaded.provider_routing.task_classes["memory-curator"] == "premium_agentic"
     assert loaded.provider_routing.task_classes["summarize-memory"] == "deterministic"
     assert loaded.provider_routing.low_priority_task_names == ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"]
     assert loaded.provider_routing.profile_daily_call_limits["copilot-strong"] == 20
     assert loaded.provider_routing.profile_daily_call_limits["copilot-mini"] == 50
-    assert loaded.provider_routing.profile_daily_call_limits["gemini-cheap"] == 100
     assert loaded.provider_routing.model_burst_call_limit == 2
     assert loaded.provider_routing.model_burst_window_seconds == 300.0
-    assert loaded.provider_routing.profiles["copilot-strong"].provider == "copilot-cli"
+    assert loaded.provider_routing.profiles["copilot-strong"].provider == "copilot-sdk"
     assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4-mini"
-    assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-cli"
+    assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-sdk"
     assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
-    assert loaded.provider_routing.profiles["gemini-cheap"].provider == "gemini-cli"
-    assert loaded.provider_routing.profiles["gemini-cheap"].model == "gemini-3-flash-preview"
     assert loaded.gemini_cli.command == "gemini"
     assert loaded.copilot_cli.command == "copilot"
     assert loaded.opencode.command == "opencode"

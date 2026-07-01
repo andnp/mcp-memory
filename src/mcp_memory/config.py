@@ -77,13 +77,15 @@ class MemoryConfig:
 @dataclass
 class AIConfig:
     provider: str = "none"
-    model: str = "gemini-3-flash-preview"
+    model: str = "gpt-5.4-mini"
     timeout_seconds: float = 900.0
     max_retries: int = 0
 
     def __post_init__(self) -> None:
-        if self.provider not in {"none", "gemini-cli", "copilot-cli", "opencode", "ollama"}:
-            raise ValueError("ai.provider must be one of 'none', 'gemini-cli', 'copilot-cli', 'opencode', or 'ollama'")
+        if self.provider not in {"none", "gemini-cli", "copilot-cli", "copilot-sdk", "opencode", "ollama"}:
+            raise ValueError(
+                "ai.provider must be one of 'none', 'gemini-cli', 'copilot-cli', 'copilot-sdk', 'opencode', or 'ollama'"
+            )
         if self.timeout_seconds <= 0:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
@@ -499,35 +501,23 @@ def _load_storage_config(data: dict[str, Any]) -> StorageConfig:
 def _default_provider_routing_data() -> dict[str, Any]:
     return {
         "profiles": {
-            "gemini-strong": {
-                "provider": "gemini-cli",
-                "model": "gemini-3.1-pro-preview",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
-            "gemini-cheap": {
-                "provider": "gemini-cli",
-                "model": "gemini-3-flash-preview",
-                "timeout_seconds": 900,
-                "max_retries": 0,
-            },
             "copilot-strong": {
-                "provider": "copilot-cli",
+                "provider": "copilot-sdk",
                 "model": "gpt-5.4-mini",
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },
             "copilot-mini": {
-                "provider": "copilot-cli",
+                "provider": "copilot-sdk",
                 "model": "gpt-5-mini",
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },
         },
         "task_routes": {
-            "ingest-system1": ["copilot-mini", "gemini-cheap"],
-            "deduplicator": ["copilot-mini", "gemini-cheap"],
-            "memory-curator": ["copilot-strong", "gemini-strong", "gemini-cheap"],
+            "ingest-system1": ["copilot-mini"],
+            "deduplicator": ["copilot-mini"],
+            "memory-curator": ["copilot-strong", "copilot-mini"],
         },
         "task_classes": {
             "ingest-system1": "cheap_agentic",
@@ -543,15 +533,13 @@ def _default_provider_routing_data() -> dict[str, Any]:
             "sweeper": "deterministic",
         },
         "profile_daily_call_limits": {
-            "gemini-strong": 50,
-            "gemini-cheap": 100,
             "copilot-strong": 20,
             "copilot-mini": 50,
         },
         "model_burst_call_limit": 2,
         "model_burst_window_seconds": 300.0,
-        "default_json_route": ["copilot-mini", "gemini-cheap"],
-        "default_agentic_route": ["copilot-mini", "gemini-cheap"],
+        "default_json_route": ["copilot-mini"],
+        "default_agentic_route": ["copilot-mini"],
         "fallback_to_json_only": False,
         "low_priority_task_names": ["graph-linker", "conflict-detector", "defragmenter", "taxonomist"],
     }
