@@ -108,6 +108,8 @@ def search_result_payload(result: RelationalSearchResult) -> dict:
         "memory_type": result.memory_type,
         "status": result.status,
         "tags": list(result.tags),
+        "workspace_ids": list(result.workspace_ids),
+        "score": result.score,
     }
 
 
