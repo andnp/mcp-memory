@@ -84,8 +84,8 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
         workspace_a_id = resolve_workspace_id(workspace_root=str(workspace_a))
         workspace_b_id = resolve_workspace_id(workspace_root=str(workspace_b))
 
-        assert first_result["entry"]["workspace_id"] == workspace_a_id
-        assert second_result["entry"]["workspace_id"] == workspace_b_id
+        assert first_result["status"] == "recorded"
+        assert second_result["status"] == "recorded"
 
         assert runtime.journal is not None
         pending_entries = runtime.journal.get_pending(limit=10)

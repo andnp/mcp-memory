@@ -475,9 +475,9 @@ def test_postgres_integration_daemon_app_health_overview_and_search_use_real_run
             task_id=seeded_task.id,
             request_id="postgres-daemon-conversation",
             subprocess_pid=1234,
-            provider_key="gemini-cli",
-            provider_name="Gemini CLI",
-            model_name="gemini-3-flash-preview",
+            provider_key="test-provider",
+            provider_name="Test Provider",
+            model_name="test-model",
             status="success",
             duration_seconds=1.0,
             created_at=current_time,
@@ -488,9 +488,9 @@ def test_postgres_integration_daemon_app_health_overview_and_search_use_real_run
             attempt=1,
             task_name="memory-curator",
             task_id=seeded_task.id,
-            provider_key="gemini-cli",
-            provider_name="Gemini CLI",
-            model_name="gemini-3-flash-preview",
+            provider_key="test-provider",
+            provider_name="Test Provider",
+            model_name="test-model",
             subprocess_pid=1234,
             prompt_text="prompt",
             response_text="response",
@@ -524,7 +524,7 @@ def test_postgres_integration_daemon_app_health_overview_and_search_use_real_run
     assert overview.json()["memories"]["total"] == 1
     assert overview.json()["search"]["semantic_enabled"] is False
     assert overview.json()["recent_logs"][0]["message"] == "postgres daemon smoke log"
-    assert overview.json()["provider_usage"][0]["provider_key"] == "gemini-cli"
+    assert overview.json()["provider_usage"][0]["provider_key"] == "test-provider"
 
     assert search.status_code == 200
     assert {item["title"] for item in search.json()["results"]} == {"Postgres daemon search fact"}

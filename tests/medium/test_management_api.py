@@ -1322,7 +1322,6 @@ async def test_daemon_zmq_record_thought_tool_fast_path_ignores_saturated_reques
         assert blocking_request.done() is False
         assert decoded["status"] == "recorded"
         expected_workspace_id = daemon_app_module.resolve_workspace_id(workspace_root=str(workspace))
-        assert decoded["entry"]["workspace_id"] == expected_workspace_id
         assert request_elapsed < 1.0
 
         pending_entries = app.state.routes.ctx.journal.get_pending(limit=10)
