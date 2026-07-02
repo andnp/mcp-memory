@@ -84,6 +84,7 @@ def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> DaemonSp
         host,
         "--port",
         str(port),
+        "--internal-preflight-done",
     ]
     startup_log_path = resolve_daemon_startup_log_path()
     startup_log_path.parent.mkdir(parents=True, exist_ok=True)

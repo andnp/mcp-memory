@@ -79,11 +79,18 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
     runner = CliRunner()
     captured: dict[str, object] = {}
 
-    def fake_start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int | None) -> None:
+    def fake_start_daemon(
+        debug_enabled: bool,
+        workspace_root: str | None,
+        host: str,
+        port: int | None,
+        internal_preflight_done: bool,
+    ) -> None:
         captured["debug_enabled"] = debug_enabled
         captured["workspace_root"] = workspace_root
         captured["host"] = host
         captured["port"] = port
+        captured["internal_preflight_done"] = internal_preflight_done
 
     monkeypatch.setattr("mcp_memory.cli._start_daemon", fake_start_daemon)
 
@@ -98,6 +105,7 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
         "workspace_root": "/tmp/demo",
         "host": "0.0.0.0",
         "port": 1234,
+        "internal_preflight_done": False,
     }
 
 
@@ -105,11 +113,18 @@ def test_daemon_root_command_forwards_to_existing_daemon_start_helper(monkeypatc
     runner = CliRunner()
     captured: dict[str, object] = {}
 
-    def fake_start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int | None) -> None:
+    def fake_start_daemon(
+        debug_enabled: bool,
+        workspace_root: str | None,
+        host: str,
+        port: int | None,
+        internal_preflight_done: bool,
+    ) -> None:
         captured["debug_enabled"] = debug_enabled
         captured["workspace_root"] = workspace_root
         captured["host"] = host
         captured["port"] = port
+        captured["internal_preflight_done"] = internal_preflight_done
 
     monkeypatch.setattr("mcp_memory.cli._start_daemon", fake_start_daemon)
 
@@ -124,6 +139,7 @@ def test_daemon_root_command_forwards_to_existing_daemon_start_helper(monkeypatc
         "workspace_root": "/tmp/demo",
         "host": "0.0.0.0",
         "port": 1234,
+        "internal_preflight_done": False,
     }
 
 

@@ -37,7 +37,14 @@ from mcp_memory.config import load_config, resolve_memory_path
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
-from mcp_memory.daemon import DaemonStopResult, create_daemon_app, ensure_daemon_started, inspect_daemon, stop_daemon
+from mcp_memory.daemon import (
+    DaemonStopResult,
+    create_daemon_app,
+    ensure_daemon_started,
+    inspect_daemon,
+    prepare_daemon_start,
+    stop_daemon,
+)
 from mcp_memory.daemon_process import find_free_port
 from mcp_memory.cli_tui import run_monitor_tui
 from mcp_memory.embeddings import describe_embedder
@@ -100,13 +107,27 @@ def _run_stdio_proxy(
         sys.exit(1)
 
 
-def _start_daemon(debug_enabled: bool, workspace_root: str | None, host: str, port: int | None) -> None:
+def _start_daemon(
+    debug_enabled: bool,
+    workspace_root: str | None,
+    host: str,
+    port: int | None,
+    internal_preflight_done: bool = False,
+) -> None:
     configure_workspace_logging(
         debug_enabled,
         workspace_root_override=workspace_root,
         console_output=True,
         source="daemon",
     )
+    if not internal_preflight_done:
+        existing = prepare_daemon_start(workspace_root, None)
+        if existing is not None:
+            console.print(
+                f"[yellow]Global daemon already running:[/] pid={existing.pid} endpoint={existing.transport_endpoint}"
+            )
+            console.print("Use `mcp-memory daemon restart` to replace it.")
+            sys.exit(1)
     resolved_port = port
     if resolved_port is None:
         resolved_port = resolve_global_daemon_bootstrap_spec(workspace_root_override=workspace_root).config.daemon.port
@@ -1705,8 +1726,9 @@ def _daemon_start_command_action(
     workspace_root: str | None,
     host: str,
     port: int | None,
+    internal_preflight_done: bool,
 ) -> None:
-    _start_daemon(debug_enabled, workspace_root, host, port)
+    _start_daemon(debug_enabled, workspace_root, host, port, internal_preflight_done)
 
 
 def _daemon_status_command_action(workspace_root: str | None) -> None:

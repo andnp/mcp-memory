@@ -67,6 +67,111 @@ class DaemonStopResult:
         return self.metadata.pid
 
 
+def prepare_daemon_start(
+    workspace_root_override: str | None = None,
+    cwd: Path | None = None,
+) -> DaemonMetadata | None:
+    """Reclaim the global daemon slot before a caller binds a daemon directly.
+
+    Callers that run a daemon process themselves (e.g. the `mcp-memory daemon`
+    CLI command) rather than going through `ensure_daemon_started` must call
+    this first. Otherwise they skip the orphan-cleanup/health-check guard and
+    silently overwrite the global daemon metadata, orphaning whatever process
+    was previously registered (it becomes invisible to `daemon status`/`stop`).
+
+    Returns the existing healthy metadata if one is already running (the
+    caller should refuse to start a duplicate), or None once orphaned/unhealthy
+    daemons have been cleaned up and it is safe to start a new one.
+    """
+    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    current_state_dir = _normalize_state_dir(resolve_state_dir())
+    metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
+    lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
+    timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
+    probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
+    health_confirmation_timeout_seconds = max(
+        min(
+            timeout_seconds / _UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+            DEFAULT_DAEMON_REQUEST_TIMEOUT_SECONDS,
+        ),
+        spec.config.daemon.healthcheck_interval_seconds,
+    )
+    lock.acquire(timeout_seconds=timeout_seconds)
+    try:
+        return _reclaim_daemon_slot(
+            spec,
+            current_state_dir=current_state_dir,
+            metadata_path=metadata_path,
+            timeout_seconds=timeout_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
+            health_confirmation_timeout_seconds=health_confirmation_timeout_seconds,
+        )
+    finally:
+        lock.release()
+
+
+def _reclaim_daemon_slot(
+    spec,
+    *,
+    current_state_dir: Path,
+    metadata_path: Path,
+    timeout_seconds: float,
+    probe_timeout_seconds: float,
+    health_confirmation_timeout_seconds: float,
+) -> DaemonMetadata | None:
+    existing = _read_daemon_metadata(metadata_path)
+    existing_process_running = existing is not None and _is_process_running(existing.pid)
+    existing_health = None
+    if existing is not None and existing_process_running:
+        existing_health = _confirm_daemon_health(
+            existing,
+            confirmation_attempts=_UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
+            retry_delay_seconds=spec.config.daemon.healthcheck_interval_seconds,
+            timeout_seconds=health_confirmation_timeout_seconds,
+        )
+    if existing is not None and existing_health is not None and existing_health.healthy:
+        logger.info("Reusing healthy global daemon: pid=%s endpoint=%s", existing.pid, existing.transport_endpoint)
+        return existing
+
+    cleanup_deadline = time.monotonic() + timeout_seconds
+    if existing is None or not existing_process_running:
+        if existing is not None:
+            logger.warning("Removing stale global daemon metadata: pid=%s", existing.pid)
+            remove_metadata(metadata_path)
+        _terminate_orphaned_daemon_processes(
+            current_pid=os.getpid(),
+            current_state_dir=current_state_dir,
+            deadline=cleanup_deadline,
+            poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
+        )
+        _cleanup_stale_daemon_socket(
+            Path(existing.socket_path) if existing is not None and existing.socket_path else resolve_daemon_socket_path(),
+            probe_timeout_seconds=probe_timeout_seconds,
+            reason="owner_missing_before_spawn",
+        )
+    elif existing is not None:
+        assessment = existing_health or _assess_daemon_health(existing)
+        logger.warning(
+            "Stopping unhealthy global daemon before recovery: pid=%s endpoint=%s attempts=%s assessment=%s",
+            existing.pid,
+            existing.transport_endpoint,
+            assessment.attempts,
+            assessment.summary,
+        )
+        _terminate_daemon_process(
+            existing.pid,
+            deadline=cleanup_deadline,
+            poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
+        )
+        remove_metadata(metadata_path)
+        _cleanup_stale_daemon_socket(
+            Path(existing.socket_path) if existing.socket_path else resolve_daemon_socket_path(),
+            probe_timeout_seconds=probe_timeout_seconds,
+            reason="owner_stopped_for_recovery",
+        )
+    return None
+
+
 def ensure_daemon_started(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -86,56 +191,16 @@ def ensure_daemon_started(
     )
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
-        existing = _read_daemon_metadata(metadata_path)
-        existing_process_running = existing is not None and _is_process_running(existing.pid)
-        existing_health = None
-        if existing is not None and existing_process_running:
-            existing_health = _confirm_daemon_health(
-                existing,
-                confirmation_attempts=_UNHEALTHY_DAEMON_CONFIRMATION_ATTEMPTS,
-                retry_delay_seconds=spec.config.daemon.healthcheck_interval_seconds,
-                timeout_seconds=health_confirmation_timeout_seconds,
-            )
-        if existing is not None and existing_health is not None and existing_health.healthy:
-            logger.info("Reusing healthy global daemon: pid=%s endpoint=%s", existing.pid, existing.transport_endpoint)
+        existing = _reclaim_daemon_slot(
+            spec,
+            current_state_dir=current_state_dir,
+            metadata_path=metadata_path,
+            timeout_seconds=timeout_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
+            health_confirmation_timeout_seconds=health_confirmation_timeout_seconds,
+        )
+        if existing is not None:
             return existing
-
-        cleanup_deadline = time.monotonic() + timeout_seconds
-        if existing is None or not existing_process_running:
-            if existing is not None:
-                logger.warning("Removing stale global daemon metadata: pid=%s", existing.pid)
-                remove_metadata(metadata_path)
-            _terminate_orphaned_daemon_processes(
-                current_pid=os.getpid(),
-                current_state_dir=current_state_dir,
-                deadline=cleanup_deadline,
-                poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
-            )
-            _cleanup_stale_daemon_socket(
-                Path(existing.socket_path) if existing is not None and existing.socket_path else resolve_daemon_socket_path(),
-                probe_timeout_seconds=probe_timeout_seconds,
-                reason="owner_missing_before_spawn",
-            )
-        elif existing is not None:
-            assessment = existing_health or _assess_daemon_health(existing)
-            logger.warning(
-                "Stopping unhealthy global daemon before recovery: pid=%s endpoint=%s attempts=%s assessment=%s",
-                existing.pid,
-                existing.transport_endpoint,
-                assessment.attempts,
-                assessment.summary,
-            )
-            _terminate_daemon_process(
-                existing.pid,
-                deadline=cleanup_deadline,
-                poll_interval_seconds=spec.config.daemon.healthcheck_interval_seconds,
-            )
-            remove_metadata(metadata_path)
-            _cleanup_stale_daemon_socket(
-                Path(existing.socket_path) if existing.socket_path else resolve_daemon_socket_path(),
-                probe_timeout_seconds=probe_timeout_seconds,
-                reason="owner_stopped_for_recovery",
-            )
 
         daemon_port = spec.config.daemon.port
         if daemon_port == 0:
@@ -303,6 +368,7 @@ __all__ = [
     "create_daemon_app",
     "daemon_url",
     "ensure_daemon_started",
+    "prepare_daemon_start",
     "read_daemon_metadata",
     "inspect_daemon",
     "stop_daemon",
