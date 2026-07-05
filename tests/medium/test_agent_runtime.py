@@ -1903,7 +1903,7 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert deduplicator_task.priority == task_priority(DEDUPLICATOR_TASK_NAME)
     assert curator_task is not None
     assert curator_task.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
-    assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 3600.0
+    assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 300.0
 
 
 def test_bootstrap_background_tasks_accepts_bootstrap_capability_view(db_manager) -> None:
@@ -2153,7 +2153,7 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
 
 
-def test_bootstrap_background_tasks_uses_one_hour_curator_cadence(monkeypatch, db_manager) -> None:
+def test_bootstrap_background_tasks_uses_five_minute_curator_cadence(monkeypatch, db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     from mcp_memory.context import ApplicationContext
 
@@ -2176,7 +2176,7 @@ def test_bootstrap_background_tasks_uses_one_hour_curator_cadence(monkeypatch, d
     scheduled = queue.find_open_task(CURATOR_TASK_NAME, None)
     assert scheduled is not None
     assert scheduled.available_at == pytest.approx(max(1200.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME], 20000.0))
-    assert scheduled.data["interval_seconds"] == 3600.0
+    assert scheduled.data["interval_seconds"] == 300.0
 
 
 def test_bootstrap_background_tasks_refreshes_stale_recurring_cadence(monkeypatch, db_manager) -> None:
