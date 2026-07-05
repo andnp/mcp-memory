@@ -15,7 +15,6 @@ from mcp_memory.core.sampling import (
     SEMANTIC_STRATEGY,
     SamplingBatch,
 )
-from mcp_memory.core.task_handlers.campaigns import campaign_family_keys
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME, DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
@@ -23,7 +22,6 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.work_item_store import COMPATIBILITY_GROUP_STRUCTURAL_REVIEW
 
 CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
@@ -327,30 +325,25 @@ def build_json_tool_loop_prompt(
     guardrails: str,
 ) -> str:
     seed_payload = [curator_seed_payload_item(record) for record in seed_records]
-    structural_families = list(campaign_family_keys(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
     return (
         "You are the curator maintenance agent for the global memory store.\n"
         "Improve retrieval quality with justified maintenance: merge, rewrite, retag, relink, split, archive, or delete only when clearly justified.\n"
         "Prefer focused durable memories with specific titles/summaries. Treat frequently surfaced but rarely read records as retrieval-friction candidates.\n"
         f"{_curator_size_policy_prompt()}\n"
-        "Your workflow is a loop, not a one-shot response.\n"
-        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the next active curator batch.\n"
+        "Process exactly one curator batch this run; this is not an open-ended loop.\n"
+        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the active curator batch.\n"
         "2. For each returned memory, use read/search/list plus mutation tools as needed.\n"
         "3. For the highest-risk records, you must spend some budget on adjacency discovery before concluding no-op. Use search/list/read to inspect nearby duplicates, canonicals, contradictions, taxonomy cleanup, or split candidates when records look broad, noisy, heavily linked, or frequently surfaced.\n"
         "4. Build a shortlist of concrete mutations, score each roughly for confidence and impact, and execute every safe candidate that clears the high-confidence/medium-impact bar.\n"
         "5. A local read alone is not enough for suspicious records; either mutate the nearby cluster or make an explicit no-op decision after adjacency review.\n"
-        "6. After finishing that batch, call internal_get_next_curator_batch again with exclude_memory_ids covering the memories you already reviewed in this run.\n"
-        "7. Keep looping until internal_get_next_curator_batch returns no records worth processing. Do not stop after a single batch.\n"
-        "8. Summarize only after the loop is done. Do not report incremental results between batches.\n"
+        "6. Summarize once this batch is done. Do not fetch another batch or claim additional work items in this session.\n"
         "Treat seed memories as a starting frontier, not a hard boundary; widen only for nearby duplicates, contradictions, or oversized clusters.\n"
-        f"When the current frontier is exhausted, you may continue by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families, separators=(",", ":"))}, and limit=1.\n"
-        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids. For claimed memory_dedup_review items, prefer internal_merge_memory_into_canonical and preserve lineage.\n"
-        "For claimed conflict_review items, inspect payload.candidate_memory_ids and add symmetric CONTRADICTS links only when the conflict is clear and well-supported.\n"
+        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records. Avoid growing a memory past that size unless no reasonable split exists.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for closeout instead.\n"
         "Before stopping, check once more for adjacent worthwhile maintenance. No-op is fine only when no concrete safe cleanup remains above the high-confidence/medium-impact bar, and your final summary must make clear whether adjacency review was actually performed.\n"
-        f"When your full looping pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
+        f"When this batch is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
         "Return final JSON like {\"summary\":\"...\",\"actions_taken\":N}.\n\n"
         f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))}"
     )
@@ -363,11 +356,9 @@ def build_agentic_prompt(
     seed_records: list[Any],
     guardrails: str,
 ) -> str:
-    structural_families = list(campaign_family_keys(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
     return (
         "You are the memory-curator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
-        "Treat this run as a structural-review campaign: the session should keep going while compatible structural work remains high-value and safe.\n"
         "Good memory anatomy: one focused durable takeaway plus enough evidence to stand alone, a title/summary that names the conclusion, and tags that make the record discoverable later.\n"
         f"{_curator_size_policy_prompt()}\n"
         "Bad memory smells from live retrieval telemetry include generic summaries, mixed-topic blobs, thin split-child fragments, repeated overlap across neighboring memories, and memories that keep getting surfaced but almost never opened.\n"
@@ -375,23 +366,17 @@ def build_agentic_prompt(
         "Tool mapping: use internal_update_memory_record for retitling, resummarizing, rewriting for durability, trimming noise, and retagging; use internal_split_memory_record for decompositions; use internal_merge_memory_into_canonical for canonicalization; use internal_archive_memory_record or internal_delete_memory_record for safe cleanup of leftovers; and use internal_create_memory_link or internal_delete_memory_link for structural edge cleanup.\n"
         "Actively look for multi-memory cleanups, not just single-record edits. If two similar memories should become one canonical memory, or three-to-five overlapping memories should become a smaller set of cleaner focused records, do that reorganization instead of merely describing it. Think in rotations in memory space: 5 noisy memories can become 3 durable ones, 3 overlapping memories can become 2 organized ones, and 1 giant blob can become several focused memories.\n"
         "Prefer mutations that improve future retrieval decisions: fewer clearer durable memories, stronger canonicals, better summaries/titles, less overlap, less filler, and cleaner neighborhood structure. Judge success at the neighborhood level, not just the single-record level. Prefer reversible low-risk cleanup when ambiguity remains.\n"
-        "Your workflow is a loop, not a single batch.\n"
-        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the next active curator batch.\n"
+        "Process exactly one curator batch this run; this is not an open-ended loop.\n"
+        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the active curator batch.\n"
         "2. For each memory in the returned batch, use search/read/list and any other available tools to gain enough context to make high-value edits.\n"
         "3. For the highest-risk records or clusters in that batch, you must spend some budget on adjacency discovery before concluding no-op. Use search/list/read to inspect nearby duplicates, canonicals, contradictions, taxonomy cleanup opportunities, split candidates, merge candidates, or reorganization opportunities when records look broad, append-heavy, heavily linked, frequently surfaced, or otherwise noisy.\n"
         "4. Build a shortlist of concrete possible mutations from that review, including multi-memory reorganizations when appropriate, and score each one roughly for confidence and impact. Execute every safe candidate that is high-confidence and at least medium-impact instead of merely reporting it.\n"
         "5. Split, archive, merge, rewrite, relabel, resummarize, relink, canonicalize, or otherwise improve the memory base when justified. If a record is structurally acceptable but its title, summary, or wording is still weak, prefer a lightweight internal_update_memory_record rather than defaulting to no-op. A local read of the current batch alone is not enough to declare the frontier healthy when suspicious records or suspicious clusters exist.\n"
-        "6. After finishing that batch, call internal_get_next_curator_batch again with exclude_memory_ids covering the memories you already reviewed in this run.\n"
-        "7. Keep looping until internal_get_next_curator_batch returns no more records worth processing. You must not stop after a single batch.\n"
-        "8. Only report final results after all looping work is complete. Do not emit incremental progress summaries between batches.\n"
+        "6. Report final results once this batch is done. Do not fetch another batch or claim additional work items in this session.\n"
         "Treat the fetched frontier as the active working set for this run; widen only when it implies nearby duplicates, contradictions, taxonomy cleanup, merge opportunities, or oversized clusters.\n"
         "When you successfully split or merge a cluster, do one extra neighborhood cleanup pass before moving on: remove obsolete links, tighten summaries/titles/tags on the new children or canonicals if needed, and archive/delete stale leftovers when the resulting structure is clearly better and lineage is preserved.\n"
-        f"After finishing the active frontier, you may claim more compatible structural work by calling internal_get_compatible_work_batch with task_id='{task.id}', compatibility_group='structural_review', execution_lane='agentic', allowed_families={json.dumps(structural_families, separators=(",", ":"))}, and limit=1.\n"
-        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids. For claimed memory_dedup_review items, use payload.seed_memory_ids, prefer internal_merge_memory_into_canonical, and preserve SUPERSEDES lineage plus archive-before-delete cleanup.\n"
-        "For claimed conflict_review items, inspect payload.candidate_memory_ids and add symmetric CONTRADICTS links only when the conflict is clear and well-supported.\n"
-        "When you claim a follow-on structural work item, you must finish it yourself with internal_complete_work_item, internal_release_work_item, or internal_defer_work_item; use internal_heartbeat_work_item if you need more lease time.\n"
-        "Aim for multiple coherent, high-value maintenance actions in one run when justified, with clear lineage and archive-before-delete when possible.\n"
-        "Do not end the provider session merely because the initial handler-local frontier is complete if a compatible structural follow-on item is still worth doing.\n"
+        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids.\n"
+        "Aim for multiple coherent, high-value maintenance actions on this batch when justified, with clear lineage and archive-before-delete when possible.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records.\n"
         "If you split or rewrite a record, make each resulting memory self-contained enough to stand alone in search results.\n"

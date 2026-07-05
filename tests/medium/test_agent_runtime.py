@@ -68,11 +68,8 @@ from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.work_item_store import (
-    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     EXECUTION_LANE_AGENTIC,
-    WORK_FAMILY_CONFLICT_REVIEW,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
-    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
 from tests.sdk.providers import FakeAIProvider
 
@@ -6136,7 +6133,7 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert result["execution_mode"] == "agentic_mcp"
         assert provider.prompts
         assert "Use the workspace-local internal MCP maintenance tools directly" in provider.prompts[0]
-        assert "Aim for multiple coherent, high-value maintenance actions in one run" in provider.prompts[0]
+        assert "Aim for multiple coherent, high-value maintenance actions on this batch" in provider.prompts[0]
         assert "internal_get_next_curator_batch" in provider.prompts[0]
         assert "Your standing curator jobs are:" in provider.prompts[0]
         assert "Tool mapping: use internal_update_memory_record" in provider.prompts[0]
@@ -6569,326 +6566,6 @@ async def test_memory_curator_direct_sampling_packetizes_support_records_without
 
 
 @pytest.mark.asyncio
-async def test_memory_curator_can_execute_structural_follow_on_dedup_work_in_one_run(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
-    assert runtime.repository is not None
-    assert runtime.work_items is not None
-
-    class _AgenticProvider:
-        def __init__(self) -> None:
-            self.prompts: list[str] = []
-
-        def supports_agentic(self) -> bool:
-            return True
-
-        async def run_agent(self, prompt: str) -> AgenticRunResult:
-            self.prompts.append(prompt)
-            batch_result = await call_internal_memory_tool(
-                runtime,
-                "internal_get_compatible_work_batch",
-                {
-                    "task_id": "memory-curator-structural-follow-on-task",
-                    "compatibility_group": "structural_review",
-                    "allowed_families": ["memory_dedup_review"],
-                    "execution_lane": "agentic",
-                    "workspace_id": runtime.workspace_id,
-                    "limit": 1,
-                },
-            )
-            batch_payload = json.loads(batch_result[0].text)
-            assert batch_payload["claimed_count"] == 1
-            work_item = batch_payload["records"][0]
-            seed_memory_ids = work_item["payload"]["seed_memory_ids"]
-            canonical_id, duplicate_id = seed_memory_ids
-            await call_internal_memory_tool(
-                runtime,
-                "internal_merge_memory_into_canonical",
-                {
-                    "canonical_memory_id": canonical_id,
-                    "source_memory_id": duplicate_id,
-                    "summary": "Canonical testing preference after structural batching.",
-                    "metadata": {"deduplicator_task_id": "memory-curator-structural-follow-on-task"},
-                },
-            )
-            await call_internal_memory_tool(
-                runtime,
-                "internal_complete_work_item",
-                {"work_item_id": work_item["id"]},
-            )
-            return AgenticRunResult(
-                status="success",
-                summary="Curator completed structural follow-on work in one run.",
-                parsed={
-                    "stats": {
-                        "tools": {
-                            "totalCalls": 3,
-                            "byName": {
-                                "mcp_mcp-memory-internal_internal_get_compatible_work_batch": {"count": 1},
-                                "mcp_mcp-memory-internal_internal_merge_memory_into_canonical": {"count": 1},
-                                "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 1},
-                            },
-                        }
-                    }
-                },
-            )
-
-    try:
-        oversized = runtime.repository.create_memory(
-            title="Oversized architecture record",
-            content="Oversized architecture detail. " * 220,
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["architecture", "oversized"],
-        )
-        canonical = runtime.repository.create_memory(
-            title="Testing preferences",
-            content="Use pytest for integration tests and avoid brittle mocks.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["testing"],
-        )
-        duplicate = runtime.repository.create_memory(
-            title="Testing preferences duplicate",
-            content="Use pytest for integration tests and avoid brittle mocks.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["testing"],
-        )
-        assert oversized is not None and canonical is not None and duplicate is not None
-
-        work_item, created = runtime.work_items.enqueue_unique(
-            family_key="memory_dedup_review",
-            execution_lane="agentic",
-            workspace_id=runtime.workspace_id,
-            priority=90,
-            idempotency_key=f"memory_dedup_review:{canonical.id}:{duplicate.id}",
-            payload={
-                "workspace_id": runtime.workspace_id,
-                "seed_memory_ids": [canonical.id, duplicate.id],
-                "strategy_used": "semantic",
-                "candidate_count": 2,
-            },
-        )
-        assert created is True
-
-        provider = _AgenticProvider()
-        result = await handle_memory_curator_task(
-            runtime,
-            TaskRecord(
-                id="memory-curator-structural-follow-on-task",
-                task_name=CURATOR_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
-                workspace_id=runtime.workspace_id,
-                status="running",
-                priority=95,
-                retries_count=0,
-                max_retries=3,
-                created_at=0.0,
-                updated_at=0.0,
-                available_at=0.0,
-                claimed_at=0.0,
-                started_at=0.0,
-                completed_at=None,
-                last_error=None,
-            ),
-            provider,
-        )
-
-        refreshed_duplicate = runtime.repository.get_memory(duplicate.id)
-        refreshed_work_item = runtime.work_items.get_item(work_item.id)
-
-        assert result["summary"] == "Curator completed structural follow-on work in one run."
-        assert result["execution_mode"] == "agentic_mcp"
-        assert result["compatibility_group"] == "structural_review"
-        assert result["campaign_key"] == "structural_review"
-        assert result["campaign_origin_family"] == "memory_curation_review"
-        assert result["campaign_family_keys"] == [
-            WORK_FAMILY_MEMORY_CURATION_REVIEW,
-            WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-            WORK_FAMILY_CONFLICT_REVIEW,
-        ]
-        assert result["campaign_continuation_supported"] is True
-        assert result["tool_calls_executed"] == 3
-        assert result["mutations"] == 2
-        assert result["compatible_batch_calls"] == 1
-        assert refreshed_duplicate is not None and refreshed_duplicate.status == "archived"
-        assert refreshed_work_item.status == "completed"
-        assert provider.prompts
-        assert "internal_get_compatible_work_batch" in provider.prompts[0]
-        assert "structural_review" in provider.prompts[0]
-        assert "memory_dedup_review" in provider.prompts[0]
-        assert "conflict_review" in provider.prompts[0]
-        assert "Treat this run as a structural-review campaign" in provider.prompts[0]
-        assert "Your workflow is a loop, not a single batch." in provider.prompts[0]
-        assert "you must spend some budget on adjacency discovery before concluding no-op" in provider.prompts[0]
-        assert "Keep looping until internal_get_next_curator_batch returns no more records worth processing." in provider.prompts[0]
-    finally:
-        runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_memory_curator_can_execute_structural_follow_on_conflict_work_in_one_run(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
-    assert runtime.repository is not None
-    assert runtime.work_items is not None
-
-    class _AgenticProvider:
-        def __init__(self) -> None:
-            self.prompts: list[str] = []
-
-        def supports_agentic(self) -> bool:
-            return True
-
-        async def run_agent(self, prompt: str) -> AgenticRunResult:
-            self.prompts.append(prompt)
-            batch_result = await call_internal_memory_tool(
-                runtime,
-                "internal_get_compatible_work_batch",
-                {
-                    "task_id": "memory-curator-structural-conflict-task",
-                    "compatibility_group": COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
-                    "allowed_families": [WORK_FAMILY_CONFLICT_REVIEW],
-                    "execution_lane": EXECUTION_LANE_AGENTIC,
-                    "workspace_id": runtime.workspace_id,
-                    "limit": 1,
-                },
-            )
-            batch_payload = json.loads(batch_result[0].text)
-            assert batch_payload["claimed_count"] == 1
-            work_item = batch_payload["records"][0]
-            left_id, right_id = work_item["payload"]["candidate_memory_ids"]
-            for source_id, target_id in ((left_id, right_id), (right_id, left_id)):
-                await call_internal_memory_tool(
-                    runtime,
-                    "internal_create_memory_link",
-                    {
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "link_type": "CONTRADICTS",
-                        "context": "Conflicting rollout guidance identified during structural follow-on review.",
-                    },
-                )
-            await call_internal_memory_tool(
-                runtime,
-                "internal_complete_work_item",
-                {"work_item_id": work_item["id"]},
-            )
-            return AgenticRunResult(
-                status="success",
-                summary="Curator completed conflict-review structural follow-on work in one run.",
-                parsed={
-                    "stats": {
-                        "tools": {
-                            "totalCalls": 4,
-                            "byName": {
-                                "mcp_mcp-memory-internal_internal_get_compatible_work_batch": {"count": 1},
-                                "mcp_mcp-memory-internal_internal_create_memory_link": {"count": 2},
-                                "mcp_mcp-memory-internal_internal_complete_work_item": {"count": 1},
-                            },
-                        }
-                    }
-                },
-            )
-
-    try:
-        oversized = runtime.repository.create_memory(
-            title="Oversized architecture record",
-            content="Oversized architecture detail. " * 220,
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["architecture", "oversized"],
-        )
-        left = runtime.repository.create_memory(
-            title="Rollout guidance A",
-            content="The migration must be completed before enabling shared-mode reads.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["rollout", "shared-mode"],
-        )
-        right = runtime.repository.create_memory(
-            title="Rollout guidance B",
-            content="Shared-mode reads can be enabled before the migration is completed.",
-            workspace_ids=[runtime.workspace_id or "global"],
-            memory_type="fact",
-            tags=["rollout", "shared-mode"],
-        )
-        assert oversized is not None and left is not None and right is not None
-
-        work_item, created = runtime.work_items.enqueue_unique(
-            family_key=WORK_FAMILY_CONFLICT_REVIEW,
-            execution_lane=EXECUTION_LANE_AGENTIC,
-            workspace_id=runtime.workspace_id,
-            priority=90,
-            idempotency_key=f"{WORK_FAMILY_CONFLICT_REVIEW}:{left.id}:{right.id}",
-            payload={
-                "workspace_id": runtime.workspace_id,
-                "candidate_memory_ids": [left.id, right.id],
-                "strategy_used": "semantic",
-                "candidate_count": 2,
-            },
-        )
-        assert created is True
-
-        provider = _AgenticProvider()
-        result = await handle_memory_curator_task(
-            runtime,
-            TaskRecord(
-                id="memory-curator-structural-conflict-task",
-                task_name=CURATOR_TASK_NAME,
-                data={"workspace_id": runtime.workspace_id},
-                workspace_id=runtime.workspace_id,
-                status="running",
-                priority=95,
-                retries_count=0,
-                max_retries=3,
-                created_at=0.0,
-                updated_at=0.0,
-                available_at=0.0,
-                claimed_at=0.0,
-                started_at=0.0,
-                completed_at=None,
-                last_error=None,
-            ),
-            provider,
-        )
-
-        refreshed_work_item = runtime.work_items.get_item(work_item.id)
-        left_links = runtime.repository.get_links(left.id, direction="outgoing", link_type="CONTRADICTS")
-        right_links = runtime.repository.get_links(right.id, direction="outgoing", link_type="CONTRADICTS")
-
-        assert result["summary"] == "Curator completed conflict-review structural follow-on work in one run."
-        assert result["execution_mode"] == "agentic_mcp"
-        assert result["compatibility_group"] == COMPATIBILITY_GROUP_STRUCTURAL_REVIEW
-        assert result["campaign_family_keys"] == [
-            WORK_FAMILY_MEMORY_CURATION_REVIEW,
-            WORK_FAMILY_MEMORY_DEDUP_REVIEW,
-            WORK_FAMILY_CONFLICT_REVIEW,
-        ]
-        assert result["tool_calls_executed"] == 4
-        assert result["mutations"] == 3
-        assert result["compatible_batch_calls"] == 1
-        assert refreshed_work_item.status == "completed"
-        assert {link.target_id for link in left_links} == {right.id}
-        assert {link.target_id for link in right_links} == {left.id}
-        assert provider.prompts
-        assert "For claimed conflict_review items" in provider.prompts[0]
-        assert "payload.candidate_memory_ids" in provider.prompts[0]
-        assert "internal_create_memory_link" in provider.prompts[0]
-    finally:
-        runtime.close()
-
-
-@pytest.mark.asyncio
 async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -6958,7 +6635,7 @@ async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monk
         assert "prefer a lightweight internal_update_memory_record rather than defaulting to no-op" in provider.prompts[0]
         assert "which 1-3 mutation classes were considered but declined" in provider.prompts[0]
         assert "A local read of the current batch alone is not enough to declare the frontier healthy" in provider.prompts[0]
-        assert "Only report final results after all looping work is complete." in provider.prompts[0]
+        assert "Report final results once this batch is done." in provider.prompts[0]
         assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
         assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
         assert record.id not in provider.prompts[0]
@@ -7356,12 +7033,12 @@ async def test_memory_curator_prompt_flags_oversized_seed_memories(monkeypatch, 
         assert f"Treat memories above {CURATOR_MAX_MEMORY_CHARS} characters as oversized and prefer splitting them into focused linked records." in prompt
         assert "Do not merge, append, or rewrite across different projects, products, or repositories" in prompt
         assert "No-op is acceptable when no change adds clear value." in prompt
-        assert "Your workflow is a loop, not a one-shot response." in prompt
+        assert "Process exactly one curator batch this run; this is not an open-ended loop." in prompt
         assert "Immediately call internal_get_next_curator_batch" in prompt
         assert "you must spend some budget on adjacency discovery before concluding no-op" in prompt
         assert "Build a shortlist of concrete mutations" in prompt
         assert "high-confidence/medium-impact bar" in prompt
-        assert "Do not report incremental results between batches." in prompt
+        assert "Summarize once this batch is done." in prompt
         assert "Size policy: target band is" in prompt
         assert "Rewrite or trim when it is still one takeaway but the acceptable band carries filler" in prompt
         assert "Merge when a memory is too thin to stand alone or mostly duplicates a nearby canonical." in prompt
@@ -7449,10 +7126,10 @@ async def test_memory_curator_prompt_serializes_seed_memories_as_json(monkeypatc
         assert "Treat frequently surfaced but rarely read records as retrieval-friction candidates" in prompt
         assert "one focused durable takeaway plus enough evidence to stand alone" in prompt
         assert "Leave alone when a memory already has one focused durable takeaway plus enough evidence to stand alone." in prompt
-        assert "Your workflow is a loop, not a one-shot response." in prompt
+        assert "Process exactly one curator batch this run; this is not an open-ended loop." in prompt
         assert "your final summary must make clear whether adjacency review was actually performed" in prompt
         assert "no concrete safe cleanup remains above the high-confidence/medium-impact bar" in prompt
-        assert "Keep looping until internal_get_next_curator_batch returns no records worth processing." in prompt
+        assert "Summarize once this batch is done." in prompt
     finally:
         runtime.close()
 

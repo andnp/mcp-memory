@@ -152,7 +152,6 @@ async def handle_memory_curator_task(
                 "internal_read_memory_record",
                 "internal_list_memory_records",
                 "internal_get_next_curator_batch",
-                "internal_get_compatible_work_batch",
                 "task_complete",
                 "internal_task_complete",
                 "internal_heartbeat_work_item",
