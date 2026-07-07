@@ -49,7 +49,21 @@ def test_get_memory_tools_returns_expected_names() -> None:
     assert read_tool.description is not None
     assert read_tool.inputSchema == {
         "type": "object",
-        "properties": {"memory_id": {"type": "string"}},
+        "properties": {
+            "memory_id": {"type": "string"},
+            "include_relationships": {
+                "type": "boolean",
+                "description": "Include incoming/outgoing relationship edges. Defaults to false to save tokens.",
+            },
+            "include_superseded": {
+                "type": "boolean",
+                "description": "Include superseded record breadcrumbs. Defaults to false to save tokens.",
+            },
+            "include_metadata": {
+                "type": "boolean",
+                "description": "Include maintenance metadata and workspace IDs. Defaults to false to save tokens.",
+            },
+        },
         "required": ["memory_id"],
     }
 
