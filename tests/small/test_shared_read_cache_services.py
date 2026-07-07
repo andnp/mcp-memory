@@ -360,7 +360,7 @@ def _projection_payload(
     }
 
 
-def _compact_projection_payload(payload: dict[str, object]) -> dict[str, object]:
+def _compact_projection_payload(payload: dict[str, object] | dict[str, str | float | list]) -> dict[str, object]:
     return {
         key: payload[key]
         for key in ("memory_id", "title", "summary")
