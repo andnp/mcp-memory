@@ -594,6 +594,8 @@ def _import_markdown_files(
             resolved_workspace_ids,
         )
         for imported in imported_records:
+            if imported is None:
+                continue
             console.print(f"[green]Imported memory:[/] {imported.id} — {imported.title}")
         console.print(f"[green]Imported total:[/] {len(imported_records)}")
 
