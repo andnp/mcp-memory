@@ -312,6 +312,63 @@ def test_ensure_daemon_started_includes_startup_log_tail_on_timeout(monkeypatch,
     assert 'last warning' in message
 
 
+def test_ensure_daemon_started_kills_spawned_process_on_timeout(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
+    config = Config()
+    config.daemon.port = 4242
+    config.daemon.auto_start_timeout_seconds = 0.2
+    config.daemon.healthcheck_interval_seconds = 0.05
+    config.daemon.shutdown_grace_seconds = 0.2
+    spec = _Spec(
+        memory_path=tmp_path / 'memories',
+        config=config,
+        workspace_id='workspace-start',
+        workspace_root=tmp_path / 'workspace',
+        lock_path=tmp_path / 'workspace.lock',
+    )
+    startup_log_path = tmp_path / 'state' / 'mcp-memory' / 'daemons' / 'daemon.log'
+    startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+    startup_log_path.write_text('still starting\n', encoding='utf-8')
+
+    class _StuckProcess:
+        def poll(self) -> None:
+            return None
+
+    monotonic_state = {'value': -0.05}
+
+    def _fake_monotonic() -> float:
+        monotonic_state['value'] += 0.05
+        return monotonic_state['value']
+
+    monkeypatch.setattr('mcp_memory.daemon.resolve_global_daemon_bootstrap_spec', lambda workspace_root_override=None, cwd=None: spec)
+    monkeypatch.setattr('mcp_memory.daemon._terminate_orphaned_daemon_processes', lambda **kwargs: None)
+    monkeypatch.setattr(
+        'mcp_memory.daemon._spawn_daemon_process',
+        lambda workspace_root, host, port: DaemonSpawnDetails(
+            pid=5555,
+            command=('python', '-m', 'mcp_memory.cli', 'daemon'),
+            startup_log_path=startup_log_path,
+            process=_StuckProcess(),
+        ),
+    )
+    monkeypatch.setattr('mcp_memory.daemon._read_daemon_metadata', lambda _path: None)
+    monkeypatch.setattr('mcp_memory.daemon._is_daemon_healthy', lambda current: False)
+    monkeypatch.setattr('mcp_memory.daemon._is_process_running', lambda pid: True)
+    monkeypatch.setattr('mcp_memory.daemon.time.sleep', lambda _: None)
+    monkeypatch.setattr('mcp_memory.daemon.time.monotonic', _fake_monotonic)
+
+    terminate_calls: list[int] = []
+    monkeypatch.setattr(
+        'mcp_memory.daemon._terminate_daemon_process',
+        lambda pid, **kwargs: terminate_calls.append(pid),
+    )
+
+    with pytest.raises(RuntimeError, match='Timed out waiting for global daemon startup'):
+        ensure_daemon_started()
+
+    assert terminate_calls == [5555]
+
+
 def test_ensure_daemon_started_allows_short_grace_for_late_health(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path / 'state'))
     config = Config()

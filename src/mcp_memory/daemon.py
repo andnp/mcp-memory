@@ -207,70 +207,85 @@ def ensure_daemon_started(
             daemon_port = _find_free_port()
         spawn_details = _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
         poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
-        readiness_deadline = time.monotonic() + timeout_seconds
-        current = None
-        while time.monotonic() < readiness_deadline:
-            current = _read_daemon_metadata(metadata_path)
-            if current is not None and _is_daemon_healthy(current):
-                return current
-            if _spawned_daemon_exited_before_readiness(spawn_details, current):
-                raise RuntimeError(
-                    _format_startup_failure_message(
-                        "Global daemon exited before becoming ready.",
-                        spawn_details=spawn_details,
-                        metadata=current,
-                    )
-                )
-            time.sleep(poll_interval_seconds)
-
-        if current is None:
-            metadata_grace_deadline = time.monotonic() + max(20.0, timeout_seconds)
-            while time.monotonic() < metadata_grace_deadline:
+        try:
+            readiness_deadline = time.monotonic() + timeout_seconds
+            current = None
+            while time.monotonic() < readiness_deadline:
                 current = _read_daemon_metadata(metadata_path)
-                if current is not None:
-                    break
+                if current is not None and _is_daemon_healthy(current):
+                    return current
                 if _spawned_daemon_exited_before_readiness(spawn_details, current):
                     raise RuntimeError(
                         _format_startup_failure_message(
-                            "Global daemon exited before publishing readiness metadata.",
+                            "Global daemon exited before becoming ready.",
                             spawn_details=spawn_details,
                             metadata=current,
                         )
                     )
                 time.sleep(poll_interval_seconds)
 
-        if current is not None and _is_process_running(current.pid):
-            grace_seconds = max(5.0, timeout_seconds * 2)
-            grace_deadline = time.monotonic() + grace_seconds
-            while time.monotonic() < grace_deadline:
+            if current is None:
+                metadata_grace_deadline = time.monotonic() + max(20.0, timeout_seconds)
+                while time.monotonic() < metadata_grace_deadline:
+                    current = _read_daemon_metadata(metadata_path)
+                    if current is not None:
+                        break
+                    if _spawned_daemon_exited_before_readiness(spawn_details, current):
+                        raise RuntimeError(
+                            _format_startup_failure_message(
+                                "Global daemon exited before publishing readiness metadata.",
+                                spawn_details=spawn_details,
+                                metadata=current,
+                            )
+                        )
+                    time.sleep(poll_interval_seconds)
+
+            if current is not None and _is_process_running(current.pid):
+                grace_seconds = max(5.0, timeout_seconds * 2)
+                grace_deadline = time.monotonic() + grace_seconds
+                while time.monotonic() < grace_deadline:
+                    latest = _read_daemon_metadata(metadata_path)
+                    if latest is not None and _is_daemon_healthy(latest):
+                        return latest
+                    if _spawned_daemon_exited_before_readiness(spawn_details, latest):
+                        raise RuntimeError(
+                            _format_startup_failure_message(
+                                "Global daemon exited before reaching a healthy state.",
+                                spawn_details=spawn_details,
+                                metadata=latest,
+                            )
+                        )
+                    time.sleep(poll_interval_seconds)
                 latest = _read_daemon_metadata(metadata_path)
-                if latest is not None and _is_daemon_healthy(latest):
-                    return latest
-                if _spawned_daemon_exited_before_readiness(spawn_details, latest):
+                if latest is not None and _is_process_running(latest.pid):
                     raise RuntimeError(
                         _format_startup_failure_message(
-                            "Global daemon exited before reaching a healthy state.",
+                            "Timed out waiting for global daemon startup.",
                             spawn_details=spawn_details,
                             metadata=latest,
                         )
                     )
-                time.sleep(poll_interval_seconds)
-            latest = _read_daemon_metadata(metadata_path)
-            if latest is not None and _is_process_running(latest.pid):
-                raise RuntimeError(
-                    _format_startup_failure_message(
-                        "Timed out waiting for global daemon startup.",
-                        spawn_details=spawn_details,
-                        metadata=latest,
-                    )
+            raise RuntimeError(
+                _format_startup_failure_message(
+                    "Timed out waiting for global daemon startup.",
+                    spawn_details=spawn_details,
+                    metadata=current,
                 )
-        raise RuntimeError(
-            _format_startup_failure_message(
-                "Timed out waiting for global daemon startup.",
-                spawn_details=spawn_details,
-                metadata=current,
             )
-        )
+        except RuntimeError:
+            try:
+                _terminate_spawned_daemon_process(
+                    spawn_details,
+                    shutdown_grace_seconds=spec.config.daemon.shutdown_grace_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to terminate daemon subprocess pid=%s after startup timeout",
+                    spawn_details.pid,
+                    exc_info=True,
+                )
+            raise
     finally:
         lock.release()
 
@@ -414,6 +429,25 @@ def _wait_for_process_exit(
         deadline=deadline,
         poll_interval_seconds=poll_interval_seconds,
         is_process_running=_is_process_running,
+    )
+
+
+def _terminate_spawned_daemon_process(
+    spawn_details: DaemonSpawnDetails,
+    *,
+    shutdown_grace_seconds: float,
+    poll_interval_seconds: float,
+) -> None:
+    if not _is_process_running(spawn_details.pid):
+        return
+    logger.warning(
+        "Killing daemon subprocess pid=%s that failed to become ready before giving up",
+        spawn_details.pid,
+    )
+    _terminate_daemon_process(
+        spawn_details.pid,
+        deadline=time.monotonic() + max(shutdown_grace_seconds, 1.0),
+        poll_interval_seconds=poll_interval_seconds,
     )
 
 
