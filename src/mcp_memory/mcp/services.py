@@ -702,7 +702,7 @@ def search_memory_records_service(
     )
     if inflight_search is not None and not inflight_search.is_leader:
         try:
-            payload = ctx.read_cache.wait_for_inflight_search(inflight_search)
+            coalesced_payload = ctx.read_cache.wait_for_inflight_search(inflight_search)
         except Exception as error:
             if _shared_read_cache_enabled(
                 ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
@@ -733,7 +733,7 @@ def search_memory_records_service(
         duration_ms = (perf_counter() - started_at) * 1000.0
         surfaced_memory_ids = [
             str(result["memory_id"])
-            for result in payload.get("results", [])
+            for result in coalesced_payload.get("results", [])
             if isinstance(result, dict) and isinstance(result.get("memory_id"), str)
         ]
         _record_search_invocation(
@@ -743,7 +743,7 @@ def search_memory_records_service(
             surfaced_memory_ids=surfaced_memory_ids,
             duration_ms=duration_ms,
         )
-        return payload
+        return coalesced_payload
     diagnostics = None
     try:
         if debug_enabled:
@@ -792,7 +792,7 @@ def search_memory_records_service(
     result_payloads = _build_search_result_payloads(
         results, debug_enabled=debug_enabled
     )
-    payload = {
+    payload: dict[str, object] = {
         "status": "ok",
         "results": result_payloads,
     }
@@ -920,7 +920,7 @@ def read_memory_record_service(
         )
         for record in result.superseded
     ]
-    payload = {
+    payload: dict[str, object] = {
         "status": "ok",
         "record": (
             agent_memory_record_payload_with_metadata(result.record)
