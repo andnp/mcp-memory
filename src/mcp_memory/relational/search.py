@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypedDict, cast
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, is_fallback_embedding_model
@@ -38,6 +38,13 @@ DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE = 32
 DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN = 8
 QUERY_EMBEDDING_CACHE_TTL_SECONDS = 300.0
 QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 128
+
+
+class _SemanticScoreKwargs(TypedDict, total=False):
+    candidate_ids: Sequence[str] | None
+    semantic_timing_ms: dict[str, float] | None
+    vector_search_diagnostics: dict[str, object] | None
+    limit: int
 
 
 logger = logging.getLogger(__name__)
@@ -963,14 +970,29 @@ class RelationalMemorySearchService:
             parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in signature.parameters.values()
         )
+        optional_kwargs: _SemanticScoreKwargs = {
+            "candidate_ids": candidate_ids,
+            "semantic_timing_ms": semantic_timing_ms,
+            "vector_search_diagnostics": vector_search_diagnostics,
+            "limit": limit,
+        }
+        filtered_kwargs = (
+            optional_kwargs
+            if accepts_var_kwargs
+            else cast(
+                "_SemanticScoreKwargs",
+                {
+                    key: value
+                    for key, value in optional_kwargs.items()
+                    if key in signature.parameters
+                },
+            )
+        )
         return self._semantic_scores(
             query,
             candidates,
             workspace_id,
-            candidate_ids=candidate_ids if accepts_var_kwargs or "candidate_ids" in signature.parameters else None,
-            semantic_timing_ms=semantic_timing_ms if accepts_var_kwargs or "semantic_timing_ms" in signature.parameters else None,
-            vector_search_diagnostics=vector_search_diagnostics if accepts_var_kwargs or "vector_search_diagnostics" in signature.parameters else None,
-            limit=limit,
+            **filtered_kwargs,
         )
 
     def _compute_semantic_matches(
