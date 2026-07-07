@@ -10,7 +10,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
-ToolService = Callable[[ApplicationContext, dict], dict]
+ToolService = Callable[..., dict]
 ToolServiceResolver = Callable[[], dict[str, ToolService]]
 ToolSuccessRecorder = Callable[[ApplicationContext, str, dict], None]
 

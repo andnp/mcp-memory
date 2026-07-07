@@ -64,7 +64,7 @@ async def test_internal_dispatch_records_tracker_counts_via_session_bound_task_r
         internal_tool_call_tracker=tracker,
     )
 
-    def _ok_service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+    def _ok_service(ctx: ApplicationContext, arguments: dict) -> dict:
         return {"status": "ok"}
 
     services = {
