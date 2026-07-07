@@ -284,7 +284,7 @@ class FakeCursor:
         if "memories.status = %s" in normalized:
             status = str(params.pop(0))
 
-        rows = []
+        rows: list[tuple[object, ...]] = []
         for memory in self._sorted_memories():
             memory_id = str(memory["id"])
             if workspace_id is not None and workspace_id not in self._state.memory_workspaces.get(memory_id, set()):
@@ -370,7 +370,7 @@ class FakeCursor:
         else:
             memory_ids = {str(arguments[0])}
         link_type = str(arguments[1]) if len(arguments) > 1 else None
-        rows = []
+        rows: list[tuple[object, ...]] = []
         for source_id, target_id, stored_link_type in sorted(self._state.links):
             matched_memory_id = source_id if direction_key == "source_id" else target_id
             if matched_memory_id not in memory_ids:
