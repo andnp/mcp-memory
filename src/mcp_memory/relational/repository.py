@@ -695,7 +695,7 @@ class RelationalMemoryRepository:
     ):
         conn = self._db.get_connection()
         clauses = []
-        params = []
+        params: list[object] = []
 
         query = "SELECT DISTINCT memories.* FROM memories"
         if workspace_id is not None:
@@ -725,7 +725,7 @@ class RelationalMemoryRepository:
     ) -> list[str]:
         conn = self._db.get_connection()
         clauses = []
-        params = []
+        params: list[object] = []
 
         query = "SELECT DISTINCT memories.id FROM memories"
         if workspace_id is not None:
