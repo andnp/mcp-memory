@@ -200,7 +200,7 @@ class RecordThoughtOperation:
         normalized_content = _normalize_record_thought_content(content)
         recorded_at = time.time()
         entry = self._record_entry_with_writeback(normalized_content, recorded_at=recorded_at)
-        payload = {
+        payload: dict[str, object] = {
             "status": "recorded",
             "entry": entry.to_dict(),
         }
