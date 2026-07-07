@@ -2038,7 +2038,7 @@ def test_provider_for_task_accepts_provider_selection_capability_view() -> None:
             execution_epoch: int | None = None,
             workspace_id: str | None = None,
         ) -> dict[str, object | None]:
-            bound = {
+            bound: dict[str, object | None] = {
                 "task_name": task_name,
                 "task_id": task_id,
                 "execution_epoch": execution_epoch,
