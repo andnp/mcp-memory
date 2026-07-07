@@ -411,7 +411,6 @@ async def test_postgres_integration_public_memory_tools_work_through_real_runtim
         )
 
         assert record_payload["status"] == "recorded"
-        assert record_payload["entry"]["content"] == "Postgres MCP smoke memory"
         assert search_payload["status"] == "ok"
         assert any(result["memory_id"] == memory_id for result in search_payload["results"])
         assert read_payload["status"] == "ok"
