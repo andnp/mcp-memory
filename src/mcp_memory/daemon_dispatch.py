@@ -198,7 +198,7 @@ def serialize_tool_response(response) -> dict[str, object]:
 
 def normalize_request(path: str, payload: dict | None) -> tuple[str, dict[str, object]]:
     split = urlsplit(path)
-    request_payload = {} if payload is None else dict(payload)
+    request_payload: dict[str, object] = {} if payload is None else dict(payload)
     if split.query:
         for key, values in parse_qs(split.query, keep_blank_values=True).items():
             if key in request_payload:
