@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import psycopg
 
 from mcp_memory.config import PostgresStorageConfig
 from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
@@ -23,6 +26,9 @@ from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
 from mcp_memory.storage.types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
+
+
+logger = logging.getLogger(__name__)
 
 
 class UnsupportedPostgresRuntimeComponent:
@@ -95,13 +101,36 @@ def _inspect_postgres_bootstrap_state_on_cursor(cursor: CursorLike) -> StorageBo
     )
 
 
+def _ensure_postgres_schema_tolerating_outage(
+    config: PostgresStorageConfig,
+    *,
+    tolerate_outage: bool,
+) -> StorageBootstrapState | None:
+    try:
+        return ensure_postgres_schema(config)
+    except psycopg.OperationalError:
+        if not tolerate_outage:
+            raise
+        logger.warning(
+            "Postgres unreachable during schema bootstrap; starting daemon in degraded mode. "
+            "Writes will queue to the local writeback cache until connectivity returns.",
+            exc_info=True,
+        )
+        return None
+
+
 def build_postgres_runtime_components(
     spec: StorageBootstrapSpec,
     *,
     embedder: Any,
     enable_background_repair_queue: bool,
 ) -> StorageBackendResources:
-    bootstrap_state = ensure_postgres_schema(spec.config.storage.postgres)
+    cache_config = spec.config.storage.cache
+    tolerate_outage = cache_config.enabled and cache_config.mode == "writeback"
+    bootstrap_state = _ensure_postgres_schema_tolerating_outage(
+        spec.config.storage.postgres,
+        tolerate_outage=tolerate_outage,
+    )
     connection_manager = PostgresConnectionManager(spec.config.storage.postgres)
     repository = PostgresRelationalMemoryRepository(connection_manager)
     journal = PostgresSystem1Journal(connection_manager)
@@ -133,7 +162,9 @@ def build_postgres_runtime_components(
     read_cache = None
     if spec.config.storage.cache.enabled and spec.config.storage.cache.mode in {"readonly", "writeback"}:
         read_cache = SharedReadCache(spec.memory_path / "cache" / "shared_read_cache.sqlite3")
-    if not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None:
+    if bootstrap_state is not None and (
+        not bootstrap_state.schema_metadata_present or bootstrap_state.schema_version is None
+    ):
         raise PostgresBackendNotImplementedError(
             "storage backend 'postgres' schema bootstrap did not complete successfully"
         )

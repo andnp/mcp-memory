@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import psycopg
 import pytest
 
 from mcp_memory.config import AIConfig, Config, PostgresStorageConfig, ProviderRoutingConfig, StorageConfig
@@ -95,6 +96,68 @@ def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_read
     storage = build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
 
     assert isinstance(storage.read_cache, SharedReadCache)
+
+
+def test_storage_factory_starts_degraded_when_postgres_unreachable_and_writeback_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config(
+        storage=StorageConfig(
+            backend="postgres",
+            postgres=PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"),
+        )
+    )
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "writeback"
+    spec = StorageBootstrapSpec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-123",
+    )
+
+    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig) -> StorageBootstrapState:
+        raise psycopg.OperationalError("couldn't get a connection after 30.00 sec")
+
+    monkeypatch.setattr(
+        "mcp_memory.storage.postgres.ensure_postgres_schema",
+        fake_ensure_postgres_schema_unreachable,
+    )
+
+    storage = build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
+
+    assert storage.backend == "postgres"
+    assert isinstance(storage.read_cache, SharedReadCache)
+
+
+def test_storage_factory_still_fails_startup_when_postgres_unreachable_without_writeback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config(
+        storage=StorageConfig(
+            backend="postgres",
+            postgres=PostgresStorageConfig(dsn="postgresql://memory@example.invalid/mcp_memory"),
+        )
+    )
+    config.storage.cache.enabled = True
+    config.storage.cache.mode = "readonly"
+    spec = StorageBootstrapSpec(
+        memory_path=tmp_path / "memories",
+        config=config,
+        workspace_id="workspace-123",
+    )
+
+    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig) -> StorageBootstrapState:
+        raise psycopg.OperationalError("couldn't get a connection after 30.00 sec")
+
+    monkeypatch.setattr(
+        "mcp_memory.storage.postgres.ensure_postgres_schema",
+        fake_ensure_postgres_schema_unreachable,
+    )
+
+    with pytest.raises(psycopg.OperationalError):
+        build_storage_runtime_components(spec, embedder=None, enable_background_repair_queue=False)
 
 
 def test_storage_factory_accepts_minimal_storage_bootstrap_spec(
