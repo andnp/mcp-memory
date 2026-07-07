@@ -835,7 +835,17 @@ def test_postgres_integration_maintenance_housekeeping_handlers_update_state(
 
         assert project_result == {"updated": 1}
         assert fact_result == {"degraded": 1, "restored": 0}
-        assert sweep_result == {"deleted_tasks": 1, "deleted_journal_entries": 1}
+        assert sweep_result == {
+            "deleted_tasks": 1,
+            "deleted_journal_entries": 1,
+            "gc_metadata_records": 0,
+            "lineage_hotspots": {
+                "active_split_original_records": 0,
+                "oversized_lineage_metadata_records": 0,
+                "high_relationship_density_records": 0,
+                "examples": [],
+            },
+        }
         assert stale_plan_record is not None
         assert healthy_memory_record is not None
         assert broken_memory_record is not None
@@ -933,8 +943,24 @@ def test_postgres_integration_sweeper_preserves_unexpired_recoverable_entries_an
                 )
                 remaining_recoverable = cursor.fetchall()
 
-        assert first == {"deleted_tasks": 1, "deleted_journal_entries": 2}
-        assert second == {"deleted_tasks": 0, "deleted_journal_entries": 0}
+        empty_lineage_hotspots = {
+            "active_split_original_records": 0,
+            "oversized_lineage_metadata_records": 0,
+            "high_relationship_density_records": 0,
+            "examples": [],
+        }
+        assert first == {
+            "deleted_tasks": 1,
+            "deleted_journal_entries": 2,
+            "gc_metadata_records": 0,
+            "lineage_hotspots": empty_lineage_hotspots,
+        }
+        assert second == {
+            "deleted_tasks": 0,
+            "deleted_journal_entries": 0,
+            "gc_metadata_records": 0,
+            "lineage_hotspots": empty_lineage_hotspots,
+        }
         assert remaining_recoverable == [(preserved_row[0],)]
         assert runtime.vector_store.deleted == [("thought", str(expired_row[0]), None)]
     finally:
