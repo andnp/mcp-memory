@@ -2,16 +2,42 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event
+from typing import cast
 
 import pytest
 
 from mcp_memory.core import journal_operations as journal_operations_module
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
 pytestmark = pytest.mark.small
+
+
+def test_record_thought_falls_back_to_writeback_outbox_on_journal_unavailable(
+    tmp_path: Path,
+) -> None:
+    class UnreachableJournal:
+        def record_with_timestamp(self, content, workspace_id=None, timestamp=None):
+            raise RuntimeError("journal_unavailable")
+
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    operation = RecordThoughtOperation(
+        cast(System1Journal, UnreachableJournal()),
+        task_queue=None,
+        workspace_id="workspace-a",
+        writeback_cache=cache,
+        max_outbox_entries=10,
+    )
+
+    payload = operation.execute("a thought recorded during an outage")
+
+    assert payload["entry"]["status"] == "queued_writeback"
+    assert payload["degraded"] is True
+    assert payload["cache_status"] == "writeback_queued"
+    assert cache.count_record_thought_outbox_entries() == 1
 
 
 def test_flush_record_thought_writeback_outbox_resumes_maintenance_and_schedules_ingest_for_flushed_workspaces(

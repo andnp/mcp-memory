@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import psycopg
+
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -25,5 +27,8 @@ def require_connection(
 ) -> Iterator[DbConnectionLike]:
     if sessions is None:
         raise RuntimeError(error)
-    with sessions.open_connection() as connection:
-        yield connection
+    try:
+        with sessions.open_connection() as connection:
+            yield connection
+    except psycopg.OperationalError as exc:
+        raise RuntimeError(error) from exc
