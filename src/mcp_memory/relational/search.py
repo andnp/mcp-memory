@@ -963,26 +963,14 @@ class RelationalMemorySearchService:
             parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in signature.parameters.values()
         )
-        optional_kwargs = {
-            "candidate_ids": candidate_ids,
-            "semantic_timing_ms": semantic_timing_ms,
-            "vector_search_diagnostics": vector_search_diagnostics,
-            "limit": limit,
-        }
-        filtered_kwargs = (
-            optional_kwargs
-            if accepts_var_kwargs
-            else {
-                key: value
-                for key, value in optional_kwargs.items()
-                if key in signature.parameters
-            }
-        )
         return self._semantic_scores(
             query,
             candidates,
             workspace_id,
-            **filtered_kwargs,
+            candidate_ids=candidate_ids if accepts_var_kwargs or "candidate_ids" in signature.parameters else None,
+            semantic_timing_ms=semantic_timing_ms if accepts_var_kwargs or "semantic_timing_ms" in signature.parameters else None,
+            vector_search_diagnostics=vector_search_diagnostics if accepts_var_kwargs or "vector_search_diagnostics" in signature.parameters else None,
+            limit=limit,
         )
 
     def _compute_semantic_matches(
