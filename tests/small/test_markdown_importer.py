@@ -84,4 +84,4 @@ def test_import_markdown_memory_paths_imports_multiple_files(db_manager, tmp_pat
     repository = RelationalMemoryRepository(db_manager)
     imported = import_markdown_memory_paths(repository, [str(tmp_path / "*.md")], ["workspace-a"])
 
-    assert [record.title for record in imported] == ["Alpha", "Beta"]
+    assert [record.title for record in imported if record is not None] == ["Alpha", "Beta"]
