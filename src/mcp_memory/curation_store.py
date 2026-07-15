@@ -30,6 +30,7 @@ class CurationRunState(StrEnum):
 class CurationReceiptState(StrEnum):
     APPLIED_UNVERIFIED = "applied_unverified"
     VERIFIED = "verified"
+    VERIFICATION_FAILED = "verification_failed"
     REJECTED = "rejected"
     STALE = "stale"
     FAILED = "failed"
@@ -153,6 +154,7 @@ _RECEIPT_TRANSITIONS: dict[CurationReceiptState, frozenset[CurationReceiptState]
     CurationReceiptState.APPLIED_UNVERIFIED: frozenset(
         {
             CurationReceiptState.VERIFIED,
+            CurationReceiptState.VERIFICATION_FAILED,
             CurationReceiptState.REJECTED,
             CurationReceiptState.STALE,
             CurationReceiptState.FAILED,
