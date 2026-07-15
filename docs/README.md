@@ -44,6 +44,8 @@ When a non-active spec conflicts with an active spec, the active spec wins.
 - `specs/09-autonomous-agent-requirements.md` — maintenance-agent product intent
 - `specs/10-testing-strategy.md` — testing expectations and layers
 - `specs/11-e2e-user-flows.md` — end-to-end product flows
+- `specs/19-curation-quality-and-family-ownership.md` — proposed curation quality, coverage, routing, and convergence policy
+- `specs/20-memory-mutation-history-and-restore.md` — proposed reversible history, protection, and restore model
 
 ## UI and operator surfaces
 
@@ -61,6 +63,8 @@ These are intentionally useful, but they are **not** the primary source of curre
 - `specs/12-nerd-metrics-analytics.md`
 - `specs/14-work-item-execution-architecture.md`
 - `specs/15-search-repair-queue-architecture.md`
+- `specs/19-curation-quality-and-family-ownership.md`
+- `specs/20-memory-mutation-history-and-restore.md`
 
 ## Plans and history
 
@@ -70,6 +74,8 @@ Recommended entries:
 
 - `plans/07-architecture-review-and-refactor-roadmap.md` — larger refactor context
 - `plans/08-24h-health-follow-up-task-list.md` — operator follow-up context
+- `plans/10-curation-harness-and-typed-planner.md` — draft direction for automatic memory cleanup
+- `plans/11-curation-implementation-task-list.md` — small-agent implementation backlog for the curation direction
 - `plans/09-dual-backend-storage-and-writeback-cache.md` — historical bridge for the storage/cache transition
 - `plans/09-single-writer-task-state-resilience.md` — task-state hardening context
 
@@ -99,6 +105,13 @@ Recommended entries:
 2. `specs/08-system-resilience.md`
 3. `specs/14-work-item-execution-architecture.md`
 4. `specs/15-search-repair-queue-architecture.md`
+
+### I want to implement safe automatic curation
+
+1. `specs/19-curation-quality-and-family-ownership.md`
+2. `specs/20-memory-mutation-history-and-restore.md`
+3. `plans/10-curation-harness-and-typed-planner.md`
+4. `plans/11-curation-implementation-task-list.md`
 
 ### I want design history without mistaking it for current truth
 
