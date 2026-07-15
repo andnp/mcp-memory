@@ -8,6 +8,7 @@ from .postgres_connection import (
     load_postgres_driver_modules,
 )
 from .postgres_repository import PostgresRelationalMemoryRepository
+from .postgres_curation_action_store import PostgresCurationActionStore
 from .postgres_runtime_log_store import PostgresRuntimeLogRepository, PostgresStructuredLogHandler
 from .postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from .postgres_curation_store import PostgresCurationRepository, PostgresCurationStore
@@ -35,6 +36,7 @@ __all__ = [
     "POSTGRES_SCHEMA_VERSION",
     "PooledPostgresConnectionLease",
     "PostgresRelationalMemoryRepository",
+    "PostgresCurationActionStore",
     "PostgresMutationHistoryRepository",
     "PostgresMutationHistoryStore",
     "PostgresRuntimeLogRepository",
