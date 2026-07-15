@@ -17,6 +17,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
+from mcp_memory.core.providers.interfaces import ProviderJSONCall
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 
@@ -299,7 +300,12 @@ class InstrumentedAIProvider:
     def supports_agentic(self) -> bool:
         return callable(getattr(self._provider, "run_agent", None))
 
-    async def ask_json(self, prompt: str) -> dict:
+    async def ask_json(
+        self,
+        prompt: str,
+        *,
+        _on_call_complete: Callable[[ProviderJSONCall], None] | None = None,
+    ) -> dict:
         started_at = time.time()
         request_id = str(uuid4())
         observer_state = _ProviderObserverState()
@@ -324,6 +330,25 @@ class InstrumentedAIProvider:
                 reason_category=classification.reason_category,
                 reason_code=classification.reason_code,
                 retry_delay_seconds=classification.retry_delay_seconds,
+            )
+            _notify_json_call(
+                _on_call_complete,
+                ProviderJSONCall(
+                    response=None,
+                    provider_key=self._provider_key,
+                    provider_name=self._provider_name,
+                    model_name=self._model_name,
+                    request_id=request_id,
+                    attempt=0,
+                    started_at=started_at,
+                    completed_at=started_at,
+                    status="skipped",
+                    error_text=classification.error_text,
+                    reason_code=classification.reason_code,
+                    retry_delay_seconds=classification.retry_delay_seconds,
+                    admission_status="skipped",
+                    premium_request=False,
+                ),
             )
             raise
 
@@ -378,6 +403,27 @@ class InstrumentedAIProvider:
                 error_text="Command cancelled",
                 termination_reason="provider_cancelled",
             )
+            _notify_json_call(
+                _on_call_complete,
+                ProviderJSONCall(
+                    response=None,
+                    provider_key=self._provider_key,
+                    provider_name=self._provider_name,
+                    model_name=self._model_name,
+                    request_id=request_id,
+                    attempt=_extract_attempt(observer_state.last_event),
+                    started_at=_extract_started_at(observer_state.last_event, fallback=started_at),
+                    completed_at=_extract_completed_at(observer_state.last_event, fallback=completed_at),
+                    status="cancelled",
+                    error_text="Command cancelled",
+                    reason_code="provider_cancelled",
+                    raw_text=_extract_raw_text(observer_state.last_event),
+                    parsed=None,
+                    admission_status="admitted",
+                    cancellation_requested=True,
+                    premium_request=True,
+                ),
+            )
             raise
         except Exception as exc:
             completed_at = time.time()
@@ -430,6 +476,27 @@ class InstrumentedAIProvider:
                 error_text=classification.error_text,
                 termination_reason=classification.reason_code,
             )
+            _notify_json_call(
+                _on_call_complete,
+                ProviderJSONCall(
+                    response=None,
+                    provider_key=self._provider_key,
+                    provider_name=self._provider_name,
+                    model_name=self._model_name,
+                    request_id=request_id,
+                    attempt=_extract_attempt(observer_state.last_event),
+                    started_at=_extract_started_at(observer_state.last_event, fallback=started_at),
+                    completed_at=_extract_completed_at(observer_state.last_event, fallback=completed_at),
+                    status=_extract_status(observer_state.last_event, fallback="error"),
+                    error_text=classification.error_text,
+                    reason_code=classification.reason_code,
+                    retry_delay_seconds=classification.retry_delay_seconds,
+                    raw_text=_extract_raw_text(observer_state.last_event),
+                    parsed=None,
+                    admission_status="admitted",
+                    premium_request=True,
+                ),
+            )
             raise
         self._usage_repository.clear_admission_state(provider_key=self._provider_key, model_name=self._model_name)
         completed_at = time.time()
@@ -465,7 +532,48 @@ class InstrumentedAIProvider:
             error_text=None,
             termination_reason=None,
         )
+        _notify_json_call(
+            _on_call_complete,
+            ProviderJSONCall(
+                response=response,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                request_id=request_id,
+                attempt=_extract_attempt(observer_state.last_event),
+                started_at=_extract_started_at(observer_state.last_event, fallback=started_at),
+                completed_at=_extract_completed_at(observer_state.last_event, fallback=completed_at),
+                status=_extract_status(observer_state.last_event, fallback="success"),
+                raw_text=_extract_raw_text(observer_state.last_event) or json.dumps(response, sort_keys=True),
+                parsed=response,
+                admission_status="admitted",
+                premium_request=True,
+            ),
+        )
         return response
+
+    async def ask_json_with_telemetry(self, prompt: str) -> ProviderJSONCall:
+        """Call JSON mode while returning the wrapper's authoritative metadata."""
+
+        result: ProviderJSONCall | None = None
+
+        def capture(value: ProviderJSONCall) -> None:
+            nonlocal result
+            result = value
+
+        try:
+            await self.ask_json(prompt, _on_call_complete=capture)
+        except asyncio.CancelledError as exc:
+            if result is not None:
+                setattr(exc, "provider_json_call", result)
+            raise
+        except Exception:
+            if result is not None:
+                return result
+            raise
+        if result is None:
+            raise RuntimeError("instrumented_provider_did_not_report_json_call")
+        return result
 
     async def ask(self, prompt: str) -> dict:
         return await self.ask_json(prompt)
@@ -656,6 +764,27 @@ def _extract_subprocess_pid(event: ProviderObserverEvent | None) -> int | None:
     return event.subprocess_pid
 
 
+def _extract_attempt(event: ProviderObserverEvent | None) -> int:
+    if event is None:
+        return 1
+    return event.attempt
+
+
+def _extract_started_at(event: ProviderObserverEvent | None, *, fallback: float) -> float:
+    if isinstance(
+        event,
+        (ProviderAttemptStartedEvent, ProviderAttemptHeartbeatEvent, ProviderAttemptFinishedEvent),
+    ):
+        return event.started_at
+    return fallback
+
+
+def _extract_completed_at(event: ProviderObserverEvent | None, *, fallback: float) -> float:
+    if isinstance(event, ProviderAttemptFinishedEvent):
+        return event.completed_at
+    return fallback
+
+
 def _extract_status(event: ProviderObserverEvent | None, *, fallback: str) -> str:
     if not isinstance(event, ProviderAttemptFinishedEvent):
         return fallback
@@ -666,3 +795,15 @@ def _extract_raw_text(event: ProviderObserverEvent | None) -> str | None:
     if not isinstance(event, ProviderAttemptFinishedEvent):
         return None
     return event.raw_text
+
+
+def _notify_json_call(
+    callback: Callable[[ProviderJSONCall], None] | None,
+    result: ProviderJSONCall,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(result)
+    except Exception:
+        logger.exception("Instrumented provider JSON telemetry callback failed")

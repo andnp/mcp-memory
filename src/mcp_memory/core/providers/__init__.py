@@ -10,6 +10,7 @@ from mcp_memory.core.providers.copilot_sdk import CopilotSDKProvider
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider
 from mcp_memory.core.providers.interfaces import JSONTaskProvider
+from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
 
 class AIProvider(Protocol):
@@ -49,6 +50,7 @@ __all__ = [
     "AgenticRunResult",
     "AgenticTaskProvider",
     "JSONTaskProvider",
+    "ProviderJSONCall",
     "build_agentic_ai_provider",
     "build_json_ai_provider",
 ]

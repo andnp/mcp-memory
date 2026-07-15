@@ -14,6 +14,31 @@ class AgenticRunResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderJSONCall:
+    """The authoritative result and lifecycle metadata for one JSON call."""
+
+    response: dict[str, Any] | None
+    provider_key: str
+    provider_name: str
+    model_name: str
+    request_id: str
+    attempt: int
+    started_at: float
+    completed_at: float
+    status: str
+    error_text: str | None = None
+    reason_code: str | None = None
+    retry_delay_seconds: float | None = None
+    raw_text: str | None = None
+    parsed: dict[str, Any] | None = None
+    admission_status: str | None = None
+    cancellation_requested: bool = False
+    premium_request: bool | None = None
+    token_usage: int | None = None
+    token_usage_source: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderObserverEvent:
     attempt: int
     prompt: str | None

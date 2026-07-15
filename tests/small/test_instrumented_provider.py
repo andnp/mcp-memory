@@ -137,3 +137,50 @@ async def test_instrumented_provider_records_attempts_from_typed_observer_events
     assert attempt.started_at == pytest.approx(10.0)
     assert attempt.last_heartbeat_at == pytest.approx(12.0)
     assert attempt.completed_at == pytest.approx(12.0)
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_exposes_authoritative_json_call_telemetry(db_manager) -> None:
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask_json(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            self._observer(
+                ProviderAttemptStartedEvent(attempt=1, prompt=prompt, subprocess_pid=5150, started_at=10.0)
+            )
+            self._observer(
+                ProviderAttemptFinishedEvent(
+                    attempt=1,
+                    prompt=prompt,
+                    subprocess_pid=5150,
+                    started_at=10.0,
+                    completed_at=11.0,
+                    duration_seconds=1.0,
+                    status="success",
+                    raw_text='{"ok": true}',
+                    parsed={"ok": True},
+                )
+            )
+            return {"ok": True}
+
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="copilot-strong",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    )
+
+    result = await provider.ask_json_with_telemetry("record this call")
+
+    assert result.response == {"ok": True}
+    assert result.request_id
+    assert result.attempt == 1
+    assert result.started_at == pytest.approx(10.0)
+    assert result.completed_at == pytest.approx(11.0)
+    assert result.premium_request is True
