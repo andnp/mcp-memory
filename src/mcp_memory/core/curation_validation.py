@@ -8,6 +8,7 @@ produced it and fits the harness' structural budgets.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal, Mapping
 from uuid import UUID
 
@@ -16,9 +17,13 @@ from pydantic import TypeAdapter, ValidationError
 from mcp_memory.core.curation_context import CurationContextPacket
 from mcp_memory.core.curation_identity import action_id
 from mcp_memory.core.curation_models import (
+    CurationAction,
     CurationPlan,
     CurationPlanningRequest,
 )
+from mcp_memory.core.curation_policy import RejectionCode, evaluate_curation_action
+from mcp_memory.core.curation_routing import MaintenanceFamily, primary_family_for_operation
+from mcp_memory.mutation_history import ProtectionMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +51,7 @@ class CurationRetryFeedback:
 
 @dataclass(frozen=True, slots=True)
 class CurationValidationIssue:
-    code: str
+    code: "CurationValidationReasonCode"
     message: str
     field: str | None = None
 
@@ -58,10 +63,50 @@ class CurationValidationResult:
     plan: CurationPlan | None
     issues: tuple[CurationValidationIssue, ...] = ()
     retry_feedback: CurationRetryFeedback | None = None
+    accepted_actions: tuple["AcceptedCurationAction", ...] = ()
+    rejected_actions: tuple["RejectedCurationAction", ...] = ()
+    specialist_routes: tuple["CurationSpecialistRoute", ...] = ()
 
     @property
     def valid(self) -> bool:
         return self.plan is not None and not self.issues
+
+
+class CurationValidationReasonCode(StrEnum):
+    SCHEMA_VERSION_MISMATCH = "schema_version_mismatch"
+    RUN_ID_MISMATCH = "run_id_mismatch"
+    PLAN_ID_MISMATCH = "plan_id_mismatch"
+    FRONTIER_MISMATCH = "frontier_mismatch"
+    CONTEXT_MISMATCH = "context_mismatch"
+    CONTEXT_MISSING = "context_missing"
+    SEED_SET_MISMATCH = "seed_set_mismatch"
+    DUPLICATE_SEED = "duplicate_seed"
+    DUPLICATE_RETENTION = "duplicate_retention"
+    PROPOSED_ACTIONS_BUDGET = "proposed_actions_budget"
+    ACCEPTED_MUTATIONS_BUDGET = "accepted_mutations_budget"
+    TARGET_NOT_VISIBLE = "target_not_visible"
+    DUPLICATE_ACTION_ID = "duplicate_action_id"
+    MATERIAL_AMBIGUITY = "material_ambiguity"
+    NEEDS_DIFFERENT_SPECIALIST = "needs_different_specialist"
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedCurationAction:
+    action: CurationAction
+    family: MaintenanceFamily
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedCurationAction:
+    action: CurationAction
+    reason_codes: tuple[RejectionCode, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CurationSpecialistRoute:
+    action: CurationAction
+    family: MaintenanceFamily
+    reason_code: CurationValidationReasonCode = CurationValidationReasonCode.NEEDS_DIFFERENT_SPECIALIST
 
 
 def validate_curation_plan(
@@ -70,8 +115,11 @@ def validate_curation_plan(
     request: CurationPlanningRequest,
     context: CurationContextPacket | Mapping[str, Any] | None = None,
     mutation_budget: CurationMutationBudget | None = None,
+    memory_types: Mapping[UUID, str] | None = None,
+    contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset(),
+    protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
 ) -> CurationValidationResult:
-    """Validate one plan without policy, repository, provider, or mutations."""
+    """Validate one plan and classify actions without storage or mutations."""
 
     typed_plan = _parse_plan(plan)
     if isinstance(typed_plan, CurationValidationResult):
@@ -130,7 +178,30 @@ def validate_curation_plan(
     if issues:
         return CurationValidationResult(plan=None, issues=tuple(issues))
     normalized_plan = typed_plan.model_copy(update={"actions": normalized_actions})
-    return CurationValidationResult(plan=normalized_plan)
+    accepted: list[AcceptedCurationAction] = []
+    rejected: list[RejectedCurationAction] = []
+    routes: list[CurationSpecialistRoute] = []
+    for action in normalized_plan.actions:
+        decision = evaluate_curation_action(
+            action,
+            memory_types=memory_types,
+            contradictory_memory_ids=contradictory_memory_ids,
+            protections_by_memory=protections_by_memory,
+        )
+        if decision.rejection_codes:
+            rejected.append(RejectedCurationAction(action=action, reason_codes=decision.rejection_codes))
+            continue
+        family = primary_family_for_operation(action.operation)
+        if family is not MaintenanceFamily.CURATOR:
+            routes.append(CurationSpecialistRoute(action=action, family=family))
+        elif decision.authorized:
+            accepted.append(AcceptedCurationAction(action=action, family=family))
+    return CurationValidationResult(
+        plan=normalized_plan,
+        accepted_actions=tuple(accepted),
+        rejected_actions=tuple(rejected),
+        specialist_routes=tuple(routes),
+    )
 
 
 def _parse_plan(plan: CurationPlan | Mapping[str, Any]) -> CurationPlan | CurationValidationResult:
@@ -151,7 +222,7 @@ def _parse_plan(plan: CurationPlan | Mapping[str, Any]) -> CurationPlan | Curati
             )
         return CurationValidationResult(
             plan=None,
-            issues=(CurationValidationIssue("material_ambiguity", str(exc)),),
+            issues=(CurationValidationIssue(CurationValidationReasonCode.MATERIAL_AMBIGUITY, str(exc)),),
         )
 
 
@@ -201,8 +272,8 @@ def _uuid_text(value: Any) -> str:
     return str(value if isinstance(value, UUID) else UUID(str(value)))
 
 
-def _issue(code: str, message: str) -> CurationValidationIssue:
-    return CurationValidationIssue(code=code, message=message)
+def _issue(code: CurationValidationReasonCode | str, message: str) -> CurationValidationIssue:
+    return CurationValidationIssue(code=CurationValidationReasonCode(code), message=message)
 
 
 # Short aliases for callers that use the contract's descriptive names.

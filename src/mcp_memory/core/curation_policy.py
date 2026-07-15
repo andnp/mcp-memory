@@ -167,7 +167,10 @@ def evaluate_curation_action(
         codes.append(RejectionCode.MANUAL_REVIEW_REQUIRED)
     if operation in {"archive_memory", "delete_memory"} and ProtectionMode.PINNED_ACTIVE in protections:
         codes.append(RejectionCode.PINNED_ACTIVE)
-    if any(types.get(memory_id) not in {"journal", "observation", "fact", "reflection", "plan"} for memory_id in affected_ids):
+    if memory_types is not None and any(
+        types.get(memory_id) not in {"journal", "observation", "fact", "reflection", "plan"}
+        for memory_id in affected_ids
+    ):
         codes.append(RejectionCode.UNKNOWN_MEMORY_TYPE)
     if isinstance(action, MergeMemoriesAction):
         fact_ids = {memory_id for memory_id in affected_ids if types.get(memory_id) == "fact"}
