@@ -682,6 +682,15 @@ class NerdLifecycleTrendsPayload(BaseModel):
     quality_signals: list[NerdCountSeriesPayload] = Field(default_factory=list)
 
 
+class NerdQualityProducerPayload(BaseModel):
+    task_id: str = "unknown"
+    task_name: str = "unknown"
+    tool_name: str = "unknown"
+    provider_key: str = "unknown"
+    provider_name: str = "unknown"
+    model_name: str = "unknown"
+
+
 class NerdQualityMemoryRowPayload(BaseModel):
     memory_id: str
     title: str
@@ -690,6 +699,7 @@ class NerdQualityMemoryRowPayload(BaseModel):
     status: str
     updated_at: str
     tags: list[str] = Field(default_factory=list)
+    producer: NerdQualityProducerPayload = Field(default_factory=NerdQualityProducerPayload)
 
 
 class NerdQualitySignalDrilldownPayload(BaseModel):
@@ -699,8 +709,17 @@ class NerdQualitySignalDrilldownPayload(BaseModel):
     records: list[NerdQualityMemoryRowPayload] = Field(default_factory=list)
 
 
+class NerdQualityProducerAttributionPayload(BaseModel):
+    signal_key: str
+    signal_label: str
+    count: int = 0
+    repeated: bool = False
+    producer: NerdQualityProducerPayload = Field(default_factory=NerdQualityProducerPayload)
+
+
 class NerdQualityDrilldownPayload(BaseModel):
     signals: list[NerdQualitySignalDrilldownPayload] = Field(default_factory=list)
+    producer_attributions: list[NerdQualityProducerAttributionPayload] = Field(default_factory=list)
 
 
 class NerdQualityRemediationPayload(BaseModel):

@@ -538,6 +538,7 @@ class ScopedMemoryRow:
     content_bytes: int = 0
     workspace_ids: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
     has_split_lineage: bool = False
 
 
@@ -718,6 +719,7 @@ def adapt_scoped_memory_row(row: Mapping[str, object]) -> ScopedMemoryRow:
         content_bytes=_require_int(row, "content_bytes"),
         workspace_ids=_split_csv_values(_optional_str(row, "workspace_ids_csv")),
         tags=_split_csv_values(_optional_str(row, "tags_csv")),
+        metadata=metadata,
         has_split_lineage=_has_split_lineage(metadata),
     )
 

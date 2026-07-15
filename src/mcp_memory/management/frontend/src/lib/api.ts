@@ -353,6 +353,24 @@ export interface QualityMemoryRow {
   status: string;
   updated_at: string;
   tags: string[];
+  producer: QualityProducer;
+}
+
+export interface QualityProducer {
+  task_id: string;
+  task_name: string;
+  tool_name: string;
+  provider_key: string;
+  provider_name: string;
+  model_name: string;
+}
+
+export interface QualityProducerAttribution {
+  signal_key: string;
+  signal_label: string;
+  count: number;
+  repeated: boolean;
+  producer: QualityProducer;
 }
 
 export interface QualitySignalDrilldown {
@@ -364,6 +382,7 @@ export interface QualitySignalDrilldown {
 
 export interface QualityDrilldown {
   signals: QualitySignalDrilldown[];
+  producer_attributions: QualityProducerAttribution[];
 }
 
 export interface QualityRemediation {

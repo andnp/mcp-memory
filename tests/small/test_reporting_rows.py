@@ -40,6 +40,7 @@ def test_adapt_scoped_memory_row_parses_datetimes_and_split_lineage() -> None:
     assert row.last_surfaced_at is None
     assert row.workspace_ids == ["workspace-a", "workspace-b"]
     assert row.tags == ["tag-a", "tag-b"]
+    assert row.metadata == {"split_from_memory_id": "parent-1"}
     assert row.has_split_lineage is True
 
 

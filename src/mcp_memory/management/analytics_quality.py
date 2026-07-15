@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_timestamp
@@ -8,6 +9,8 @@ from mcp_memory.management.models import (
     NerdCountSeriesPayload,
     NerdQualityDrilldownPayload,
     NerdQualityMemoryRowPayload,
+    NerdQualityProducerAttributionPayload,
+    NerdQualityProducerPayload,
     NerdQualityRemediationPayload,
     NerdQualitySignalDrilldownPayload,
     NerdStatPayload,
@@ -130,7 +133,51 @@ def build_quality_drilldown(memory_rows: list[ScopedMemoryRow], *, limit_per_sig
                 records=[_build_quality_memory_row(row) for row in rows[:limit_per_signal]],
             )
         )
-    return NerdQualityDrilldownPayload(signals=signals)
+    return NerdQualityDrilldownPayload(
+        signals=signals,
+        producer_attributions=build_quality_producer_attributions(memory_rows),
+    )
+
+
+def build_quality_producer_attributions(
+    memory_rows: list[ScopedMemoryRow],
+) -> list[NerdQualityProducerAttributionPayload]:
+    grouped: Counter[tuple[str, str, str, str, str, str, str]] = Counter()
+    labels = dict(_QUALITY_SIGNAL_DEFS)
+    for row in memory_rows:
+        producer = _producer_for_row(row)
+        producer_key = (
+            producer.task_id,
+            producer.task_name,
+            producer.tool_name,
+            producer.provider_key,
+            producer.provider_name,
+            producer.model_name,
+        )
+        for signal_key in _quality_signal_keys_for_row(row):
+            grouped[(signal_key, *producer_key)] += 1
+
+    attributions: list[NerdQualityProducerAttributionPayload] = []
+    for (signal_key, task_id, task_name, tool_name, provider_key, provider_name, model_name), count in sorted(
+        grouped.items(), key=lambda item: (-item[1], item[0])
+    ):
+        attributions.append(
+            NerdQualityProducerAttributionPayload(
+                signal_key=signal_key,
+                signal_label=labels[signal_key],
+                count=count,
+                repeated=count > 1,
+                producer=NerdQualityProducerPayload(
+                    task_id=task_id,
+                    task_name=task_name,
+                    tool_name=tool_name,
+                    provider_key=provider_key,
+                    provider_name=provider_name,
+                    model_name=model_name,
+                ),
+            )
+        )
+    return attributions
 
 
 def build_quality_remediation(
@@ -267,6 +314,58 @@ def _build_quality_memory_row(row: ScopedMemoryRow) -> NerdQualityMemoryRowPaylo
         status=row.status,
         updated_at="" if row.updated_at is None else row.updated_at.isoformat(),
         tags=list(row.tags),
+        producer=_producer_for_row(row),
+    )
+
+
+def _producer_for_row(row: ScopedMemoryRow) -> NerdQualityProducerPayload:
+    metadata = row.metadata
+    nested = metadata.get("producer")
+    producer = nested if isinstance(nested, Mapping) else {}
+
+    def first_string(*keys: str) -> str:
+        for source in (producer, metadata):
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return "unknown"
+
+    tool_name = first_string("tool_name", "tool", "producer_tool_name", "producer_tool")
+    if tool_name == "unknown":
+        tool_names = metadata.get("tool_names_used")
+        if isinstance(tool_names, list):
+            names = sorted({item.strip() for item in tool_names if isinstance(item, str) and item.strip()})
+            if len(names) == 1:
+                tool_name = names[0]
+            elif names:
+                tool_name = ",".join(names)
+    if tool_name == "unknown":
+        if metadata.get("created_via_ingest") is True:
+            tool_name = (
+                "internal_ingest_append_memory"
+                if metadata.get("appended_via_ingest") is True
+                else "internal_ingest_create_memory"
+            )
+
+    provider = metadata.get("provider")
+    provider_mapping = provider if isinstance(provider, Mapping) else {}
+
+    def provider_string(*keys: str) -> str:
+        for source in (producer, provider_mapping, metadata):
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return "unknown"
+
+    return NerdQualityProducerPayload(
+        task_id=first_string("task_id", "producer_task_id", "ingest_task_id"),
+        task_name=first_string("task_name", "producer_task", "producer_task_name", "ingest_task_name"),
+        tool_name=tool_name,
+        provider_key=provider_string("provider_key", "producer_provider_key", "producer_provider", "key"),
+        provider_name=provider_string("provider_name", "producer_provider_name", "name"),
+        model_name=provider_string("model_name", "producer_model_name", "model"),
     )
 
 

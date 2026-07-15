@@ -10,6 +10,7 @@ from mcp_memory.management.analytics_reporting import (
     build_quality_remediation,
     build_quality_signal_series,
 )
+from mcp_memory.management.analytics_quality import build_quality_producer_attributions
 from mcp_memory.management.reporting_rows import ScopedMemoryRow
 
 
@@ -120,3 +121,69 @@ def test_quality_analytics_builders_preserve_existing_quality_contracts() -> Non
         "concrete_summary_updates": 3,
         "split_lineage_updates": 1,
     }
+
+
+def test_quality_analytics_attributes_repeated_defects_and_unknown_provenance() -> None:
+    rows = [
+        ScopedMemoryRow(
+            id="generic-1",
+            title="First generic write",
+            summary="Covers several findings.",
+            memory_type="fact",
+            status="active",
+            metadata={
+                "producer": {
+                    "task_id": "task-1",
+                    "task_name": "summary-writer",
+                    "tool_name": "internal_create_memory_record",
+                    "provider_key": "provider-a",
+                    "provider_name": "Provider A",
+                    "model_name": "model-a",
+                }
+            },
+        ),
+        ScopedMemoryRow(
+            id="generic-2",
+            title="Second generic write",
+            summary="Covers another finding.",
+            memory_type="fact",
+            status="active",
+            metadata={
+                "producer": {
+                    "task_id": "task-1",
+                    "task_name": "summary-writer",
+                    "tool_name": "internal_create_memory_record",
+                    "provider_key": "provider-a",
+                    "provider_name": "Provider A",
+                    "model_name": "model-a",
+                }
+            },
+        ),
+        ScopedMemoryRow(
+            id="unknown-trace",
+            title="task_complete: unknown",
+            summary="Concrete.",
+            memory_type="journal",
+            status="active",
+        ),
+    ]
+
+    attributions = build_quality_producer_attributions(rows)
+    generic = next(item for item in attributions if item.signal_key == "generic_summary_count")
+    unknown_trace = next(item for item in attributions if item.signal_key == "trace_like_memory_count")
+
+    assert generic.count == 2
+    assert generic.repeated is True
+    assert generic.producer.task_id == "task-1"
+    assert generic.producer.task_name == "summary-writer"
+    assert generic.producer.tool_name == "internal_create_memory_record"
+    assert generic.producer.provider_key == "provider-a"
+    assert unknown_trace.count == 1
+    assert unknown_trace.repeated is False
+    assert unknown_trace.producer.task_id == "unknown"
+    assert unknown_trace.producer.tool_name == "unknown"
+    assert unknown_trace.producer.provider_key == "unknown"
+
+    drilldown = build_quality_drilldown(rows)
+    generic_record = next(signal for signal in drilldown.signals if signal.key == "generic_summary_count").records[0]
+    assert generic_record.producer.task_id == "task-1"
