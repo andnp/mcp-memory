@@ -43,7 +43,7 @@ def _snapshot(content: str, *, telemetry: int = 0) -> dict[str, object]:
     }
 
 
-def test_content_inverse_preserves_semantics_and_excludes_telemetry() -> None:
+def test_normalize_inverse_preserves_semantics_and_excludes_telemetry() -> None:
     before = _snapshot("before", telemetry=1)
     after = _snapshot("after", telemetry=9)
     revision = RecordRevision(
@@ -57,7 +57,7 @@ def test_content_inverse_preserves_semantics_and_excludes_telemetry() -> None:
         before_token="before-token",
         after_token="after-token",
     )
-    result = build_inverse(_event("rewrite_memory"), [revision])
+    result = build_inverse(_event("normalize_memory"), [revision])
     assert isinstance(result, InverseDescription)
     assert result.record_changes[0].snapshot != revision.before_snapshot
     snapshot = result.record_changes[0].snapshot
@@ -77,7 +77,12 @@ def test_link_inverse_reverses_transition_without_execution() -> None:
 
 
 def test_malformed_and_unsupported_history_fail_closed() -> None:
-    malformed = build_inverse(_event("archive_memory"), [])
+    malformed = build_inverse(_event("normalize_memory"), [])
     unsupported = build_inverse(_event("merge_memories"))
     assert isinstance(malformed, RestoreConflict) and malformed.code is RestoreConflictCode.INCOMPLETE_HISTORY
     assert isinstance(unsupported, RestoreConflict) and unsupported.code is RestoreConflictCode.UNSUPPORTED_OPERATION
+
+
+def test_rewrite_and_remove_link_restore_remain_unsupported() -> None:
+    assert isinstance(build_inverse(_event("rewrite_memory")), RestoreConflict)
+    assert isinstance(build_inverse(_event("remove_link")), RestoreConflict)

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
-from mcp_memory.core.curation_identity import canonical_token, graph_token, record_snapshot, record_token
+from mcp_memory.core.curation_identity import canonical_token, graph_token, link_token, record_snapshot, record_token
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -159,6 +159,9 @@ class SQLiteCurationActionStore:
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
         preconditions: Any | None = None,
+        actor_kind: MutationActorKind | str = MutationActorKind.MAINTENANCE,
+        restores_event_id: UUID | None = None,
+        idempotency_key: str | None = None,
     ) -> CurationActionReceipt:
         normalized_targets = _canonical_target_ids(target_ids)
         if not normalized_targets:
@@ -185,9 +188,29 @@ class SQLiteCurationActionStore:
                 "SELECT state, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
                 (str(run_id),),
             ).fetchone()
-            if run is None:
+            if run is None and restores_event_id is not None:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO curation_runs (
+                        run_id, frontier_key, context_fingerprint, policy_version,
+                        schema_version, state, budget_usage_json, created_at
+                    ) VALUES (?, ?, ?, '1', 1, ?, '{}', ?)
+                    """,
+                    (
+                        str(run_id),
+                        f"restore:{restores_event_id}",
+                        idempotency_key or str(action_id),
+                        str(CurationRunState.EXECUTING),
+                        _now_text(),
+                    ),
+                )
+                run = connection.execute(
+                    "SELECT state, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
+                    (str(run_id),),
+                ).fetchone()
+            if run is None and restores_event_id is None:
                 raise CurationActionFatalError(f"curation run {run_id} was not found")
-            if str(run[0]) == str(CurationRunState.TERMINAL):
+            if run is not None and str(run[0]) == str(CurationRunState.TERMINAL) and restores_event_id is None:
                 raise CurationActionFatalError(f"curation run {run_id} is terminal")
 
             self._lock_targets(connection, normalized_targets)
@@ -223,9 +246,12 @@ class SQLiteCurationActionStore:
                 event_id=event_id,
                 run_id=run_id,
                 action_id=action_id,
-                plan_id=None if run[1] is None else UUID(str(run[1])),
-                policy_version=None if run[2] is None else str(run[2]),
+                plan_id=None if run is None or run[1] is None else UUID(str(run[1])),
+                policy_version=None if run is None or run[2] is None else str(run[2]),
                 operation=result.operation.strip(),
+                actor_kind=actor_kind,
+                restores_event_id=restores_event_id,
+                idempotency_key=idempotency_key,
                 before_records=before_records,
                 after_records=after_records,
                 before_links=before_links,
@@ -301,6 +327,24 @@ class SQLiteCurationActionStore:
                 actual = graph_token(memory_id, [_link_mapping(link) for link in _links_for_memory(connection, memory_id)])
                 if actual != graph_expected:
                     raise CurationActionStaleError(f"graph revision token is stale for {memory_id!r}")
+        for key, expected in expected_tokens.items():
+            parts = _link_token_key(key)
+            if parts is None:
+                continue
+            source_id, target_id, link_type = parts
+            row = connection.execute(
+                "SELECT context FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
+                (source_id, target_id, _normalize_link_type(link_type)),
+            ).fetchone()
+            actual = link_token(
+                source_id,
+                target_id,
+                link_type,
+                None if row is None else str(row[0] or ""),
+                exists=row is not None,
+            )
+            if actual != expected:
+                raise CurationActionStaleError(f"link revision token is stale for {source_id}:{target_id}:{link_type}")
 
     def _check_preconditions(self, connection: sqlite3.Connection, target_ids: Sequence[str], preconditions: Any) -> None:
         if preconditions is None:
@@ -389,6 +433,9 @@ class SQLiteCurationActionStore:
         plan_id: UUID | None,
         policy_version: str | None,
         operation: str,
+        actor_kind: MutationActorKind | str,
+        restores_event_id: UUID | None,
+        idempotency_key: str | None,
         before_records: Mapping[str, RelationalMemoryRecord],
         after_records: Mapping[str, RelationalMemoryRecord],
         before_links: Mapping[tuple[str, str, str], MemoryLink],
@@ -399,21 +446,22 @@ class SQLiteCurationActionStore:
             """
             INSERT INTO memory_mutation_events (
                 id, operation, actor_kind, family, curation_run_id, plan_id,
-                action_id, policy_version, schema_version, status, idempotency_key,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                action_id, policy_version, schema_version, status, restores_event_id,
+                idempotency_key, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
             """,
             (
                 str(event_id),
                 operation,
-                str(MutationActorKind.MAINTENANCE),
+                str(actor_kind),
                 "curation",
                 str(run_id),
                 None if plan_id is None else str(plan_id),
                 str(action_id),
                 policy_version,
                 str(MutationEventStatus.APPLIED),
-                f"{run_id}:{action_id}",
+                None if restores_event_id is None else str(restores_event_id),
+                idempotency_key or f"{run_id}:{action_id}",
                 created_at,
             ),
         )
@@ -800,6 +848,14 @@ def _normalize_link_type(link_type: str) -> str:
     if not normalized:
         raise ValueError("link_type must be non-empty")
     return normalized
+
+
+def _link_token_key(key: str) -> tuple[str, str, str] | None:
+    raw = key.removeprefix("link:") if key.startswith("link:") else key
+    parts = raw.split(":")
+    if len(parts) != 3 or any(not part for part in parts):
+        return None
+    return parts[0], parts[1], parts[2]
 
 
 def _now_text() -> str:

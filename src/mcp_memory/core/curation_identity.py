@@ -137,6 +137,20 @@ def graph_token(memory_id: Any, edges: Sequence[Mapping[str, Any]]) -> str:
     return canonical_token(graph_snapshot(memory_id, edges))
 
 
+def link_token(source_id: Any, target_id: Any, link_type: Any, context: Any, *, exists: bool = True) -> str:
+    """Return the canonical identity of one relationship state."""
+    return canonical_token(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "source_id": _identifier(source_id),
+            "target_id": _identifier(target_id),
+            "type": _identifier(link_type),
+            "context": None if context is None else _normalize(str(context)),
+            "exists": exists,
+        }
+    )
+
+
 def frontier_fingerprint(family: str, strategy: str, seed_ids: Sequence[Any]) -> str:
     return canonical_token(
         {"schema_version": SCHEMA_VERSION, "family": _identifier(family), "strategy": _identifier(strategy), "seed_ids": _set_values(seed_ids)}
