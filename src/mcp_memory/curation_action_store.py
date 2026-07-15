@@ -110,6 +110,7 @@ class CurationActionStore(Protocol):
         target_ids: Sequence[str],
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
+        preconditions: Any | None = None,
     ) -> CurationActionReceipt: ...
 
 

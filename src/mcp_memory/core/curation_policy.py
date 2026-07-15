@@ -48,6 +48,7 @@ class RejectionCode(StrEnum):
     DESTRUCTIVE_CHANGE_REQUIRES_REVIEW = "destructive_change_requires_review"
     MANUAL_REVIEW_REQUIRED = "manual_review_required"
     PINNED_ACTIVE = "pinned_active"
+    GENERIC_SUMMARY = "generic_summary"
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,8 @@ def evaluate_curation_action(
             codes.append(RejectionCode.EVIDENCE_REQUIRED)
         if not action.link_type or action.link_type != action.link_type.upper():
             codes.append(RejectionCode.LINK_TYPE_NOT_CANONICAL)
+    if isinstance(action, NormalizeMemoryAction) and action.summary is not None and is_generic_summary(action.summary):
+        codes.append(RejectionCode.GENERIC_SUMMARY)
 
     types = memory_types or {}
     affected_ids = _affected_ids(action)
@@ -171,6 +174,12 @@ def evaluate_curation_action(
         if len(fact_ids) > 1 and (fact_ids & set(contradictory_memory_ids) or not action.claim_manifest.unresolved_tensions):
             codes.append(RejectionCode.CONTRADICTORY_FACTS)
     return PolicyDecision(operation=operation, risk=risk, mode=mode, rejection_codes=tuple(dict.fromkeys(codes)))
+
+
+def is_generic_summary(summary: str) -> bool:
+    """Return whether a summary uses the known non-distinguishing shape."""
+    normalized = " ".join(summary.strip().lower().split())
+    return normalized.startswith(("covers ", "added "))
 
 
 def _affected_ids(action: object) -> set[UUID]:
