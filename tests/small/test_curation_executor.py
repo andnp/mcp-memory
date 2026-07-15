@@ -8,9 +8,16 @@ import pytest
 
 from mcp_memory.core.curation_executor import CurationExecutor, CurationPolicyRejection
 from mcp_memory.core.curation_identity import canonical_token, record_snapshot, record_token
-from mcp_memory.core.curation_models import ActionPreconditions, NormalizeMemoryAction
+from mcp_memory.core.curation_models import (
+    ActionPreconditions,
+    CreateLinkAction,
+    EvidenceRef,
+    LinkAssertion,
+    NormalizeMemoryAction,
+)
 from mcp_memory.curation_action_store import (
     CurationActionFatalError,
+    CurationActionStaleError,
     CurationTransaction,
     MutationResult,
     SQLiteCurationActionStore,
@@ -44,6 +51,21 @@ def _seed(db_manager: DatabaseManager) -> tuple[RelationalMemoryRepository, Cura
     )
     SQLiteCurationStore(db_manager).create_run(run)
     return repository, run, memory_id
+
+
+def _seed_link_endpoints(db_manager: DatabaseManager) -> tuple[RelationalMemoryRepository, CurationRun, UUID, UUID]:
+    repository, run, source_id = _seed(db_manager)
+    target_id = uuid4()
+    repository.create_memory(
+        "Target title",
+        "Target content.",
+        ["workspace"],
+        memory_id=str(target_id),
+        summary="Target summary",
+        tags=["target"],
+        memory_type="fact",
+    )
+    return repository, run, source_id, target_id
 
 
 def _action(
@@ -220,3 +242,156 @@ def test_normalize_requires_expected_record_token(db_manager: DatabaseManager) -
         CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
             action, run_id=run.run_id, memory_type="observation"
         )
+
+
+def _link_action(
+    source_id: UUID,
+    target_id: UUID,
+    source_token: str,
+    target_token: str,
+    *,
+    rationale: str = "the source explicitly supports the target",
+    link_type: str = "SUPPORTS",
+    context: str = "The source records the target as supporting evidence.",
+) -> CreateLinkAction:
+    assertion = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type, context=context)
+    return CreateLinkAction(
+        action_id=uuid4(),
+        source_id=source_id,
+        target_id=target_id,
+        confidence=1,
+        rationale=rationale,
+        evidence=[EvidenceRef(link=assertion)],
+        preconditions=ActionPreconditions(
+            record_tokens={source_id: source_token, target_id: target_token},
+            absent_links=[assertion],
+        ),
+        link_type=link_type,
+        context=context,
+    )
+
+
+def test_create_link_records_edge_history_and_compact_receipt(db_manager: DatabaseManager) -> None:
+    repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+        _link_action(source_id, target_id, record_token(source), record_token(target)),
+        run_id=run.run_id,
+        source_type=source.type,
+        target_type=target.type,
+    )
+
+    links = repository.get_links(str(source_id))
+    assert [(link.target_id, link.link_type, link.context) for link in links] == [
+        (str(target_id), "SUPPORTS", "The source records the target as supporting evidence.")
+    ]
+    assert receipt.operation == "create_link"
+    assert set(receipt.affected_ids) == {source_id, target_id}
+    assert receipt.mutation_event_id is not None
+    connection = db_manager.get_connection()
+    assert connection.execute("SELECT COUNT(*) FROM memory_link_revisions").fetchone()[0] == 1
+    revision = connection.execute(
+        "SELECT source_id, target_id, link_type, context, before_exists, after_exists "
+        "FROM memory_link_revisions"
+    ).fetchone()
+    assert tuple(revision) == (
+        str(source_id),
+        str(target_id),
+        "SUPPORTS",
+        "The source records the target as supporting evidence.",
+        0,
+        1,
+    )
+
+
+def test_create_link_replay_is_idempotent(db_manager: DatabaseManager) -> None:
+    repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+    action = _link_action(source_id, target_id, record_token(source), record_token(target))
+    executor = CurationExecutor(SQLiteCurationActionStore(db_manager))
+
+    first = executor.execute_create_link(action, run_id=run.run_id, source_type=source.type, target_type=target.type)
+    replay = executor.execute_create_link(action, run_id=run.run_id, source_type=source.type, target_type=target.type)
+
+    assert replay == first
+    connection = db_manager.get_connection()
+    assert connection.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM memory_link_revisions").fetchone()[0] == 1
+    assert len(repository.get_links(str(source_id))) == 1
+
+
+def test_create_link_rejects_protection_before_mutation(db_manager: DatabaseManager) -> None:
+    repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+
+    with pytest.raises(CurationPolicyRejection):
+        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+            _link_action(source_id, target_id, record_token(source), record_token(target)),
+            run_id=run.run_id,
+            source_type=source.type,
+            target_type=target.type,
+            protections=[ProtectionMode.MANUAL_REVIEW_REQUIRED],
+        )
+
+    assert repository.get_links(str(source_id)) == []
+    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+
+
+def test_create_link_rejects_generic_vocabulary_without_exact_evidence_or_preconditions(
+    db_manager: DatabaseManager,
+) -> None:
+    repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+    action = CreateLinkAction(
+        action_id=uuid4(),
+        source_id=source_id,
+        target_id=target_id,
+        confidence=1,
+        rationale="architecture and testing are related",
+        evidence=[EvidenceRef(memory_id=source_id), EvidenceRef(memory_id=target_id)],
+        link_type="SUPPORTS",
+        context="",
+        preconditions=ActionPreconditions(
+            record_tokens={source_id: record_token(source), target_id: record_token(target)}
+        ),
+    )
+
+    with pytest.raises(CurationActionFatalError, match="exact endpoint"):
+        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+            action,
+            run_id=run.run_id,
+            source_type=source.type,
+            target_type=target.type,
+        )
+
+    assert repository.get_links(str(source_id)) == []
+    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+
+
+def test_create_link_missing_endpoint_fails_before_history(db_manager: DatabaseManager) -> None:
+    repository, run, source_id, _target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    assert source is not None
+    missing_id = uuid4()
+    action = _link_action(source_id, missing_id, record_token(source), "missing")
+
+    with pytest.raises(CurationActionStaleError):
+        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+            action,
+            run_id=run.run_id,
+            source_type=source.type,
+            target_type="fact",
+        )
+
+    assert repository.get_links(str(source_id)) == []
+    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
