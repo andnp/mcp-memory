@@ -325,7 +325,16 @@ class SQLiteMutationHistoryStore:
             ).fetchone()
             if existing is None:
                 raise
-            if str(existing["target_event_id"]) != str(request.target_event_id):
+            if not _restore_request_identity_matches(
+                request,
+                target_event_id=str(existing["target_event_id"]),
+                scope=str(existing["scope"]),
+                expected_record_tokens=_json_value(existing["expected_record_tokens"], default={}),
+                expected_link_tokens=_json_value(existing["expected_link_tokens"], default={}),
+                actor_id=existing["actor_id"],
+                reason=str(existing["reason"]),
+                confirmation=bool(existing["confirmation"]),
+            ):
                 raise MutationHistoryIdentityConflictError(
                     f"restore idempotency key {request.idempotency_key!r} is already in use"
                 )
@@ -498,3 +507,25 @@ def _event_identity_matches(left: MutationEvent, right: MutationEvent, *, includ
         left_data.pop("id", None)
         right_data.pop("id", None)
     return left_data == right_data
+
+
+def _restore_request_identity_matches(
+    request: RestoreRequest,
+    *,
+    target_event_id: str,
+    scope: str,
+    expected_record_tokens: Any,
+    expected_link_tokens: Any,
+    actor_id: object,
+    reason: str,
+    confirmation: bool,
+) -> bool:
+    return (
+        target_event_id == str(request.target_event_id)
+        and scope == str(request.scope)
+        and expected_record_tokens == {str(key): value for key, value in request.expected_record_tokens.items()}
+        and expected_link_tokens == request.expected_link_tokens
+        and actor_id == request.actor_id
+        and reason == request.reason
+        and confirmation == request.confirmation
+    )

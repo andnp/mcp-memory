@@ -27,6 +27,7 @@ from mcp_memory.mutation_history_store import (
     MutationHistoryIdentityConflictError,
     MutationHistoryTerminalizationError,
     _event_identity_matches,
+    _restore_request_identity_matches,
 )
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
@@ -311,7 +312,16 @@ class PostgresMutationHistoryStore:
         )
         if row is None:
             raise RuntimeError("restore request insert was not persisted")
-        if str(row[1]) != str(request.target_event_id):
+        if not _restore_request_identity_matches(
+            request,
+            target_event_id=str(row[1]),
+            scope=str(row[2]),
+            expected_record_tokens=_json_value(row[3], default={}),
+            expected_link_tokens=_json_value(row[4], default={}),
+            actor_id=row[5],
+            reason=str(row[6]),
+            confirmation=bool(row[8]),
+        ):
             raise MutationHistoryIdentityConflictError(
                 f"restore idempotency key {request.idempotency_key!r} is already in use"
             )

@@ -2,33 +2,15 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any, cast
-from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.mutation_history import (
-    LinkRevision,
-    MutationActorKind,
-    MutationEvent,
-    MutationEventStatus,
-    Protection,
-    ProtectionMode,
-    RecordRevision,
-    RestoreRequest,
-    RestoreResult,
-    RestoreResultStatus,
-    RevisionRole,
-)
 from mcp_memory.storage.postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
-from mcp_memory.mutation_history_store import MutationHistoryTerminalizationError
+from tests.small.mutation_history_repository_contract import assert_mutation_history_repository_contract
 
 
 pytestmark = pytest.mark.small
-
-MEMORY_ID = UUID("00000000-0000-0000-0000-000000000001")
-OTHER_MEMORY_ID = UUID("00000000-0000-0000-0000-000000000002")
-
 
 class FakePostgresCursor:
     def __init__(self, connection: FakePostgresConnection) -> None:
@@ -139,91 +121,11 @@ def _sqlite_query(query: str) -> str:
     return query.replace("'{}'::jsonb", "'{}'").replace("%s::jsonb", "?").replace("%s", "?")
 
 
-def _event(*, run_id: UUID | None = None, action_id: UUID | None = None) -> MutationEvent:
-    return MutationEvent(
-        id=uuid4(),
-        operation="normalize_memory",
-        actor_kind=MutationActorKind.MAINTENANCE,
-        curation_run_id=run_id,
-        action_id=action_id,
-        status=MutationEventStatus.APPLIED,
+def test_postgres_mutation_history_repository_contract() -> None:
+    session_manager = FakePostgresSessionManager()
+    assert_mutation_history_repository_contract(
+        lambda: PostgresMutationHistoryStore(cast(Any, session_manager))
     )
-
-
-def test_postgres_history_store_round_trips_history_protection_and_idempotency() -> None:
-    store = PostgresMutationHistoryStore(cast(Any, FakePostgresSessionManager()))
-    event = store.append_event(_event(run_id=uuid4(), action_id=uuid4()))
-    store.append_record_revisions(
-        [
-            RecordRevision(
-                event_id=event.id,
-                memory_id=MEMORY_ID,
-                role=RevisionRole.TARGET,
-                before_exists=True,
-                before_snapshot={"content": "before"},
-                after_exists=True,
-                after_snapshot={"content": "after"},
-                before_token="before-token",
-                after_token="after-token",
-            )
-        ]
-    )
-    store.append_link_revisions(
-        [
-            LinkRevision(
-                event_id=event.id,
-                source_id=MEMORY_ID,
-                target_id=OTHER_MEMORY_ID,
-                link_type="supports",
-                context="context",
-                before_exists=False,
-                after_exists=True,
-            )
-        ]
-    )
-    protection = store.set_protection(
-        Protection(memory_id=MEMORY_ID, mode=ProtectionMode.PINNED_ACTIVE, reason="important")
-    )
-
-    assert store.get_record_revisions(event.id)[0].after_snapshot == {"content": "after"}
-    assert store.get_link_revisions(event.id)[0].after_exists is True
-    assert store.list_events(memory_id=MEMORY_ID) == [event]
-    assert store.get_protections(MEMORY_ID) == [protection]
-
-    replay = store.append_event(event.model_copy(update={"id": uuid4()}))
-    assert replay.id == event.id
-    request = RestoreRequest(target_event_id=event.id, reason="undo", idempotency_key="restore-1")
-    first_restore = store.request_restore(request)
-    replay_restore = store.request_restore(request)
-    assert first_restore.status is RestoreResultStatus.APPLIED
-    assert replay_restore.status is RestoreResultStatus.ALREADY_APPLIED
-    assert replay_restore.request_id == first_restore.request_id
-
-
-def test_postgres_history_store_first_terminal_write_wins() -> None:
-    store = PostgresMutationHistoryStore(cast(Any, FakePostgresSessionManager()))
-    event = store.append_event(_event())
-
-    terminal = store.terminalize_event(event.id, MutationEventStatus.FAILED)
-    assert store.terminalize_event(event.id, MutationEventStatus.FAILED) == terminal
-    with pytest.raises(MutationHistoryTerminalizationError):
-        store.terminalize_event(event.id, MutationEventStatus.STALE)
-
-    request = store.request_restore(
-        RestoreRequest(target_event_id=event.id, reason="undo", idempotency_key="restore-2")
-    )
-    assert request.request_id is not None
-    request_id = request.request_id
-    result = store.terminalize_restore_request(
-        request_id,
-        RestoreResult(status=RestoreResultStatus.CONFLICT, target_event_id=event.id, conflict_reason="changed"),
-    )
-    assert result.status is RestoreResultStatus.CONFLICT
-    with pytest.raises(MutationHistoryTerminalizationError):
-        store.terminalize_restore_request(
-            request_id,
-            RestoreResult(status=RestoreResultStatus.APPLIED, target_event_id=event.id),
-        )
 
 
 def test_postgres_mutation_history_migration_is_latest_and_additive() -> None:
