@@ -15,6 +15,7 @@ from mcp_memory.config import Config
 from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
+from tests.small.maintenance_read_repository_contract import assert_maintenance_read_preserves_telemetry
 
 
 pytestmark = pytest.mark.small
@@ -783,6 +784,134 @@ def test_postgres_repository_keyword_candidates_use_postgres_fts_shape_and_hide_
     )
 
     assert ids == [current_plan.id]
+
+
+def _postgres_telemetry_snapshot(
+    session_manager: FakeSessionManager,
+    memory_ids: Sequence[str],
+) -> dict[str, tuple[object, object, object, object]]:
+    normalized_ids = list(dict.fromkeys(memory_ids))
+    return {
+        memory_id: (
+            memory["read_count"],
+            memory["access_score"],
+            memory["last_accessed_at"],
+            memory["last_surfaced_at"],
+        )
+        for memory_id in normalized_ids
+        if (memory := session_manager._state.memories.get(memory_id)) is not None
+    }
+
+
+def test_postgres_repository_maintenance_peek_returns_context_without_changing_telemetry(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+    old_fact = repository.create_memory(
+        title="Postgres fact",
+        content="Use Postgres for shared storage.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    current_fact = repository.create_memory(
+        title="Postgres fact refined",
+        content="Use Postgres for shared storage with maintenance reads.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    supporter = repository.create_memory(
+        title="Postgres support",
+        content="Supports the refined storage fact.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert old_fact is not None and current_fact is not None and supporter is not None
+
+    repository.add_link(current_fact.id, old_fact.id, "SUPERSEDES", "Refined after testing")
+    repository.add_link(supporter.id, current_fact.id, "DEPENDS_ON", "Supports the refinement")
+    session_manager._state.memories[current_fact.id].update(
+        read_count=1,
+        access_score=4.0,
+        last_accessed_at="2026-07-14T12:00:00+00:00",
+        last_surfaced_at="2026-07-14T12:01:00+00:00",
+    )
+
+    result = assert_maintenance_read_preserves_telemetry(
+        repository,
+        [current_fact.id, old_fact.id, supporter.id],
+        lambda: repository.peek_memory(current_fact.id),
+        telemetry_snapshot=lambda ids: _postgres_telemetry_snapshot(session_manager, ids),
+    )
+
+    ordinary_record = repository.get_memory(current_fact.id)
+    assert result is not None and ordinary_record is not None
+    assert result.record == ordinary_record
+    assert result.relationships["outgoing"] == repository.get_links(current_fact.id, "outgoing")
+    assert result.relationships["incoming"] == repository.get_links(current_fact.id, "incoming")
+    assert [record.id for record in result.superseded] == [old_fact.id]
+
+
+def test_postgres_repository_maintenance_search_returns_filtered_context_without_changing_telemetry(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+    old_fact = repository.create_memory(
+        title="Legacy Postgres maintenance investigation",
+        content="Legacy investigation details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    current_fact = repository.create_memory(
+        title="Current Postgres maintenance investigation",
+        content="Authoritative investigation details for shared storage.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    other_type = repository.create_memory(
+        title="Postgres maintenance investigation plan",
+        content="A plan should be excluded by the type filter.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert old_fact is not None and current_fact is not None and other_type is not None
+    repository.add_link(current_fact.id, old_fact.id, "SUPERSEDES", "Current investigation supersedes legacy")
+    session_manager._state.memories[current_fact.id].update(
+        read_count=1,
+        access_score=2.5,
+        last_accessed_at="2026-07-14T12:00:00+00:00",
+        last_surfaced_at="2026-07-14T12:01:00+00:00",
+    )
+
+    default_results, included_results = assert_maintenance_read_preserves_telemetry(
+        repository,
+        [current_fact.id, old_fact.id, other_type.id],
+        lambda: (
+            repository.search_memories_for_maintenance(
+                "Postgres maintenance investigation",
+                workspace_id="workspace-alpha",
+                memory_type="fact",
+                limit=10,
+            ),
+            repository.search_memories_for_maintenance(
+                "Postgres maintenance investigation",
+                workspace_id="workspace-alpha",
+                memory_type="fact",
+                include_superseded=True,
+                limit=10,
+            ),
+        ),
+        telemetry_snapshot=lambda ids: _postgres_telemetry_snapshot(session_manager, ids),
+    )
+
+    assert [context.record.id for context in default_results] == [current_fact.id]
+    assert [context.record.id for context in included_results] == [current_fact.id, old_fact.id]
+    assert [record.id for record in default_results[0].superseded] == [old_fact.id]
+    assert included_results[1].superseded == []
+    assert default_results[0].record == repository.get_memory(current_fact.id)
+    assert default_results[0].relationships == {
+        "outgoing": repository.get_links(current_fact.id, "outgoing"),
+        "incoming": repository.get_links(current_fact.id, "incoming"),
+    }
 
 
 def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_filters(

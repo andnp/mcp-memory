@@ -13,6 +13,7 @@ from mcp_memory.relational.repository import (
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
     RankedMemoryCandidate,
+    RelationalMemoryReadContext,
     RelationalMemoryRecord,
     build_read_cache_validation_token,
     VALID_MEMORY_STATUSES,
@@ -254,6 +255,53 @@ class PostgresRelationalMemoryRepository:
                 if row is None:
                     return None
                 return self._hydrate_record(cursor, row)
+
+    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
+        """Read authoritative memory context without changing retrieval telemetry."""
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+
+        outgoing = self.get_links(memory_id, direction="outgoing")
+        incoming = self.get_links(memory_id, direction="incoming")
+        superseded = [
+            target
+            for link in outgoing
+            if link.link_type == "SUPERSEDES"
+            for target in [self.get_memory(link.target_id)]
+            if target is not None
+        ]
+        return RelationalMemoryReadContext(
+            record=record,
+            relationships={"outgoing": outgoing, "incoming": incoming},
+            superseded=superseded,
+        )
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[RelationalMemoryReadContext]:
+        """Search authoritative Postgres records without surfacing or accessing them."""
+        memory_ids = self.search_keyword_memory_ids(
+            query,
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            limit=limit,
+        )
+        contexts: list[RelationalMemoryReadContext] = []
+        for memory_id in memory_ids:
+            context = self.peek_memory(memory_id)
+            if context is not None:
+                contexts.append(context)
+        return contexts
 
     def update_memory(
         self,

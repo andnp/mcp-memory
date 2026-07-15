@@ -9,14 +9,27 @@ T = TypeVar("T")
 
 
 def assert_maintenance_read_preserves_telemetry(
-    repository: RelationalMemoryRepository,
+    repository: object,
     memory_ids: Sequence[str],
     operation: Callable[[], T],
+    *,
+    telemetry_snapshot: Callable[[Sequence[str]], object] | None = None,
 ) -> T:
-    """Run a maintenance read and assert its raw SQLite telemetry is unchanged."""
-    before = _telemetry_snapshot(repository, memory_ids)
+    """Run a maintenance read and assert backend telemetry is unchanged."""
+    if telemetry_snapshot is None:
+        if not isinstance(repository, RelationalMemoryRepository):
+            raise TypeError("a telemetry_snapshot is required for non-SQLite repositories")
+
+        def sqlite_snapshot(ids: Sequence[str]) -> object:
+            return _telemetry_snapshot(repository, ids)
+
+        snapshot = sqlite_snapshot
+    else:
+        snapshot = telemetry_snapshot
+
+    before = snapshot(memory_ids)
     result = operation()
-    after = _telemetry_snapshot(repository, memory_ids)
+    after = snapshot(memory_ids)
     assert after == before
     return result
 
