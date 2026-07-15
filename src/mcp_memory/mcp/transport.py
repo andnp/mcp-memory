@@ -99,6 +99,10 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_list_memory_records_service,
     )
     from mcp_memory.mcp.internal_read_services import (
+        internal_bounded_adjacency_service,
+        internal_list_relationships_service,
+        internal_maintenance_search_service,
+        internal_peek_record_service,
         internal_read_memory_record_service,
         internal_search_memory_records_service,
     )
@@ -133,6 +137,10 @@ def internal_tool_services() -> dict[str, ToolService]:
     return {
         "internal_search_memory_records": internal_search_memory_records_service,
         "internal_read_memory_record": internal_read_memory_record_service,
+        "internal_peek_record": internal_peek_record_service,
+        "internal_maintenance_search": internal_maintenance_search_service,
+        "internal_list_relationships": internal_list_relationships_service,
+        "internal_bounded_adjacency": internal_bounded_adjacency_service,
         "internal_list_memory_records": internal_list_memory_records_service,
         "task_complete": internal_task_complete_service,
         "internal_task_complete": internal_task_complete_service,

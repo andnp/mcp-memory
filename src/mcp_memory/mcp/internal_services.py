@@ -6,6 +6,10 @@ from mcp_memory.mcp.internal_ingest_keys import (
     INGEST_TOOL_INVOCATIONS_TASK_DATA_KEY,
 )
 from mcp_memory.mcp.internal_read_services import (
+    internal_bounded_adjacency_service,
+    internal_list_relationships_service,
+    internal_maintenance_search_service,
+    internal_peek_record_service,
     internal_read_memory_record_service,
     internal_search_memory_records_service,
 )
@@ -26,5 +30,9 @@ __all__ = [
     "internal_create_memory_record_for_ingest_service",
     "internal_search_memory_records_service",
     "internal_read_memory_record_service",
+    "internal_peek_record_service",
+    "internal_maintenance_search_service",
+    "internal_list_relationships_service",
+    "internal_bounded_adjacency_service",
     "internal_task_complete_service",
 ]

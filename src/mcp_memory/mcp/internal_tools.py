@@ -45,6 +45,61 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_peek_record",
+            description="Read one authoritative memory record for maintenance without user access updates or shared-cache reads.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "include_metadata": {"type": "boolean"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="internal_maintenance_search",
+            description="Search authoritative memory records for maintenance with a bounded result budget.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "memory_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "include_superseded": {"type": "boolean"},
+                    "include_metadata": {"type": "boolean"},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="internal_list_relationships",
+            description="List a bounded incoming, outgoing, or combined relationship slice for maintenance.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["incoming", "outgoing", "both"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
+            name="internal_bounded_adjacency",
+            description="Read a bounded one-hop neighborhood for maintenance without mutation or work-item lifecycle access.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["incoming", "outgoing", "both"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "include_metadata": {"type": "boolean"},
+                },
+                "required": ["memory_id"],
+            },
+        ),
+        Tool(
             name="internal_list_memory_records",
             description="List recent memory records for maintenance work.",
             inputSchema={
