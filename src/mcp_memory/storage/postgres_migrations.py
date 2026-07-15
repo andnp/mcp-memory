@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 11
+POSTGRES_SCHEMA_VERSION = 12
 
 
 @dataclass(frozen=True)
@@ -583,6 +583,70 @@ POSTGRES_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_memory_link_revisions_endpoint ON memory_link_revisions(source_id, target_id, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_memory_protections_memory ON memory_protections(memory_id, mode)",
             "CREATE INDEX IF NOT EXISTS idx_memory_restore_requests_target ON memory_restore_requests(target_event_id, created_at DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=12,
+        name="add_curation_ledger",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS curation_runs (
+                run_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                work_item_id TEXT,
+                frontier_key TEXT NOT NULL,
+                selector_strategy TEXT,
+                context_fingerprint TEXT NOT NULL,
+                planner_id TEXT,
+                provider_id TEXT,
+                model_id TEXT,
+                policy_version TEXT NOT NULL DEFAULT '1',
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                state TEXT NOT NULL,
+                outcome TEXT,
+                plan_id TEXT,
+                rejection_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                retry_reason TEXT,
+                budget_usage_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TEXT NOT NULL,
+                terminalized_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS curation_action_receipts (
+                run_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                affected_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                status TEXT NOT NULL,
+                before_token TEXT,
+                after_token TEXT,
+                mutation_event_id TEXT,
+                error_code TEXT,
+                applied_at TEXT,
+                verified_at TEXT,
+                PRIMARY KEY (run_id, action_id),
+                FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE,
+                FOREIGN KEY (mutation_event_id) REFERENCES memory_mutation_events(id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS curation_candidate_state (
+                memory_id TEXT PRIMARY KEY,
+                last_observed_revision_token TEXT,
+                disposition TEXT NOT NULL DEFAULT 'pending',
+                consecutive_no_op_count INTEGER NOT NULL DEFAULT 0,
+                cooldown_until TEXT,
+                last_disposition_reason TEXT,
+                last_frontier_key TEXT,
+                last_run_id TEXT,
+                escalation_count INTEGER NOT NULL DEFAULT 0,
+                last_escalated_strategy TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_curation_runs_created_at ON curation_runs(created_at DESC, run_id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_curation_action_receipts_run ON curation_action_receipts(run_id, action_id)",
+            "CREATE INDEX IF NOT EXISTS idx_curation_candidate_state_cooldown ON curation_candidate_state(cooldown_until, memory_id)",
         ),
     ),
 )

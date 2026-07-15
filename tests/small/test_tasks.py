@@ -55,6 +55,7 @@ class _TaskRuntimeContextStub:
     repository: object = None
     relational_search: object = None
     task_queue: object = None
+    curation: object = None
     ai_json_provider: object = None
     ai_agent_provider: object = None
     ai_provider_registry: dict[str, object] | None = None

@@ -82,6 +82,7 @@ class ManagementContext(MemoryPipelineContext, Protocol):
 
 
 class TaskRuntimeContext(MemoryPipelineContext, Protocol):
+    curation: Any
     ai_json_provider: Any
     ai_agent_provider: Any
     ai_provider_registry: dict[str, Any] | None
@@ -162,6 +163,7 @@ _MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
 
 _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
     {
+        "curation",
         "ai_json_provider",
         "ai_agent_provider",
         "ai_provider_registry",
@@ -204,6 +206,7 @@ class ApplicationContext:
     relational_search: Any = None
     read_cache: Any = None
     task_queue: Any = None
+    curation: Any = None
     ai_json_provider: Any = None
     ai_agent_provider: Any = None
     ai_provider_registry: dict[str, Any] | None = None

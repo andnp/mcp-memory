@@ -145,6 +145,7 @@ def create_runtime_from_spec(
         relational_search=storage.relational_search,
         read_cache=storage.read_cache,
         task_queue=storage.task_queue,
+        curation=storage.curation,
         ai_json_provider=ai_json_provider,
         ai_agent_provider=ai_agent_provider,
         ai_provider_registry=provider_registry,

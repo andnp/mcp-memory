@@ -128,9 +128,10 @@ def test_postgres_mutation_history_repository_contract() -> None:
     )
 
 
-def test_postgres_mutation_history_migration_is_latest_and_additive() -> None:
-    migration = POSTGRES_MIGRATIONS[-1]
-    assert migration.version == POSTGRES_SCHEMA_VERSION == 11
+def test_postgres_mutation_history_migration_remains_additive() -> None:
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 11)
+    assert POSTGRES_SCHEMA_VERSION == 12
+    assert migration.version == 11
     assert migration.name == "add_mutation_history_and_protections"
     statements = " ".join(migration.statements)
     for table in (
