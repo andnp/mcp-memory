@@ -13,6 +13,9 @@ _MAX_LIST_LIMIT = 200
 _MEMORY_DETAIL_PATH_RE = re.compile(r"^/api/memories/(?P<memory_id>[^/]+)$")
 _MUTATION_HISTORY_DETAIL_PATH_RE = re.compile(r"^/api/mutation-history/(?P<event_id>[^/]+)$")
 _MUTATION_HISTORY_DIFF_PATH_RE = re.compile(r"^/api/mutation-history/(?P<event_id>[^/]+)/diff$")
+_PROTECTION_LIST_PATH_RE = re.compile(r"^/api/(?:memories|admin/memories)/(?P<memory_id>[^/]+)/protections$")
+_RESTORE_ELIGIBILITY_PATH_RE = re.compile(r"^/api/(?:mutation-history|admin/mutation-history)/(?P<event_id>[^/]+)/restore-eligibility$")
+_RESTORE_PATH_RE = re.compile(r"^/api/(?:mutation-history|admin/mutation-history)/(?P<event_id>[^/]+)/restore$")
 _TASK_CANCEL_PATH_RE = re.compile(r"^/api/admin/tasks/(?P<task_id>[^/]+)/cancel$")
 
 
@@ -134,6 +137,19 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             limit=optional_int(payload, "limit", default=50, minimum=1, maximum=100) or 50,
             offset=optional_int(payload, "offset", default=0, minimum=0, maximum=10_000) or 0,
         ).model_dump()
+    if path == "/api/admin/protections":
+        return routes.service.set_protection(
+            memory_id=required_str(payload, "memory_id"),
+            mode=required_str(payload, "mode"),
+            reason=required_str(payload, "reason"),
+            actor_id=optional_str(payload, "actor_id"),
+            expires_at=optional_str(payload, "expires_at"),
+        ).model_dump()
+    if path == "/api/admin/protections/delete":
+        return routes.service.remove_protection(
+            memory_id=required_str(payload, "memory_id"),
+            mode=required_str(payload, "mode"),
+        ).model_dump()
     if path == "/api/admin/agents/run":
         return routes.service.enqueue_background_task(
             required_str(payload, "task_name"),
@@ -179,6 +195,27 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
     history_diff_match = _MUTATION_HISTORY_DIFF_PATH_RE.fullmatch(path)
     if history_diff_match is not None:
         return routes.service.get_mutation_history_diff(history_diff_match.group("event_id")).model_dump()
+
+    protection_list_match = _PROTECTION_LIST_PATH_RE.fullmatch(path)
+    if protection_list_match is not None:
+        return routes.service.list_protections(protection_list_match.group("memory_id")).model_dump()
+
+    restore_eligibility_match = _RESTORE_ELIGIBILITY_PATH_RE.fullmatch(path)
+    if restore_eligibility_match is not None:
+        return routes.service.get_restore_eligibility(restore_eligibility_match.group("event_id")).model_dump()
+
+    restore_match = _RESTORE_PATH_RE.fullmatch(path)
+    if restore_match is not None:
+        return routes.service.request_restore(
+            event_id=restore_match.group("event_id"),
+            scope=optional_str(payload, "scope") or "all",
+            expected_record_tokens=payload.get("expected_record_tokens"),
+            expected_link_tokens=payload.get("expected_link_tokens"),
+            actor_id=optional_str(payload, "actor_id"),
+            reason=required_str(payload, "reason"),
+            idempotency_key=required_str(payload, "idempotency_key"),
+            confirmation=bool_value(payload, "confirmation", default=False),
+        ).model_dump()
 
     history_detail_match = _MUTATION_HISTORY_DETAIL_PATH_RE.fullmatch(path)
     if history_detail_match is not None:

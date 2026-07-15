@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -1129,6 +1129,41 @@ class MutationHistoryDiffPayload(BaseModel):
     records: list[dict[str, Any]] = Field(default_factory=list)
     links: list[dict[str, Any]] = Field(default_factory=list)
     truncated: bool = False
+
+
+class ProtectionListPayload(BaseModel):
+    memory_id: str
+    protections: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProtectionMutationPayload(BaseModel):
+    status: Literal["applied", "removed"]
+    memory_id: str
+    mode: str
+    protection: dict[str, Any] | None = None
+
+
+class RestoreEligibilityPayload(BaseModel):
+    event_id: str
+    eligible: bool
+    operation: str | None = None
+    inverse_operation: str | None = None
+    risk: str | None = None
+    requires_confirmation: bool = False
+    current_record_tokens: dict[str, str] = Field(default_factory=dict)
+    current_link_tokens: dict[str, str] = Field(default_factory=dict)
+    protections: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    conflict_code: str | None = None
+    conflict_reason: str | None = None
+
+
+class RestoreRequestPayload(BaseModel):
+    status: str
+    target_event_id: str
+    request_id: str | None = None
+    event_id: str | None = None
+    conflict_reason: str | None = None
+    conflict_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class NerdMetricsPayload(BaseModel):

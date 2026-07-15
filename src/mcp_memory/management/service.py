@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -15,7 +15,15 @@ from uuid import UUID, uuid4
 
 from mcp_memory.context import ManagementContext
 from mcp_memory.core import MemoryPipeline
+from mcp_memory.core.curation_identity import link_token, record_token
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.mutation_restore import (
+    InverseDescription,
+    RestoreConflict,
+    RestoreConflictCode,
+    RestoreExecutor,
+    build_inverse,
+)
 from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
@@ -33,7 +41,18 @@ from mcp_memory.management.operator_health_reporting import (
 )
 from mcp_memory.management.overview_reporting import build_overview
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
-from mcp_memory.mutation_history import LinkRevision, MutationEvent, RecordRevision
+from mcp_memory.mutation_history import (
+    LinkRevision,
+    MutationEvent,
+    Protection,
+    ProtectionMode,
+    RecordRevision,
+    RestoreRequest,
+    RestoreResult,
+    RestoreResultStatus,
+    RestoreScope,
+)
+from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.models import (
@@ -53,6 +72,10 @@ from mcp_memory.management.models import (
     MutationHistoryDetailPayload,
     MutationHistoryDiffPayload,
     MutationHistoryListPayload,
+    ProtectionListPayload,
+    ProtectionMutationPayload,
+    RestoreEligibilityPayload,
+    RestoreRequestPayload,
     NerdMetricsPayload,
     OperatorHealthSnapshotPayload,
     QualityCleanupCandidatePayload,
@@ -174,6 +197,76 @@ def _bounded_history_value(value: object) -> object:
     }
 
 
+@dataclass(frozen=True)
+class _RestoreAnalysis:
+    event: MutationEvent
+    inverse: InverseDescription | None
+    conflict: RestoreConflict | None
+    current_record_tokens: dict[str, str]
+    current_link_tokens: dict[str, str]
+    protections: dict[str, list[Protection]]
+    conflict_code: str | None = None
+    conflict_reason: str | None = None
+
+
+def _restore_risk(operation: str) -> str:
+    if operation == "normalize_memory":
+        return "low"
+    if operation == "create_link":
+        return "moderate"
+    return "unsupported"
+
+
+def _required_token(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field}_must_contain_tokens")
+    return value
+
+
+def _parse_record_tokens(value: object) -> dict[UUID, str]:
+    if not isinstance(value, dict):
+        raise ValueError("expected_record_tokens_must_be_object")
+    return {
+        _parse_uuid(str(memory_id), field="memory_id"): _required_token(token, "expected_record_tokens")
+        for memory_id, token in value.items()
+    }
+
+
+def _parse_link_tokens(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("expected_link_tokens_must_be_object")
+    return {str(key): _required_token(token, "expected_link_tokens") for key, token in value.items()}
+
+
+def _restore_conflict(target_event_id: UUID, code: str, reason: str) -> RestoreResult:
+    return RestoreResult(
+        status=RestoreResultStatus.CONFLICT,
+        target_event_id=target_event_id,
+        conflict_reason=reason,
+        conflict_details={"code": code},
+    )
+
+
+def _restore_rejected(target_event_id: UUID, code: str, reason: str) -> RestoreResult:
+    return RestoreResult(
+        status=RestoreResultStatus.REJECTED,
+        target_event_id=target_event_id,
+        conflict_reason=reason,
+        conflict_details={"code": code},
+    )
+
+
+def _restore_payload(result: RestoreResult) -> RestoreRequestPayload:
+    return RestoreRequestPayload(
+        status=result.status.value,
+        target_event_id=str(result.target_event_id),
+        request_id=None if result.request_id is None else str(result.request_id),
+        event_id=None if result.event_id is None else str(result.event_id),
+        conflict_reason=result.conflict_reason,
+        conflict_details=result.conflict_details,
+    )
+
+
 def _resolve_log_workspace_id(
     service_workspace_id: str | None,
     workspace_id: str | None | object,
@@ -217,6 +310,16 @@ class ManagementService:
         self._repository = ctx.repository
         self._mutation_history = getattr(ctx, "mutation_history", None)
         self._curation = getattr(ctx, "curation", None)
+        self._action_store = getattr(ctx, "curation_action_store", None)
+        if self._action_store is None and self._db_manager is not None:
+            if self._storage_backend == "postgres":
+                from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
+
+                self._action_store = PostgresCurationActionStore(self._db_manager)
+            else:
+                from mcp_memory.curation_action_store import SQLiteCurationActionStore
+
+                self._action_store = SQLiteCurationActionStore(self._db_manager)
         self._provider_usage = resources.provider_usage
         self._runtime_logs = resources.runtime_logs
         self._embedding_integrity_events = resources.embedding_integrity_events
@@ -631,9 +734,245 @@ class ManagementService:
             truncated=len(records) >= _MAX_HISTORY_REVISION_ROWS or len(links) >= _MAX_HISTORY_REVISION_ROWS,
         )
 
+    def list_protections(self, memory_id: str) -> ProtectionListPayload:
+        parsed_memory_id = _parse_uuid(memory_id, field="memory_id")
+        return ProtectionListPayload(
+            memory_id=str(parsed_memory_id),
+            protections=[
+                protection.model_dump(mode="json")
+                for protection in self._require_mutation_history().get_protections(parsed_memory_id)
+            ],
+        )
+
+    def set_protection(
+        self,
+        *,
+        memory_id: str,
+        mode: str,
+        reason: str,
+        actor_id: str | None = None,
+        expires_at: str | None = None,
+    ) -> ProtectionMutationPayload:
+        parsed_memory_id = _parse_uuid(memory_id, field="memory_id")
+        try:
+            protection = Protection(
+                memory_id=parsed_memory_id,
+                mode=ProtectionMode(mode),
+                reason=reason,
+                actor_id=actor_id,
+                expires_at=None if expires_at is None else datetime.fromisoformat(expires_at),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("protection_invalid") from exc
+        stored = self._require_mutation_history().set_protection(protection)
+        return ProtectionMutationPayload(
+            status="applied",
+            memory_id=str(parsed_memory_id),
+            mode=str(stored.mode),
+            protection=stored.model_dump(mode="json"),
+        )
+
+    def remove_protection(self, *, memory_id: str, mode: str) -> ProtectionMutationPayload:
+        parsed_memory_id = _parse_uuid(memory_id, field="memory_id")
+        try:
+            parsed_mode = ProtectionMode(mode)
+        except ValueError as exc:
+            raise ValueError("mode_invalid") from exc
+        self._require_mutation_history().remove_protection(parsed_memory_id, parsed_mode)
+        return ProtectionMutationPayload(
+            status="removed",
+            memory_id=str(parsed_memory_id),
+            mode=str(parsed_mode),
+        )
+
+    def get_restore_eligibility(self, event_id: str) -> RestoreEligibilityPayload:
+        analysis = self._analyze_restore(event_id)
+        requires_confirmation = self._restore_requires_confirmation(analysis)
+        conflict_code = analysis.conflict_code
+        conflict_reason = analysis.conflict_reason
+        if analysis.conflict is not None:
+            conflict_code = analysis.conflict.code.value
+            conflict_reason = analysis.conflict.reason
+        if conflict_code is None:
+            blocked = self._restore_protection_conflict(analysis)
+            if blocked is not None:
+                conflict_code, conflict_reason = blocked
+            elif requires_confirmation:
+                conflict_code = "confirmation_required"
+                conflict_reason = "explicit confirmation is required by the current policy"
+        return RestoreEligibilityPayload(
+            event_id=str(analysis.event.id),
+            eligible=conflict_code is None,
+            operation=analysis.event.operation,
+            inverse_operation=None if analysis.inverse is None else analysis.inverse.inverse_operation,
+            risk=_restore_risk(analysis.event.operation),
+            requires_confirmation=requires_confirmation,
+            current_record_tokens=analysis.current_record_tokens,
+            current_link_tokens=analysis.current_link_tokens,
+            protections={
+                memory_id: [protection.model_dump(mode="json") for protection in protections]
+                for memory_id, protections in analysis.protections.items()
+            },
+            conflict_code=conflict_code,
+            conflict_reason=conflict_reason,
+        )
+
+    def request_restore(
+        self,
+        *,
+        event_id: str,
+        scope: str = "all",
+        expected_record_tokens: object = None,
+        expected_link_tokens: object = None,
+        actor_id: str | None = None,
+        reason: str,
+        idempotency_key: str,
+        confirmation: bool = False,
+    ) -> RestoreRequestPayload:
+        parsed_event_id = _parse_uuid(event_id, field="event_id")
+        try:
+            parsed_scope = RestoreScope(scope)
+        except ValueError as exc:
+            raise ValueError("scope_invalid") from exc
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key_required")
+        if not reason.strip():
+            raise ValueError("reason_required")
+        request = RestoreRequest(
+            target_event_id=parsed_event_id,
+            scope=parsed_scope,
+            expected_record_tokens=_parse_record_tokens(expected_record_tokens or {}),
+            expected_link_tokens=_parse_link_tokens(expected_link_tokens or {}),
+            actor_id=actor_id,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            confirmation=confirmation,
+        )
+        analysis = self._analyze_restore(event_id)
+        result: RestoreResult | None = None
+        if analysis.conflict_code is not None:
+            result = _restore_conflict(parsed_event_id, analysis.conflict_code, analysis.conflict_reason or "restore is not eligible")
+        elif analysis.conflict is not None:
+            result = _restore_conflict(parsed_event_id, analysis.conflict.code.value, analysis.conflict.reason)
+        else:
+            blocked = self._restore_protection_conflict(analysis)
+            if blocked is not None:
+                result = _restore_rejected(parsed_event_id, blocked[0], blocked[1])
+            elif self._restore_requires_confirmation(analysis) and not confirmation:
+                result = _restore_rejected(
+                    parsed_event_id,
+                    "confirmation_required",
+                    "explicit confirmation is required by the current policy",
+                )
+            else:
+                result = self._restore_token_conflict(request, analysis)
+        history = self._require_mutation_history()
+        if result is not None:
+            registered = history.request_restore(request)
+            if registered.status is RestoreResultStatus.ALREADY_APPLIED or registered.event_id is not None:
+                return _restore_payload(registered)
+            if registered.request_id is None:
+                raise RuntimeError("restore request store returned no request id")
+            finalized = history.terminalize_restore_request(registered.request_id, result)
+            return _restore_payload(finalized)
+        if self._action_store is None:
+            raise ValueError("curation_action_store_unavailable")
+        executed = RestoreExecutor(
+            self._action_store,
+            history,
+            curation_store=self._curation,
+        ).execute(request)
+        return _restore_payload(executed)
+
+    def _analyze_restore(self, event_id: str) -> _RestoreAnalysis:
+        event, records, links = self._get_history_parts(event_id)
+        inverse = build_inverse(event, records, links)
+        protections: dict[str, list[Protection]] = {}
+        current_record_tokens: dict[str, str] = {}
+        current_link_tokens: dict[str, str] = {}
+        if isinstance(inverse, RestoreConflict):
+            return _RestoreAnalysis(event, None, inverse, current_record_tokens, current_link_tokens, protections)
+        for change in inverse.record_changes:
+            memory_id = str(change.memory_id)
+            protections[memory_id] = self._require_mutation_history().get_protections(change.memory_id)
+            record = self._memory_queries.get_memory(memory_id) if self._memory_queries is not None else None
+            if record is None:
+                return _RestoreAnalysis(
+                    event, inverse, None, current_record_tokens, current_link_tokens, protections,
+                    RestoreConflictCode.STALE_STATE.value, f"target memory {memory_id} is missing",
+                )
+            current_record_tokens[memory_id] = record_token(record)
+            if change.expected_current_token != current_record_tokens[memory_id]:
+                return _RestoreAnalysis(
+                    event, inverse, None, current_record_tokens, current_link_tokens, protections,
+                    RestoreConflictCode.STALE_STATE.value, f"current record token is stale for {memory_id}",
+                )
+        for change in inverse.link_changes:
+            source_id = str(change.source_id)
+            target_id = str(change.target_id)
+            key = f"{source_id}:{target_id}:{change.link_type}"
+            for memory_id, parsed_memory_id in ((source_id, change.source_id), (target_id, change.target_id)):
+                protections.setdefault(memory_id, self._require_mutation_history().get_protections(parsed_memory_id))
+                record = self._memory_queries.get_memory(memory_id) if self._memory_queries is not None else None
+                if record is None:
+                    return _RestoreAnalysis(
+                        event, inverse, None, current_record_tokens, current_link_tokens, protections,
+                        RestoreConflictCode.STALE_STATE.value, f"target memory {memory_id} is missing",
+                    )
+                current_record_tokens[memory_id] = record_token(record)
+            matching = []
+            if self._memory_queries is not None:
+                matching = [
+                    link for link in self._memory_queries.get_links(source_id, direction="outgoing")
+                    if str(link.target_id) == target_id and link.link_type == change.link_type
+                ]
+            current = matching[0] if matching else None
+            current_link_tokens[key] = link_token(
+                source_id,
+                target_id,
+                change.link_type,
+                None if current is None else current.context,
+                exists=current is not None,
+            )
+            if change.exists != (current is not None) or (current is not None and current.context != change.context):
+                return _RestoreAnalysis(
+                    event, inverse, None, current_record_tokens, current_link_tokens, protections,
+                    RestoreConflictCode.STALE_STATE.value, f"current link state is stale for {key}",
+                )
+        return _RestoreAnalysis(event, inverse, None, current_record_tokens, current_link_tokens, protections)
+
+    @staticmethod
+    def _restore_requires_confirmation(analysis: _RestoreAnalysis) -> bool:
+        return any(
+            ProtectionMode.MANUAL_REVIEW_REQUIRED in {protection.mode for protection in protections}
+            for protections in analysis.protections.values()
+        )
+
+    @staticmethod
+    def _restore_protection_conflict(analysis: _RestoreAnalysis) -> tuple[str, str] | None:
+        if any(
+            ProtectionMode.NO_AUTONOMOUS_MUTATION in {protection.mode for protection in protections}
+            for protections in analysis.protections.values()
+        ):
+            return "protection_denied", "current protection does not allow autonomous restore"
+        return None
+
+    @staticmethod
+    def _restore_token_conflict(request: RestoreRequest, analysis: _RestoreAnalysis) -> RestoreResult | None:
+        for memory_id, token in analysis.current_record_tokens.items():
+            if request.expected_record_tokens.get(UUID(memory_id)) != token:
+                return _restore_conflict(request.target_event_id, "stale_state", f"current record token is stale for {memory_id}")
+        for key, token in analysis.current_link_tokens.items():
+            if request.expected_link_tokens.get(key) != token:
+                return _restore_conflict(request.target_event_id, "stale_state", f"current link token is stale for {key}")
+        return None
+
     def _require_mutation_history(self):
         if self._mutation_history is None:
-            raise ValueError("mutation_history_unavailable")
+            if self._db_manager is not None and self._storage_backend != "postgres":
+                self._mutation_history = SQLiteMutationHistoryStore(self._db_manager)
+            else:
+                raise ValueError("mutation_history_unavailable")
         return self._mutation_history
 
     def _get_history_parts(self, event_id: str) -> tuple[MutationEvent, list[RecordRevision], list[LinkRevision]]:

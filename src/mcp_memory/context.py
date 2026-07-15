@@ -160,6 +160,7 @@ _MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "vector_store",
         "mutation_history",
         "curation",
+        "curation_action_store",
     }
 )
 
@@ -224,6 +225,7 @@ class ApplicationContext:
     embedding_repair_queue: Any = None
     embedder: Any = None
     vector_store: Any = None
+    curation_action_store: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
 
