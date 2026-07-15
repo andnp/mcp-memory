@@ -1,0 +1,210 @@
+"""Pure structural and context validation for typed curation plans.
+
+This module deliberately does not evaluate policy, inspect storage, or apply
+actions.  It only proves that a plan belongs to the request and context that
+produced it and fits the harness' structural budgets.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping
+from uuid import UUID
+
+from pydantic import TypeAdapter, ValidationError
+
+from mcp_memory.core.curation_context import CurationContextPacket
+from mcp_memory.core.curation_identity import action_id
+from mcp_memory.core.curation_models import (
+    CurationPlan,
+    CurationPlanningRequest,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CurationMutationBudget:
+    """Independent limits for proposed and eventually accepted mutations."""
+
+    max_proposed_actions: int = 24
+    max_accepted_mutations: int = 16
+
+    def __post_init__(self) -> None:
+        for name in ("max_proposed_actions", "max_accepted_mutations"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class CurationRetryFeedback:
+    """Bounded feedback suitable for one schema-formatting retry."""
+
+    reason_code: Literal["formatting_only"]
+    message: str
+    fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CurationValidationIssue:
+    code: str
+    message: str
+    field: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CurationValidationResult:
+    """The result of structural/context validation, with no policy decision."""
+
+    plan: CurationPlan | None
+    issues: tuple[CurationValidationIssue, ...] = ()
+    retry_feedback: CurationRetryFeedback | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.plan is not None and not self.issues
+
+
+def validate_curation_plan(
+    plan: CurationPlan | Mapping[str, Any],
+    *,
+    request: CurationPlanningRequest,
+    context: CurationContextPacket | Mapping[str, Any] | None = None,
+    mutation_budget: CurationMutationBudget | None = None,
+) -> CurationValidationResult:
+    """Validate one plan without policy, repository, provider, or mutations."""
+
+    typed_plan = _parse_plan(plan)
+    if isinstance(typed_plan, CurationValidationResult):
+        return typed_plan
+    budget = mutation_budget or CurationMutationBudget()
+    issues: list[CurationValidationIssue] = []
+
+    if typed_plan.schema_version != request.schema_version:
+        issues.append(_issue("schema_version_mismatch", "plan schema version does not match request"))
+    if typed_plan.run_id != request.run_id:
+        issues.append(_issue("run_id_mismatch", "plan run_id does not match request"))
+    if typed_plan.plan_id != request.plan_id:
+        issues.append(_issue("plan_id_mismatch", "plan plan_id does not match request"))
+    if typed_plan.frontier_key != request.frontier_key:
+        issues.append(_issue("frontier_mismatch", "plan frontier_key does not match request"))
+    if typed_plan.context_fingerprint != request.context_fingerprint:
+        issues.append(_issue("context_mismatch", "plan context_fingerprint does not match request"))
+
+    visible_ids = _context_ids(context)
+    if context is None:
+        issues.append(_issue("context_missing", "an immutable context packet is required"))
+    else:
+        context_fingerprint = _context_value(context, "context_fingerprint")
+        if context_fingerprint != request.context_fingerprint:
+            issues.append(_issue("context_mismatch", "context fingerprint does not match request"))
+        context_seeds = {_uuid_text(value) for value in _context_values(context, "seeds", "seed_memory_ids")}
+        plan_seeds = {_uuid_text(value) for value in typed_plan.seed_memory_ids}
+        if plan_seeds != context_seeds:
+            issues.append(_issue("seed_set_mismatch", "plan seed_memory_ids do not match the context"))
+
+    seed_ids = [_uuid_text(value) for value in typed_plan.seed_memory_ids]
+    if len(seed_ids) != len(set(seed_ids)):
+        issues.append(_issue("duplicate_seed", "seed_memory_ids must be unique"))
+    retained_ids = [_uuid_text(decision.memory_id) for decision in typed_plan.retained]
+    if len(retained_ids) != len(set(retained_ids)):
+        issues.append(_issue("duplicate_retention", "retained decisions must be unique"))
+
+    if len(typed_plan.actions) > budget.max_proposed_actions:
+        issues.append(_issue("proposed_actions_budget", "plan exceeds the proposed action budget"))
+    if len(typed_plan.actions) > budget.max_accepted_mutations:
+        issues.append(_issue("accepted_mutations_budget", "plan exceeds the accepted mutation budget"))
+
+    normalized_actions = []
+    normalized_ids: set[UUID] = set()
+    for position, action in enumerate(typed_plan.actions):
+        targets = _action_targets(action)
+        hidden = sorted(set(targets) - visible_ids, key=lambda value: value.encode("utf-8"))
+        if hidden:
+            issues.append(_issue("target_not_visible", f"action target(s) are absent from context: {hidden}"))
+        expected_id = action_id(typed_plan.plan_id, position, action)
+        if expected_id in normalized_ids:
+            issues.append(_issue("duplicate_action_id", "normalized action IDs must be unique"))
+        normalized_ids.add(expected_id)
+        normalized_actions.append(action.model_copy(update={"action_id": expected_id}))
+
+    if issues:
+        return CurationValidationResult(plan=None, issues=tuple(issues))
+    normalized_plan = typed_plan.model_copy(update={"actions": normalized_actions})
+    return CurationValidationResult(plan=normalized_plan)
+
+
+def _parse_plan(plan: CurationPlan | Mapping[str, Any]) -> CurationPlan | CurationValidationResult:
+    if isinstance(plan, CurationPlan):
+        return plan
+    try:
+        return TypeAdapter(CurationPlan).validate_python(plan)
+    except ValidationError as exc:
+        if _is_formatting_only(exc):
+            fields = tuple(sorted({".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()}))
+            return CurationValidationResult(
+                plan=None,
+                retry_feedback=CurationRetryFeedback(
+                    reason_code="formatting_only",
+                    message="return a schema-valid typed curation plan; no semantic changes are requested",
+                    fields=fields,
+                ),
+            )
+        return CurationValidationResult(
+            plan=None,
+            issues=(CurationValidationIssue("material_ambiguity", str(exc)),),
+        )
+
+
+def _is_formatting_only(error: ValidationError) -> bool:
+    for item in error.errors():
+        error_type = str(item.get("type", ""))
+        location = item.get("loc", ())
+        if error_type == "literal_error" and location == ("schema_version",):
+            return False
+        if error_type.startswith("value_error"):
+            return False
+    return True
+
+
+def _context_ids(context: CurationContextPacket | Mapping[str, Any] | None) -> set[str]:
+    if context is None:
+        return set()
+    values = list(_context_values(context, "seeds", "seed_memory_ids"))
+    values.extend(_context_values(context, "support", "support_memory_ids"))
+    return {_uuid_text(value) for value in values}
+
+
+def _context_values(context: CurationContextPacket | Mapping[str, Any], records: str, ids: str) -> list[Any]:
+    value = _context_value(context, records)
+    if value is not None:
+        return [record["memory_id"] if isinstance(record, Mapping) else record for record in value]
+    value = _context_value(context, ids)
+    return [] if value is None else list(value)
+
+
+def _context_value(context: CurationContextPacket | Mapping[str, Any], name: str) -> Any:
+    if isinstance(context, Mapping):
+        return context.get(name)
+    return getattr(context, name, None)
+
+
+def _action_targets(action: Any) -> set[str]:
+    values: list[Any] = []
+    for name in ("target_id", "source_id", "canonical_id"):
+        if hasattr(action, name):
+            values.append(getattr(action, name))
+    values.extend(getattr(action, "source_ids", []))
+    return {_uuid_text(value) for value in values}
+
+
+def _uuid_text(value: Any) -> str:
+    return str(value if isinstance(value, UUID) else UUID(str(value)))
+
+
+def _issue(code: str, message: str) -> CurationValidationIssue:
+    return CurationValidationIssue(code=code, message=message)
+
+
+# Short aliases for callers that use the contract's descriptive names.
+validate_plan = validate_curation_plan
+MutationBudget = CurationMutationBudget
