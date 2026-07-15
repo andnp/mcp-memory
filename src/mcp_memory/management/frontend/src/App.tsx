@@ -10,6 +10,7 @@ import { SearchPage } from './pages/SearchPage';
 
 const NerdPage = lazy(async () => import('./pages/NerdPage').then((module) => ({ default: module.NerdPage })));
 const SelectorStatsPage = lazy(async () => import('./pages/SelectorStatsPage').then((module) => ({ default: module.SelectorStatsPage })));
+const CurationAuditPage = lazy(async () => import('./pages/CurationAuditPage').then((module) => ({ default: module.CurationAuditPage })));
 
 const navItems = [
   { to: '/', label: 'Overview', end: true },
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/retrieval', label: 'Retrieval' },
   { to: '/nerd', label: 'Nerd' },
   { to: '/selector-stats', label: 'Selector Stats' },
+  { to: '/curation', label: 'Curation' },
 ];
 
 function NotFoundPage() {
@@ -72,6 +74,7 @@ export default function App() {
           <Route path="/retrieval" element={<RetrievalPage />} />
           <Route path="/nerd" element={<NerdPage />} />
           <Route path="/selector-stats" element={<SelectorStatsPage />} />
+          <Route path="/curation" element={<CurationAuditPage />} />
           <Route path="/memory/:memoryId" element={<MemoryDetailPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

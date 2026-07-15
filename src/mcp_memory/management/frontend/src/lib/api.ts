@@ -616,6 +616,44 @@ export interface ProviderPolicyMetrics {
   by_provider: ProviderPolicyProviderRollup[];
 }
 
+export interface CurationMetricsPayload {
+  window_hours: number;
+  run_states: Record<string, number>;
+  run_outcomes: Record<string, number>;
+  operation_counts: Record<string, number>;
+  receipt_statuses: Record<string, number>;
+  rejection_reasons: Record<string, number>;
+  no_op_runs: number;
+  candidate: {
+    total: number;
+    dispositions: Record<string, number>;
+    no_op_candidates: number;
+    cooldown_candidates: number;
+  };
+  specialist_routes: {
+    total: number;
+    by_family: Record<string, number>;
+    by_reason: Record<string, number>;
+    by_status: Record<string, number>;
+  };
+  provider_disclosure: {
+    mutation_events_with_provider: number;
+    mutation_events_without_provider: number;
+    by_provider: Record<string, number>;
+  };
+  history: {
+    event_count: number;
+    applied_event_count: number;
+    restorable_event_count: number;
+    restore_request_count: number;
+    restore_requests_by_status: Record<string, number>;
+    restore_available: boolean;
+  };
+  verified_yield: number;
+  verified_receipt_count: number;
+  terminal_receipt_count: number;
+}
+
 export interface NerdMetricsResponse {
   generated_at: number;
   window_hours: number;
@@ -641,6 +679,7 @@ export interface NerdMetricsResponse {
   search_quality: SearchQuality;
   route_audit: TaskRouteAudit[];
   provider_policy: ProviderPolicyMetrics;
+  curation: CurationMetricsPayload;
   alerts: NerdAlert[];
   agent_throughput: AgentThroughputBucket[];
   provider_latency: ProviderLatencyBucket[];
@@ -746,6 +785,148 @@ export interface SelectorStatsResponse {
   outcome_rows: SelectorOutcomeRow[];
   feature_rollup_rows: SelectorFeatureRollupRow[];
   recent_runs: SelectorRecentDiagnostic[];
+}
+
+export interface CurationRun {
+  run_id: string;
+  task_id?: string | null;
+  work_item_id?: string | null;
+  frontier_key: string;
+  context_fingerprint: string;
+  planner_id?: string | null;
+  provider_id?: string | null;
+  model_id?: string | null;
+  policy_version?: string;
+  schema_version?: number;
+  state: string;
+  outcome?: string | null;
+  plan_id?: string | null;
+  rejection_codes?: string[];
+  retry_reason?: string | null;
+  budget_usage?: Record<string, unknown>;
+  created_at?: string | null;
+  terminalized_at?: string | null;
+}
+
+export interface CurationActionReceipt {
+  run_id: string;
+  action_id: string;
+  operation: string;
+  affected_ids: string[];
+  status: string;
+  before_token?: string | null;
+  after_token?: string | null;
+  mutation_event_id?: string | null;
+  error_code?: string | null;
+  applied_at?: string | null;
+  verified_at?: string | null;
+}
+
+export interface MutationHistoryEvent {
+  id: string;
+  operation: string;
+  actor_kind: string;
+  family?: string | null;
+  provider_id?: string | null;
+  reason_code?: string | null;
+  status: string;
+  curation_run_id?: string | null;
+  action_id?: string | null;
+  restores_event_id?: string | null;
+  created_at?: string | null;
+  receipt?: CurationActionReceipt | null;
+}
+
+export interface MutationHistoryListResponse {
+  events: MutationHistoryEvent[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_offset: number | null;
+}
+
+export interface RecordHistoryRevision {
+  memory_id: string;
+  role: string;
+  before_snapshot?: unknown;
+  after_snapshot?: unknown;
+  before?: unknown;
+  after?: unknown;
+  before_exists: boolean;
+  after_exists: boolean;
+  before_token?: string | null;
+  after_token?: string | null;
+}
+
+export interface LinkHistoryRevision {
+  source_id: string;
+  target_id: string;
+  link_type: string;
+  context?: unknown;
+  before_context?: unknown;
+  after_context?: unknown;
+  before_exists: boolean;
+  after_exists: boolean;
+}
+
+export interface MutationHistoryDetailResponse {
+  event: MutationHistoryEvent;
+  receipt: CurationActionReceipt | null;
+  curation_run: CurationRun | null;
+  records: RecordHistoryRevision[];
+  links: LinkHistoryRevision[];
+  truncated: boolean;
+}
+
+export interface MutationHistoryDiffResponse {
+  event_id: string;
+  records: RecordHistoryRevision[];
+  links: LinkHistoryRevision[];
+  truncated: boolean;
+}
+
+export interface Protection {
+  memory_id: string;
+  mode: string;
+  reason: string;
+  actor_id?: string | null;
+  expires_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface ProtectionListResponse {
+  memory_id: string;
+  protections: Protection[];
+}
+
+export interface RestoreEligibilityResponse {
+  event_id: string;
+  eligible: boolean;
+  operation: string | null;
+  inverse_operation: string | null;
+  risk: string | null;
+  requires_confirmation: boolean;
+  current_record_tokens: Record<string, string>;
+  current_link_tokens: Record<string, string>;
+  protections: Record<string, Protection[]>;
+  conflict_code: string | null;
+  conflict_reason: string | null;
+}
+
+export interface ProtectionMutationResponse {
+  status: 'applied' | 'removed';
+  memory_id: string;
+  mode: string;
+  protection?: Protection | null;
+}
+
+export interface RestoreRequestResponse {
+  status: string;
+  target_event_id: string;
+  request_id: string | null;
+  event_id: string | null;
+  conflict_reason: string | null;
+  conflict_details: Record<string, unknown>;
 }
 
 export type ManagementScope = 'global' | 'workspace';
@@ -894,5 +1075,74 @@ export function fetchSelectorStats(params: {
 } = {}): Promise<SelectorStatsResponse> {
   return requestJson<SelectorStatsResponse>(withQueryParams('/api/selector-stats', params), {
     method: 'POST',
+  });
+}
+
+export function fetchMutationHistory(params: {
+  limit?: number;
+  offset?: number;
+  family?: string;
+  operation?: string;
+} = {}): Promise<MutationHistoryListResponse> {
+  return requestJson<MutationHistoryListResponse>(withQueryParams('/api/mutation-history', params), {
+    method: 'POST',
+  });
+}
+
+export function fetchMutationHistoryDetail(eventId: string): Promise<MutationHistoryDetailResponse> {
+  return requestJson<MutationHistoryDetailResponse>(`/api/mutation-history/${eventId}`);
+}
+
+export function fetchMutationHistoryDiff(eventId: string): Promise<MutationHistoryDiffResponse> {
+  return requestJson<MutationHistoryDiffResponse>(`/api/mutation-history/${eventId}/diff`);
+}
+
+export function fetchRestoreEligibility(eventId: string): Promise<RestoreEligibilityResponse> {
+  return requestJson<RestoreEligibilityResponse>(`/api/mutation-history/${eventId}/restore-eligibility`);
+}
+
+export function fetchProtections(memoryId: string): Promise<ProtectionListResponse> {
+  return requestJson<ProtectionListResponse>(`/api/memories/${memoryId}/protections`);
+}
+
+export function setProtection(params: {
+  memory_id: string;
+  mode: string;
+  reason: string;
+  actor_id?: string;
+}): Promise<ProtectionMutationResponse> {
+  return requestJson<ProtectionMutationResponse>('/api/admin/protections', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function removeProtection(params: {
+  memory_id: string;
+  mode: string;
+}): Promise<ProtectionMutationResponse> {
+  return requestJson<ProtectionMutationResponse>('/api/admin/protections/delete', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export function requestRestore(params: {
+  event_id: string;
+  expected_record_tokens: Record<string, string>;
+  expected_link_tokens: Record<string, string>;
+  reason: string;
+  idempotency_key: string;
+  confirmation: boolean;
+}): Promise<RestoreRequestResponse> {
+  return requestJson<RestoreRequestResponse>(`/api/mutation-history/${params.event_id}/restore`, {
+    method: 'POST',
+    body: JSON.stringify({
+      expected_record_tokens: params.expected_record_tokens,
+      expected_link_tokens: params.expected_link_tokens,
+      reason: params.reason,
+      idempotency_key: params.idempotency_key,
+      confirmation: params.confirmation,
+    }),
   });
 }
