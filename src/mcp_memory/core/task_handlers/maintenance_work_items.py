@@ -1,12 +1,162 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_identity import canonical_token
+from mcp_memory.core.curation_routing import MaintenanceFamily
+from mcp_memory.core.curation_validation import CurationSpecialistRoute
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.work_item_store import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_CONFLICT_REVIEW,
+    WORK_FAMILY_GRAPH_LINK_REVIEW,
+    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+    WORK_FAMILY_MEMORY_TAGGING,
+    WORK_FAMILY_OPERATOR_REVIEW,
+    WorkItemRecord,
+)
+
+
+SPECIALIST_ROUTE_WORK_FAMILIES: dict[MaintenanceFamily, str] = {
+    MaintenanceFamily.CONFLICT_REVIEW: WORK_FAMILY_CONFLICT_REVIEW,
+    MaintenanceFamily.DEDUPLICATOR: WORK_FAMILY_MEMORY_DEDUP_REVIEW,
+    MaintenanceFamily.GRAPH_LINKER: WORK_FAMILY_GRAPH_LINK_REVIEW,
+    MaintenanceFamily.TAXONOMIST: WORK_FAMILY_MEMORY_TAGGING,
+}
+
+
+def enqueue_specialist_routes(
+    work_items: Any,
+    routes: Iterable[CurationSpecialistRoute],
+    *,
+    context: Any | None = None,
+    workspace_id: str | None = None,
+    priority: int = 100,
+) -> tuple[WorkItemRecord, ...]:
+    """Persist accepted specialist routes without claiming or executing them."""
+
+    records: list[WorkItemRecord] = []
+    for route in routes:
+        record, _ = enqueue_specialist_route(
+            work_items,
+            route,
+            context=context,
+            workspace_id=workspace_id,
+            priority=priority,
+        )
+        records.append(record)
+    return tuple(records)
+
+
+def enqueue_specialist_route(
+    work_items: Any,
+    route: CurationSpecialistRoute,
+    *,
+    context: Any | None = None,
+    workspace_id: str | None = None,
+    priority: int = 100,
+) -> tuple[WorkItemRecord, bool]:
+    """Create one idempotent work item for a validated specialist route."""
+
+    requested_family = _family_value(route.family)
+    try:
+        primary_family = MaintenanceFamily(requested_family)
+    except ValueError:
+        primary_family = None
+    work_family = (
+        SPECIALIST_ROUTE_WORK_FAMILIES[primary_family]
+        if primary_family is not None and primary_family in SPECIALIST_ROUTE_WORK_FAMILIES
+        else WORK_FAMILY_OPERATOR_REVIEW
+    )
+    reason_code = _enum_value(route.reason_code)
+    target_ids = _route_target_ids(route)
+    target_revision_token = _route_target_revision_token(route, target_ids=target_ids, context=context)
+    idempotency_key = f"specialist-route:{requested_family}:{target_revision_token}:{reason_code}"
+    payload: dict[str, Any] = {
+        "route_kind": "specialist_route",
+        "primary_family": requested_family,
+        "work_family": work_family,
+        "operation": _enum_value(route.action.operation),
+        "action_id": str(route.action.action_id),
+        "target_ids": target_ids,
+        "target_revision_token": target_revision_token,
+        "reason_code": reason_code,
+        "action": route.action.model_dump(mode="json"),
+    }
+    if work_family == WORK_FAMILY_OPERATOR_REVIEW:
+        payload["operator_review_required"] = True
+        payload["operator_review_reason"] = "unsupported_specialist_family"
+    return work_items.enqueue_unique(
+        family_key=work_family,
+        execution_lane=EXECUTION_LANE_AGENTIC,
+        workspace_id=workspace_id,
+        priority=priority,
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+
+
+def _route_target_ids(route: CurationSpecialistRoute) -> list[str]:
+    action = route.action
+    values: list[Any] = []
+    for name in ("target_id", "source_id", "canonical_id"):
+        if hasattr(action, name):
+            values.append(getattr(action, name))
+    values.extend(getattr(action, "source_ids", ()))
+    return sorted({str(value) for value in values})
+
+
+def _route_target_revision_token(
+    route: CurationSpecialistRoute,
+    *,
+    target_ids: list[str],
+    context: Any | None,
+) -> str:
+    revision_tokens: list[str] = []
+    for evidence in route.action.evidence:
+        if evidence.revision_token:
+            revision_tokens.append(evidence.revision_token)
+    for memory_id, token in route.action.preconditions.record_tokens.items():
+        if str(memory_id) in target_ids:
+            revision_tokens.append(token)
+
+    record_tokens = _context_value(context, "record_tokens")
+    graph_tokens = _context_value(context, "graph_tokens")
+    if isinstance(record_tokens, Mapping) or isinstance(graph_tokens, Mapping):
+        for memory_id in target_ids:
+            record_token = record_tokens.get(memory_id) if isinstance(record_tokens, Mapping) else None
+            graph_token = graph_tokens.get(memory_id) if isinstance(graph_tokens, Mapping) else None
+            if record_token is not None and graph_token is not None:
+                revision_tokens.append(canonical_token({"record": record_token, "graph": graph_token}))
+            elif record_token is not None:
+                revision_tokens.append(str(record_token))
+            elif graph_token is not None:
+                revision_tokens.append(str(graph_token))
+
+    return canonical_token(
+        {
+            "target_ids": target_ids,
+            "revision_tokens": sorted(set(str(token) for token in revision_tokens)),
+        }
+    )
+
+
+def _context_value(context: Any | None, name: str) -> Any:
+    if isinstance(context, Mapping):
+        return context.get(name)
+    return getattr(context, name, None)
+
+
+def _family_value(value: Any) -> str:
+    return str(getattr(value, "value", value))
+
+
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value))
 
 
 def claim_work_batch(

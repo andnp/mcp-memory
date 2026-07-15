@@ -23,6 +23,7 @@ WORK_FAMILY_MEMORY_CURATION_REVIEW = "memory_curation_review"
 WORK_FAMILY_MEMORY_DEDUP_REVIEW = "memory_dedup_review"
 WORK_FAMILY_GRAPH_LINK_REVIEW = "graph_link_review"
 WORK_FAMILY_MEMORY_TAGGING = "memory_tagging"
+WORK_FAMILY_OPERATOR_REVIEW = "operator_review"
 COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW = "lightweight_review"
 COMPATIBILITY_GROUP_STRUCTURAL_REVIEW = "structural_review"
 WORK_ITEM_COMPATIBILITY_GROUPS: dict[str, tuple[str, ...]] = {

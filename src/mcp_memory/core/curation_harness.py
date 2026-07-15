@@ -34,6 +34,7 @@ from mcp_memory.core.curation_planner import (
     CurationPlannerSchemaError,
     PlannerExecutionEnvelope,
 )
+from mcp_memory.core.task_handlers.maintenance_work_items import enqueue_specialist_routes
 from mcp_memory.core.curation_validation import (
     CurationMutationBudget,
     CurationRetryFeedback,
@@ -140,6 +141,7 @@ class CurationDryRunResult:
     validation: CurationValidationResult | None
     work_item: CurationWorkItemDecision
     planner_attempts: int
+    specialist_work_items: tuple[WorkItemRecord, ...] = ()
 
     @property
     def outcome(self) -> CurationRunOutcome:
@@ -147,6 +149,18 @@ class CurationDryRunResult:
 
 
 class WorkItemRepository(Protocol):
+    def enqueue_unique(
+        self,
+        *,
+        family_key: str,
+        execution_lane: str,
+        payload: dict[str, Any] | None = None,
+        workspace_id: str | None = None,
+        priority: int = 100,
+        available_at: float | None = None,
+        idempotency_key: str | None = None,
+    ) -> tuple[WorkItemRecord, bool]: ...
+
     def complete_item(self, item_id: str, *, completed_at: float | None = None) -> WorkItemRecord: ...
 
     def defer_item(
@@ -267,6 +281,13 @@ class CurationDryRunHarness:
             self._persist_no_op_dispositions(plan.retained, context, run_id, frontier_key)
 
         work_item = self._work_item_decision(outcome, reason_code, latest)
+        specialist_work_items: tuple[WorkItemRecord, ...] = ()
+        if validation is not None and validation.valid and validation.specialist_routes and self._work_items is not None:
+            specialist_work_items = enqueue_specialist_routes(
+                self._work_items,
+                validation.specialist_routes,
+                context=context,
+            )
         self._apply_work_item_decision(frontier.work_item_id, work_item)
         run_result = CurationRunResult(
             run_id=run_id,
@@ -283,6 +304,7 @@ class CurationDryRunHarness:
             validation=validation,
             work_item=work_item,
             planner_attempts=len(envelopes),
+            specialist_work_items=specialist_work_items,
         )
 
     async def _plan(
