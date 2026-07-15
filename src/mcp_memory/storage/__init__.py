@@ -10,6 +10,7 @@ from .postgres_connection import (
 from .postgres_repository import PostgresRelationalMemoryRepository
 from .postgres_runtime_log_store import PostgresRuntimeLogRepository, PostgresStructuredLogHandler
 from .postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
+from .postgres_mutation_history_store import PostgresMutationHistoryRepository, PostgresMutationHistoryStore
 from .postgres import (
     UnsupportedPostgresRuntimeComponent,
     build_postgres_runtime_components,
@@ -32,6 +33,8 @@ __all__ = [
     "POSTGRES_SCHEMA_VERSION",
     "PooledPostgresConnectionLease",
     "PostgresRelationalMemoryRepository",
+    "PostgresMutationHistoryRepository",
+    "PostgresMutationHistoryStore",
     "PostgresRuntimeLogRepository",
     "PostgresStructuredLogHandler",
     "PostgresTaskExecutionAttemptRepository",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 10
+POSTGRES_SCHEMA_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -485,6 +485,104 @@ POSTGRES_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_workspace_created ON embedding_integrity_events(workspace_id, created_at DESC, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_kind_created ON embedding_integrity_events(event_kind, created_at DESC, id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_model_created ON embedding_integrity_events(model_name, created_at DESC, id DESC)",
+        ),
+    ),
+    PostgresMigration(
+        version=11,
+        name="add_mutation_history_and_protections",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS memory_mutation_events (
+                id TEXT PRIMARY KEY,
+                operation TEXT NOT NULL,
+                actor_kind TEXT NOT NULL,
+                actor_id TEXT,
+                family TEXT,
+                task_id TEXT,
+                curation_run_id TEXT,
+                plan_id TEXT,
+                action_id TEXT,
+                provider_id TEXT,
+                reason_code TEXT,
+                rationale TEXT,
+                policy_version TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL,
+                restores_event_id TEXT REFERENCES memory_mutation_events(id),
+                idempotency_key TEXT,
+                created_at TEXT NOT NULL,
+                terminalized_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS memory_record_revisions (
+                id BIGSERIAL PRIMARY KEY,
+                event_id TEXT NOT NULL REFERENCES memory_mutation_events(id) ON DELETE CASCADE,
+                memory_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                before_exists BOOLEAN NOT NULL,
+                before_snapshot JSONB,
+                after_exists BOOLEAN NOT NULL,
+                after_snapshot JSONB,
+                before_token TEXT,
+                after_token TEXT,
+                UNIQUE (event_id, memory_id, role)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS memory_link_revisions (
+                id BIGSERIAL PRIMARY KEY,
+                event_id TEXT NOT NULL REFERENCES memory_mutation_events(id) ON DELETE CASCADE,
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                link_type TEXT NOT NULL,
+                context TEXT,
+                before_exists BOOLEAN NOT NULL,
+                after_exists BOOLEAN NOT NULL,
+                UNIQUE (event_id, source_id, target_id, link_type)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS memory_protections (
+                memory_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                actor_id TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                PRIMARY KEY (memory_id, mode)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS memory_restore_requests (
+                id TEXT PRIMARY KEY,
+                target_event_id TEXT NOT NULL REFERENCES memory_mutation_events(id),
+                scope TEXT NOT NULL,
+                expected_record_tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+                expected_link_tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+                actor_id TEXT,
+                reason TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                confirmation BOOLEAN NOT NULL DEFAULT FALSE,
+                status TEXT NOT NULL,
+                event_id TEXT REFERENCES memory_mutation_events(id),
+                conflict_reason TEXT,
+                conflict_details JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TEXT NOT NULL,
+                terminalized_at TEXT
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_mutation_events_action ON memory_mutation_events(curation_run_id, action_id) WHERE curation_run_id IS NOT NULL AND action_id IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_mutation_events_idempotency ON memory_mutation_events(idempotency_key) WHERE idempotency_key IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_created_at ON memory_mutation_events(created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_curation_run ON memory_mutation_events(curation_run_id, action_id)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_restores_event ON memory_mutation_events(restores_event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_record_revisions_event ON memory_record_revisions(event_id, id)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_record_revisions_memory ON memory_record_revisions(memory_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_link_revisions_event ON memory_link_revisions(event_id, id)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_link_revisions_endpoint ON memory_link_revisions(source_id, target_id, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_protections_memory ON memory_protections(memory_id, mode)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_restore_requests_target ON memory_restore_requests(target_event_id, created_at DESC)",
         ),
     ),
 )
