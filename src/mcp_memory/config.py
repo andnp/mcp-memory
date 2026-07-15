@@ -180,6 +180,13 @@ class IngestEscalationConfig:
             raise ValueError("ingest_escalation.preview_entry_limit must be >= 1")
 
 
+@dataclass
+class CurationConfig:
+    """Operational switches for the curator rollout."""
+
+    shadow_mode_enabled: bool = False
+
+
 
 @dataclass
 class DaemonConfig:
@@ -374,6 +381,7 @@ class Config:
     provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
     ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
     ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
+    curation: CurationConfig = field(default_factory=CurationConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -673,6 +681,9 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "novelty_threshold": 0.6,
         "preview_entry_limit": 8,
     }
+    document["curation"] = {
+        "shadow_mode_enabled": False,
+    }
     memory_table = tomlkit.table()
     memory_table.update({
         "enabled": True,
@@ -726,6 +737,7 @@ def load_config(config_path: Path | None = None) -> Config:
         ),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
+        curation=_load_dataclass_from_dict(CurationConfig, raw.get("curation", {})),
     )
 
 

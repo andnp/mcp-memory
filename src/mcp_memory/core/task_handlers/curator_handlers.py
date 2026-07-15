@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_shadow import curator_shadow_mode_enabled, run_curator_shadow_mode
 from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     finalize_agentic_tool_tracking,
     prefer_deterministic_agentic_counts,
@@ -87,6 +88,18 @@ async def handle_memory_curator_task(
             mutations=0,
             claimed_work_item_count=0,
             reason="no_seed_records",
+        )
+
+    if curator_shadow_mode_enabled(ctx):
+        return await run_curator_shadow_mode(
+            ctx,
+            task,
+            provider=provider,
+            seed_batch=seed_batch,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
+            claimed_work_item=claimed_review_item,
+            work_item_metadata=work_item_metadata,
         )
 
     curator_guardrails = build_curator_guardrails()
