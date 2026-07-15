@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "protected",
+  "description": "A user-protected record cannot be changed autonomously.",
+  "memories": [
+    {"id": "m-protected", "project": "shared", "title": "Canonical user preference", "content": "The user prefers explicit confirmation before destructive changes.", "summary": "User requires confirmation before destructive changes.", "type": "preference", "status": "active", "tags": ["user", "safety"], "protected": true}
+  ],
+  "links": [],
+  "allowed_actions": [],
+  "forbidden_actions": [{"operation": "normalize", "target_ids": ["m-protected"]}, {"operation": "archive", "target_ids": ["m-protected"]}],
+  "required_invariants": ["preserve the protected record", "route changes to explicit human review"],
+  "acceptable_retention_reasons": ["destructive_change_not_justified"]
+}

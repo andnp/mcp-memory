@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "no-op",
+  "description": "A coherent frontier has no safe mutation and must be fully dispositioned.",
+  "memories": [
+    {"id": "m-noop", "project": "shared", "title": "Deterministic action IDs", "content": "Action IDs derive from canonical intent and stable position.", "summary": "Action IDs derive deterministically from intent.", "type": "fact", "status": "active", "tags": ["curation"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [],
+  "forbidden_actions": [],
+  "required_invariants": ["make no mutation", "disposition every seed", "apply cooldown to unchanged candidates"],
+  "acceptable_retention_reasons": ["already_focused", "insufficient_evidence"]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "fixture_id": "link",
+  "description": "A supported relationship is missing between two related records.",
+  "memories": [
+    {"id": "m-link-a", "project": "shared", "title": "Retry cooldowns", "content": "Retries use a bounded cooldown.", "summary": "Retries use bounded cooldowns.", "type": "fact", "status": "active", "tags": ["retries"], "protected": false},
+    {"id": "m-link-b", "project": "shared", "title": "Provider admission", "content": "Admission failures trigger retry handling.", "summary": "Admission failures trigger retry handling.", "type": "fact", "status": "active", "tags": ["providers"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [{"operation": "create_link", "target_ids": ["m-link-a", "m-link-b"]}],
+  "forbidden_actions": [{"operation": "merge", "target_ids": ["m-link-a", "m-link-b"]}],
+  "required_invariants": ["create exactly one normalized relationship", "do not merge distinct claims"],
+  "acceptable_retention_reasons": ["relationship_is_intentional"]
+}

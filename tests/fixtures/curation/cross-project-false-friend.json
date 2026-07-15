@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "fixture_id": "cross-project-false-friend",
+  "description": "Shared vocabulary does not establish that two project records are duplicates.",
+  "memories": [
+    {"id": "m-friend-a", "project": "atlas", "title": "Release pipeline", "content": "Atlas deploys through the release pipeline after integration tests.", "summary": "Atlas release pipeline follows integration tests.", "type": "fact", "status": "active", "tags": ["release", "pipeline"], "protected": false},
+    {"id": "m-friend-b", "project": "beacon", "title": "Release pipeline", "content": "Beacon deploys through a separate release pipeline after security review.", "summary": "Beacon release pipeline follows security review.", "type": "fact", "status": "active", "tags": ["release", "pipeline"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [],
+  "forbidden_actions": [{"operation": "merge", "target_ids": ["m-friend-a", "m-friend-b"]}],
+  "required_invariants": ["do not collapse project-qualified claims", "retain both project associations"],
+  "acceptable_retention_reasons": ["project_boundary_risk", "distinct_claims"]
+}

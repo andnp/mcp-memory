@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "focused-oversized",
+  "description": "A long record has one coherent subject and should remain intact.",
+  "memories": [
+    {"id": "m-focused", "project": "shared", "title": "Database recovery runbook", "content": "The database recovery runbook covers detection, failover, point-in-time recovery, validation, and rollback in one coherent procedure.", "summary": "Coherent database recovery procedure.", "type": "fact", "status": "active", "tags": ["database", "recovery"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [],
+  "forbidden_actions": [{"operation": "split", "target_ids": ["m-focused"]}],
+  "required_invariants": ["retain the complete recovery procedure", "do not split a focused subject for size alone"],
+  "acceptable_retention_reasons": ["already_focused"]
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "bad-summary",
+  "description": "A generic summary can be normalized without changing the content claim.",
+  "memories": [
+    {"id": "m-summary", "project": "shared", "title": "Provider retry policy", "content": "Gemini retries use a bounded cooldown after transient admission failures.", "summary": "A useful memory about an important topic.", "type": "fact", "status": "active", "tags": ["provider", "retries"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [{"operation": "normalize", "target_ids": ["m-summary"]}],
+  "forbidden_actions": [{"operation": "rewrite", "target_ids": ["m-summary"]}],
+  "required_invariants": ["preserve the content exactly", "summary must describe the concrete claim"],
+  "acceptable_retention_reasons": ["insufficient_evidence"]
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "split",
+  "description": "One oversized mixed-topic record should become focused children.",
+  "memories": [
+    {"id": "m-split", "project": "shared", "title": "Deployment and incident notes", "content": "Deployment uses staged rollout. Incident response pages the owner and records the timeline. Backups run nightly and restore tests happen monthly.", "summary": "Mixed deployment, incident, and backup notes.", "type": "observation", "status": "active", "tags": ["deployment", "incidents", "backups"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [{"operation": "split", "target_ids": ["m-split"]}],
+  "forbidden_actions": [{"operation": "archive", "target_ids": ["m-split"]}],
+  "required_invariants": ["preserve every durable claim", "create lineage from the original to each child", "reject thin children"],
+  "acceptable_retention_reasons": ["insufficient_evidence"]
+}

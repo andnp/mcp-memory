@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "fixture_id": "contradiction",
+  "description": "Two source-qualified facts disagree and require review rather than silent merging.",
+  "memories": [
+    {"id": "m-conflict-a", "project": "shared", "title": "Retention policy", "content": "The 2025 policy retains audit logs for 30 days.", "summary": "2025 policy retains logs for 30 days.", "type": "fact", "status": "active", "tags": ["policy"], "protected": false},
+    {"id": "m-conflict-b", "project": "shared", "title": "Retention policy", "content": "The 2026 policy retains audit logs for 90 days.", "summary": "2026 policy retains logs for 90 days.", "type": "fact", "status": "active", "tags": ["policy"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [],
+  "forbidden_actions": [{"operation": "merge", "target_ids": ["m-conflict-a", "m-conflict-b"]}],
+  "required_invariants": ["preserve temporal qualifiers", "surface the disagreement for review"],
+  "acceptable_retention_reasons": ["distinct_claims", "needs_different_specialist"]
+}

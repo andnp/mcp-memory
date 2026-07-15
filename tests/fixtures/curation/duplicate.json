@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "fixture_id": "duplicate",
+  "description": "Two records make the same durable preference claim.",
+  "memories": [
+    {"id": "m-duplicate-a", "project": "shared", "title": "Deterministic tests", "content": "The project uses deterministic pytest fixtures.", "summary": "Project testing uses deterministic fixtures.", "type": "fact", "status": "active", "tags": ["testing"], "protected": false},
+    {"id": "m-duplicate-b", "project": "shared", "title": "Stable test data", "content": "Use deterministic pytest fixtures for the project.", "summary": "Deterministic fixtures are preferred for tests.", "type": "fact", "status": "active", "tags": ["testing"], "protected": false}
+  ],
+  "links": [],
+  "allowed_actions": [{"operation": "merge", "target_ids": ["m-duplicate-a", "m-duplicate-b"]}],
+  "forbidden_actions": [{"operation": "archive", "target_ids": ["m-duplicate-a"]}],
+  "required_invariants": ["preserve the durable testing preference", "retain provenance from both records"],
+  "acceptable_retention_reasons": ["distinct_claims"]
+}
