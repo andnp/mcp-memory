@@ -14,7 +14,13 @@ from typing import Any, Protocol, TypedDict, cast
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import Embedder, is_fallback_embedding_model
-from mcp_memory.relational.repository import FTS_QUERY_TOKEN_PATTERN, MemoryLink, RankedMemoryCandidate, RelationalMemoryRecord
+from mcp_memory.relational.repository import (
+    FTS_QUERY_TOKEN_PATTERN,
+    MemoryLink,
+    RankedMemoryCandidate,
+    RelationalMemoryReadContext,
+    RelationalMemoryRecord,
+)
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
 
@@ -136,6 +142,21 @@ class SearchRepositoryLike(Protocol):
     ) -> list[str]: ...
 
 
+class MaintenanceReadRepositoryLike(Protocol):
+    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None: ...
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[RelationalMemoryReadContext]: ...
+
+
 @dataclass(slots=True)
 class RelationalSearchResult:
     memory_id: str
@@ -154,6 +175,18 @@ class RelationalReadResult:
     record: RelationalMemoryRecord
     relationships: dict[str, list[MemoryLink]]
     superseded: list[RelationalMemoryRecord]
+
+
+def _to_relational_read_result(
+    context: RelationalMemoryReadContext | None,
+) -> RelationalReadResult | None:
+    if context is None:
+        return None
+    return RelationalReadResult(
+        record=context.record,
+        relationships=context.relationships,
+        superseded=context.superseded,
+    )
 
 
 @dataclass(slots=True)
@@ -838,6 +871,34 @@ class RelationalMemorySearchService:
             },
             superseded=superseded,
         )
+
+    def peek_memory(self, memory_id: str) -> RelationalReadResult | None:
+        """Return authoritative memory context without changing retrieval telemetry."""
+        repository = cast(MaintenanceReadRepositoryLike, self._repository)
+        context = repository.peek_memory(memory_id)
+        return _to_relational_read_result(context)
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalReadResult]:
+        """Search authoritative records without surfacing or accessing them."""
+        repository = cast(MaintenanceReadRepositoryLike, self._repository)
+        contexts = repository.search_memories_for_maintenance(
+            query,
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            limit=limit,
+        )
+        return [result for context in contexts if (result := _to_relational_read_result(context)) is not None]
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         return self._repository.get_read_cache_validation_tokens(memory_ids)

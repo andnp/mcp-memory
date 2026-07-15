@@ -50,6 +50,13 @@ class MemoryLink:
 
 
 @dataclass
+class RelationalMemoryReadContext:
+    record: RelationalMemoryRecord
+    relationships: dict[str, list[MemoryLink]]
+    superseded: list[RelationalMemoryRecord]
+
+
+@dataclass
 class RankedMemoryCandidate:
     record: RelationalMemoryRecord
     incoming_links_count: int
@@ -291,6 +298,27 @@ class RelationalMemoryRepository:
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
+        # Keep the established public query semantics unchanged; maintenance
+        # search uses the private variant below for its type filter.
+        return self._search_keyword_memory_ids(
+            query,
+            workspace_id=workspace_id,
+            memory_type=None,
+            status=status,
+            include_superseded=include_superseded,
+            limit=limit,
+        )
+
+    def _search_keyword_memory_ids(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[str]:
         tokens = [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
         normalized_query = " OR ".join(f'"{token}"' for token in tokens)
         if not normalized_query:
@@ -304,6 +332,9 @@ class RelationalMemoryRepository:
             joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
             clauses.append("memory_workspaces.workspace_id = ?")
             params.append(workspace_id)
+        if memory_type is not None:
+            clauses.append("memories.type = ?")
+            params.append(memory_type)
         if status is not None:
             clauses.append("memories.status = ?")
             params.append(status)
@@ -564,6 +595,53 @@ class RelationalMemoryRepository:
         if row is None:
             return None
         return self._hydrate_record(conn, row)
+
+    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
+        """Read authoritative memory context without changing retrieval telemetry."""
+        record = self.get_memory(memory_id)
+        if record is None:
+            return None
+
+        outgoing = self.get_links(memory_id, direction="outgoing")
+        incoming = self.get_links(memory_id, direction="incoming")
+        superseded = [
+            target
+            for link in outgoing
+            if link.link_type == "SUPERSEDES"
+            for target in [self.get_memory(link.target_id)]
+            if target is not None
+        ]
+        return RelationalMemoryReadContext(
+            record=record,
+            relationships={"outgoing": outgoing, "incoming": incoming},
+            superseded=superseded,
+        )
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        *,
+        workspace_id: str | None = None,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 50,
+    ) -> list[RelationalMemoryReadContext]:
+        """Search authoritative SQLite records without surfacing or accessing them."""
+        memory_ids = self._search_keyword_memory_ids(
+            query,
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            status=status,
+            include_superseded=include_superseded,
+            limit=limit,
+        )
+        contexts: list[RelationalMemoryReadContext] = []
+        for memory_id in memory_ids:
+            context = self.peek_memory(memory_id)
+            if context is not None:
+                contexts.append(context)
+        return contexts
 
     def update_memory(
         self,

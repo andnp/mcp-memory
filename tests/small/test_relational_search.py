@@ -27,6 +27,9 @@ from mcp_memory.relational.search import (
 from mcp_memory.mcp.services import search_memory_records_service
 from mcp_memory.context import ApplicationContext
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
+from tests.small.maintenance_read_repository_contract import (
+    assert_maintenance_read_preserves_telemetry,
+)
 
 
 pytestmark = pytest.mark.small
@@ -374,6 +377,91 @@ def test_read_memory_returns_superseded_breadcrumbs_and_updates_access_score(db_
     assert refreshed.read_count == 1
     assert [memory.id for memory in result.superseded] == [old_fact.id]
     assert result.relationships["outgoing"][0].link_type == "SUPERSEDES"
+
+
+def test_maintenance_peek_matches_read_context_without_changing_telemetry(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    old_fact = repository.create_memory(
+        title="SQLite fact",
+        content="Use SQLite locally.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    current_fact = repository.create_memory(
+        title="SQLite fact refined",
+        content="Use SQLite locally with WAL mode.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert old_fact is not None and current_fact is not None
+    repository.add_link(current_fact.id, old_fact.id, "SUPERSEDES", "Refined after testing")
+    repository.record_access(
+        current_fact.id,
+        access_score=4.0,
+        accessed_at="2026-07-14T12:00:00+00:00",
+        increment_read_count=True,
+    )
+    repository.touch_last_surfaced([current_fact.id], "2026-07-14T12:01:00+00:00")
+
+    result = assert_maintenance_read_preserves_telemetry(
+        repository,
+        [current_fact.id, old_fact.id],
+        lambda: service.peek_memory(current_fact.id),
+    )
+    ordinary_record = repository.get_memory(current_fact.id)
+    assert result is not None and ordinary_record is not None
+    assert result.record == ordinary_record
+    assert result.relationships["outgoing"] == repository.get_links(current_fact.id, "outgoing")
+    assert result.relationships["incoming"] == repository.get_links(current_fact.id, "incoming")
+    assert [record.id for record in result.superseded] == [old_fact.id]
+
+
+def test_maintenance_search_returns_full_context_without_changing_telemetry(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+
+    record = repository.create_memory(
+        title="Maintenance search candidate",
+        content="Authoritative maintenance investigation content.",
+        summary="Maintenance candidate summary.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+    other_type = repository.create_memory(
+        title="Maintenance search plan",
+        content="Authoritative maintenance investigation plan.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert other_type is not None
+    repository.record_access(
+        record.id,
+        access_score=2.5,
+        accessed_at="2026-07-14T12:00:00+00:00",
+        increment_read_count=True,
+    )
+    repository.touch_last_surfaced([record.id], "2026-07-14T12:01:00+00:00")
+
+    results = assert_maintenance_read_preserves_telemetry(
+        repository,
+        [record.id],
+        lambda: service.search_memories_for_maintenance(
+            "authoritative investigation",
+            workspace_id="workspace-alpha",
+            memory_type="fact",
+            limit=10,
+        ),
+    )
+
+    assert [result.record.id for result in results] == [record.id]
+    assert results[0].record == repository.get_memory(record.id)
+    assert results[0].relationships == {
+        "outgoing": repository.get_links(record.id, "outgoing"),
+        "incoming": repository.get_links(record.id, "incoming"),
+    }
 
 
 def test_list_most_read_memories_orders_by_explicit_read_count(db_manager) -> None:
