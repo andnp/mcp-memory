@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
+from mcp_memory.core.task_handlers.curator_support import (
+    select_curator_seed_batch,
+    select_curator_support_records,
+)
+from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.relational.repository import RelationalMemoryRecord
+
+
+pytestmark = pytest.mark.small
+
+
+def _record(memory_id: str, *, updated_at: str, tags: list[str] | None = None) -> RelationalMemoryRecord:
+    return RelationalMemoryRecord(
+        id=memory_id,
+        title=memory_id,
+        content=f"Durable content for {memory_id}.",
+        summary=f"Summary for {memory_id}.",
+        type="fact",
+        status="active",
+        created_at=updated_at,
+        updated_at=updated_at,
+        read_count=0,
+        access_score=0.0,
+        last_accessed_at=None,
+        last_surfaced_at=None,
+        workspace_ids=["workspace-other"],
+        tags=tags or [],
+    )
+
+
+def _task(strategy: str | None = None) -> TaskRecord:
+    return TaskRecord(
+        id="curator-whole-corpus-task",
+        task_name=CURATOR_TASK_NAME,
+        data={} if strategy is None else {"strategy": strategy},
+        workspace_id="workspace-task",
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+
+class _BackendRepository:
+    def __init__(self, records_by_strategy: dict[str, list[RelationalMemoryRecord]]) -> None:
+        self.records_by_strategy = records_by_strategy
+        self.calls: list[dict[str, object]] = []
+        self.by_id = {
+            record.id: record
+            for records in records_by_strategy.values()
+            for record in records
+        }
+
+    def query_maintenance_candidates(self, strategy: str, **kwargs: object) -> list[RelationalMemoryRecord]:
+        self.calls.append({"strategy": strategy, **kwargs})
+        return self.records_by_strategy.get(strategy, [])
+
+    def get_memory(self, memory_id: str) -> RelationalMemoryRecord | None:
+        return self.by_id.get(memory_id)
+
+    def get_links(self, _memory_id: str, direction: str = "outgoing") -> list[object]:
+        _ = direction
+        return []
+
+    def has_incoming_link(self, _memory_id: str, _link_type: str) -> bool:
+        return False
+
+    def count_incoming_links(self, _memory_id: str) -> int:
+        return 0
+
+
+def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> None:
+    old_record = _record("old-global-record", updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [old_record],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [],
+    })
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+
+    batch = select_curator_seed_batch(ctx, _task("cold-storage"), seed_limit=1)
+
+    assert [record.id for record in batch.records] == [old_record.id]
+    assert {call["strategy"] for call in repository.calls} == {
+        "cold-storage",
+        "never-surfaced",
+        "oversized/thin",
+        "orphan/low-support",
+        "seeded-random",
+    }
+    assert all("workspace_id" not in call for call in repository.calls)
+    assert all(call["seed"] == "curator-whole-corpus-task" for call in repository.calls)
+    assert batch.records[0].workspace_ids == ["workspace-other"]
+
+
+def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:
+    seed = _record("seed", updated_at="2026-01-01T00:00:00+00:00", tags=["auth"])
+    adjacent = _record("adjacent", updated_at="2020-01-01T00:00:00+00:00")
+    tagged = _record("tagged", updated_at="2020-01-02T00:00:00+00:00", tags=["auth"])
+    repository = _BackendRepository({
+        "cold-storage": [tagged],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [],
+    })
+    repository.by_id[adjacent.id] = adjacent
+    setattr(repository, "get_links", lambda memory_id, direction="outgoing": (
+        [SimpleNamespace(source_id=seed.id, target_id=adjacent.id)]
+        if memory_id == seed.id and direction == "outgoing"
+        else []
+    ))
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+
+    support = select_curator_support_records(ctx, _task(), [seed], support_limit=2)
+
+    assert {record.id for record in support} == {adjacent.id, tagged.id}
+    assert all("workspace_id" not in call for call in repository.calls)
+    assert {record.workspace_ids[0] for record in support} == {"workspace-other"}
+
+
+def test_semantic_candidates_use_global_search_seam() -> None:
+    anchor = _record("semantic-anchor", updated_at="2026-01-01T00:00:00+00:00")
+    neighbor = _record("semantic-neighbor", updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [anchor],
+    })
+    repository.by_id[neighbor.id] = neighbor
+    search_calls: list[dict[str, object]] = []
+
+    def search_memories(query: str, **kwargs: object) -> list[object]:
+        search_calls.append({"query": query, **kwargs})
+        return [SimpleNamespace(memory_id=neighbor.id)]
+
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=SimpleNamespace(search_memories=search_memories),
+        db_manager=None,
+        workspace_id=None,
+    )
+
+    batch = select_curator_seed_batch(ctx, _task("semantic"), seed_limit=2)
+
+    assert {record.id for record in batch.records} == {anchor.id, neighbor.id}
+    assert search_calls
+    assert all(call["workspace_id"] is None for call in search_calls)
+    assert all(call["status"] == "active" for call in search_calls)

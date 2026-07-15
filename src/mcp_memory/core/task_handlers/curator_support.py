@@ -53,6 +53,13 @@ CURATOR_STRATEGY_WEIGHTS = {
     ORPHAN_LOW_SUPPORT_STRATEGY: 2,
     BOUNDED_NOISE_STRATEGY: 1,
 }
+_CURATOR_BACKEND_STRATEGIES = (
+    "oversized/thin",
+    COLD_STORAGE_STRATEGY,
+    NEVER_SURFACED_STRATEGY,
+    "orphan/low-support",
+    "seeded-random",
+)
 
 CURATOR_SIZE_BAND_TARGET = "target"
 CURATOR_SIZE_BAND_ACCEPTABLE = "acceptable"
@@ -186,12 +193,8 @@ def select_curator_seed_batch(
     excluded_ids = exclude_memory_ids or set()
     candidates = [
         record
-        for record in ctx.repository.list_memories(
-            workspace_id=_resolve_workspace_id(ctx, task),
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
-        if not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
-        and record.id not in excluded_ids
+        for record in _query_curator_backend_candidates(ctx, task, frontier_limit=limit)
+        if record.id not in excluded_ids
     ]
     if not candidates:
         return SamplingBatch(
@@ -421,12 +424,21 @@ def select_curator_support_records(
     seed_ids = {record.id for record in seed_records}
     seed_tags = {tag for record in seed_records for tag in record.tags}
     adjacent_ids = _seed_adjacent_memory_ids(ctx, seed_records)
+    candidate_by_id = {
+        record.id: record
+        for record in _query_curator_backend_candidates(
+            ctx,
+            task,
+            frontier_limit=max(support_limit, CURATOR_MAX_SUPPORT_RECORDS),
+        )
+    }
+    for memory_id in adjacent_ids:
+        record = ctx.repository.get_memory(memory_id)
+        if record is not None:
+            candidate_by_id[record.id] = record
     candidates = [
         record
-        for record in ctx.repository.list_memories(
-            workspace_id=_resolve_workspace_id(ctx, task),
-            limit=int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT)),
-        )
+        for record in candidate_by_id.values()
         if record.id not in seed_ids and not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
     ranked = sorted(
@@ -538,6 +550,100 @@ def should_run_curator_largest_memory_pass(task: TaskRecord) -> bool:
 
 def build_support_counts(ctx: ApplicationContext, candidates: list) -> dict[str, int]:
     return support_counts_for_candidates(ctx, candidates)
+
+
+def _query_curator_backend_candidates(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    *,
+    frontier_limit: int,
+) -> list[Any]:
+    """Build a bounded global candidate pool from the accepted backend seams."""
+    if ctx.repository is None:
+        return []
+
+    query_candidates = getattr(ctx.repository, "query_maintenance_candidates", None)
+    if not callable(query_candidates):
+        return []
+
+    query_limit = _curator_backend_query_limit(task, frontier_limit)
+    candidates_by_id: dict[str, Any] = {}
+    seeded_candidates: list[Any] = []
+    for strategy in _CURATOR_BACKEND_STRATEGIES:
+        records = cast(
+            list[Any],
+            query_candidates(
+                strategy,
+                limit=query_limit,
+                status="active",
+                include_superseded=False,
+                seed=task.id,
+            ),
+        )
+        if strategy == "seeded-random":
+            seeded_candidates = list(records)
+        for record in records:
+            candidates_by_id[record.id] = record
+
+    semantic_candidate_ids = getattr(ctx.relational_search, "_semantic_candidate_ids", None)
+    semantic_search = getattr(ctx.relational_search, "search_memories", None)
+    if callable(semantic_candidate_ids):
+        for anchor in seeded_candidates[: min(3, query_limit)]:
+            result = semantic_candidate_ids(
+                anchor.content,
+                None,
+                status="active",
+                include_superseded=False,
+                keyword_ids=(),
+                query_tokens=(),
+                requested_limit=query_limit,
+                diagnostics=None,
+                limit=query_limit,
+            )
+            semantic_ids = cast(list[Any], result[0]) if isinstance(result, tuple) else []
+            for memory_id in semantic_ids:
+                if isinstance(memory_id, str):
+                    record = ctx.repository.get_memory(memory_id)
+                    if record is not None:
+                        candidates_by_id[record.id] = record
+    elif callable(semantic_search):
+        for anchor in seeded_candidates[: min(3, query_limit)]:
+            results = cast(
+                list[Any],
+                semantic_search(
+                    anchor.content,
+                    workspace_id=None,
+                    limit=query_limit,
+                    status="active",
+                    include_superseded=False,
+                ),
+            )
+            for result in results:
+                record = _semantic_result_record(ctx, result)
+                if record is not None:
+                    candidates_by_id[record.id] = record
+
+    return list(candidates_by_id.values())
+
+
+def _curator_backend_query_limit(task: TaskRecord, frontier_limit: int) -> int:
+    configured_limit = int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT))
+    return max(
+        1,
+        min(
+            configured_limit,
+            max(frontier_limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER,
+        ),
+    )
+
+
+def _semantic_result_record(ctx: ApplicationContext, result: Any) -> Any | None:
+    if hasattr(result, "content") and hasattr(result, "id"):
+        return result
+    memory_id = getattr(result, "memory_id", None)
+    if not isinstance(memory_id, str) or ctx.repository is None:
+        return None
+    return ctx.repository.get_memory(memory_id)
 
 
 def _normalize_curator_seed_limit(value: int | None) -> int:
