@@ -118,17 +118,45 @@ class PostgresMutationHistoryStore:
                 return candidate
         return None
 
-    def list_events(self, *, memory_id: UUID | None = None, limit: int = 100) -> list[MutationEvent]:
+    def list_events(
+        self,
+        *,
+        memory_id: UUID | None = None,
+        actor_kind: MutationActorKind | str | None = None,
+        family: str | None = None,
+        operation: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[MutationEvent]:
         bounded_limit = _bounded_limit(limit)
+        if offset < 0:
+            raise ValueError("offset must not be negative")
         params: list[object] = []
-        query = "SELECT * FROM memory_mutation_events"
+        conditions: list[str] = []
         if memory_id is not None:
-            query += " WHERE EXISTS (SELECT 1 FROM memory_record_revisions r WHERE r.event_id = memory_mutation_events.id AND r.memory_id = %s)"
-            query += " OR EXISTS (SELECT 1 FROM memory_link_revisions l WHERE l.event_id = memory_mutation_events.id AND (l.source_id = %s OR l.target_id = %s))"
+            conditions.append(
+                "(EXISTS (SELECT 1 FROM memory_record_revisions r WHERE r.event_id = memory_mutation_events.id AND r.memory_id = %s)"
+                " OR EXISTS (SELECT 1 FROM memory_link_revisions l WHERE l.event_id = memory_mutation_events.id AND (l.source_id = %s OR l.target_id = %s)))"
+            )
             memory_text = str(memory_id)
             params.extend([memory_text, memory_text, memory_text])
-        query += " ORDER BY created_at DESC, id DESC LIMIT %s"
-        params.append(bounded_limit)
+        for column, value in (("actor_kind", actor_kind), ("family", family), ("operation", operation)):
+            if value is not None:
+                conditions.append(f"{column} = %s")
+                params.append(str(value))
+        if created_after is not None:
+            conditions.append("created_at >= %s")
+            params.append(created_after)
+        if created_before is not None:
+            conditions.append("created_at <= %s")
+            params.append(created_before)
+        query = "SELECT * FROM memory_mutation_events"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s"
+        params.extend([bounded_limit, offset])
         return [_event_from_row(row) for row in self._fetchall(query, tuple(params))]
 
     def append_record_revisions(self, revisions: Sequence[RecordRevision]) -> None:
@@ -191,17 +219,27 @@ class PostgresMutationHistoryStore:
                 )
             connection.commit()
 
-    def get_record_revisions(self, event_id: UUID) -> list[RecordRevision]:
+    def get_record_revisions(self, event_id: UUID, *, limit: int | None = None) -> list[RecordRevision]:
+        query = "SELECT * FROM memory_record_revisions WHERE event_id = %s ORDER BY id ASC"
+        params: list[object] = [str(event_id)]
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(_bounded_limit(limit))
         rows = self._fetchall(
-            "SELECT * FROM memory_record_revisions WHERE event_id = %s ORDER BY id ASC",
-            (str(event_id),),
+            query,
+            tuple(params),
         )
         return [_record_revision_from_row(row) for row in rows]
 
-    def get_link_revisions(self, event_id: UUID) -> list[LinkRevision]:
+    def get_link_revisions(self, event_id: UUID, *, limit: int | None = None) -> list[LinkRevision]:
+        query = "SELECT * FROM memory_link_revisions WHERE event_id = %s ORDER BY id ASC"
+        params: list[object] = [str(event_id)]
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(_bounded_limit(limit))
         rows = self._fetchall(
-            "SELECT * FROM memory_link_revisions WHERE event_id = %s ORDER BY id ASC",
-            (str(event_id),),
+            query,
+            tuple(params),
         )
         return [_link_revision_from_row(row) for row in rows]
 

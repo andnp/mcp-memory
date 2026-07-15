@@ -24,6 +24,7 @@ GLOBAL_DEFAULT_FILTERABLE_ENDPOINTS = frozenset({
     "/api/logs",
     "/api/logs/summary",
     "/api/ai-conversations",
+    "/api/mutation-history",
     "/api/admin/logs/prune",
 })
 

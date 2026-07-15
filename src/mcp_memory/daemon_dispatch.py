@@ -11,6 +11,8 @@ _DEFAULT_LIST_LIMIT = 20
 _DEFAULT_LOG_LIMIT = 50
 _MAX_LIST_LIMIT = 200
 _MEMORY_DETAIL_PATH_RE = re.compile(r"^/api/memories/(?P<memory_id>[^/]+)$")
+_MUTATION_HISTORY_DETAIL_PATH_RE = re.compile(r"^/api/mutation-history/(?P<event_id>[^/]+)$")
+_MUTATION_HISTORY_DIFF_PATH_RE = re.compile(r"^/api/mutation-history/(?P<event_id>[^/]+)/diff$")
 _TASK_CANCEL_PATH_RE = re.compile(r"^/api/admin/tasks/(?P<task_id>[^/]+)/cancel$")
 
 
@@ -121,6 +123,17 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
             status=optional_str(payload, "status"),
             limit=optional_int(payload, "limit", default=_DEFAULT_LOG_LIMIT, minimum=1, maximum=_MAX_LIST_LIMIT),
         ).model_dump()
+    if path == "/api/mutation-history":
+        return routes.service.list_mutation_history(
+            memory_id=optional_str(payload, "memory_id"),
+            actor_kind=optional_str(payload, "actor_kind"),
+            family=optional_str(payload, "family"),
+            operation=optional_str(payload, "operation"),
+            after=optional_float(payload, "after"),
+            before=optional_float(payload, "before"),
+            limit=optional_int(payload, "limit", default=50, minimum=1, maximum=100) or 50,
+            offset=optional_int(payload, "offset", default=0, minimum=0, maximum=10_000) or 0,
+        ).model_dump()
     if path == "/api/admin/agents/run":
         return routes.service.enqueue_background_task(
             required_str(payload, "task_name"),
@@ -162,6 +175,14 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
     memory_match = _MEMORY_DETAIL_PATH_RE.fullmatch(path)
     if memory_match is not None:
         return routes.service.get_memory_detail(memory_match.group("memory_id")).model_dump()
+
+    history_diff_match = _MUTATION_HISTORY_DIFF_PATH_RE.fullmatch(path)
+    if history_diff_match is not None:
+        return routes.service.get_mutation_history_diff(history_diff_match.group("event_id")).model_dump()
+
+    history_detail_match = _MUTATION_HISTORY_DETAIL_PATH_RE.fullmatch(path)
+    if history_detail_match is not None:
+        return routes.service.get_mutation_history_event(history_detail_match.group("event_id")).model_dump()
 
     cancel_match = _TASK_CANCEL_PATH_RE.fullmatch(path)
     if cancel_match is not None:

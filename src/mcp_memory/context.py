@@ -158,6 +158,8 @@ _MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "embedding_integrity_events",
         "embedder",
         "vector_store",
+        "mutation_history",
+        "curation",
     }
 )
 

@@ -3,13 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
 import time
 from time import perf_counter
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from mcp_memory.context import ManagementContext
 from mcp_memory.core import MemoryPipeline
@@ -31,6 +33,7 @@ from mcp_memory.management.operator_health_reporting import (
 )
 from mcp_memory.management.overview_reporting import build_overview
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
+from mcp_memory.mutation_history import LinkRevision, MutationEvent, RecordRevision
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.models import (
@@ -47,6 +50,9 @@ from mcp_memory.management.models import (
     MemorySearchResultPayload,
     MemorySearchPayload,
     MemoryToolLatencyPayload,
+    MutationHistoryDetailPayload,
+    MutationHistoryDiffPayload,
+    MutationHistoryListPayload,
     NerdMetricsPayload,
     OperatorHealthSnapshotPayload,
     QualityCleanupCandidatePayload,
@@ -132,11 +138,40 @@ _QUALITY_CLEANUP_RECOMMENDATIONS: dict[str, tuple[str, str, int]] = {
     ),
 }
 
+_MAX_HISTORY_LIST_LIMIT = 100
+_MAX_HISTORY_OFFSET = 10_000
+_MAX_HISTORY_REVISION_ROWS = 100
+_MAX_HISTORY_VALUE_CHARS = 16_000
+
 
 logger = logging.getLogger(__name__)
 
 _build_default_provider_usage = _context_build_default_provider_usage
 _build_default_embedding_integrity_events = _context_build_default_embedding_integrity_events
+
+
+def _parse_uuid(value: str, *, field: str) -> UUID:
+    try:
+        return UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"{field}_invalid") from exc
+
+
+def _history_time(value: float | None) -> datetime | None:
+    return None if value is None else datetime.fromtimestamp(value, tz=UTC)
+
+
+def _bounded_history_value(value: object) -> object:
+    if value is None:
+        return None
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    if len(encoded) <= _MAX_HISTORY_VALUE_CHARS:
+        return value
+    return {
+        "truncated": True,
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "original_characters": len(encoded),
+    }
 
 
 def _resolve_log_workspace_id(
@@ -180,6 +215,8 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = ctx.repository
+        self._mutation_history = getattr(ctx, "mutation_history", None)
+        self._curation = getattr(ctx, "curation", None)
         self._provider_usage = resources.provider_usage
         self._runtime_logs = resources.runtime_logs
         self._embedding_integrity_events = resources.embedding_integrity_events
@@ -534,6 +571,147 @@ class ManagementService:
             },
             superseded=superseded,
         )
+
+    def list_mutation_history(
+        self,
+        *,
+        memory_id: str | None = None,
+        actor_kind: str | None = None,
+        family: str | None = None,
+        operation: str | None = None,
+        after: float | None = None,
+        before: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> MutationHistoryListPayload:
+        store = self._require_mutation_history()
+        bounded_limit = min(limit, _MAX_HISTORY_LIST_LIMIT)
+        if bounded_limit < 1:
+            raise ValueError("limit_out_of_range")
+        if offset < 0 or offset > _MAX_HISTORY_OFFSET:
+            raise ValueError("offset_out_of_range")
+        parsed_memory_id = _parse_uuid(memory_id, field="memory_id") if memory_id is not None else None
+        events = store.list_events(
+            memory_id=parsed_memory_id,
+            actor_kind=actor_kind,
+            family=family,
+            operation=operation,
+            created_after=_history_time(after),
+            created_before=_history_time(before),
+            limit=bounded_limit + 1,
+            offset=offset,
+        )
+        has_more = len(events) > bounded_limit
+        visible_events = events[:bounded_limit]
+        return MutationHistoryListPayload(
+            events=[self._history_event_payload(event) for event in visible_events],
+            limit=bounded_limit,
+            offset=offset,
+            has_more=has_more,
+            next_offset=offset + bounded_limit if has_more else None,
+        )
+
+    def get_mutation_history_event(self, event_id: str) -> MutationHistoryDetailPayload:
+        event, records, links = self._get_history_parts(event_id)
+        return MutationHistoryDetailPayload(
+            event=self._history_event_payload(event),
+            receipt=self._receipt_payload(event),
+            curation_run=self._curation_run_payload(event),
+            records=[self._record_revision_payload(revision) for revision in records],
+            links=[self._link_revision_payload(revision) for revision in links],
+            truncated=len(records) >= _MAX_HISTORY_REVISION_ROWS or len(links) >= _MAX_HISTORY_REVISION_ROWS,
+        )
+
+    def get_mutation_history_diff(self, event_id: str) -> MutationHistoryDiffPayload:
+        event, records, links = self._get_history_parts(event_id)
+        return MutationHistoryDiffPayload(
+            event_id=str(event.id),
+            records=[self._record_diff_payload(revision) for revision in records],
+            links=[self._link_diff_payload(revision) for revision in links],
+            truncated=len(records) >= _MAX_HISTORY_REVISION_ROWS or len(links) >= _MAX_HISTORY_REVISION_ROWS,
+        )
+
+    def _require_mutation_history(self):
+        if self._mutation_history is None:
+            raise ValueError("mutation_history_unavailable")
+        return self._mutation_history
+
+    def _get_history_parts(self, event_id: str) -> tuple[MutationEvent, list[RecordRevision], list[LinkRevision]]:
+        store = self._require_mutation_history()
+        parsed_event_id = _parse_uuid(event_id, field="event_id")
+        event = store.get_event(parsed_event_id)
+        if event is None:
+            raise ValueError("mutation_event_not_found")
+        return (
+            event,
+            store.get_record_revisions(parsed_event_id, limit=_MAX_HISTORY_REVISION_ROWS),
+            store.get_link_revisions(parsed_event_id, limit=_MAX_HISTORY_REVISION_ROWS),
+        )
+
+    def _history_event_payload(self, event: MutationEvent) -> dict[str, object]:
+        payload = event.model_dump(mode="json")
+        # Provider rationale is not an audit fact. Persisted revisions and
+        # tokens remain the only source for before/after history.
+        payload.pop("rationale", None)
+        payload["receipt"] = self._receipt_payload(event)
+        return payload
+
+    def _receipt_payload(self, event: MutationEvent) -> dict[str, object] | None:
+        if self._curation is None or event.curation_run_id is None or event.action_id is None:
+            return None
+        receipt = self._curation.get_receipt(event.curation_run_id, event.action_id)
+        return None if receipt is None else receipt.model_dump(mode="json")
+
+    def _curation_run_payload(self, event: MutationEvent) -> dict[str, object] | None:
+        if self._curation is None or event.curation_run_id is None:
+            return None
+        run = self._curation.get_run(event.curation_run_id)
+        return None if run is None else run.model_dump(mode="json")
+
+    def _record_revision_payload(self, revision: RecordRevision) -> dict[str, object]:
+        return {
+            "memory_id": str(revision.memory_id),
+            "role": str(revision.role),
+            "before_exists": revision.before_exists,
+            "after_exists": revision.after_exists,
+            "before_snapshot": _bounded_history_value(revision.before_snapshot),
+            "after_snapshot": _bounded_history_value(revision.after_snapshot),
+            "before_token": revision.before_token,
+            "after_token": revision.after_token,
+        }
+
+    def _link_revision_payload(self, revision: LinkRevision) -> dict[str, object]:
+        return {
+            "source_id": str(revision.source_id),
+            "target_id": str(revision.target_id),
+            "link_type": revision.link_type,
+            "context": _bounded_history_value(revision.context),
+            "before_exists": revision.before_exists,
+            "after_exists": revision.after_exists,
+        }
+
+    def _record_diff_payload(self, revision: RecordRevision) -> dict[str, object]:
+        return {
+            "memory_id": str(revision.memory_id),
+            "role": str(revision.role),
+            "before": _bounded_history_value(revision.before_snapshot),
+            "after": _bounded_history_value(revision.after_snapshot),
+            "before_exists": revision.before_exists,
+            "after_exists": revision.after_exists,
+            "before_token": revision.before_token,
+            "after_token": revision.after_token,
+        }
+
+    def _link_diff_payload(self, revision: LinkRevision) -> dict[str, object]:
+        return {
+            "source_id": str(revision.source_id),
+            "target_id": str(revision.target_id),
+            "link_type": revision.link_type,
+            "before_context": _bounded_history_value(revision.context) if revision.before_exists else None,
+            "after_context": _bounded_history_value(revision.context) if revision.after_exists else None,
+            "before_exists": revision.before_exists,
+            "after_exists": revision.after_exists,
+        }
 
     def create_memory_link(
         self,

@@ -39,6 +39,7 @@ _EXTENDED_TIMEOUT_PATH_PREFIXES = (
     "/api/memories/search",
     "/api/admin/search/repair",
     "/api/memories/",
+    "/api/mutation-history/",
     "/api/record-thought",
     "/internal/tools",
     "/internal/maintenance/tools",

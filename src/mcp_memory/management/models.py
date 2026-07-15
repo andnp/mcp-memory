@@ -1107,6 +1107,30 @@ class CurationMetricsPayload(BaseModel):
     terminal_receipt_count: int = 0
 
 
+class MutationHistoryListPayload(BaseModel):
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int
+    offset: int
+    has_more: bool = False
+    next_offset: int | None = None
+
+
+class MutationHistoryDetailPayload(BaseModel):
+    event: dict[str, Any]
+    receipt: dict[str, Any] | None = None
+    curation_run: dict[str, Any] | None = None
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    links: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class MutationHistoryDiffPayload(BaseModel):
+    event_id: str
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    links: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+
+
 class NerdMetricsPayload(BaseModel):
     generated_at: float
     window_hours: int
