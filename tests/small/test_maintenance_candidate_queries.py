@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from tests.small.maintenance_candidate_query_contract import (
+    assert_maintenance_candidate_query_contract,
+)
 
 
 pytestmark = pytest.mark.small
@@ -164,3 +167,7 @@ def test_seeded_random_candidates_are_reproducible_and_tie_broken(db_manager) ->
     assert [record.id for record in first] == [record.id for record in second]
     assert [record.id for record in first] != [record.id for record in different_seed]
     assert len({record.id for record in first}) == 8
+
+
+def test_shared_candidate_query_contract(db_manager) -> None:
+    assert_maintenance_candidate_query_contract(RelationalMemoryRepository(db_manager))

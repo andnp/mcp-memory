@@ -10,6 +10,12 @@ from uuid import uuid4
 
 from mcp_memory.core.summaries import build_deterministic_summary
 from mcp_memory.relational.repository import (
+    _DEFAULT_CANDIDATE_LIMIT,
+    _DEFAULT_LOW_SUPPORT_MAX,
+    _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+    _DEFAULT_QUALITY_OVERSIZED_MIN_CHARS,
+    _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+    _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
     RankedMemoryCandidate,
@@ -698,6 +704,273 @@ class PostgresRelationalMemoryRepository:
         self._record_timing_ms(timing_ms, "candidate_hydration_candidate_build", candidate_build_started)
         return candidates
 
+    def query_maintenance_candidates(
+        self,
+        strategy: str,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+        thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+        low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
+        quality_signal: str | None = None,
+        seed: int | str = 0,
+    ) -> list[RelationalMemoryRecord]:
+        """Return a bounded, globally scoped maintenance candidate frontier."""
+        normalized_strategy = strategy.strip().lower()
+        strategy_aliases = {
+            "cold": "cold-storage",
+            "never_surfaced": "never-surfaced",
+            "oversized-thin": "oversized/thin",
+            "orphan-low-support": "orphan/low-support",
+            "quality": "quality-signal",
+            "seeded_random": "seeded-random",
+        }
+        normalized_strategy = strategy_aliases.get(normalized_strategy, normalized_strategy)
+        supported_strategies = {
+            "cold-storage",
+            "never-surfaced",
+            "oversized/thin",
+            "orphan/low-support",
+            "quality-signal",
+            "seeded-random",
+        }
+        if normalized_strategy not in supported_strategies:
+            raise ValueError(f"unsupported maintenance candidate strategy: {strategy!r}")
+        if limit <= 0:
+            return []
+        if oversized_min_chars < 0 or thin_max_chars < 0 or low_support_max < 0:
+            raise ValueError("candidate thresholds must be non-negative")
+
+        clauses = ["TRUE"]
+        params: list[object] = []
+        if workspace_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memory_workspaces scoped_workspace "
+                "WHERE scoped_workspace.memory_id = memories.id "
+                "AND scoped_workspace.workspace_id = %s)"
+            )
+            params.append(workspace_id)
+        if status is not None:
+            clauses.append("memories.status = %s")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes "
+                "WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        order_by = "memories.updated_at ASC, memories.created_at ASC, memories.id ASC"
+        if normalized_strategy == "cold-storage":
+            order_by = (
+                "memories.last_accessed_at IS NULL DESC, memories.last_accessed_at ASC, "
+                "memories.updated_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "never-surfaced":
+            clauses.append("memories.last_surfaced_at IS NULL")
+        elif normalized_strategy == "oversized/thin":
+            clauses.append(
+                "(LENGTH(COALESCE(memories.content, '')) > %s OR "
+                "(LENGTH(COALESCE(memories.content, '')) <= %s "
+                "AND memories.metadata ? 'split_from_memory_id'))"
+            )
+            params.extend([oversized_min_chars, thin_max_chars])
+            order_by = (
+                "LENGTH(COALESCE(memories.content, '')) DESC, memories.read_count ASC, "
+                "memories.updated_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "orphan/low-support":
+            clauses.append("COALESCE(incoming_counts.incoming_links_count, 0) <= %s")
+            params.append(low_support_max)
+            order_by = (
+                "COALESCE(incoming_counts.incoming_links_count, 0) ASC, memories.read_count ASC, "
+                "memories.access_score ASC, memories.last_surfaced_at IS NULL DESC, "
+                "memories.last_surfaced_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "quality-signal":
+            quality_clause, quality_params = self._quality_signal_clause(quality_signal)
+            clauses.append(quality_clause)
+            params.extend(quality_params)
+        else:
+            order_by = "md5(CONCAT(%s, ':', memories.id)) ASC, memories.id ASC"
+            params.append(str(seed))
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        memories.id,
+                        memories.title,
+                        memories.content,
+                        memories.summary,
+                        memories.type,
+                        memories.status,
+                        memories.created_at,
+                        memories.updated_at,
+                        memories.read_count,
+                        memories.access_score,
+                        memories.last_accessed_at,
+                        memories.last_surfaced_at,
+                        memories.metadata,
+                        COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
+                        COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
+                    FROM memories
+                    LEFT JOIN (
+                        SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids
+                        FROM memory_workspaces
+                        GROUP BY memory_id
+                    ) workspace_agg ON workspace_agg.memory_id = memories.id
+                    LEFT JOIN (
+                        SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags
+                        FROM memory_tags
+                        JOIN tags ON tags.id = memory_tags.tag_id
+                        GROUP BY memory_tags.memory_id
+                    ) tag_agg ON tag_agg.memory_id = memories.id
+                    LEFT JOIN (
+                        SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count
+                        FROM links
+                        GROUP BY target_id
+                    ) incoming_counts ON incoming_counts.memory_id = memories.id
+                    WHERE
+                    """
+                    + " AND ".join(clauses)
+                    + " ORDER BY "
+                    + order_by
+                    + " LIMIT %s",
+                    tuple([*params, limit]),
+                )
+                rows = cursor.fetchall()
+
+        return [
+            RelationalMemoryRecord(
+                id=str(row[0]),
+                title=str(row[1]),
+                content=str(row[2]),
+                summary=None if row[3] is None else str(row[3]),
+                type=str(row[4]),
+                status=str(row[5]),
+                created_at=str(row[6]),
+                updated_at=str(row[7]),
+                read_count=self._coerce_int(row[8]),
+                access_score=self._coerce_float(row[9]),
+                last_accessed_at=None if row[10] is None else str(row[10]),
+                last_surfaced_at=None if row[11] is None else str(row[11]),
+                metadata=self._load_metadata(row[12]),
+                workspace_ids=self._load_text_values(row[13]),
+                tags=self._load_text_values(row[14]),
+            )
+            for row in rows
+        ]
+
+    def query_cold_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "cold-storage",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+        )
+
+    def query_never_surfaced_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "never-surfaced",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+        )
+
+    def query_oversized_thin_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+        thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "oversized/thin",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            oversized_min_chars=oversized_min_chars,
+            thin_max_chars=thin_max_chars,
+        )
+
+    def query_orphan_low_support_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "orphan/low-support",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            low_support_max=low_support_max,
+        )
+
+    def query_quality_signal_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        quality_signal: str | None = None,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "quality-signal",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            quality_signal=quality_signal,
+        )
+
+    def query_seeded_random_candidates(
+        self,
+        seed: int | str,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "seeded-random",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            seed=seed,
+        )
+
     def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False):
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
@@ -1263,6 +1536,40 @@ class PostgresRelationalMemoryRepository:
         if isinstance(raw_value, list | tuple):
             return [str(value) for value in raw_value]
         raise TypeError("expected text array-compatible value")
+
+    def _quality_signal_clause(self, quality_signal: str | None) -> tuple[str, list[object]]:
+        signal = None if quality_signal is None else quality_signal.strip().lower()
+        if signal is not None:
+            signal = _QUALITY_SIGNAL_ALIASES.get(signal, signal)
+        clauses = {
+            "trace_like_memory_count": (
+                "(LOWER(TRIM(memories.title)) LIKE 'task_complete%' OR "
+                "LOWER(TRIM(memories.title)) LIKE 'task complete%' OR "
+                "LOWER(TRIM(memories.title)) LIKE 'task_complete_record%')",
+                [],
+            ),
+            "generic_summary_count": (
+                "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %'",
+                [],
+            ),
+            "untagged_observation_count": (
+                "memories.type = 'observation' AND NOT EXISTS ("
+                "SELECT 1 FROM memory_tags untagged WHERE untagged.memory_id = memories.id)",
+                [],
+            ),
+            "oversized_memory_count": (
+                "LENGTH(COALESCE(memories.content, '')) >= %s",
+                [_DEFAULT_QUALITY_OVERSIZED_MIN_CHARS],
+            ),
+        }
+        if signal is None:
+            return "(" + " OR ".join(clause for clause, _ in clauses.values()) + ")", [
+                parameter for _, values in clauses.values() for parameter in values
+            ]
+        if signal not in clauses:
+            supported = sorted([*clauses, *_QUALITY_SIGNAL_ALIASES])
+            raise ValueError(f"unsupported quality signal: {quality_signal!r}; expected one of {supported}")
+        return clauses[signal]
 
     def _coerce_int(self, value: object) -> int:
         if isinstance(value, bool):

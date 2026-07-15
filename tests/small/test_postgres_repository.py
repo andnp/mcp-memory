@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TypeAlias
+from typing import Any, TypeAlias
 from uuid import UUID
 
 import pytest
@@ -15,6 +16,9 @@ from mcp_memory.config import Config
 from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
+from tests.small.maintenance_candidate_query_contract import (
+    assert_maintenance_candidate_query_contract,
+)
 from tests.small.maintenance_read_repository_contract import assert_maintenance_read_preserves_telemetry
 
 
@@ -55,6 +59,10 @@ class FakeCursor:
 
         if normalized.startswith("INSERT INTO memories ("):
             self._insert_memory(arguments)
+        elif normalized.startswith(
+            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags FROM memories LEFT JOIN ( SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids FROM memory_workspaces GROUP BY memory_id ) workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id ) tag_agg ON tag_agg.memory_id = memories.id LEFT JOIN ( SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count FROM links GROUP BY target_id ) incoming_counts ON incoming_counts.memory_id = memories.id WHERE"
+        ):
+            self._select_maintenance_candidates(normalized, arguments)
         elif normalized.startswith(
             "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags FROM memories LEFT JOIN ( SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids FROM memory_workspaces GROUP BY memory_id ) workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id ) tag_agg ON tag_agg.memory_id = memories.id WHERE"
         ):
@@ -429,6 +437,155 @@ class FakeCursor:
                 )
             )
         self._result = rows
+
+    def _select_maintenance_candidates(self, normalized: str, arguments: SqlParams) -> None:
+        params = list(arguments)
+        limit = self._as_int(params.pop())
+        workspace_id: str | None = None
+        status: str | None = None
+        if "scoped_workspace.workspace_id = %s" in normalized:
+            workspace_id = str(params.pop(0))
+        if "memories.status = %s" in normalized:
+            status = str(params.pop(0))
+
+        seed = ""
+        oversized_min_chars = 0
+        thin_max_chars = 0
+        low_support_max = 0
+        quality_min_chars: int | None = None
+        if "md5(CONCAT" in normalized:
+            strategy = "seeded-random"
+            seed = str(params.pop(0))
+        elif "LENGTH(COALESCE(memories.content, '')) > %s" in normalized:
+            strategy = "oversized/thin"
+            oversized_min_chars = self._as_int(params.pop(0))
+            thin_max_chars = self._as_int(params.pop(0))
+        elif "COALESCE(incoming_counts.incoming_links_count, 0) <= %s" in normalized:
+            strategy = "orphan/low-support"
+            low_support_max = self._as_int(params.pop(0))
+        elif (
+            "LOWER(TRIM" in normalized
+            or "memories.type = 'observation' AND NOT EXISTS" in normalized
+            or "LENGTH(COALESCE(memories.content, '')) >= %s" in normalized
+        ):
+            strategy = "quality-signal"
+            quality_min_chars = self._as_int(params.pop(0)) if ">= %s" in normalized else None
+        elif "memories.last_surfaced_at IS NULL" in normalized:
+            strategy = "never-surfaced"
+        else:
+            strategy = "cold-storage"
+
+        rows: list[tuple[Any, dict[str, object]]] = []
+        for memory in self._state.memories.values():
+            memory_id = str(memory["id"])
+            if workspace_id is not None and workspace_id not in self._state.memory_workspaces.get(memory_id, set()):
+                continue
+            if status is not None and str(memory["status"]) != status:
+                continue
+            if (
+                "NOT EXISTS (SELECT 1 FROM links supersedes" in normalized
+                and any(target_id == memory_id and link_type == "SUPERSEDES" for _, target_id, link_type in self._state.links)
+            ):
+                continue
+            content_length = len(str(memory["content"]))
+            metadata = json.loads(str(memory["metadata"]))
+            if strategy == "never-surfaced" and memory["last_surfaced_at"] is not None:
+                continue
+            if strategy == "oversized/thin" and not (
+                content_length > oversized_min_chars
+                or (content_length <= thin_max_chars and "split_from_memory_id" in metadata)
+            ):
+                continue
+            incoming_count = sum(1 for _, target_id, _ in self._state.links if target_id == memory_id)
+            if strategy == "orphan/low-support" and incoming_count > low_support_max:
+                continue
+            if strategy == "quality-signal":
+                title = str(memory["title"]).strip().lower()
+                summary = str(memory["summary"] or "").strip().lower()
+                signal_matches = (
+                    title.startswith("task_complete")
+                    or title.startswith("task complete")
+                    or title.startswith("task_complete_record")
+                    or summary.startswith("covers ")
+                    or (
+                        str(memory["type"]) == "observation"
+                        and not self._state.memory_tags.get(memory_id)
+                    )
+                    or (quality_min_chars is not None and content_length >= quality_min_chars)
+                )
+                all_quality_signals = all(
+                    marker in normalized
+                    for marker in (
+                        "LOWER(TRIM(memories.title)) LIKE",
+                        "LOWER(TRIM(COALESCE(memories.summary",
+                        "memories.type = 'observation'",
+                        ">= %s",
+                    )
+                )
+                if (
+                    not all_quality_signals
+                    and "LOWER(TRIM(memories.title)) LIKE 'task_complete%'" in normalized
+                    and "LOWER(TRIM(COALESCE(memories.summary" not in normalized
+                ):
+                    signal_matches = title.startswith("task_complete")
+                elif (
+                    not all_quality_signals
+                    and "LOWER(TRIM(COALESCE(memories.summary" in normalized
+                    and "LOWER(TRIM(memories.title)) LIKE" not in normalized
+                ):
+                    signal_matches = summary.startswith("covers ")
+                elif (
+                    not all_quality_signals
+                    and "memories.type = 'observation'" in normalized
+                    and ">= %s" not in normalized
+                ):
+                    signal_matches = (
+                        str(memory["type"]) == "observation"
+                        and not self._state.memory_tags.get(memory_id)
+                    )
+                elif not all_quality_signals and ">= %s" in normalized:
+                    signal_matches = quality_min_chars is not None and content_length >= quality_min_chars
+                if not signal_matches:
+                    continue
+
+            if strategy == "seeded-random":
+                sort_key = (hashlib.md5(f"{seed}:{memory_id}".encode()).hexdigest(), memory_id)
+            elif strategy == "cold-storage":
+                last_accessed = memory["last_accessed_at"]
+                sort_key = (
+                    0 if last_accessed is None else 1,
+                    "" if last_accessed is None else str(last_accessed),
+                    str(memory["updated_at"]),
+                    str(memory["created_at"]),
+                    memory_id,
+                )
+            elif strategy == "oversized/thin":
+                sort_key = (-content_length, self._as_int(memory["read_count"]), str(memory["updated_at"]), memory_id)
+            elif strategy == "orphan/low-support":
+                last_surfaced = memory["last_surfaced_at"]
+                sort_key = (
+                    incoming_count,
+                    self._as_int(memory["read_count"]),
+                    self._as_float(memory["access_score"]),
+                    0 if last_surfaced is None else 1,
+                    "" if last_surfaced is None else str(last_surfaced),
+                    memory_id,
+                )
+            else:
+                sort_key = (str(memory["updated_at"]), str(memory["created_at"]), memory_id)
+            rows.append((sort_key, memory))
+
+        rows.sort(key=lambda row: row[0])
+        self._result = [
+            (*self._memory_row(memory),
+             sorted(self._state.memory_workspaces.get(str(memory["id"]), set())),
+             sorted(
+                 self._state.tags[tag_id]
+                 for tag_id in self._state.memory_tags.get(str(memory["id"]), set())
+                 if tag_id in self._state.tags
+             ))
+            for _, memory in rows[:limit]
+        ]
 
     def _memory_row(self, memory: dict[str, object]) -> tuple[object, ...]:
         return (
@@ -1696,3 +1853,19 @@ def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculat
     assert vector_store.last_candidate_ids == expected_fallback_ids
     assert diagnostics.semantic_candidate_strategy == "global-fallback"
     assert diagnostics.timing_ms["semantic_speculative_fallback"] >= 0.0
+
+
+def test_postgres_maintenance_candidate_query_contract(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+
+    assert_maintenance_candidate_query_contract(repository)
+
+    candidate_queries = [
+        query
+        for query in session_manager._state.query_log
+        if "incoming_counts" in query
+    ]
+    assert candidate_queries
+    assert all(" LIMIT %s" in query for query in candidate_queries)
