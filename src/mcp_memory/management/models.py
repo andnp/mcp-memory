@@ -1061,6 +1061,52 @@ class NerdProviderPolicyPayload(BaseModel):
     by_provider: list[NerdProviderPolicyProviderPayload] = Field(default_factory=list)
 
 
+class CurationCandidateMetricsPayload(BaseModel):
+    total: int = 0
+    dispositions: dict[str, int] = Field(default_factory=dict)
+    no_op_candidates: int = 0
+    cooldown_candidates: int = 0
+
+
+class CurationSpecialistRouteMetricsPayload(BaseModel):
+    total: int = 0
+    by_family: dict[str, int] = Field(default_factory=dict)
+    by_reason: dict[str, int] = Field(default_factory=dict)
+    by_status: dict[str, int] = Field(default_factory=dict)
+
+
+class CurationProviderDisclosurePayload(BaseModel):
+    mutation_events_with_provider: int = 0
+    mutation_events_without_provider: int = 0
+    by_provider: dict[str, int] = Field(default_factory=dict)
+
+
+class CurationHistoryMetricsPayload(BaseModel):
+    event_count: int = 0
+    applied_event_count: int = 0
+    restorable_event_count: int = 0
+    restore_request_count: int = 0
+    restore_requests_by_status: dict[str, int] = Field(default_factory=dict)
+    restore_available: bool = False
+
+
+class CurationMetricsPayload(BaseModel):
+    window_hours: int = 24
+    run_states: dict[str, int] = Field(default_factory=dict)
+    run_outcomes: dict[str, int] = Field(default_factory=dict)
+    operation_counts: dict[str, int] = Field(default_factory=dict)
+    receipt_statuses: dict[str, int] = Field(default_factory=dict)
+    rejection_reasons: dict[str, int] = Field(default_factory=dict)
+    no_op_runs: int = 0
+    candidate: CurationCandidateMetricsPayload = Field(default_factory=CurationCandidateMetricsPayload)
+    specialist_routes: CurationSpecialistRouteMetricsPayload = Field(default_factory=CurationSpecialistRouteMetricsPayload)
+    provider_disclosure: CurationProviderDisclosurePayload = Field(default_factory=CurationProviderDisclosurePayload)
+    history: CurationHistoryMetricsPayload = Field(default_factory=CurationHistoryMetricsPayload)
+    verified_yield: float = 0.0
+    verified_receipt_count: int = 0
+    terminal_receipt_count: int = 0
+
+
 class NerdMetricsPayload(BaseModel):
     generated_at: float
     window_hours: int
@@ -1082,6 +1128,7 @@ class NerdMetricsPayload(BaseModel):
     search_quality: SearchQualityPayload = Field(default_factory=SearchQualityPayload)
     route_audit: list[TaskRouteAuditPayload] = Field(default_factory=list)
     provider_policy: NerdProviderPolicyPayload = Field(default_factory=NerdProviderPolicyPayload)
+    curation: CurationMetricsPayload = Field(default_factory=CurationMetricsPayload)
     alerts: list[NerdAlertPayload] = Field(default_factory=list)
     agent_throughput: list[AgentThroughputBucketPayload] = Field(default_factory=list)
     provider_latency: list[ProviderLatencyBucketPayload] = Field(default_factory=list)

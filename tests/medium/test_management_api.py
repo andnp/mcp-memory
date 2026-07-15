@@ -363,6 +363,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "quality_remediation" in nerd_metrics
         assert "retrieval" in nerd_metrics
         assert "maintenance_summary" in nerd_metrics
+        assert "curation" in nerd_metrics
+        assert nerd_metrics["curation"]["verified_yield"] == 0.0
         assert nerd_metrics["agent_throughput"]
         assert nerd_metrics["provider_latency"]
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])

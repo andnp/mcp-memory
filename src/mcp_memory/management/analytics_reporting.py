@@ -6,6 +6,7 @@ import time
 from statistics import median
 
 from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_timestamp
+from mcp_memory.management.analytics_curation import build_curation_metrics
 from mcp_memory.management.analytics_maintenance import build_maintenance_summary
 from mcp_memory.management.analytics_provider_policy import build_provider_policy_rollups
 from mcp_memory.management.analytics_quality import _build_backlog_series
@@ -299,6 +300,11 @@ def build_nerd_metrics(
         provider_usage_repo=provider_usage_repo,
         workspace_id=workspace_id,
     )
+    curation = build_curation_metrics(
+        db_manager,
+        window_hours=window_hours,
+        now=generated_at,
+    )
     copilot_premium_usage = summarize_copilot_premium_requests(
         db_manager,
         workspace_id=workspace_id,
@@ -399,6 +405,7 @@ def build_nerd_metrics(
         search_quality=search_quality,
         route_audit=route_audit,
         provider_policy=provider_policy,
+        curation=curation,
         alerts=build_nerd_alerts(
             queue_snapshot=queue_snapshot,
             execution_attempt_health=execution_attempt_health,
@@ -1161,5 +1168,4 @@ def _prefer_nonzero_int(primary: int | None, fallback: int | None) -> int | None
     if fallback is not None and fallback > 0:
         return fallback
     return primary if primary is not None else fallback
-
 
