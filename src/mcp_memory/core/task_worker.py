@@ -15,11 +15,16 @@ from mcp_memory.core.maintenance_idle import (
     should_pause_autonomous_recurring_maintenance,
 )
 from mcp_memory.core._recovery_actions import RecoveryAction
+from mcp_memory.core.curation_reconciliation import (
+    CurationReconciliationDisposition,
+    CurationReconciler,
+)
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest, schedule_system1_ingest_continuation
 from mcp_memory.core.task_results import TaskRunResultSource
 from mcp_memory.core.task_handlers import (
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    CURATOR_TASK_NAME,
     SYSTEM1_INGEST_TASK_NAME,
     task_priority,
 )
@@ -110,6 +115,7 @@ class RuntimeTaskWorker:
         retry_delay_seconds: float = 0.0,
         abandoned_recovery_interval_seconds: float = 30.0,
         abandoned_task_stale_after_seconds: float = 60.0,
+        curation_reconciler: CurationReconciler | None = None,
     ) -> None:
         self._ctx = ctx
         self._handlers = handlers or {}
@@ -118,6 +124,7 @@ class RuntimeTaskWorker:
         self._retry_delay_seconds = retry_delay_seconds
         self._abandoned_recovery_interval_seconds = abandoned_recovery_interval_seconds
         self._abandoned_task_stale_after_seconds = abandoned_task_stale_after_seconds
+        self._curation_reconciler = curation_reconciler
         self._stop_event = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
         self._reconciliation_runner: asyncio.Task[None] | None = None
@@ -318,6 +325,9 @@ class RuntimeTaskWorker:
             reconciled_conversation_ids = await asyncio.to_thread(
                 self._reconcile_orphaned_running_conversations,
             )
+            curation_outcomes = []
+            if self._curation_reconciler is not None:
+                curation_outcomes = await asyncio.to_thread(self._curation_reconciler.reconcile)
 
             journal = getattr(self._ctx, "journal", None)
             released_claim_ids: list[int] = []
@@ -342,7 +352,16 @@ class RuntimeTaskWorker:
                 tuple(released_claim_ids),
                 tuple(overdue_summaries),
             )
-            should_log = bool(recovered_task_ids or reconciled_conversation_ids or released_claim_ids or overdue_pending)
+            should_log = bool(
+                recovered_task_ids
+                or reconciled_conversation_ids
+                or released_claim_ids
+                or overdue_pending
+                or any(
+                    outcome.disposition is not CurationReconciliationDisposition.CONTINUE
+                    for outcome in curation_outcomes
+                )
+            )
             if should_log and snapshot != self._last_reconciliation_snapshot:
                 logger.info(
                     "Runtime reconciliation pass completed",
@@ -357,6 +376,14 @@ class RuntimeTaskWorker:
                         "released_orphaned_claim_ids": released_claim_ids,
                         "overdue_pending_count": len(overdue_pending),
                         "overdue_pending_task_ids": overdue_summaries,
+                        "curation_reconciliation_outcomes": [
+                            {
+                                "disposition": outcome.disposition.value,
+                                "reason_code": outcome.reason_code,
+                                "run_id": None if outcome.run_id is None else str(outcome.run_id),
+                            }
+                            for outcome in curation_outcomes
+                        ],
                     },
                 )
             self._last_reconciliation_snapshot = snapshot if should_log else None
@@ -445,6 +472,34 @@ class RuntimeTaskWorker:
                     task.execution_epoch,
                 )
                 await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
+                return
+
+        if task.task_name == CURATOR_TASK_NAME and self._curation_reconciler is not None:
+            curation_outcome = await asyncio.to_thread(self._curation_reconciler.before_curator_work)
+            if curation_outcome.disposition is CurationReconciliationDisposition.BLOCK:
+                blocked_task = await asyncio.to_thread(
+                    task_queue.fail_permanently,
+                    task.id,
+                    f"Curation reconciliation blocked work: {curation_outcome.reason_code}",
+                    None,
+                    task.execution_epoch,
+                )
+                await asyncio.to_thread(self._reconcile_terminal_task_state, blocked_task)
+                return
+            if curation_outcome.disposition is CurationReconciliationDisposition.DEFER:
+                delay = curation_outcome.retry_delay_seconds or self._retry_delay_seconds
+                deferred_task = await asyncio.to_thread(
+                    task_queue.retry_running_task,
+                    task.id,
+                    f"Curation reconciliation deferred work: {curation_outcome.reason_code}",
+                    time.time() + max(delay, 0.0),
+                    task.execution_epoch,
+                )
+                await asyncio.to_thread(
+                    self._reconcile_retryable_interruption,
+                    deferred_task,
+                    termination_reason=f"curation_reconciliation_{curation_outcome.reason_code}",
+                )
                 return
 
         try:
