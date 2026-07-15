@@ -21,6 +21,7 @@ from .postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION, P
 from .session import ConnectionLease, SessionManager
 from .sqlite import build_sqlite_runtime_components
 from .types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
+from mcp_memory.curation_store import SQLiteCurationRepository, SQLiteCurationStore
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 
 __all__ = [
@@ -42,6 +43,8 @@ __all__ = [
     "StorageBootstrapState",
     "StorageBootstrapSpec",
     "SQLiteMutationHistoryStore",
+    "SQLiteCurationRepository",
+    "SQLiteCurationStore",
     "StorageBackendResources",
     "UnsupportedPostgresRuntimeComponent",
     "apply_postgres_migrations",

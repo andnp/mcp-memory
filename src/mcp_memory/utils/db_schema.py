@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -322,6 +322,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
         """
     )
     create_mutation_history_schema(conn)
+    create_curation_ledger_schema(conn)
 
 
 def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
@@ -541,6 +542,66 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         """
     )
     create_mutation_history_schema(conn)
+    create_curation_ledger_schema(conn)
+
+
+def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
+    """Create the additive curation run, receipt, and candidate tables."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS curation_runs (
+            run_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            work_item_id TEXT,
+            frontier_key TEXT NOT NULL,
+            selector_strategy TEXT,
+            context_fingerprint TEXT NOT NULL,
+            planner_id TEXT,
+            provider_id TEXT,
+            model_id TEXT,
+            policy_version TEXT NOT NULL DEFAULT '1',
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            state TEXT NOT NULL,
+            outcome TEXT,
+            plan_id TEXT,
+            rejection_codes_json TEXT NOT NULL DEFAULT '[]',
+            retry_reason TEXT,
+            budget_usage_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            terminalized_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS curation_action_receipts (
+            run_id TEXT NOT NULL,
+            action_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            affected_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL,
+            before_token TEXT,
+            after_token TEXT,
+            mutation_event_id TEXT,
+            error_code TEXT,
+            applied_at TEXT,
+            verified_at TEXT,
+            PRIMARY KEY (run_id, action_id),
+            FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE,
+            FOREIGN KEY (mutation_event_id) REFERENCES memory_mutation_events(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS curation_candidate_state (
+            memory_id TEXT PRIMARY KEY,
+            last_observed_revision_token TEXT,
+            disposition TEXT NOT NULL DEFAULT 'pending',
+            consecutive_no_op_count INTEGER NOT NULL DEFAULT 0,
+            cooldown_until TEXT,
+            last_disposition_reason TEXT,
+            last_frontier_key TEXT,
+            last_run_id TEXT,
+            escalation_count INTEGER NOT NULL DEFAULT 0,
+            last_escalated_strategy TEXT
+        );
+        """
+    )
 
 
 def create_mutation_history_schema(conn: sqlite3.Connection) -> None:
@@ -751,9 +812,22 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON memory_link_revisions(source_id, target_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_memory_protections_memory
             ON memory_protections(memory_id, mode);
-        CREATE INDEX IF NOT EXISTS idx_memory_restore_requests_target
-            ON memory_restore_requests(target_event_id, created_at DESC);
-        """
+         CREATE INDEX IF NOT EXISTS idx_memory_restore_requests_target
+             ON memory_restore_requests(target_event_id, created_at DESC);
+
+         CREATE INDEX IF NOT EXISTS idx_curation_runs_state_created_at
+             ON curation_runs(state, created_at DESC, run_id DESC);
+         CREATE INDEX IF NOT EXISTS idx_curation_runs_task_id
+             ON curation_runs(task_id, created_at DESC, run_id DESC);
+         CREATE UNIQUE INDEX IF NOT EXISTS uq_curation_action_receipts_run_action
+             ON curation_action_receipts(run_id, action_id);
+         CREATE INDEX IF NOT EXISTS idx_curation_action_receipts_run_status
+             ON curation_action_receipts(run_id, status, action_id);
+         CREATE INDEX IF NOT EXISTS idx_curation_action_receipts_mutation_event
+             ON curation_action_receipts(mutation_event_id);
+         CREATE INDEX IF NOT EXISTS idx_curation_candidate_state_cooldown
+             ON curation_candidate_state(cooldown_until, disposition, memory_id);
+         """
     )
     conn.execute(
         "INSERT OR REPLACE INTO schema_metadata (key, value) VALUES (?, ?)",

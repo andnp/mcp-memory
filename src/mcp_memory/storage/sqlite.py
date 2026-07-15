@@ -12,6 +12,7 @@ from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
+from mcp_memory.curation_store import SQLiteCurationStore
 from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
@@ -68,4 +69,5 @@ def build_sqlite_runtime_components(
         embedding_repair_queue=embedding_repair_queue,
         vector_store=vector_store,
         mutation_history=SQLiteMutationHistoryStore(db_manager),
+        curation=SQLiteCurationStore(db_manager),
     )

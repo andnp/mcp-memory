@@ -29,6 +29,7 @@ class StorageBackendResources:
     embedding_repair_queue: Any
     vector_store: Any
     mutation_history: Any = None
+    curation: Any = None
 
 
 @dataclass(frozen=True)
