@@ -125,7 +125,17 @@ class _IntegrityScanVectorStore:
     def get(self, *, source_kind: str, source_id: str, model_name: str):
         return self._records.get((source_kind, source_id, model_name))
 
-    def upsert(self, *, source_kind: str, source_id: str, workspace_id: str | None, model_name: str, embedding: list[float]) -> None:
+    def upsert(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        workspace_id: str | None,
+        model_name: str,
+        embedding: list[float],
+        memory_updated_at: str | None = None,
+    ) -> bool:
+        _ = memory_updated_at
         self._records[(source_kind, source_id, model_name)] = EmbeddingRecord(
             source_kind=source_kind,
             source_id=source_id,
@@ -135,6 +145,7 @@ class _IntegrityScanVectorStore:
             updated_at=time.time(),
         )
         self.upserted_ids.append(source_id)
+        return True
 
 
 @pytest.mark.asyncio
@@ -315,6 +326,56 @@ def test_embedding_repair_queue_prune_completed_removes_old_rows(db_manager) -> 
 
     assert pruned == 1
     assert queue.list_items(limit=10) == []
+
+
+def test_versioned_embedding_repair_rejects_a_stale_write(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    record = repository.create_memory(
+        title="Versioned memory",
+        content="first version",
+        workspace_ids=["workspace-alpha"],
+        updated_at="2026-04-11T00:00:00+00:00",
+        created_at="2026-04-11T00:00:00+00:00",
+    )
+    assert record is not None
+
+    assert vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id=None,
+        model_name="versioned-model",
+        embedding=[1.0, 0.0],
+        memory_updated_at=record.updated_at,
+    ) is True
+    newer = repository.update_memory(record.id, content="second version")
+    assert newer is not None
+    assert newer.updated_at != record.updated_at
+    assert vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id=None,
+        model_name="versioned-model",
+        embedding=[0.0, 1.0],
+        memory_updated_at=newer.updated_at,
+    ) is True
+
+    assert vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id=None,
+        model_name="versioned-model",
+        embedding=[9.0, 9.0],
+        memory_updated_at=record.updated_at,
+    ) is False
+    stored = vector_store.get(
+        source_kind="memory",
+        source_id=record.id,
+        model_name="versioned-model",
+    )
+    assert stored is not None
+    assert stored.embedding == [0.0, 1.0]
+    assert stored.memory_updated_at == newer.updated_at
 
 
 @pytest.mark.asyncio

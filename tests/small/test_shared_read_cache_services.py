@@ -390,6 +390,36 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
     assert cached_payload == response
 
 
+def test_shared_read_cache_invalidation_clears_exact_query_and_affected_entries(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="old query",
+        workspace_id="workspace-123",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    cache.store_read_response("memory-1", {"status": "ok"}, validation_token="v1")
+    cache.store_projection_entries(
+        [
+            SharedReadCacheProjectionUpsert(
+                memory_id="memory-1",
+                payload={"memory_id": "memory-1"},
+                validation_token="v1",
+            )
+        ]
+    )
+    cache.store_search_response(request, {"status": "ok", "results": []})
+
+    cache.invalidate_for_mutation(["memory-1"])
+
+    assert cache.load_read_response("memory-1") is None
+    assert cache.load_projection_entry("memory-1") is None
+    assert cache.load_search_response(request) is None
+
+
 def test_record_thought_service_queues_writeback_entry_on_authoritative_failure(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     config = Config()

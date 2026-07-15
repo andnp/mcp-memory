@@ -325,7 +325,8 @@ class PostgresVectorStore:
         workspace_id: str | None,
         model_name: str,
         embedding: list[float],
-    ) -> None:
+        memory_updated_at: str | None = None,
+    ) -> bool:
         if is_fallback_embedding_model(model_name):
             self._raise_for_blocked_fallback_embedding_write(
                 source_kind=source_kind,
@@ -333,13 +334,22 @@ class PostgresVectorStore:
                 model_name=model_name,
             )
         if self._sessions is None:
-            return
+            return False
         normalized_embedding = [float(value) for value in embedding]
         payload_json = json.dumps(normalized_embedding)
         updated_at = time.time()
         capabilities = self._get_search_capabilities()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
+                if memory_updated_at is not None:
+                    cursor.execute(
+                        "SELECT updated_at FROM memories WHERE id = %s FOR SHARE",
+                        (source_id,),
+                    )
+                    current = cursor.fetchone()
+                    if current is None or str(current[0]) != memory_updated_at:
+                        connection.rollback()
+                        return False
                 stored_dimensions = self._read_model_dimensions(cursor, model_name=model_name)
                 current_dimension = len(normalized_embedding)
                 if len(stored_dimensions) > 1:
@@ -354,50 +364,108 @@ class PostgresVectorStore:
                         f"does not match new dimension {current_dimension}"
                     )
                 if capabilities.server_side_vector_search_available:
-                    cursor.execute(
-                        """
-                        INSERT INTO embeddings (
-                            source_kind, source_id, workspace_id, model_name, embedding_json, embedding_vector, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s::jsonb, CAST(%s AS vector), %s)
-                        ON CONFLICT (source_kind, source_id, model_name)
-                        DO UPDATE SET
-                            workspace_id = EXCLUDED.workspace_id,
-                            embedding_json = EXCLUDED.embedding_json,
-                            embedding_vector = EXCLUDED.embedding_vector,
-                            updated_at = EXCLUDED.updated_at
-                        """,
-                        (
-                            source_kind,
-                            source_id,
-                            workspace_id,
-                            model_name,
-                            payload_json,
-                            _format_vector_literal(normalized_embedding),
-                            updated_at,
-                        ),
-                    )
+                    if memory_updated_at is not None:
+                        cursor.execute(
+                            """
+                            INSERT INTO embeddings (
+                                source_kind, source_id, workspace_id, model_name,
+                                embedding_json, memory_updated_at, embedding_vector, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, CAST(%s AS vector), %s)
+                            ON CONFLICT (source_kind, source_id, model_name)
+                            DO UPDATE SET
+                                workspace_id = EXCLUDED.workspace_id,
+                                embedding_json = EXCLUDED.embedding_json,
+                                memory_updated_at = EXCLUDED.memory_updated_at,
+                                embedding_vector = EXCLUDED.embedding_vector,
+                                updated_at = EXCLUDED.updated_at
+                            WHERE embeddings.memory_updated_at IS NULL
+                               OR embeddings.memory_updated_at <= EXCLUDED.memory_updated_at
+                            """,
+                            (
+                                source_kind,
+                                source_id,
+                                workspace_id,
+                                model_name,
+                                payload_json,
+                                memory_updated_at,
+                                _format_vector_literal(normalized_embedding),
+                                updated_at,
+                            ),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO embeddings (
+                                source_kind, source_id, workspace_id, model_name, embedding_json, embedding_vector, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s::jsonb, CAST(%s AS vector), %s)
+                            ON CONFLICT (source_kind, source_id, model_name)
+                            DO UPDATE SET
+                                workspace_id = EXCLUDED.workspace_id,
+                                embedding_json = EXCLUDED.embedding_json,
+                                embedding_vector = EXCLUDED.embedding_vector,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            (
+                                source_kind,
+                                source_id,
+                                workspace_id,
+                                model_name,
+                                payload_json,
+                                _format_vector_literal(normalized_embedding),
+                                updated_at,
+                            ),
+                        )
                 else:
-                    cursor.execute(
-                        """
-                        INSERT INTO embeddings (
-                            source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-                        ON CONFLICT (source_kind, source_id, model_name)
-                        DO UPDATE SET
-                            workspace_id = EXCLUDED.workspace_id,
-                            embedding_json = EXCLUDED.embedding_json,
-                            updated_at = EXCLUDED.updated_at
-                        """,
-                        (
-                            source_kind,
-                            source_id,
-                            workspace_id,
-                            model_name,
-                            payload_json,
-                            updated_at,
-                        ),
-                    )
+                    if memory_updated_at is not None:
+                        cursor.execute(
+                            """
+                            INSERT INTO embeddings (
+                                source_kind, source_id, workspace_id, model_name,
+                                embedding_json, memory_updated_at, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)
+                            ON CONFLICT (source_kind, source_id, model_name)
+                            DO UPDATE SET
+                                workspace_id = EXCLUDED.workspace_id,
+                                embedding_json = EXCLUDED.embedding_json,
+                                memory_updated_at = EXCLUDED.memory_updated_at,
+                                updated_at = EXCLUDED.updated_at
+                            WHERE embeddings.memory_updated_at IS NULL
+                               OR embeddings.memory_updated_at <= EXCLUDED.memory_updated_at
+                            """,
+                            (
+                                source_kind,
+                                source_id,
+                                workspace_id,
+                                model_name,
+                                payload_json,
+                                memory_updated_at,
+                                updated_at,
+                            ),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO embeddings (
+                                source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+                            ON CONFLICT (source_kind, source_id, model_name)
+                            DO UPDATE SET
+                                workspace_id = EXCLUDED.workspace_id,
+                                embedding_json = EXCLUDED.embedding_json,
+                                updated_at = EXCLUDED.updated_at
+                            """,
+                            (
+                                source_kind,
+                                source_id,
+                                workspace_id,
+                                model_name,
+                                payload_json,
+                                updated_at,
+                            ),
+                        )
+                updated = int(getattr(cursor, "rowcount", 0) or 0) == 1
             connection.commit()
+        return updated
 
     def get(
         self,
@@ -412,7 +480,7 @@ class PostgresVectorStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
+                    SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at, memory_updated_at
                     FROM embeddings
                     WHERE source_kind = %s AND source_id = %s AND model_name = %s
                     """,
@@ -428,6 +496,7 @@ class PostgresVectorStore:
             model_name=str(row[3]),
             embedding=_decode_embedding_payload(row[4]),
             updated_at=_coerce_float(row[5]),
+            memory_updated_at=None if row[6] is None else str(row[6]),
         )
 
     def get_updated_at_map(
@@ -457,6 +526,31 @@ class PostgresVectorStore:
             str(row[0]): _coerce_float(row[1])
             for row in rows
         }
+
+    def get_memory_updated_at_map(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        source_ids: list[str],
+    ) -> dict[str, str | None]:
+        if self._sessions is None:
+            return {}
+        normalized_source_ids = [source_id for source_id in source_ids if isinstance(source_id, str) and source_id]
+        if not normalized_source_ids:
+            return {}
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT source_id, memory_updated_at
+                    FROM embeddings
+                    WHERE source_kind = %s AND model_name = %s AND source_id = ANY(%s::text[])
+                    """,
+                    (source_kind, model_name, normalized_source_ids),
+                )
+                rows = cursor.fetchall()
+        return {str(row[0]): None if row[1] is None else str(row[1]) for row in rows}
 
     def search(
         self,

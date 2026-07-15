@@ -42,6 +42,7 @@ class EmbeddingRecord:
     model_name: str
     embedding: list[float]
     updated_at: float
+    memory_updated_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -157,8 +158,53 @@ class SQLiteVectorStore:
         workspace_id: str | None,
         model_name: str,
         embedding: list[float],
-    ) -> None:
+        memory_updated_at: str | None = None,
+    ) -> bool:
         conn = self._db.get_connection()
+        if memory_updated_at is not None:
+            owns_transaction = not conn.in_transaction
+            if owns_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            try:
+                current = conn.execute(
+                    "SELECT updated_at FROM memories WHERE id = ?",
+                    (source_id,),
+                ).fetchone()
+                if current is None or str(current["updated_at"]) != memory_updated_at:
+                    if owns_transaction:
+                        conn.rollback()
+                    return False
+                cursor = conn.execute(
+                    """
+                    INSERT INTO embeddings (
+                        source_kind, source_id, workspace_id, model_name,
+                        embedding_json, memory_updated_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_kind, source_id, model_name) DO UPDATE SET
+                        workspace_id = excluded.workspace_id,
+                        embedding_json = excluded.embedding_json,
+                        memory_updated_at = excluded.memory_updated_at,
+                        updated_at = excluded.updated_at
+                    WHERE embeddings.memory_updated_at IS NULL
+                       OR embeddings.memory_updated_at <= excluded.memory_updated_at
+                    """,
+                    (
+                        source_kind,
+                        source_id,
+                        workspace_id,
+                        model_name,
+                        json.dumps(embedding),
+                        memory_updated_at,
+                        time.time(),
+                    ),
+                )
+                if owns_transaction:
+                    conn.commit()
+                return cursor.rowcount == 1
+            except Exception:
+                if owns_transaction:
+                    conn.rollback()
+                raise
         conn.execute(
             """
             INSERT OR REPLACE INTO embeddings (
@@ -180,6 +226,7 @@ class SQLiteVectorStore:
             ),
         )
         conn.commit()
+        return True
 
     def get(
         self,
@@ -190,7 +237,7 @@ class SQLiteVectorStore:
     ) -> EmbeddingRecord | None:
         row = self._db.get_connection().execute(
             """
-            SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at
+            SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at, memory_updated_at
             FROM embeddings
             WHERE source_kind = ? AND source_id = ? AND model_name = ?
             """,
@@ -205,6 +252,7 @@ class SQLiteVectorStore:
             model_name=str(row["model_name"]),
             embedding=list(json.loads(row["embedding_json"])),
             updated_at=float(row["updated_at"]),
+            memory_updated_at=None if row["memory_updated_at"] is None else str(row["memory_updated_at"]),
         )
 
     def get_updated_at_map(
@@ -228,6 +276,30 @@ class SQLiteVectorStore:
         ).fetchall()
         return {
             str(row["source_id"]): float(row["updated_at"])
+            for row in rows
+        }
+
+    def get_memory_updated_at_map(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        source_ids: list[str],
+    ) -> dict[str, str | None]:
+        normalized_source_ids = [source_id for source_id in source_ids if isinstance(source_id, str) and source_id]
+        if not normalized_source_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_source_ids)
+        rows = self._db.get_connection().execute(
+            f"""
+            SELECT source_id, memory_updated_at
+            FROM embeddings
+            WHERE source_kind = ? AND model_name = ? AND source_id IN ({placeholders})
+            """,
+            [source_kind, model_name, *normalized_source_ids],
+        ).fetchall()
+        return {
+            str(row["source_id"]): None if row["memory_updated_at"] is None else str(row["memory_updated_at"])
             for row in rows
         }
 

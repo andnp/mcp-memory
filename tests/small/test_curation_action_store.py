@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +14,11 @@ from mcp_memory.curation_action_store import (
 )
 from mcp_memory.curation_store import CurationRun, CurationRunState, SQLiteCurationStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.storage.shared_read_cache import (
+    SharedReadCache,
+    SharedReadCacheProjectionUpsert,
+    SharedReadCacheSearchRequest,
+)
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -147,6 +153,52 @@ def test_replay_returns_original_receipt_without_reapplying_callback(db_manager:
     assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM embedding_repair_queue").fetchone()[0] == 1
+
+
+def test_committed_action_invalidates_affected_derivative_caches(
+    db_manager: DatabaseManager,
+    tmp_path: Path,
+) -> None:
+    repository, run, first_id, _ = _seed(db_manager)
+    first = repository.get_memory(str(first_id))
+    assert first is not None
+    cache = SharedReadCache(tmp_path / "shared-read-cache.sqlite3")
+    request = SharedReadCacheSearchRequest(
+        query="old content",
+        workspace_id="workspace",
+        limit=5,
+        adaptive_limit=True,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )
+    cache.store_read_response(str(first_id), {"status": "ok", "record": {"content": "old content"}}, validation_token="old")
+    cache.store_projection_entries(
+        [
+            SharedReadCacheProjectionUpsert(
+                memory_id=str(first_id),
+                payload={"memory_id": str(first_id), "title": "old"},
+                validation_token="old",
+            )
+        ]
+    )
+    cache.store_search_response(request, {"status": "ok", "results": [{"memory_id": str(first_id)}]})
+
+    def apply(transaction):
+        transaction.update_memory(str(first_id), content="new content")
+        return MutationResult("normalize_memory", [first_id])
+
+    SQLiteCurationActionStore(db_manager, read_cache=cache).execute_action(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        target_ids=[str(first_id)],
+        expected_tokens={str(first_id): record_token(first)},
+        apply=apply,
+    )
+
+    assert cache.load_read_response(str(first_id)) is None
+    assert cache.load_projection_entry(str(first_id)) is None
+    assert cache.load_search_response(request) is None
 
 
 @pytest.mark.parametrize(

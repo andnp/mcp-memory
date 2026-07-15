@@ -459,6 +459,29 @@ class SharedReadCache:
             tuple(normalized_ids),
         )
 
+    def invalidate_for_mutation(self, memory_ids: list[str]) -> None:
+        """Drop derivative entries after an authoritative semantic mutation.
+
+        Exact-query responses are corpus-wide projections, so there is no safe
+        per-memory key to invalidate.  Clearing them makes a committed
+        mutation visible to the next public search; stale responses remain
+        available only to the explicit error fallback path until this point.
+        """
+        normalized_ids = [memory_id for memory_id in memory_ids if isinstance(memory_id, str) and memory_id]
+        with self._connect() as connection:
+            if normalized_ids:
+                placeholders = ",".join("?" for _ in normalized_ids)
+                connection.execute(
+                    f"DELETE FROM cached_memory_records WHERE memory_id IN ({placeholders})",
+                    tuple(normalized_ids),
+                )
+                connection.execute(
+                    f"DELETE FROM cached_memory_projections WHERE memory_id IN ({placeholders})",
+                    tuple(normalized_ids),
+                )
+            connection.execute("DELETE FROM cached_search_results")
+            connection.commit()
+
     def increment_metric(self, metric_name: str, *, amount: int = 1) -> None:
         if metric_name not in _METRIC_COLUMNS or amount <= 0:
             return

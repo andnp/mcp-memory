@@ -121,6 +121,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             workspace_id TEXT,
             model_name TEXT NOT NULL,
             embedding_json TEXT NOT NULL,
+            memory_updated_at TEXT,
             updated_at REAL NOT NULL,
             PRIMARY KEY (source_kind, source_id, model_name)
         );
@@ -369,6 +370,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
     ensure_column(conn, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'"
     )
+    ensure_column(conn, "embeddings", "memory_updated_at", "TEXT")
     ensure_column(conn, "hook_conversations", "workspace_id", "TEXT")
     ensure_column(conn, "hook_conversations", "last_tool_name", "TEXT")
     ensure_column(conn, "hook_conversations", "last_payload_json", "TEXT NOT NULL DEFAULT '{}'"

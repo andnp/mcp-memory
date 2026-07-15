@@ -9,6 +9,7 @@ receipt boundary.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -48,6 +49,9 @@ from mcp_memory.storage.postgres_curation_store import _receipt_from_row
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
 
+logger = logging.getLogger(__name__)
+
+
 _SUMMARY_UNSET = object()
 _VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
 _VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
@@ -63,6 +67,7 @@ class PostgresCurationActionStore:
         *,
         embedding_model: str = "default",
         model_name: str | None = None,
+        read_cache: Any | None = None,
         fault_stage: str | None = None,
         fault_injector: Callable[[str], None] | None = None,
     ) -> None:
@@ -74,6 +79,7 @@ class PostgresCurationActionStore:
             raise ValueError("embedding_model must be non-empty")
         self._fault_stage = fault_stage
         self._fault_injector = fault_injector
+        self._read_cache = read_cache
 
     def execute_action(
         self,
@@ -211,6 +217,7 @@ class PostgresCurationActionStore:
                     self._insert_receipt(cursor, receipt)
                     self._fail_stage("receipt_preparation")
                 connection.commit()
+                self._invalidate_derivative_caches(after_ids)
                 return receipt
             except CurationActionError:
                 connection.rollback()
@@ -222,6 +229,16 @@ class PostgresCurationActionStore:
                         f"Postgres action transaction was retryable for {run_id}/{action_id}"
                     ) from exc
                 raise CurationActionFatalError(f"curation action failed for {run_id}/{action_id}") from exc
+
+    def _invalidate_derivative_caches(self, memory_ids: Sequence[str]) -> None:
+        if self._read_cache is None:
+            return
+        try:
+            self._read_cache.invalidate_for_mutation(list(memory_ids))
+        except Exception:
+            # The cache is derivative; a cache failure must not turn a
+            # committed authoritative mutation into a retryable action.
+            logger.warning("Unable to invalidate shared read cache after curation mutation", exc_info=True)
 
     def _receipt(self, run_id: UUID, action_id: UUID) -> CurationActionReceipt | None:
         with self._sessions.open_connection() as connection:

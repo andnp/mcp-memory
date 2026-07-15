@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 12
+POSTGRES_SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -289,6 +289,7 @@ POSTGRES_MIGRATIONS = (
                 workspace_id TEXT,
                 model_name TEXT NOT NULL,
                 embedding_json JSONB NOT NULL,
+                memory_updated_at TEXT,
                 updated_at DOUBLE PRECISION NOT NULL,
                 PRIMARY KEY (source_kind, source_id, model_name)
             )
@@ -647,6 +648,13 @@ POSTGRES_MIGRATIONS = (
             "CREATE INDEX IF NOT EXISTS idx_curation_runs_created_at ON curation_runs(created_at DESC, run_id DESC)",
             "CREATE INDEX IF NOT EXISTS idx_curation_action_receipts_run ON curation_action_receipts(run_id, action_id)",
             "CREATE INDEX IF NOT EXISTS idx_curation_candidate_state_cooldown ON curation_candidate_state(cooldown_until, memory_id)",
+        ),
+    ),
+    PostgresMigration(
+        version=13,
+        name="add_embedding_memory_versions",
+        statements=(
+            "ALTER TABLE embeddings ADD COLUMN IF NOT EXISTS memory_updated_at TEXT",
         ),
     ),
 )

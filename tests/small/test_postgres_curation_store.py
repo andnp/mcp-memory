@@ -104,10 +104,10 @@ def _sqlite_query(query: str) -> str:
     return query.replace("%s::jsonb", "?").replace("%s", "?")
 
 
-def test_postgres_migration_adds_curation_ledger_as_latest_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 12
-    migration = POSTGRES_MIGRATIONS[-1]
-    assert migration.version == POSTGRES_SCHEMA_VERSION
+def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
+    assert POSTGRES_SCHEMA_VERSION == 13
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
+    assert migration.version == 12
     assert migration.name == "add_curation_ledger"
     assert any("CREATE TABLE IF NOT EXISTS curation_runs" in statement for statement in migration.statements)
     assert any("PRIMARY KEY (run_id, action_id)" in statement for statement in migration.statements)

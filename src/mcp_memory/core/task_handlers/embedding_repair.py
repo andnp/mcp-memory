@@ -314,19 +314,21 @@ async def handle_embedding_repair_task(
 
         embeddings = embedder.embed([_memory_embedding_text(record) for record, _ in repair_pairs])
         for (record, work_item), embedding in zip(repair_pairs, embeddings, strict=False):
-            vector_store.upsert(
+            stored = vector_store.upsert(
                 source_kind="memory",
                 source_id=record.id,
                 workspace_id=None,
                 model_name=embedder.model_name,
                 embedding=embedding,
+                memory_updated_at=record.updated_at,
             )
             if embedding_repair_queue is not None:
                 embedding_repair_queue.complete_item(work_item.id)
             else:
                 assert work_items is not None
                 work_items.complete_item(work_item.id)
-            repaired += 1
+            if stored is not False:
+                repaired += 1
 
     pruned_completed = 0
     if embedding_repair_queue is not None:

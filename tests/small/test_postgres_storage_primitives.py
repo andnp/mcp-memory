@@ -498,7 +498,7 @@ class FakePrimitiveCursor:
                 for row in limited
             ]
             return
-        if normalized.startswith("SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at FROM embeddings WHERE source_kind = %s AND source_id = %s AND model_name = %s"):
+        if normalized.startswith("SELECT source_kind, source_id, workspace_id, model_name, embedding_json, updated_at, memory_updated_at FROM embeddings WHERE source_kind = %s AND source_id = %s AND model_name = %s"):
             row = next(
                 (
                     row for row in self._state.embeddings
@@ -509,7 +509,15 @@ class FakePrimitiveCursor:
                 None,
             )
             self._result = [] if row is None else [
-                (row["source_kind"], row["source_id"], row["workspace_id"], row["model_name"], row["embedding_json"], row["updated_at"])
+                (
+                    row["source_kind"],
+                    row["source_id"],
+                    row["workspace_id"],
+                    row["model_name"],
+                    row["embedding_json"],
+                    row["updated_at"],
+                    row.get("memory_updated_at"),
+                )
             ]
             return
         if normalized.startswith("SELECT DISTINCT jsonb_array_length(embedding_json) FROM embeddings WHERE model_name = %s AND jsonb_typeof(embedding_json) = 'array'"):

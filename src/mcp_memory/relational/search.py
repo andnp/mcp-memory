@@ -1430,6 +1430,14 @@ class RelationalMemorySearchService:
         assert self._embedder is not None
         assert self._vector_store is not None
 
+        get_memory_updated_at_map = getattr(self._vector_store, "get_memory_updated_at_map", None)
+        memory_updated_at_by_id: dict[str, str | None] | None = None
+        if callable(get_memory_updated_at_map):
+            memory_updated_at_by_id = cast(dict[str, str | None], get_memory_updated_at_map(
+                source_kind="memory",
+                model_name=self._embedder.model_name,
+                source_ids=[candidate.id for candidate in candidates],
+            ))
         get_updated_at_map = getattr(self._vector_store, "get_updated_at_map", None)
         updated_at_by_id: dict[str, float] | None = None
         if callable(get_updated_at_map):
@@ -1441,6 +1449,12 @@ class RelationalMemorySearchService:
 
         stale_or_missing: list[RelationalMemoryRecord] = []
         for candidate in candidates:
+            if memory_updated_at_by_id is not None:
+                if memory_updated_at_by_id.get(candidate.id) == candidate.updated_at:
+                    continue
+                if memory_updated_at_by_id.get(candidate.id) is not None:
+                    stale_or_missing.append(candidate)
+                    continue
             existing_updated_at = (
                 updated_at_by_id.get(candidate.id)
                 if updated_at_by_id is not None

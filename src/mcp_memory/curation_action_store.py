@@ -8,6 +8,7 @@ transaction and exposes only ``CurationTransaction`` to its callback.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -33,6 +34,9 @@ from mcp_memory.mutation_history import (
 )
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
 from mcp_memory.utils.db import DatabaseManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class CurationActionError(RuntimeError):
@@ -138,6 +142,7 @@ class SQLiteCurationActionStore:
         *,
         embedding_model: str = "default",
         model_name: str | None = None,
+        read_cache: Any | None = None,
         fault_stage: str | None = None,
         fault_injector: Callable[[str], None] | None = None,
     ) -> None:
@@ -149,6 +154,7 @@ class SQLiteCurationActionStore:
             raise ValueError("embedding_model must be non-empty")
         self._fault_stage = fault_stage
         self._fault_injector = fault_injector
+        self._read_cache = read_cache
 
     def execute_action(
         self,
@@ -274,6 +280,7 @@ class SQLiteCurationActionStore:
             self._insert_receipt(connection, receipt)
             self._fail_stage("receipt_preparation")
             connection.commit()
+            self._invalidate_derivative_caches(after_ids)
             return receipt
         except CurationActionError:
             connection.rollback()
@@ -294,6 +301,16 @@ class SQLiteCurationActionStore:
             ) from exc
         finally:
             connection.close()
+
+    def _invalidate_derivative_caches(self, memory_ids: Sequence[str]) -> None:
+        if self._read_cache is None:
+            return
+        try:
+            self._read_cache.invalidate_for_mutation(list(memory_ids))
+        except Exception:
+            # The cache is derivative; a cache failure must not turn a
+            # committed authoritative mutation into a retryable action.
+            logger.warning("Unable to invalidate shared read cache after curation mutation", exc_info=True)
 
     def _lock_targets(self, connection: sqlite3.Connection, target_ids: Sequence[str]) -> None:
         for memory_id in target_ids:
