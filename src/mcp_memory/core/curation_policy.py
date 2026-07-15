@@ -7,6 +7,8 @@ from enum import StrEnum
 from typing import Mapping
 from uuid import UUID
 
+from mcp_memory.mutation_history import ProtectionMode
+
 from .curation_models import (
     ArchiveMemoryAction,
     ClaimManifest,
@@ -42,6 +44,10 @@ class RejectionCode(StrEnum):
     UNKNOWN_MEMORY_TYPE = "unknown_memory_type"
     LINK_TYPE_NOT_CANONICAL = "link_type_not_canonical"
     EMPTY_CONTENT = "empty_content"
+    NO_AUTONOMOUS_MUTATION = "no_autonomous_mutation"
+    DESTRUCTIVE_CHANGE_REQUIRES_REVIEW = "destructive_change_requires_review"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+    PINNED_ACTIVE = "pinned_active"
 
 
 @dataclass(frozen=True)
@@ -113,6 +119,7 @@ def evaluate_curation_action(
     *,
     memory_types: Mapping[UUID, str] | None = None,
     contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset(),
+    protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
 ) -> PolicyDecision:
     """Evaluate an already-typed action using only caller-supplied facts."""
     operation = action.get("operation", "") if isinstance(action, Mapping) else getattr(action, "operation", "")
@@ -141,6 +148,22 @@ def evaluate_curation_action(
 
     types = memory_types or {}
     affected_ids = _affected_ids(action)
+    protections = {
+        mode
+        for memory_id in affected_ids
+        for mode in (protections_by_memory or {}).get(memory_id, frozenset())
+    }
+    if ProtectionMode.NO_AUTONOMOUS_MUTATION in protections:
+        codes.append(RejectionCode.NO_AUTONOMOUS_MUTATION)
+    if (
+        ProtectionMode.NO_AUTONOMOUS_DESTRUCTIVE_CHANGE in protections
+        and operation in _DESTRUCTIVE_OPERATIONS
+    ):
+        codes.append(RejectionCode.DESTRUCTIVE_CHANGE_REQUIRES_REVIEW)
+    if ProtectionMode.MANUAL_REVIEW_REQUIRED in protections:
+        codes.append(RejectionCode.MANUAL_REVIEW_REQUIRED)
+    if operation in {"archive_memory", "delete_memory"} and ProtectionMode.PINNED_ACTIVE in protections:
+        codes.append(RejectionCode.PINNED_ACTIVE)
     if any(types.get(memory_id) not in {"journal", "observation", "fact", "reflection", "plan"} for memory_id in affected_ids):
         codes.append(RejectionCode.UNKNOWN_MEMORY_TYPE)
     if isinstance(action, MergeMemoriesAction):
@@ -155,7 +178,17 @@ def _affected_ids(action: object) -> set[UUID]:
         return set(action.source_ids) | {action.canonical_id}
     if isinstance(action, (CreateLinkAction, RemoveLinkAction)):
         return {action.source_id, action.target_id}
-    target_id = getattr(action, "target_id", None)
+    target_id = action.get("target_id") if isinstance(action, Mapping) else getattr(action, "target_id", None)
     if isinstance(target_id, UUID):
         return {target_id}
     return set()
+
+
+_DESTRUCTIVE_OPERATIONS = {
+    "rewrite_memory",
+    "remove_link",
+    "merge_memories",
+    "split_memory",
+    "archive_memory",
+    "delete_memory",
+}

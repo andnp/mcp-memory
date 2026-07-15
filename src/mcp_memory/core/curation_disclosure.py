@@ -7,20 +7,13 @@ from enum import StrEnum
 from typing import Mapping
 from uuid import UUID
 
+from mcp_memory.mutation_history import ProtectionMode
+
 
 class ProviderTrustClass(StrEnum):
     LOCAL = "local"
     TRUSTED_EXTERNAL = "trusted_external"
     EXTERNAL = "external"
-
-
-class ProtectionMode(StrEnum):
-    NO_AUTONOMOUS_MUTATION = "no_autonomous_mutation"
-    NO_AUTONOMOUS_DESTRUCTIVE_CHANGE = "no_autonomous_destructive_change"
-    MANUAL_REVIEW_REQUIRED = "manual_review_required"
-    LOCAL_PROVIDER_ONLY = "local_provider_only"
-    NO_EXTERNAL_PROVIDER_DISCLOSURE = "no_external_provider_disclosure"
-    PINNED_ACTIVE = "pinned_active"
 
 
 class DisclosureDecision(StrEnum):
@@ -91,12 +84,12 @@ def decide_record_disclosure(
         raise ValueError("record must contain a UUID memory_id")
 
     external = provider.trust_class is not ProviderTrustClass.LOCAL
-    if not provider.allowlisted:
-        return _denied(memory_id, "provider is not operator-allowlisted", review=True)
     if external and ProtectionMode.NO_EXTERNAL_PROVIDER_DISCLOSURE in protections:
         return _denied(memory_id, "external provider disclosure is prohibited")
     if external and ProtectionMode.LOCAL_PROVIDER_ONLY in protections:
         return _denied(memory_id, "local provider execution is required", local=True)
+    if not provider.allowlisted:
+        return _denied(memory_id, "provider is not operator-allowlisted", review=True)
 
     selected = tuple(record.items() if fields is None else ((name, record[name]) for name in fields if name in record))
     disclosed: list[FieldDisclosure] = []

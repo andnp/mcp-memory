@@ -22,6 +22,15 @@ def test_strict_protection_denies_external_disclosure_and_explains_local_executi
     assert "local" in result.reason
 
 
+def test_local_provider_is_allowed_by_local_only_protection() -> None:
+    result = decide_record_disclosure(
+        {"memory_id": uuid4(), "content": "private"},
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+        protections={ProtectionMode.LOCAL_PROVIDER_ONLY},
+    )
+    assert result.decision is DisclosureDecision.ALLOW
+
+
 def test_no_external_disclosure_wins_over_other_protections() -> None:
     memory_id = uuid4()
     result = decide_record_disclosure(
