@@ -1,0 +1,181 @@
+"""Pure, versioned identities for curation plans and semantic state."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import unicodedata
+from collections.abc import Mapping, Sequence
+from typing import Any
+from uuid import UUID, uuid5
+
+from pydantic import BaseModel
+
+from .curation_models import CurationAction
+
+SCHEMA_VERSION = 1
+# Stable namespace; changing this is an identity schema change.
+CURATION_ACTION_NAMESPACE = UUID("2f5b4bb8-4f1b-5e2f-8f9d-6a7d8e9c0b1a")
+
+
+def _text(value: str, *, identifier: bool = False) -> str:
+    value = unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
+    return value.strip() if identifier else value
+
+
+def _normalize(value: Any) -> Any:
+    if isinstance(value, str):
+        return _text(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, bool) or value is None or isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("canonical JSON does not support non-finite numbers")
+        return value
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("canonical JSON object keys must be strings")
+            normalized_key = _text(key)
+            if normalized_key in result:
+                raise ValueError(f"duplicate canonical JSON key: {normalized_key!r}")
+            result[normalized_key] = _normalize(item)
+        return result
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [_normalize(item) for item in value]
+    raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
+
+
+def canonical_json(value: Any) -> bytes:
+    """Return the exact UTF-8 bytes used by all curation identities."""
+    return json.dumps(
+        _normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def canonical_token(value: Any) -> str:
+    return "v1:" + hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def _identifier(value: Any) -> str:
+    if not isinstance(value, (str, UUID)):
+        raise TypeError("identity identifiers must be strings or UUIDs")
+    return _text(str(value), identifier=True)
+
+
+def _set_values(values: Sequence[Any]) -> list[str]:
+    return sorted({_identifier(value) for value in values}, key=lambda item: item.encode("utf-8"))
+
+
+def _mapping_value(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def record_snapshot(
+    record: Mapping[str, Any] | Any,
+    *,
+    workspace_ids: Sequence[Any] | None = None,
+    lineage: Mapping[str, Any] | None = None,
+    mutation_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the allowlisted semantic record snapshot from a mapping or model."""
+    tags = _mapping_value(record, "tags", []) or []
+    workspaces = workspace_ids if workspace_ids is not None else (_mapping_value(record, "workspace_ids", []) or [])
+    snapshot = {
+        "schema_version": SCHEMA_VERSION,
+        "record": {
+            "id": _identifier(_mapping_value(record, "id")),
+            "title": _normalize(_mapping_value(record, "title")),
+            "content": _normalize(_mapping_value(record, "content")),
+            "summary": _normalize(_mapping_value(record, "summary")),
+            "type": _identifier(_mapping_value(record, "type")),
+            "status": _identifier(_mapping_value(record, "status")),
+            "tags": _set_values(tags),
+            "workspace_ids": _set_values(workspaces),
+            "lineage": _normalize(lineage if lineage is not None else (_mapping_value(record, "lineage", {}) or {})),
+            "mutation_metadata": _normalize(
+                mutation_metadata if mutation_metadata is not None else (_mapping_value(record, "mutation_metadata", {}) or {})
+            ),
+        },
+    }
+    return snapshot
+
+
+def record_token(record: Mapping[str, Any] | Any, **kwargs: Any) -> str:
+    return canonical_token(record_snapshot(record, **kwargs))
+
+
+def graph_snapshot(memory_id: Any, edges: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    normalized: set[tuple[str, str, str, str | None]] = set()
+    for edge in edges:
+        normalized.add(
+            (
+                _identifier(edge["source_id"]),
+                _identifier(edge["target_id"]),
+                _identifier(edge["type"]),
+                None if edge.get("context") is None else _normalize(edge["context"]),
+            )
+        )
+    ordered = sorted(normalized, key=lambda item: tuple((part or "").encode("utf-8") for part in item))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "memory_id": _identifier(memory_id),
+        "edges": [
+            {"source_id": source, "target_id": target, "type": link_type, "context": context}
+            for source, target, link_type, context in ordered
+        ],
+    }
+
+
+def graph_token(memory_id: Any, edges: Sequence[Mapping[str, Any]]) -> str:
+    return canonical_token(graph_snapshot(memory_id, edges))
+
+
+def frontier_fingerprint(family: str, strategy: str, seed_ids: Sequence[Any]) -> str:
+    return canonical_token(
+        {"schema_version": SCHEMA_VERSION, "family": _identifier(family), "strategy": _identifier(strategy), "seed_ids": _set_values(seed_ids)}
+    )
+
+
+def context_fingerprint(packet: Mapping[str, Any]) -> str:
+    allowed = {"frontier_fingerprint", "seeds", "support", "record_tokens", "graph_tokens", "disclosure", "omissions", "limits"}
+    return canonical_token(
+        {"schema_version": SCHEMA_VERSION, **{key: packet[key] for key in sorted(allowed) if key in packet}}
+    )
+
+
+def action_id(plan_id: Any, position: int, action: CurationAction | Mapping[str, Any]) -> UUID:
+    """Derive the action UUID from intent, never from provider advisory fields."""
+    data = action.model_dump(mode="json") if isinstance(action, BaseModel) else dict(action)
+    operation = _identifier(data["operation"])
+    base = {"action_id", "confidence", "rationale", "operation", "evidence", "preconditions"}
+    target_keys = ("target_id", "source_id", "canonical_id", "source_ids")
+    target_ids = [data[key] for key in target_keys if key in data and key != "source_ids"]
+    if "source_ids" in data:
+        target_ids.extend(data["source_ids"])
+    arguments = {key: data[key] for key in data if key not in base and key not in target_keys}
+    arguments["operation"] = operation
+    preconditions = data.get("preconditions", {})
+    evidence = data.get("evidence", [])
+    name = {
+        "schema_version": SCHEMA_VERSION,
+        "plan_id": _identifier(plan_id),
+        "position": position,
+        "operation": operation,
+        "target_ids": _set_values(target_ids),
+        "arguments": arguments,
+        "preconditions": preconditions,
+        "evidence": sorted(evidence, key=canonical_json),
+    }
+    return uuid5(CURATION_ACTION_NAMESPACE, canonical_json(name).decode("utf-8"))
+
+
+# Descriptive aliases make the contract convenient without duplicating logic.
+canonicalize_json = canonical_json
+deterministic_action_id = action_id
