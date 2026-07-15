@@ -17,6 +17,18 @@ VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
 FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 _SUMMARY_UNSET = object()
 _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
+_DEFAULT_CANDIDATE_LIMIT = 50
+_DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS = 3_000
+_DEFAULT_THIN_CANDIDATE_MAX_CHARS = 800
+_DEFAULT_LOW_SUPPORT_MAX = 1
+_DEFAULT_QUALITY_OVERSIZED_MIN_CHARS = 4_000
+
+_QUALITY_SIGNAL_ALIASES = {
+    "trace_like": "trace_like_memory_count",
+    "generic_summary": "generic_summary_count",
+    "untagged_observation": "untagged_observation_count",
+    "oversized": "oversized_memory_count",
+}
 
 
 logger = logging.getLogger(__name__)
@@ -449,6 +461,255 @@ class RelationalMemoryRepository:
             )
         return [ranked_by_id[memory_id] for memory_id in normalized_ids if memory_id in ranked_by_id]
 
+    def query_maintenance_candidates(
+        self,
+        strategy: str,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+        thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+        low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
+        quality_signal: str | None = None,
+        seed: int | str = 0,
+    ) -> list[RelationalMemoryRecord]:
+        """Return a bounded, globally scoped maintenance candidate frontier.
+
+        The strategy is evaluated and ordered in SQLite, so this method does not
+        load a recent window or hydrate the corpus before applying the limit.
+        Results are ordered with an explicit record-id tie-breaker.  A workspace
+        filter is opt-in; ``None`` means the shared global corpus.
+
+        Supported strategies are ``cold-storage``, ``never-surfaced``,
+        ``oversized/thin``, ``orphan/low-support``, ``quality-signal``, and
+        ``seeded-random``.  The random strategy uses a SHA-256 key derived from
+        ``seed`` and the record ID, rather than SQLite's process-dependent
+        ``random()``.
+        """
+        normalized_strategy = strategy.strip().lower()
+        strategy_aliases = {
+            "cold": "cold-storage",
+            "never_surfaced": "never-surfaced",
+            "oversized-thin": "oversized/thin",
+            "orphan-low-support": "orphan/low-support",
+            "quality": "quality-signal",
+            "seeded_random": "seeded-random",
+        }
+        normalized_strategy = strategy_aliases.get(normalized_strategy, normalized_strategy)
+        supported_strategies = {
+            "cold-storage",
+            "never-surfaced",
+            "oversized/thin",
+            "orphan/low-support",
+            "quality-signal",
+            "seeded-random",
+        }
+        if normalized_strategy not in supported_strategies:
+            raise ValueError(f"unsupported maintenance candidate strategy: {strategy!r}")
+        if limit <= 0:
+            return []
+        if oversized_min_chars < 0 or thin_max_chars < 0 or low_support_max < 0:
+            raise ValueError("candidate thresholds must be non-negative")
+
+        clauses = ["1 = 1"]
+        params: list[object] = []
+        if workspace_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memory_workspaces scoped_workspace "
+                "WHERE scoped_workspace.memory_id = memories.id "
+                "AND scoped_workspace.workspace_id = ?)"
+            )
+            params.append(workspace_id)
+        if status is not None:
+            clauses.append("memories.status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM links supersedes "
+                "WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"
+            )
+
+        order_by = "memories.updated_at ASC, memories.created_at ASC, memories.id ASC"
+        if normalized_strategy == "cold-storage":
+            order_by = (
+                "memories.last_accessed_at IS NULL DESC, memories.last_accessed_at ASC, "
+                "memories.updated_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "never-surfaced":
+            clauses.append("memories.last_surfaced_at IS NULL")
+            order_by = "memories.updated_at ASC, memories.created_at ASC, memories.id ASC"
+        elif normalized_strategy == "oversized/thin":
+            clauses.append(
+                "(LENGTH(COALESCE(memories.content, '')) > ? OR "
+                "(LENGTH(COALESCE(memories.content, '')) <= ? "
+                "AND memories.metadata LIKE '%\"split_from_memory_id\"%'))"
+            )
+            params.extend([oversized_min_chars, thin_max_chars])
+            order_by = (
+                "LENGTH(COALESCE(memories.content, '')) DESC, memories.read_count ASC, "
+                "memories.updated_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "orphan/low-support":
+            clauses.append("COALESCE(incoming_counts.incoming_links_count, 0) <= ?")
+            params.append(low_support_max)
+            order_by = (
+                "COALESCE(incoming_counts.incoming_links_count, 0) ASC, memories.read_count ASC, "
+                "memories.access_score ASC, memories.last_surfaced_at IS NULL DESC, "
+                "memories.last_surfaced_at ASC, memories.id ASC"
+            )
+        elif normalized_strategy == "quality-signal":
+            quality_clause, quality_params = _quality_signal_clause(quality_signal)
+            clauses.append(quality_clause)
+            params.extend(quality_params)
+            order_by = "memories.updated_at ASC, memories.created_at ASC, memories.id ASC"
+        else:
+            conn = self._db.get_connection()
+            conn.create_function("stable_seeded_random_key", 2, _stable_seeded_random_key, deterministic=True)
+            order_by = "stable_seeded_random_key(?, memories.id) ASC, memories.id ASC"
+            params.append(str(seed))
+
+        conn = self._db.get_connection()
+        rows = conn.execute(
+            """
+            SELECT
+                memories.*,
+                COALESCE(workspace_agg.workspace_ids, '') AS workspace_ids_csv,
+                COALESCE(tag_agg.tags, '') AS tags_csv
+            FROM memories
+            LEFT JOIN (
+                SELECT memory_id, GROUP_CONCAT(DISTINCT workspace_id) AS workspace_ids
+                FROM memory_workspaces
+                GROUP BY memory_id
+            ) workspace_agg ON workspace_agg.memory_id = memories.id
+            LEFT JOIN (
+                SELECT memory_tags.memory_id, GROUP_CONCAT(DISTINCT tags.name) AS tags
+                FROM memory_tags
+                JOIN tags ON tags.id = memory_tags.tag_id
+                GROUP BY memory_tags.memory_id
+            ) tag_agg ON tag_agg.memory_id = memories.id
+            LEFT JOIN (
+                SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count
+                FROM links
+                GROUP BY target_id
+            ) incoming_counts ON incoming_counts.memory_id = memories.id
+            WHERE
+            """
+            + " AND ".join(clauses)
+            + " ORDER BY "
+            + order_by
+            + " LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+        return [self._candidate_record_from_row(row) for row in rows]
+
+    def query_cold_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "cold-storage",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+        )
+
+    def query_never_surfaced_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "never-surfaced",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+        )
+
+    def query_oversized_thin_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        oversized_min_chars: int = _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+        thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "oversized/thin",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            oversized_min_chars=oversized_min_chars,
+            thin_max_chars=thin_max_chars,
+        )
+
+    def query_orphan_low_support_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "orphan/low-support",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            low_support_max=low_support_max,
+        )
+
+    def query_quality_signal_candidates(
+        self,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+        quality_signal: str | None = None,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "quality-signal",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            quality_signal=quality_signal,
+        )
+
+    def query_seeded_random_candidates(
+        self,
+        seed: int | str,
+        *,
+        limit: int = _DEFAULT_CANDIDATE_LIMIT,
+        workspace_id: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "seeded-random",
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            include_superseded=include_superseded,
+            seed=seed,
+        )
+
     def get_links(
         self,
         memory_id: str,
@@ -858,6 +1119,25 @@ class RelationalMemoryRepository:
             tags=[tag_row[0] for tag_row in tag_rows],
         )
 
+    def _candidate_record_from_row(self, row) -> RelationalMemoryRecord:
+        return RelationalMemoryRecord(
+            id=row["id"],
+            title=row["title"],
+            content=row["content"],
+            summary=row["summary"],
+            type=row["type"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            read_count=int(row["read_count"] or 0),
+            access_score=row["access_score"],
+            last_accessed_at=row["last_accessed_at"],
+            last_surfaced_at=row["last_surfaced_at"],
+            metadata=json.loads(row["metadata"] or "{}"),
+            workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
+            tags=_split_csv_values(row["tags_csv"]),
+        )
+
     def _replace_workspace_mappings(self, conn, memory_id: str, workspace_ids: list[str]):
         conn.execute("DELETE FROM memory_workspaces WHERE memory_id = ?", (memory_id,))
         for workspace_id in workspace_ids:
@@ -946,6 +1226,46 @@ def _split_csv_values(value: str | None) -> list[str]:
     if not value:
         return []
     return [item for item in value.split(",") if item]
+
+
+def _quality_signal_clause(quality_signal: str | None) -> tuple[str, list[object]]:
+    signal = None if quality_signal is None else quality_signal.strip().lower()
+    if signal is not None:
+        signal = _QUALITY_SIGNAL_ALIASES.get(signal, signal)
+    clauses = {
+        "trace_like_memory_count": (
+            "(LOWER(TRIM(memories.title)) LIKE 'task_complete%' OR "
+            "LOWER(TRIM(memories.title)) LIKE 'task complete%' OR "
+            "LOWER(TRIM(memories.title)) LIKE 'task_complete_record%')",
+            [],
+        ),
+        "generic_summary_count": (
+            "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %'",
+            [],
+        ),
+        "untagged_observation_count": (
+            "memories.type = 'observation' AND NOT EXISTS ("
+            "SELECT 1 FROM memory_tags untagged WHERE untagged.memory_id = memories.id)",
+            [],
+        ),
+        "oversized_memory_count": (
+            "LENGTH(COALESCE(memories.content, '')) >= ?",
+            [_DEFAULT_QUALITY_OVERSIZED_MIN_CHARS],
+        ),
+    }
+    if signal is None:
+        return "(" + " OR ".join(clause for clause, _ in clauses.values()) + ")", [
+            parameter for _, values in clauses.values() for parameter in values
+        ]
+    if signal not in clauses:
+        supported = sorted([*clauses, *_QUALITY_SIGNAL_ALIASES])
+        raise ValueError(f"unsupported quality signal: {quality_signal!r}; expected one of {supported}")
+    return clauses[signal]
+
+
+def _stable_seeded_random_key(seed: object, memory_id: object) -> str:
+    payload = f"{seed}\x00{memory_id}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def build_read_cache_validation_token(
