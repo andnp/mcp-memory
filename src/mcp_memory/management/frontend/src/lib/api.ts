@@ -373,6 +373,21 @@ export interface QualityProducerAttribution {
   producer: QualityProducer;
 }
 
+export interface QualityRemediationSignal {
+  idempotency_key: string;
+  defect_family: string;
+  defect_label: string;
+  count: number;
+  threshold: number;
+  policy_version: string;
+  window_start: number;
+  window_end: number;
+  memory_ids: string[];
+  producer: QualityProducer;
+  work_item_id: string | null;
+  work_item_status: string | null;
+}
+
 export interface QualitySignalDrilldown {
   key: string;
   label: string;
@@ -388,6 +403,7 @@ export interface QualityDrilldown {
 export interface QualityRemediation {
   stats: NerdStat[];
   activity: CountSeries[];
+  signals: QualityRemediationSignal[];
 }
 
 export interface RetrievalSummary {

@@ -717,6 +717,21 @@ class NerdQualityProducerAttributionPayload(BaseModel):
     producer: NerdQualityProducerPayload = Field(default_factory=NerdQualityProducerPayload)
 
 
+class NerdQualityRemediationSignalPayload(BaseModel):
+    idempotency_key: str
+    defect_family: str
+    defect_label: str
+    count: int = 0
+    threshold: int = 0
+    policy_version: str
+    window_start: float
+    window_end: float
+    memory_ids: list[str] = Field(default_factory=list)
+    producer: NerdQualityProducerPayload = Field(default_factory=NerdQualityProducerPayload)
+    work_item_id: str | None = None
+    work_item_status: str | None = None
+
+
 class NerdQualityDrilldownPayload(BaseModel):
     signals: list[NerdQualitySignalDrilldownPayload] = Field(default_factory=list)
     producer_attributions: list[NerdQualityProducerAttributionPayload] = Field(default_factory=list)
@@ -725,6 +740,7 @@ class NerdQualityDrilldownPayload(BaseModel):
 class NerdQualityRemediationPayload(BaseModel):
     stats: list[NerdStatPayload] = Field(default_factory=list)
     activity: list[NerdCountSeriesPayload] = Field(default_factory=list)
+    signals: list[NerdQualityRemediationSignalPayload] = Field(default_factory=list)
 
 
 class NerdGrowthDynamicsPayload(BaseModel):

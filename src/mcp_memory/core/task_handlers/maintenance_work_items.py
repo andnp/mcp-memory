@@ -10,6 +10,7 @@ from mcp_memory.core.curation_validation import CurationSpecialistRoute
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.management.models import NerdQualityRemediationSignalPayload
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_CONFLICT_REVIEW,
@@ -98,6 +99,36 @@ def enqueue_specialist_route(
         idempotency_key=idempotency_key,
         payload=payload,
     )
+
+
+def enqueue_producer_remediation_signals(
+    work_items: Any,
+    signals: Iterable[NerdQualityRemediationSignalPayload],
+    *,
+    workspace_id: str | None = None,
+    priority: int = 100,
+) -> tuple[WorkItemRecord, ...]:
+    """Persist producer-defect signals using the operator-review work family."""
+    records: list[WorkItemRecord] = []
+    for signal in signals:
+        payload = signal.model_dump(mode="json")
+        payload.update(
+            {
+                "work_item_kind": "producer_remediation",
+                "operator_review_required": True,
+                "operator_review_reason": "repeated_producer_defect",
+            }
+        )
+        record, _ = work_items.enqueue_unique(
+            family_key=WORK_FAMILY_OPERATOR_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=workspace_id,
+            priority=priority,
+            idempotency_key=signal.idempotency_key,
+            payload=payload,
+        )
+        records.append(record)
+    return tuple(records)
 
 
 def _route_target_ids(route: CurationSpecialistRoute) -> list[str]:

@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from mcp_memory.core.curation_identity import canonical_token
 from mcp_memory.management.analytics_common import _bucket_starts, _datetime_to_timestamp
 from mcp_memory.management.models import (
     NerdCountSeriesPayload,
@@ -12,6 +13,7 @@ from mcp_memory.management.models import (
     NerdQualityProducerAttributionPayload,
     NerdQualityProducerPayload,
     NerdQualityRemediationPayload,
+    NerdQualityRemediationSignalPayload,
     NerdQualitySignalDrilldownPayload,
     NerdStatPayload,
     NerdTimeCountBucketPayload,
@@ -31,6 +33,10 @@ _QUALITY_REMEDIATION_DEFS: tuple[tuple[str, str], ...] = (
     ("concrete_summary_updates", "Concrete summary updates"),
     ("split_lineage_updates", "Split-lineage updates"),
 )
+
+PRODUCER_REMEDIATION_THRESHOLD = 2
+PRODUCER_REMEDIATION_POLICY_VERSION = "cur-065-v1"
+PRODUCER_REMEDIATION_WINDOW_SECONDS = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -245,7 +251,91 @@ def build_quality_remediation(
                 ],
             )
         )
-    return NerdQualityRemediationPayload(stats=stats, activity=activity)
+    return NerdQualityRemediationPayload(
+        stats=stats,
+        activity=activity,
+        signals=build_quality_remediation_signals(
+            memory_rows,
+            cutoff=cutoff,
+            generated_at=generated_at,
+        ),
+    )
+
+
+def build_quality_remediation_signals(
+    memory_rows: list[ScopedMemoryRow],
+    *,
+    cutoff: float,
+    generated_at: float,
+    threshold: int = PRODUCER_REMEDIATION_THRESHOLD,
+    policy_version: str = PRODUCER_REMEDIATION_POLICY_VERSION,
+    window_seconds: int = PRODUCER_REMEDIATION_WINDOW_SECONDS,
+) -> list[NerdQualityRemediationSignalPayload]:
+    """Build stable operator signals for repeated producer defects."""
+    if threshold < 1:
+        raise ValueError("threshold must be at least 1")
+    if window_seconds < 1:
+        raise ValueError("window_seconds must be at least 1")
+    if generated_at < cutoff:
+        return []
+
+    labels = dict(_QUALITY_SIGNAL_DEFS)
+    grouped: dict[tuple[str, tuple[str, ...], int], list[ScopedMemoryRow]] = {}
+    for row in memory_rows:
+        created_at = _datetime_to_timestamp(row.created_at)
+        if created_at is None or created_at < cutoff or created_at > generated_at:
+            continue
+        producer = _producer_for_row(row)
+        producer_values = (
+            producer.task_id,
+            producer.task_name,
+            producer.tool_name,
+            producer.provider_key,
+            producer.provider_name,
+            producer.model_name,
+        )
+        window_start = int(created_at // window_seconds) * window_seconds
+        for signal_key in _quality_signal_keys_for_row(row):
+            grouped.setdefault((signal_key, producer_values, window_start), []).append(row)
+
+    remediation_signals: list[NerdQualityRemediationSignalPayload] = []
+    for (signal_key, producer_values, window_start), rows in sorted(
+        grouped.items(), key=lambda item: (item[0][2], item[0][0], item[0][1])
+    ):
+        if len(rows) < threshold:
+            continue
+        task_id, task_name, tool_name, provider_key, provider_name, model_name = producer_values
+        producer = NerdQualityProducerPayload(
+            task_id=task_id,
+            task_name=task_name,
+            tool_name=tool_name,
+            provider_key=provider_key,
+            provider_name=provider_name,
+            model_name=model_name,
+        )
+        window_end = window_start + window_seconds
+        identity = {
+            "defect_family": signal_key,
+            "policy_version": policy_version,
+            "producer": producer.model_dump(mode="json"),
+            "window_start": window_start,
+            "window_end": window_end,
+        }
+        remediation_signals.append(
+            NerdQualityRemediationSignalPayload(
+                idempotency_key=f"producer-remediation:{canonical_token(identity)}",
+                defect_family=signal_key,
+                defect_label=labels[signal_key],
+                count=len(rows),
+                threshold=threshold,
+                policy_version=policy_version,
+                window_start=float(window_start),
+                window_end=float(window_end),
+                memory_ids=sorted(row.id for row in rows),
+                producer=producer,
+            )
+        )
+    return remediation_signals
 
 
 def _build_backlog_series(
