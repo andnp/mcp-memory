@@ -20,6 +20,7 @@ from .postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION, P
 from .session import ConnectionLease, SessionManager
 from .sqlite import build_sqlite_runtime_components
 from .types import PostgresBackendNotImplementedError, StorageBackendResources, StorageBootstrapSpec
+from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 
 __all__ = [
     "PostgresBackendNotImplementedError",
@@ -37,6 +38,7 @@ __all__ = [
     "SessionManager",
     "StorageBootstrapState",
     "StorageBootstrapSpec",
+    "SQLiteMutationHistoryStore",
     "StorageBackendResources",
     "UnsupportedPostgresRuntimeComponent",
     "apply_postgres_migrations",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -321,6 +321,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    create_mutation_history_schema(conn)
 
 
 def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
@@ -539,6 +540,95 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    create_mutation_history_schema(conn)
+
+
+def create_mutation_history_schema(conn: sqlite3.Connection) -> None:
+    """Create the additive mutation-history and protection tables."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memory_mutation_events (
+            id TEXT PRIMARY KEY,
+            operation TEXT NOT NULL,
+            actor_kind TEXT NOT NULL,
+            actor_id TEXT,
+            family TEXT,
+            task_id TEXT,
+            curation_run_id TEXT,
+            plan_id TEXT,
+            action_id TEXT,
+            provider_id TEXT,
+            reason_code TEXT,
+            rationale TEXT,
+            policy_version TEXT,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL,
+            restores_event_id TEXT,
+            idempotency_key TEXT,
+            created_at TEXT NOT NULL,
+            terminalized_at TEXT,
+            FOREIGN KEY (restores_event_id) REFERENCES memory_mutation_events(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_record_revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            memory_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            before_exists INTEGER NOT NULL,
+            before_snapshot TEXT,
+            after_exists INTEGER NOT NULL,
+            after_snapshot TEXT,
+            before_token TEXT,
+            after_token TEXT,
+            UNIQUE (event_id, memory_id, role),
+            FOREIGN KEY (event_id) REFERENCES memory_mutation_events(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_link_revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            link_type TEXT NOT NULL,
+            context TEXT,
+            before_exists INTEGER NOT NULL,
+            after_exists INTEGER NOT NULL,
+            UNIQUE (event_id, source_id, target_id, link_type),
+            FOREIGN KEY (event_id) REFERENCES memory_mutation_events(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_protections (
+            memory_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            actor_id TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT,
+            PRIMARY KEY (memory_id, mode)
+        );
+
+        CREATE TABLE IF NOT EXISTS memory_restore_requests (
+            id TEXT PRIMARY KEY,
+            target_event_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            expected_record_tokens TEXT NOT NULL DEFAULT '{}',
+            expected_link_tokens TEXT NOT NULL DEFAULT '{}',
+            actor_id TEXT,
+            reason TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            confirmation INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            event_id TEXT,
+            conflict_reason TEXT,
+            conflict_details TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            terminalized_at TEXT,
+            FOREIGN KEY (target_event_id) REFERENCES memory_mutation_events(id),
+            FOREIGN KEY (event_id) REFERENCES memory_mutation_events(id)
+        );
+        """
+    )
 
 
 def finalize_schema_setup(conn: sqlite3.Connection) -> None:
@@ -638,6 +728,31 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
             ON embedding_integrity_events(event_kind, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_embedding_integrity_events_model_created_at
             ON embedding_integrity_events(model_name, created_at DESC, id DESC);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_mutation_events_action
+            ON memory_mutation_events(curation_run_id, action_id)
+            WHERE curation_run_id IS NOT NULL AND action_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_mutation_events_idempotency
+            ON memory_mutation_events(idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_created_at
+            ON memory_mutation_events(created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_curation_run
+            ON memory_mutation_events(curation_run_id, action_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_events_restores_event
+            ON memory_mutation_events(restores_event_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_record_revisions_event
+            ON memory_record_revisions(event_id, id);
+        CREATE INDEX IF NOT EXISTS idx_memory_record_revisions_memory
+            ON memory_record_revisions(memory_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_link_revisions_event
+            ON memory_link_revisions(event_id, id);
+        CREATE INDEX IF NOT EXISTS idx_memory_link_revisions_endpoint
+            ON memory_link_revisions(source_id, target_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_protections_memory
+            ON memory_protections(memory_id, mode);
+        CREATE INDEX IF NOT EXISTS idx_memory_restore_requests_target
+            ON memory_restore_requests(target_event_id, created_at DESC);
         """
     )
     conn.execute(

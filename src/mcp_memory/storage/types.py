@@ -28,6 +28,7 @@ class StorageBackendResources:
     work_items: Any
     embedding_repair_queue: Any
     vector_store: Any
+    mutation_history: Any = None
 
 
 @dataclass(frozen=True)
