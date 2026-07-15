@@ -16,6 +16,7 @@ from mcp_memory.core.curation_context import (
     CurationReadBudget,
     build_context_packet,
 )
+from mcp_memory.core.curation_identity import candidate_revision_token
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_models import (
     CurationBudgetUsage,
@@ -362,7 +363,13 @@ class CurationDryRunHarness:
         now = self._clock()
         for decision in retained:
             memory_id = decision.memory_id
-            token = context.record_tokens.get(str(memory_id))
+            record_token = context.record_tokens.get(str(memory_id))
+            graph_token = context.graph_tokens.get(str(memory_id))
+            token = (
+                None
+                if record_token is None or graph_token is None
+                else candidate_revision_token(record_token, graph_token)
+            )
             previous = self._curation_store.get_candidate_state(memory_id)
             count = 1
             if previous is not None and previous.last_observed_revision_token == token:

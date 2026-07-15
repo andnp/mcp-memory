@@ -137,6 +137,16 @@ def graph_token(memory_id: Any, edges: Sequence[Mapping[str, Any]]) -> str:
     return canonical_token(graph_snapshot(memory_id, edges))
 
 
+def candidate_revision_token(record_revision_token: str, graph_revision_token: str) -> str:
+    """Combine semantic record and adjacency identities for candidate state."""
+    return canonical_token(
+        {
+            "record_revision_token": record_revision_token,
+            "graph_revision_token": graph_revision_token,
+        }
+    )
+
+
 def link_token(source_id: Any, target_id: Any, link_type: Any, context: Any, *, exists: bool = True) -> str:
     """Return the canonical identity of one relationship state."""
     return canonical_token(

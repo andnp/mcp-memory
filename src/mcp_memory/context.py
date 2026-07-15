@@ -164,6 +164,7 @@ _MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
 _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
     {
         "curation",
+        "mutation_history",
         "ai_json_provider",
         "ai_agent_provider",
         "ai_provider_registry",
@@ -207,6 +208,7 @@ class ApplicationContext:
     read_cache: Any = None
     task_queue: Any = None
     curation: Any = None
+    mutation_history: Any = None
     ai_json_provider: Any = None
     ai_agent_provider: Any = None
     ai_provider_registry: dict[str, Any] | None = None

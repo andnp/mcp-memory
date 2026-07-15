@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 import re
 from typing import Any, cast
+from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_identity import candidate_revision_token, graph_token, record_token
+from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
@@ -31,6 +35,7 @@ CURATOR_MAX_BATCH_RECORDS = 24
 CURATOR_MAX_MEMORY_CHARS = 3000
 CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
+CURATOR_STABILIZATION_WINDOW_SECONDS = 3600.0
 CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
 CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
@@ -441,6 +446,7 @@ def select_curator_support_records(
         for record in candidate_by_id.values()
         if record.id not in seed_ids and not ctx.repository.has_incoming_link(record.id, "SUPERSEDES")
     ]
+    candidates = filter_curator_candidates(ctx, candidates)
     ranked = sorted(
         candidates,
         key=lambda record: (
@@ -552,6 +558,109 @@ def build_support_counts(ctx: ApplicationContext, candidates: list) -> dict[str,
     return support_counts_for_candidates(ctx, candidates)
 
 
+def filter_curator_candidates(
+    ctx: ApplicationContext,
+    candidates: list[Any],
+    *,
+    now: datetime | None = None,
+    suppress_destructive_actions: bool = True,
+) -> list[Any]:
+    """Apply persisted no-op cooldown and edit stabilization to a candidate pool."""
+    curation = getattr(ctx, "curation", None)
+    get_state = getattr(curation, "get_candidate_state", None)
+    put_state = getattr(curation, "put_candidate_state", None)
+    if not callable(get_state):
+        return candidates
+
+    current_time = now or datetime.now(UTC)
+    eligible: list[Any] = []
+    for record in candidates:
+        memory_id = _candidate_uuid(record.id)
+        if memory_id is None:
+            eligible.append(record)
+            continue
+        identity = curator_candidate_revision_token(ctx, record)
+        state = cast(CurationCandidateState | None, get_state(memory_id))
+        if state is not None and state.last_observed_revision_token != identity:
+            if callable(put_state):
+                put_state(
+                    state.model_copy(
+                        update={
+                            "last_observed_revision_token": identity,
+                            "disposition": CandidateDisposition.PENDING,
+                            "consecutive_no_op_count": 0,
+                            "cooldown_until": None,
+                            "last_disposition_reason": "candidate_revision_or_adjacency_changed",
+                        }
+                    )
+                )
+            state = None
+        if state is not None and state.cooldown_until is not None and state.cooldown_until > current_time:
+            continue
+        if suppress_destructive_actions and _has_recent_stabilizing_edit(ctx, memory_id, current_time):
+            continue
+        eligible.append(record)
+    return eligible
+
+
+def curator_candidate_revision_token(ctx: ApplicationContext, record: Any) -> str:
+    """Return the stable semantic-plus-adjacency identity used by candidate state."""
+    edges = _candidate_edges(ctx, record.id)
+    return candidate_revision_token(record_token(record), graph_token(record.id, edges))
+
+
+def _candidate_edges(ctx: ApplicationContext, memory_id: str) -> list[dict[str, Any]]:
+    repository = getattr(ctx, "repository", None)
+    get_links = getattr(repository, "get_links", None)
+    if not callable(get_links):
+        return []
+    links = [
+        *cast(list[Any], get_links(memory_id, direction="outgoing")),
+        *cast(list[Any], get_links(memory_id, direction="incoming")),
+    ]
+    return [
+        {
+            "source_id": link.source_id,
+            "target_id": link.target_id,
+            "type": getattr(link, "link_type", getattr(link, "type", "")),
+            "context": getattr(link, "context", None),
+        }
+        for link in links
+    ]
+
+
+def _candidate_uuid(memory_id: Any) -> UUID | None:
+    try:
+        return UUID(str(memory_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_recent_stabilizing_edit(ctx: ApplicationContext, memory_id: UUID, now: datetime) -> bool:
+    history = getattr(ctx, "mutation_history", None)
+    list_events = getattr(history, "list_events", None)
+    if not callable(list_events):
+        return False
+    try:
+        events = cast(list[Any], list_events(memory_id=memory_id, limit=50))
+    except Exception:
+        return False
+    for event in events:
+        created_at = getattr(event, "created_at", None)
+        if created_at is None:
+            continue
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        age = (now - created_at).total_seconds()
+        family = getattr(event, "family", None)
+        family_name = "" if family is None else str(family)
+        if 0 <= age <= CURATOR_STABILIZATION_WINDOW_SECONDS and (
+            str(getattr(event, "actor_kind", "")) == "user" or family_name not in {"", "curator"}
+        ):
+            return True
+    return False
+
+
 def _query_curator_backend_candidates(
     ctx: ApplicationContext,
     task: TaskRecord,
@@ -623,7 +732,7 @@ def _query_curator_backend_candidates(
                 if record is not None:
                     candidates_by_id[record.id] = record
 
-    return list(candidates_by_id.values())
+    return filter_curator_candidates(ctx, list(candidates_by_id.values()))
 
 
 def _curator_backend_query_limit(task: TaskRecord, frontier_limit: int) -> int:
