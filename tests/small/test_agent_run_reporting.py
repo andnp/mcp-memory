@@ -1,5 +1,11 @@
 from mcp_memory.management.agent_run_reporting import (
     build_agent_run_history_payload,
+    classify_curator_run,
+    CURATOR_NARRATIVE_ONLY,
+    CURATOR_OBSERVED_MUTATION,
+    CURATOR_PROVIDER_FAILURE,
+    CURATOR_UNKNOWN_LEGACY,
+    CURATOR_VALID_NO_OP,
     decode_run_result,
     extract_ingest_audit,
     extract_run_result_metadata,
@@ -8,6 +14,76 @@ from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
 from mcp_memory.management.reporting_rows import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
+
+
+def test_classify_curator_run_uses_persisted_outcomes_not_provider_narrative() -> None:
+    cases = [
+        (
+            CURATOR_PROVIDER_FAILURE,
+            "failed",
+            "provider_timeout",
+            {},
+        ),
+        (
+            CURATOR_NARRATIVE_ONLY,
+            "completed",
+            None,
+            {"summary": "Rewrote the memory", "tool_calls_executed": 0, "mutations": 0},
+        ),
+        (
+            CURATOR_OBSERVED_MUTATION,
+            "completed",
+            None,
+            {"summary": "No changes were made", "tool_calls_executed": 2, "mutations": 1},
+        ),
+        (
+            CURATOR_VALID_NO_OP,
+            "completed",
+            None,
+            {"summary": "Reviewed and retained the records", "tool_calls_executed": 3, "mutations": 0},
+        ),
+        (
+            CURATOR_UNKNOWN_LEGACY,
+            "completed",
+            None,
+            {"summary": "Rewrote the memory"},
+        ),
+    ]
+
+    for expected, status, error_text, result in cases:
+        classification, _reason = classify_curator_run(
+            task_name="memory-curator",
+            status=status,
+            error_text=error_text,
+            result=result,
+        )
+        assert classification == expected
+
+
+def test_build_agent_run_history_payload_adds_curator_classification_without_dropping_fields() -> None:
+    result = {
+        "summary": "Updated the record",  # Provider prose must not establish mutation.
+        "tool_calls_executed": 0,
+        "mutations": 0,
+        "candidate_count": 4,
+    }
+
+    payload = build_agent_run_history_payload(
+        task_id="curator-task",
+        task_name="memory-curator",
+        status="completed",
+        started_at=10.0,
+        completed_at=12.0,
+        duration_seconds=2.0,
+        error_text=None,
+        result=result,
+        detail_level="full",
+    )
+
+    assert payload.result == result
+    assert payload.result_metadata.candidate_count == 4
+    assert payload.run_classification == CURATOR_NARRATIVE_ONLY
+    assert payload.classification_reason == "persisted tool_calls_executed=0; narrative present"
 
 
 def test_decode_run_result_accepts_postgres_jsonb_mapping() -> None:

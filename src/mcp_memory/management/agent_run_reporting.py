@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 
 from mcp_memory.core.task_results import TaskRunResult
-from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
+from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, TRIGGERABLE_BACKGROUND_TASK_NAMES
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
     AgentRunPayload,
@@ -18,6 +19,15 @@ from mcp_memory.management.reporting_rows import (
     coerce_task_result_view,
     decode_task_result_payload,
 )
+
+
+CURATOR_PROVIDER_FAILURE = "provider_failure"
+CURATOR_NARRATIVE_ONLY = "narrative_only"
+CURATOR_OBSERVED_MUTATION = "observed_mutation"
+CURATOR_VALID_NO_OP = "valid_no_op"
+CURATOR_UNKNOWN_LEGACY = "unknown_legacy"
+
+_CURATOR_MUTATION_KEYS = ("created", "merged", "updated", "archived", "degraded", "restored")
 
 
 def build_agent_runs(task_queue, workspace_id: str | None) -> list[AgentRunPayload]:
@@ -139,6 +149,15 @@ def build_agent_run_history_payload(
     include_full_result = detail_level == "full"
     result_view = coerce_task_result_view(result)
     result_summary = result.summary if isinstance(result, TaskRunResult) else result_view.summary
+    run_classification: str | None = None
+    classification_reason: str | None = None
+    if task_name == CURATOR_TASK_NAME:
+        run_classification, classification_reason = classify_curator_run(
+            task_name=task_name,
+            status=status,
+            error_text=error_text,
+            result=result_view,
+        )
     return AgentRunHistoryPayload(
         task_id=task_id,
         task_name=task_name,
@@ -151,7 +170,84 @@ def build_agent_run_history_payload(
         result_metadata=result_view.metadata_copy(),
         ingest_audit=result_view.full_ingest_audit() if include_full_result else result_view.compact_ingest_audit(),
         result=result_view.raw_payload if include_full_result else None,
+        run_classification=run_classification,
+        classification_reason=classification_reason,
     )
+
+
+def classify_curator_run(
+    *,
+    task_name: str,
+    status: str,
+    error_text: str | None,
+    result: TaskResultSource,
+) -> tuple[str, str]:
+    """Classify a curator run from task-run fields and its persisted result only.
+
+    The mutation branch intentionally uses the persisted mutation counter (or
+    structured mutation deltas), never ``result_summary``.  Summaries are
+    provider-authored narrative and are not evidence that a mutation occurred.
+    """
+    if task_name != CURATOR_TASK_NAME:
+        return CURATOR_UNKNOWN_LEGACY, "not a curator run"
+
+    if status in {"failed", "retry"} and error_text and error_text.strip():
+        return CURATOR_PROVIDER_FAILURE, f"status={status}; persisted error_text present"
+
+    result_view = coerce_task_result_view(result)
+    payload = result_view.raw_payload
+    if status != "completed":
+        return CURATOR_UNKNOWN_LEGACY, f"status={status}; no completed curator outcome"
+
+    reason = payload.get("reason")
+    if reason == "provider_not_configured":
+        return CURATOR_PROVIDER_FAILURE, "reason=provider_not_configured"
+
+    mutations = _persisted_count(payload, "mutations")
+    if mutations is None:
+        mutations = _persisted_mutation_delta_sum(payload)
+    tool_calls = _persisted_count(payload, "tool_calls_executed")
+
+    if mutations is not None and mutations > 0:
+        return CURATOR_OBSERVED_MUTATION, f"persisted mutations={mutations}"
+
+    if tool_calls is not None and tool_calls > 0 and mutations == 0:
+        return CURATOR_VALID_NO_OP, f"persisted tool_calls_executed={tool_calls}; mutations=0"
+
+    if tool_calls == 0 and _has_persisted_summary(payload):
+        return CURATOR_NARRATIVE_ONLY, "persisted tool_calls_executed=0; narrative present"
+
+    if reason == "no_seed_records" and tool_calls == 0 and mutations == 0:
+        return CURATOR_VALID_NO_OP, "reason=no_seed_records"
+
+    if status in {"failed", "retry"}:
+        return CURATOR_UNKNOWN_LEGACY, "run failure lacks a persisted provider error"
+    return CURATOR_UNKNOWN_LEGACY, "authoritative curator outcome fields unavailable"
+
+
+def _persisted_count(payload: Mapping[str, object], key: str) -> int | None:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    return None
+
+
+def _persisted_mutation_delta_sum(payload: Mapping[str, object]) -> int | None:
+    if not any(key in payload for key in _CURATOR_MUTATION_KEYS):
+        return None
+    values = [_persisted_count(payload, key) for key in _CURATOR_MUTATION_KEYS if key in payload]
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+def _has_persisted_summary(payload: Mapping[str, object]) -> bool:
+    raw_summary = payload.get("summary")
+    return isinstance(raw_summary, str) and bool(raw_summary.strip())
 
 
 def format_result_summary(result: TaskResultSource) -> str | None:

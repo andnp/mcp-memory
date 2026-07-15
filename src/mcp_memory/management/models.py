@@ -442,6 +442,8 @@ class AgentRunHistoryPayload(BaseModel):
     result_metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
     ingest_audit: IngestAuditPayload = Field(default_factory=IngestAuditPayload)
     result: dict[str, Any] | None = None
+    run_classification: str | None = None
+    classification_reason: str | None = None
 
 
 class AgentRunHistoryListPayload(BaseModel):
