@@ -9,7 +9,7 @@ from mcp_memory.core.curation_identity import (
     graph_token,
     record_token,
 )
-from mcp_memory.core.curation_models import NormalizeMemoryAction
+from mcp_memory.core.curation_models import ActionPreconditions, NormalizeMemoryAction
 
 MEMORY_ID = UUID("00000000-0000-0000-0000-000000000001")
 OTHER_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -63,6 +63,23 @@ def test_intent_hash_normalizes_set_like_permutations_and_detects_changes() -> N
     permutation["payload"] = {"tags": ["a", "b"]}
     assert action_intent_token(**common) == action_intent_token(**permutation)
     assert action_intent_token(**common) != action_intent_token(**{**permutation, "payload": {"tags": ["a", "c"]}})
+
+
+def test_intent_hash_canonicalizes_typed_preconditions() -> None:
+    preconditions = ActionPreconditions(record_tokens={MEMORY_ID: "token"})
+    assert action_intent_token(
+        operation="normalize_memory",
+        target_ids=[str(MEMORY_ID)],
+        expected_tokens={str(MEMORY_ID): "token"},
+        preconditions=preconditions,
+        payload={"summary": "specific"},
+    ) == action_intent_token(
+        operation="normalize_memory",
+        target_ids=[str(MEMORY_ID)],
+        expected_tokens={str(MEMORY_ID): "token"},
+        preconditions=preconditions.model_dump(mode="json"),
+        payload={"summary": "specific"},
+    )
 
 
 def test_canonical_json_normalizes_unicode_newlines_and_maps() -> None:

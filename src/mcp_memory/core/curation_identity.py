@@ -92,6 +92,8 @@ _ACTION_IDENTIFIER_KEYS = frozenset(
 
 
 def _canonical_action_value(value: Any, *, key: str | None = None) -> Any:
+    if isinstance(value, BaseModel):
+        return _canonical_action_value(value.model_dump(mode="json"), key=key)
     if isinstance(value, str):
         return _identifier(value) if key in _ACTION_IDENTIFIER_KEYS else _text(value)
     if isinstance(value, UUID):
