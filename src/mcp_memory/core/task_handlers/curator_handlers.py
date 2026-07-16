@@ -4,8 +4,10 @@ from typing import Any, Awaitable, Callable, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_shadow import (
+    curator_create_link_execution_enabled,
     curator_normalize_execution_enabled,
     curator_shadow_mode_enabled,
+    run_curator_verified_create_link_execution,
     run_curator_shadow_mode,
     run_curator_verified_normalize_execution,
 )
@@ -109,6 +111,18 @@ async def handle_memory_curator_task(
 
     if curator_normalize_execution_enabled(ctx):
         return await run_curator_verified_normalize_execution(
+            ctx,
+            task,
+            provider=provider,
+            seed_batch=seed_batch,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
+            claimed_work_item=claimed_review_item,
+            work_item_metadata=work_item_metadata,
+        )
+
+    if curator_create_link_execution_enabled(ctx):
+        return await run_curator_verified_create_link_execution(
             ctx,
             task,
             provider=provider,

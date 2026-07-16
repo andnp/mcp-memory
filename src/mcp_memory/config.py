@@ -186,6 +186,7 @@ class CurationConfig:
 
     shadow_mode_enabled: bool = False
     normalize_execution_enabled: bool = False
+    create_link_execution_enabled: bool = False
 
 
 
@@ -685,6 +686,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
     document["curation"] = {
         "shadow_mode_enabled": False,
         "normalize_execution_enabled": False,
+        "create_link_execution_enabled": False,
     }
     memory_table = tomlkit.table()
     memory_table.update({

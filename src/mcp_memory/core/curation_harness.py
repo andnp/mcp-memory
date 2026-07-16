@@ -25,6 +25,7 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
     CurationRunOutcome,
     CurationRunResult,
+    CreateLinkAction,
     NormalizeMemoryAction,
     RetentionDecision,
 )
@@ -182,6 +183,7 @@ class CurationHarnessConfig:
     mutation_budget: CurationMutationBudget = field(default_factory=CurationMutationBudget)
     no_op_cooldown_seconds: float = 3600.0
     execute_accepted_normalize_actions: bool = False
+    execute_accepted_create_link_actions: bool = False
 
 
 class CurationDryRunHarness:
@@ -291,6 +293,18 @@ class CurationDryRunHarness:
                 validation=validation,
                 context=context,
             )
+        elif (
+            self._config.execute_accepted_create_link_actions
+            and validation is not None
+            and validation.valid
+            and _create_link_actions(validation)
+        ):
+            outcome, reason_code, terminal_state = self._execute_accepted_create_links(
+                run_id=run_id,
+                executing=executing,
+                validation=validation,
+                context=context,
+            )
         terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
         if terminal is None:
             terminal = self._curation_store.get_run(run_id)
@@ -302,12 +316,22 @@ class CurationDryRunHarness:
 
         work_item = self._work_item_decision(outcome, reason_code, latest)
         specialist_work_items: tuple[WorkItemRecord, ...] = ()
-        if validation is not None and validation.valid and validation.specialist_routes and self._work_items is not None:
+        specialist_routes = () if validation is None else validation.specialist_routes
+        if (
+            self._config.execute_accepted_create_link_actions
+            and validation is not None
+            and validation.valid
+        ):
+            executed_ids = {action.action_id for action in _create_link_actions(validation)}
+            specialist_routes = tuple(
+                route for route in specialist_routes if route.action.action_id not in executed_ids
+            )
+        if validation is not None and validation.valid and specialist_routes and self._work_items is not None:
             from mcp_memory.core.task_handlers.maintenance_work_items import enqueue_specialist_routes
 
             specialist_work_items = enqueue_specialist_routes(
                 self._work_items,
-                validation.specialist_routes,
+                specialist_routes,
                 context=context,
             )
         self._apply_work_item_decision(frontier.work_item_id, work_item)
@@ -529,9 +553,74 @@ class CurationDryRunHarness:
             CurationRunState.VERIFYING,
         )
 
+    def _execute_accepted_create_links(
+        self,
+        *,
+        run_id: UUID,
+        executing: CurationRun,
+        validation: CurationValidationResult,
+        context: ImmutableCurationContextPacket,
+    ) -> tuple[CurationRunOutcome, str, CurationRunState]:
+        """Execute policy-valid create-links through the deterministic pipeline."""
+        if self._executor is None or self._verifier is None:
+            raise RuntimeError("create-link execution requires an executor and verifier")
+
+        actions = _create_link_actions(validation)
+        memory_types = dict(self._memory_types or {})
+        for record in (*context.seeds, *context.support):
+            memory_id = record.get("memory_id")
+            memory_type = record.get("type")
+            if memory_id is not None and isinstance(memory_type, str):
+                memory_types[UUID(str(memory_id))] = memory_type
+
+        receipts = []
+        for action in actions:
+            protections = set()
+            for endpoint_id in (action.source_id, action.target_id):
+                protections.update((self._protections_by_memory or {}).get(endpoint_id, ()))
+            receipt = self._executor.execute_create_link(
+                action,
+                run_id=run_id,
+                memory_types=memory_types,
+                protections=protections,
+            )
+            receipts.append((receipt, action))
+
+        verifying = executing.model_copy(update={"state": CurationRunState.VERIFYING})
+        stored = self._curation_store.transition_run(run_id, CurationRunState.EXECUTING, verifying)
+        if stored is None:
+            raise RuntimeError(f"curation run {run_id} could not enter verification")
+
+        for receipt, action in receipts:
+            verified = self._verifier.verify(receipt, action)
+            if verified.status.value != "verified":
+                return CurationRunOutcome.VERIFICATION_FAILED, "verification_failed", CurationRunState.VERIFYING
+
+        remaining_specialist_routes = tuple(
+            route
+            for route in validation.specialist_routes
+            if route.action.action_id not in {action.action_id for action in actions}
+        )
+        partial = bool(validation.rejected_actions or remaining_specialist_routes or validation.accepted_actions)
+        return (
+            CurationRunOutcome.PARTIALLY_APPLIED if partial else CurationRunOutcome.APPLIED,
+            "partially_applied" if partial else "verified_receipts",
+            CurationRunState.VERIFYING,
+        )
+
 
 def _uuid_or_none(value: str | None) -> UUID | None:
     return None if value is None else UUID(str(value))
+
+
+def _create_link_actions(validation: CurationValidationResult) -> tuple[CreateLinkAction, ...]:
+    """Return policy-valid create-links, including graph-specialist routes."""
+    actions = [
+        item.action
+        for item in (*validation.accepted_actions, *validation.specialist_routes)
+        if isinstance(item.action, CreateLinkAction)
+    ]
+    return tuple(actions)
 
 
 def _rejection_codes(validation: CurationValidationResult | None) -> list[str]:
