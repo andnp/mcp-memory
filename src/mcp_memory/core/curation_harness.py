@@ -25,8 +25,11 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
     CurationRunOutcome,
     CurationRunResult,
+    NormalizeMemoryAction,
     RetentionDecision,
 )
+from mcp_memory.core.curation_executor import CurationExecutor
+from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.curation_planner import (
     CurationPlanner,
     CurationPlannerCancelledError,
@@ -34,7 +37,6 @@ from mcp_memory.core.curation_planner import (
     CurationPlannerSchemaError,
     PlannerExecutionEnvelope,
 )
-from mcp_memory.core.task_handlers.maintenance_work_items import enqueue_specialist_routes
 from mcp_memory.core.curation_validation import (
     CurationMutationBudget,
     CurationRetryFeedback,
@@ -179,6 +181,7 @@ class CurationHarnessConfig:
     read_budget: CurationReadBudget = field(default_factory=CurationReadBudget)
     mutation_budget: CurationMutationBudget = field(default_factory=CurationMutationBudget)
     no_op_cooldown_seconds: float = 3600.0
+    execute_accepted_normalize_actions: bool = False
 
 
 class CurationDryRunHarness:
@@ -195,6 +198,8 @@ class CurationDryRunHarness:
         contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset(),
         protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
         clock: Callable[[], datetime] | None = None,
+        executor: CurationExecutor | None = None,
+        verifier: CurationVerifier | None = None,
     ) -> None:
         self._curation_store = curation_store
         self._planner = planner
@@ -204,6 +209,8 @@ class CurationDryRunHarness:
         self._contradictory_memory_ids = contradictory_memory_ids
         self._protections_by_memory = protections_by_memory
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._executor = executor
+        self._verifier = verifier
 
     async def run(self, frontier: CurationFrontier) -> CurationDryRunResult:
         context = build_context_packet(
@@ -271,7 +278,20 @@ class CurationDryRunHarness:
         transitioned = self._curation_store.transition_run(run_id, run.state, executing)
         if transitioned is not None:
             executing = transitioned
-        terminal = self._curation_store.terminalize_run(run_id, CurationRunState.EXECUTING, outcome)
+        terminal_state = CurationRunState.EXECUTING
+        if (
+            self._config.execute_accepted_normalize_actions
+            and validation is not None
+            and validation.valid
+            and validation.accepted_actions
+        ):
+            outcome, reason_code, terminal_state = self._execute_accepted_normalizes(
+                run_id=run_id,
+                executing=executing,
+                validation=validation,
+                context=context,
+            )
+        terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
         if terminal is None:
             terminal = self._curation_store.get_run(run_id)
         if terminal is None:
@@ -283,6 +303,8 @@ class CurationDryRunHarness:
         work_item = self._work_item_decision(outcome, reason_code, latest)
         specialist_work_items: tuple[WorkItemRecord, ...] = ()
         if validation is not None and validation.valid and validation.specialist_routes and self._work_items is not None:
+            from mcp_memory.core.task_handlers.maintenance_work_items import enqueue_specialist_routes
+
             specialist_work_items = enqueue_specialist_routes(
                 self._work_items,
                 validation.specialist_routes,
@@ -437,6 +459,8 @@ class CurationDryRunHarness:
     ) -> CurationWorkItemDecision:
         if outcome is CurationRunOutcome.NO_OP:
             return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
+        if outcome is CurationRunOutcome.APPLIED:
+            return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
         delay = None if envelope is None else envelope.retry_delay_seconds
         return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, delay)
 
@@ -451,6 +475,59 @@ class CurationDryRunHarness:
                 error=decision.reason_code,
                 retry_delay_seconds=decision.retry_delay_seconds or 0.0,
             )
+
+    def _execute_accepted_normalizes(
+        self,
+        *,
+        run_id: UUID,
+        executing: CurationRun,
+        validation: CurationValidationResult,
+        context: ImmutableCurationContextPacket,
+    ) -> tuple[CurationRunOutcome, str, CurationRunState]:
+        """Execute and verify only policy-accepted normalize actions."""
+        if self._executor is None or self._verifier is None:
+            raise RuntimeError("normalize execution requires an executor and verifier")
+        if any(not isinstance(item.action, NormalizeMemoryAction) for item in validation.accepted_actions):
+            return CurationRunOutcome.DEFERRED, "unsupported_execution_action", CurationRunState.EXECUTING
+
+        memory_types = dict(self._memory_types or {})
+        for record in (*context.seeds, *context.support):
+            memory_id = record.get("memory_id")
+            memory_type = record.get("type")
+            if memory_id is not None and isinstance(memory_type, str):
+                memory_types[UUID(str(memory_id))] = memory_type
+
+        receipts = []
+        for item in validation.accepted_actions:
+            action = item.action
+            assert isinstance(action, NormalizeMemoryAction)
+            target_id = action.target_id
+            token = context.record_tokens.get(str(target_id))
+            receipt = self._executor.execute_normalize(
+                action,
+                run_id=run_id,
+                memory_type=memory_types.get(target_id, ""),
+                protections=(self._protections_by_memory or {}).get(target_id, ()),
+                expected_token=token,
+            )
+            receipts.append((receipt, action))
+
+        verifying = executing.model_copy(update={"state": CurationRunState.VERIFYING})
+        stored = self._curation_store.transition_run(run_id, CurationRunState.EXECUTING, verifying)
+        if stored is None:
+            raise RuntimeError(f"curation run {run_id} could not enter verification")
+
+        for receipt, action in receipts:
+            verified = self._verifier.verify(receipt, action)
+            if verified.status.value != "verified":
+                return CurationRunOutcome.VERIFICATION_FAILED, "verification_failed", CurationRunState.VERIFYING
+
+        partial = bool(validation.rejected_actions or validation.specialist_routes)
+        return (
+            CurationRunOutcome.PARTIALLY_APPLIED if partial else CurationRunOutcome.APPLIED,
+            "partially_applied" if partial else "verified_receipts",
+            CurationRunState.VERIFYING,
+        )
 
 
 def _uuid_or_none(value: str | None) -> UUID | None:
