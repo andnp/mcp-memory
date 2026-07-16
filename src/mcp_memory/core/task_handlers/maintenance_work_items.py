@@ -76,7 +76,20 @@ def enqueue_specialist_route(
     reason_code = _enum_value(route.reason_code)
     target_ids = _route_target_ids(route)
     target_revision_token = _route_target_revision_token(route, target_ids=target_ids, context=context)
-    idempotency_key = f"specialist-route:{requested_family}:{target_revision_token}:{reason_code}"
+    action_payload = route.action.model_dump(mode="json")
+    operation_payload = {
+        key: value
+        for key, value in action_payload.items()
+        if key not in {"confidence", "rationale", "evidence"}
+    }
+    idempotency_key = "specialist-route:" + canonical_token(
+        {
+            "family": requested_family,
+            "reason_code": reason_code,
+            "target_revision_token": target_revision_token,
+            "operation": operation_payload,
+        }
+    )
     payload: dict[str, Any] = {
         "route_kind": "specialist_route",
         "primary_family": requested_family,
@@ -86,12 +99,12 @@ def enqueue_specialist_route(
         "target_ids": target_ids,
         "target_revision_token": target_revision_token,
         "reason_code": reason_code,
-        "action": route.action.model_dump(mode="json"),
+        "action": action_payload,
     }
     if work_family == WORK_FAMILY_OPERATOR_REVIEW:
         payload["operator_review_required"] = True
         payload["operator_review_reason"] = "unsupported_specialist_family"
-    return work_items.enqueue_unique(
+    record, created = work_items.enqueue_unique(
         family_key=work_family,
         execution_lane=EXECUTION_LANE_AGENTIC,
         workspace_id=workspace_id,
@@ -99,6 +112,9 @@ def enqueue_specialist_route(
         idempotency_key=idempotency_key,
         payload=payload,
     )
+    if not created and canonical_token(record.payload) != canonical_token(payload):
+        raise RuntimeError("specialist_route_idempotency_conflict")
+    return record, created
 
 
 def enqueue_producer_remediation_signals(

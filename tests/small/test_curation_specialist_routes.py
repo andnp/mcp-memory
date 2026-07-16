@@ -28,14 +28,18 @@ def _route(
     family: MaintenanceFamily = MaintenanceFamily.GRAPH_LINKER,
     source_id=None,
     target_id=None,
+    action_id=None,
+    link_type: str = "DEPENDS_ON",
+    context: str | None = None,
 ):
     source_id = source_id or uuid4()
     target_id = target_id or uuid4()
     action = CreateLinkAction(
-        action_id=uuid4(),
+        action_id=action_id or uuid4(),
         source_id=source_id,
         target_id=target_id,
-        link_type="DEPENDS_ON",
+        link_type=link_type,
+        context=context,
         confidence=0.9,
         rationale="route the relationship to its owning specialist",
         evidence=[EvidenceRef(memory_id=source_id, revision_token=revision_token)],
@@ -48,11 +52,12 @@ def test_specialist_route_is_idempotent_until_target_evidence_changes(db_manager
     work_items = SQLiteWorkItemRepository(db_manager)
     source_id = uuid4()
     target_id = uuid4()
+    action_id = uuid4()
     first, created_first = enqueue_specialist_route(
-        work_items, _route(source_id=source_id, target_id=target_id)
+        work_items, _route(source_id=source_id, target_id=target_id, action_id=action_id)
     )
     repeated, created_repeated = enqueue_specialist_route(
-        work_items, _route(source_id=source_id, target_id=target_id)
+        work_items, _route(source_id=source_id, target_id=target_id, action_id=action_id)
     )
     changed, created_changed = enqueue_specialist_route(
         work_items,
@@ -68,6 +73,53 @@ def test_specialist_route_is_idempotent_until_target_evidence_changes(db_manager
     assert first.execution_lane == EXECUTION_LANE_AGENTIC
     assert first.payload["target_revision_token"] != changed.payload["target_revision_token"]
     assert len(work_items.list_items(family_key=WORK_FAMILY_GRAPH_LINK_REVIEW)) == 2
+
+
+def test_distinct_create_link_intents_do_not_collide(db_manager) -> None:
+    work_items = SQLiteWorkItemRepository(db_manager)
+    source_id = uuid4()
+    target_id = uuid4()
+    action_id = uuid4()
+
+    first, created_first = enqueue_specialist_route(
+        work_items,
+        _route(source_id=source_id, target_id=target_id, action_id=action_id),
+    )
+    repeated, created_repeated = enqueue_specialist_route(
+        work_items,
+        _route(source_id=source_id, target_id=target_id, action_id=action_id),
+    )
+    distinct, created_distinct = enqueue_specialist_route(
+        work_items,
+        _route(
+            source_id=source_id,
+            target_id=target_id,
+            action_id=uuid4(),
+            link_type="BLOCKS",
+            context="same endpoints, different relationship",
+        ),
+    )
+
+    assert created_first is True
+    assert created_repeated is False
+    assert repeated.id == first.id
+    assert created_distinct is True
+    assert distinct.id != first.id
+    assert distinct.payload["action"]["link_type"] == "BLOCKS"
+
+
+def test_existing_conflicting_route_fails_closed(db_manager) -> None:
+    work_items = SQLiteWorkItemRepository(db_manager)
+    route = _route(action_id=uuid4())
+    existing, _ = enqueue_specialist_route(work_items, route)
+    existing.payload["action"]["link_type"] = "UNRELATED"
+
+    class ConflictingWorkItems:
+        def enqueue_unique(self, **kwargs):
+            return existing, False
+
+    with pytest.raises(RuntimeError, match="specialist_route_idempotency_conflict"):
+        enqueue_specialist_route(ConflictingWorkItems(), route)
 
 
 def test_unsupported_specialist_family_creates_operator_review_work(db_manager) -> None:
