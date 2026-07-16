@@ -153,6 +153,17 @@ def _schedule_idle_shutdown_if_needed(app: FastAPI) -> None:
     app.state.idle_shutdown_task = asyncio.create_task(_shutdown_daemon_when_idle(app))
 
 
+async def _run_periodic_idle_shutdown_scheduler(app: FastAPI) -> None:
+    try:
+        while True:
+            interval = 5.0 if _IDLE_SHUTDOWN_DELAY_SECONDS >= 0.1 else 0.05
+            await asyncio.sleep(interval)
+            if bool(getattr(app.state, "enable_idle_shutdown", False)):
+                _schedule_idle_shutdown_if_needed(app)
+    except asyncio.CancelledError:
+        pass
+
+
 async def _cancel_background_task(app: FastAPI, task_name: str) -> None:
     task = getattr(app.state, task_name, None)
     if task is None:
@@ -346,11 +357,17 @@ def create_daemon_app(
             )
         app.state.routes = routes
         app.state.idle_shutdown_task = None
+        app.state.idle_shutdown_scheduler_task = None
         app.state.backup_task = backup_task
         app.state.record_thought_writeback_flush_task = record_thought_writeback_flush_task
         app.state.record_thought_writeback_flush_executor = record_thought_writeback_flush_executor
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.last_http_activity_at = time.monotonic()
+        if enable_idle_shutdown:
+            _schedule_idle_shutdown_if_needed(app)
+            app.state.idle_shutdown_scheduler_task = asyncio.create_task(
+                _run_periodic_idle_shutdown_scheduler(app)
+            )
         app.state.metadata = DaemonMetadata(
             host=daemon_host,
             port=daemon_port,
@@ -367,6 +384,7 @@ def create_daemon_app(
         try:
             yield
         finally:
+            await _cancel_background_task(app, "idle_shutdown_scheduler_task")
             await _cancel_idle_shutdown_task(app)
             await _cancel_background_task(app, "backup_task")
             await _cancel_background_task(app, "record_thought_writeback_flush_task")
