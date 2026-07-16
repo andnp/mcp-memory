@@ -78,6 +78,7 @@ class CurationActionReceipt(CurationStoreModel):
     before_token: str | None = None
     after_token: str | None = None
     mutation_event_id: UUID | None = None
+    intent_hash: str | None = None
     error_code: str | None = None
     applied_at: datetime | None = None
     verified_at: datetime | None = None
@@ -346,9 +347,9 @@ class SQLiteCurationStore:
                     """
                     INSERT INTO curation_action_receipts (
                         run_id, action_id, operation, affected_ids_json, status,
-                        before_token, after_token, mutation_event_id, error_code,
+                        before_token, after_token, mutation_event_id, intent_hash, error_code,
                         applied_at, verified_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _receipt_values(normalized),
                 )
@@ -404,7 +405,7 @@ class SQLiteCurationStore:
                 """
                 UPDATE curation_action_receipts
                 SET operation = ?, affected_ids_json = ?, status = ?, before_token = ?,
-                    after_token = ?, mutation_event_id = ?, error_code = ?,
+                    after_token = ?, mutation_event_id = ?, intent_hash = ?, error_code = ?,
                     applied_at = ?, verified_at = ?
                 WHERE run_id = ? AND action_id = ? AND status = ?
                 """,
@@ -552,6 +553,7 @@ def _receipt_values(receipt: CurationActionReceipt) -> tuple[object, ...]:
         receipt.before_token,
         receipt.after_token,
         _uuid_text(receipt.mutation_event_id),
+        receipt.intent_hash,
         receipt.error_code,
         _datetime_text(receipt.applied_at),
         _datetime_text(receipt.verified_at),
@@ -568,6 +570,7 @@ def _receipt_from_row(row: sqlite3.Row) -> CurationActionReceipt:
         before_token=row["before_token"],
         after_token=row["after_token"],
         mutation_event_id=None if row["mutation_event_id"] is None else UUID(str(row["mutation_event_id"])),
+        intent_hash=row["intent_hash"],
         error_code=row["error_code"],
         applied_at=_datetime_value(row["applied_at"]),
         verified_at=_datetime_value(row["verified_at"]),
@@ -579,6 +582,7 @@ def _receipt_identity_matches(left: CurationActionReceipt, right: CurationAction
         left.operation == right.operation
         and left.affected_ids == right.affected_ids
         and left.before_token == right.before_token
+        and (left.intent_hash is None or right.intent_hash is None or left.intent_hash == right.intent_hash)
     )
 
 

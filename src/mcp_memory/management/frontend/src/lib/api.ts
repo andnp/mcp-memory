@@ -817,6 +817,7 @@ export interface CurationActionReceipt {
   before_token?: string | null;
   after_token?: string | null;
   mutation_event_id?: string | null;
+  intent_hash?: string | null;
   error_code?: string | null;
   applied_at?: string | null;
   verified_at?: string | null;

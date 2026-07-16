@@ -115,6 +115,8 @@ class CurationActionStore(Protocol):
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
         preconditions: Any | None = None,
+        operation: str | None = None,
+        payload: Any | None = None,
     ) -> CurationActionReceipt: ...
 
 
@@ -165,6 +167,8 @@ class SQLiteCurationActionStore:
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
         preconditions: Any | None = None,
+        operation: str | None = None,
+        payload: Any | None = None,
         actor_kind: MutationActorKind | str = MutationActorKind.MAINTENANCE,
         restores_event_id: UUID | None = None,
         idempotency_key: str | None = None,
@@ -175,11 +179,24 @@ class SQLiteCurationActionStore:
         normalized_tokens = {_canonical_id(key): str(value) for key, value in expected_tokens.items()}
         if any(not value for value in normalized_tokens.values()):
             raise CurationActionFatalError("revision tokens must be non-empty")
+        normalized_operation = None if operation is None else operation.strip()
+        if operation is not None and not normalized_operation:
+            raise CurationActionFatalError("action operation must be non-empty")
 
         # The fast path avoids invoking the callback on every replay.  It is
         # repeated inside BEGIN IMMEDIATE to close the duplicate-execution race.
         existing = SQLiteCurationStore(self._db).get_receipt(run_id, action_id)
         if existing is not None:
+            _check_replay_identity(
+                existing,
+                run_id=run_id,
+                action_id=action_id,
+                operation=normalized_operation,
+                target_ids=normalized_targets,
+                expected_tokens=normalized_tokens,
+                preconditions=preconditions,
+                payload=payload,
+            )
             return existing
 
         connection = self._db.open_connection()
@@ -187,6 +204,16 @@ class SQLiteCurationActionStore:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._receipt_on(connection, run_id, action_id)
             if existing is not None:
+                _check_replay_identity(
+                    existing,
+                    run_id=run_id,
+                    action_id=action_id,
+                    operation=normalized_operation,
+                    target_ids=normalized_targets,
+                    expected_tokens=normalized_tokens,
+                    preconditions=preconditions,
+                    payload=payload,
+                )
                 connection.rollback()
                 return existing
 
@@ -235,6 +262,9 @@ class SQLiteCurationActionStore:
             result = _normalize_result(raw_result)
             if not result.operation.strip():
                 raise CurationActionFatalError("mutation result operation must be non-empty")
+            result_operation = result.operation.strip()
+            if normalized_operation is not None and result_operation != normalized_operation:
+                raise CurationActionFatalError("action operation does not match mutation result")
             self._check_protections(connection, normalized_targets, result.operation)
             self._fail_stage("after_domain_mutation")
 
@@ -269,12 +299,19 @@ class SQLiteCurationActionStore:
             receipt = CurationActionReceipt(
                 run_id=run_id,
                 action_id=action_id,
-                operation=result.operation.strip(),
+                operation=result_operation,
                 affected_ids=[UUID(value) for value in affected_ids],
                 status=CurationReceiptState.APPLIED_UNVERIFIED,
                 before_token=before_token,
                 after_token=after_token,
                 mutation_event_id=event_id,
+                intent_hash=_action_intent_hash(
+                    operation=result_operation,
+                    target_ids=normalized_targets,
+                    expected_tokens=normalized_tokens,
+                    preconditions=preconditions,
+                    payload=payload,
+                ),
                 applied_at=datetime.now(UTC),
             )
             self._insert_receipt(connection, receipt)
@@ -538,9 +575,9 @@ class SQLiteCurationActionStore:
             """
             INSERT INTO curation_action_receipts (
                 run_id, action_id, operation, affected_ids_json, status,
-                before_token, after_token, mutation_event_id, error_code,
+                before_token, after_token, mutation_event_id, intent_hash, error_code,
                 applied_at, verified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(receipt.run_id),
@@ -551,6 +588,7 @@ class SQLiteCurationActionStore:
                 receipt.before_token,
                 receipt.after_token,
                 str(receipt.mutation_event_id) if receipt.mutation_event_id is not None else None,
+                receipt.intent_hash,
                 receipt.error_code,
                 receipt.applied_at.isoformat() if receipt.applied_at is not None else None,
                 receipt.verified_at.isoformat() if receipt.verified_at is not None else None,
@@ -934,6 +972,64 @@ def _state_token(records: Mapping[str, RelationalMemoryRecord], ids: Sequence[st
 def _is_retryable_sqlite_error(error: sqlite3.OperationalError) -> bool:
     message = str(error).lower()
     return "locked" in message or "busy" in message
+
+
+def _check_replay_identity(
+    receipt: CurationActionReceipt,
+    *,
+    run_id: UUID,
+    action_id: UUID,
+    operation: str | None,
+    target_ids: Sequence[str],
+    expected_tokens: Mapping[str, str],
+    preconditions: Any | None,
+    payload: Any | None,
+) -> None:
+    if receipt.intent_hash is None:
+        return
+    candidate = _action_intent_hash(
+        operation=operation or receipt.operation,
+        target_ids=target_ids,
+        expected_tokens=expected_tokens,
+        preconditions=preconditions,
+        payload=payload,
+    )
+    if candidate != receipt.intent_hash:
+        raise CurationActionFatalError(f"curation action identity collision for {run_id}/{action_id}")
+
+
+def _action_intent_hash(
+    *,
+    operation: str,
+    target_ids: Sequence[str],
+    expected_tokens: Mapping[str, str],
+    preconditions: Any | None,
+    payload: Any | None,
+) -> str:
+    try:
+        return canonical_token(
+            {
+                "schema_version": 1,
+                "operation": operation,
+                "target_ids": list(target_ids),
+                "expected_tokens": dict(sorted(expected_tokens.items())),
+                "preconditions": _identity_value(preconditions),
+                "payload": _identity_value(payload),
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        raise CurationActionFatalError("action intent is not canonically representable") from exc
+
+
+def _identity_value(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    if isinstance(value, Mapping):
+        return {str(key): _identity_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_identity_value(item) for item in value]
+    return value
 
 
 __all__ = [

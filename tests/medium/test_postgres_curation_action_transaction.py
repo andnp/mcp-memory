@@ -7,7 +7,12 @@ from uuid import uuid4
 import pytest
 
 from mcp_memory.core.curation_identity import graph_token, record_token
-from mcp_memory.curation_action_store import CurationActionInjectedFailure, CurationActionStaleError, MutationResult
+from mcp_memory.curation_action_store import (
+    CurationActionFatalError,
+    CurationActionInjectedFailure,
+    CurationActionStaleError,
+    MutationResult,
+)
 from mcp_memory.curation_store import CurationRun, CurationRunState
 from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
@@ -107,6 +112,54 @@ def test_postgres_action_replay_is_idempotent(postgres_storage_config) -> None:
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 row = cursor.fetchone()
                 assert row is not None and row[0] == 1
+    manager.close()
+
+
+def test_postgres_action_identity_collision_rejects_mismatched_intent(postgres_storage_config) -> None:
+    manager, repository, run, first, second = _seed(postgres_storage_config)
+    action_id = uuid4()
+    preconditions = {"required_statuses": {str(first.id): "active"}}
+    calls = 0
+
+    def apply(transaction):
+        nonlocal calls
+        calls += 1
+        transaction.update_memory(str(first.id), content="once")
+        return MutationResult("rewrite_memory", [first.id])
+
+    store = PostgresCurationActionStore(manager)
+    arguments = {
+        "run_id": run.run_id,
+        "action_id": action_id,
+        "target_ids": [str(first.id)],
+        "expected_tokens": {str(first.id): record_token(first)},
+        "preconditions": preconditions,
+        "operation": "rewrite_memory",
+        "payload": {"content": "once"},
+        "apply": apply,
+    }
+    receipt = store.execute_action(**arguments)
+    assert receipt.intent_hash is not None
+
+    mismatches = [
+        {"operation": "archive_memory"},
+        {"target_ids": [str(second.id)], "expected_tokens": {str(second.id): record_token(second)}},
+        {"preconditions": {"required_statuses": {str(first.id): "archived"}}},
+        {"payload": {"content": "twice"}},
+    ]
+    for mismatch in mismatches:
+        with pytest.raises(CurationActionFatalError, match="identity collision"):
+            store.execute_action(**{**arguments, **mismatch})
+
+    assert calls == 1
+    with manager.open_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM memory_mutation_events")
+            row = cursor.fetchone()
+            assert row is not None and row[0] == 1
+            cursor.execute("SELECT COUNT(*) FROM curation_action_receipts")
+            row = cursor.fetchone()
+            assert row is not None and row[0] == 1
     manager.close()
 
 

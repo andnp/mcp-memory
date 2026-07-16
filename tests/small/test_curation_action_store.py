@@ -7,6 +7,7 @@ import pytest
 
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.curation_action_store import (
+    CurationActionFatalError,
     CurationActionInjectedFailure,
     CurationActionStaleError,
     MutationResult,
@@ -153,6 +154,55 @@ def test_replay_returns_original_receipt_without_reapplying_callback(db_manager:
     assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM embedding_repair_queue").fetchone()[0] == 1
+
+
+def test_action_identity_collision_rejects_operation_targets_preconditions_and_payload(
+    db_manager: DatabaseManager,
+) -> None:
+    repository, run, first_id, second_id = _seed(db_manager)
+    first = repository.get_memory(str(first_id))
+    second = repository.get_memory(str(second_id))
+    assert first is not None and second is not None
+    action_id = uuid4()
+    preconditions = {"required_statuses": {str(first_id): "active"}}
+    calls = 0
+
+    def apply(transaction):
+        nonlocal calls
+        calls += 1
+        transaction.update_memory(str(first_id), content="once")
+        return MutationResult("rewrite_memory", [first_id])
+
+    store = SQLiteCurationActionStore(db_manager)
+    arguments = {
+        "run_id": run.run_id,
+        "action_id": action_id,
+        "target_ids": [str(first_id)],
+        "expected_tokens": {str(first_id): record_token(first)},
+        "preconditions": preconditions,
+        "operation": "rewrite_memory",
+        "payload": {"content": "once"},
+        "apply": apply,
+    }
+    receipt = store.execute_action(**arguments)
+    assert receipt.intent_hash is not None
+
+    mismatches = [
+        {"operation": "archive_memory"},
+        {"target_ids": [str(second_id)], "expected_tokens": {str(second_id): record_token(second)}},
+        {"preconditions": {"required_statuses": {str(first_id): "archived"}}},
+        {"payload": {"content": "twice"}},
+    ]
+    for mismatch in mismatches:
+        replay_arguments = {**arguments, **mismatch}
+        with pytest.raises(CurationActionFatalError, match="identity collision"):
+            store.execute_action(**replay_arguments)
+
+    assert calls == 1
+    assert SQLiteCurationStore(db_manager).get_receipt(run.run_id, action_id) == receipt
+    connection = db_manager.get_connection()
+    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 1
 
 
 def test_committed_action_invalidates_affected_derivative_caches(

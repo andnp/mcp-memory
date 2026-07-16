@@ -197,6 +197,8 @@ class _FakeActionStore:
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
         preconditions: Any | None = None,
+        operation: str | None = None,
+        payload: Any | None = None,
     ) -> CurationActionReceipt:
         arguments: dict[str, object] = {
             "run_id": run_id,
@@ -205,6 +207,8 @@ class _FakeActionStore:
             "expected_tokens": expected_tokens,
             "apply": apply,
             "preconditions": preconditions,
+            "operation": operation,
+            "payload": payload,
         }
         self.arguments = arguments
         apply(cast(CurationTransaction, self.transaction))

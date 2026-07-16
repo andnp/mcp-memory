@@ -26,6 +26,8 @@ from mcp_memory.curation_action_store import (
     CurationTransaction,
     MutationResult,
     _build_summary,
+    _action_intent_hash,
+    _check_replay_identity,
     _canonical_id,
     _canonical_target_ids,
     _field,
@@ -90,6 +92,8 @@ class PostgresCurationActionStore:
         expected_tokens: Mapping[str, str],
         apply: Callable[[CurationTransaction], MutationResult],
         preconditions: Any | None = None,
+        operation: str | None = None,
+        payload: Any | None = None,
         actor_kind: MutationActorKind | str = MutationActorKind.MAINTENANCE,
         restores_event_id: UUID | None = None,
         idempotency_key: str | None = None,
@@ -100,11 +104,24 @@ class PostgresCurationActionStore:
         normalized_tokens = {_canonical_id(key): str(value) for key, value in expected_tokens.items()}
         if any(not value for value in normalized_tokens.values()):
             raise CurationActionFatalError("revision tokens must be non-empty")
+        normalized_operation = None if operation is None else operation.strip()
+        if operation is not None and not normalized_operation:
+            raise CurationActionFatalError("action operation must be non-empty")
 
         # The fast path is only an optimization.  The receipt is checked again
         # while holding the action transaction's locks to close the race.
         existing = self._receipt(run_id, action_id)
         if existing is not None:
+            _check_replay_identity(
+                existing,
+                run_id=run_id,
+                action_id=action_id,
+                operation=normalized_operation,
+                target_ids=normalized_targets,
+                expected_tokens=normalized_tokens,
+                preconditions=preconditions,
+                payload=payload,
+            )
             return existing
 
         with self._sessions.open_connection() as connection:
@@ -112,6 +129,16 @@ class PostgresCurationActionStore:
                 with connection.cursor() as cursor:
                     existing = self._receipt_on(cursor, run_id, action_id)
                     if existing is not None:
+                        _check_replay_identity(
+                            existing,
+                            run_id=run_id,
+                            action_id=action_id,
+                            operation=normalized_operation,
+                            target_ids=normalized_targets,
+                            expected_tokens=normalized_tokens,
+                            preconditions=preconditions,
+                            payload=payload,
+                        )
                         connection.rollback()
                         return existing
 
@@ -152,6 +179,16 @@ class PostgresCurationActionStore:
                     self._lock_targets(cursor, normalized_targets)
                     existing = self._receipt_on(cursor, run_id, action_id)
                     if existing is not None:
+                        _check_replay_identity(
+                            existing,
+                            run_id=run_id,
+                            action_id=action_id,
+                            operation=normalized_operation,
+                            target_ids=normalized_targets,
+                            expected_tokens=normalized_tokens,
+                            preconditions=preconditions,
+                            payload=payload,
+                        )
                         connection.rollback()
                         return existing
 
@@ -170,6 +207,9 @@ class PostgresCurationActionStore:
                     result = _normalize_result(raw_result)
                     if not result.operation.strip():
                         raise CurationActionFatalError("mutation result operation must be non-empty")
+                    result_operation = result.operation.strip()
+                    if normalized_operation is not None and result_operation != normalized_operation:
+                        raise CurationActionFatalError("action operation does not match mutation result")
                     self._check_protections(cursor, normalized_targets, result.operation)
                     self._fail_stage("after_domain_mutation")
 
@@ -189,7 +229,7 @@ class PostgresCurationActionStore:
                         action_id=action_id,
                         plan_id=None if run is None or run[1] is None else UUID(str(run[1])),
                         policy_version=None if run is None or run[2] is None else str(run[2]),
-                        operation=result.operation.strip(),
+                        operation=result_operation,
                         actor_kind=actor_kind,
                         restores_event_id=restores_event_id,
                         idempotency_key=idempotency_key,
@@ -206,12 +246,19 @@ class PostgresCurationActionStore:
                     receipt = CurationActionReceipt(
                         run_id=run_id,
                         action_id=action_id,
-                        operation=result.operation.strip(),
+                        operation=result_operation,
                         affected_ids=[UUID(value) for value in affected_ids],
                         status=CurationReceiptState.APPLIED_UNVERIFIED,
                         before_token=before_token,
                         after_token=after_token,
                         mutation_event_id=event_id,
+                        intent_hash=_action_intent_hash(
+                            operation=result_operation,
+                            target_ids=normalized_targets,
+                            expected_tokens=normalized_tokens,
+                            preconditions=preconditions,
+                            payload=payload,
+                        ),
                         applied_at=datetime.now(UTC),
                     )
                     self._insert_receipt(cursor, receipt)
@@ -248,7 +295,7 @@ class PostgresCurationActionStore:
     def _receipt_on(self, cursor: CursorLike, run_id: UUID, action_id: UUID) -> CurationActionReceipt | None:
         cursor.execute(
             "SELECT run_id, action_id, operation, affected_ids_json, status, before_token, after_token, "
-            "mutation_event_id, error_code, applied_at, verified_at "
+            "mutation_event_id, intent_hash, error_code, applied_at, verified_at "
             "FROM curation_action_receipts WHERE run_id = %s AND action_id = %s",
             (str(run_id), str(action_id)),
         )
@@ -486,8 +533,8 @@ class PostgresCurationActionStore:
             """
             INSERT INTO curation_action_receipts (
                 run_id, action_id, operation, affected_ids_json, status,
-                before_token, after_token, mutation_event_id, error_code, applied_at, verified_at
-            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+                before_token, after_token, mutation_event_id, intent_hash, error_code, applied_at, verified_at
+            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 str(receipt.run_id),
@@ -498,6 +545,7 @@ class PostgresCurationActionStore:
                 receipt.before_token,
                 receipt.after_token,
                 None if receipt.mutation_event_id is None else str(receipt.mutation_event_id),
+                receipt.intent_hash,
                 receipt.error_code,
                 None if receipt.applied_at is None else receipt.applied_at.isoformat(),
                 None if receipt.verified_at is None else receipt.verified_at.isoformat(),

@@ -141,9 +141,9 @@ class PostgresCurationStore:
                     """
                     INSERT INTO curation_action_receipts (
                         run_id, action_id, operation, affected_ids_json, status,
-                        before_token, after_token, mutation_event_id, error_code,
+                        before_token, after_token, mutation_event_id, intent_hash, error_code,
                         applied_at, verified_at
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (run_id, action_id) DO NOTHING
                     """,
                     _receipt_values(normalized),
@@ -201,7 +201,7 @@ class PostgresCurationStore:
                     UPDATE curation_action_receipts
                     SET operation = %s, affected_ids_json = %s::jsonb, status = %s,
                         before_token = %s, after_token = %s, mutation_event_id = %s,
-                        error_code = %s, applied_at = %s, verified_at = %s
+                        intent_hash = %s, error_code = %s, applied_at = %s, verified_at = %s
                     WHERE run_id = %s AND action_id = %s AND status = %s
                     """,
                     (
@@ -287,7 +287,7 @@ FROM curation_runs
 """
 _RECEIPT_SELECT = """
 SELECT run_id, action_id, operation, affected_ids_json, status, before_token,
-       after_token, mutation_event_id, error_code, applied_at, verified_at
+       after_token, mutation_event_id, intent_hash, error_code, applied_at, verified_at
 FROM curation_action_receipts
 """
 _CANDIDATE_SELECT = """
@@ -372,6 +372,7 @@ def _receipt_values(receipt: CurationActionReceipt) -> tuple[object, ...]:
         receipt.before_token,
         receipt.after_token,
         _uuid_text(receipt.mutation_event_id),
+        receipt.intent_hash,
         receipt.error_code,
         _datetime_text(receipt.applied_at),
         _datetime_text(receipt.verified_at),
@@ -428,9 +429,10 @@ def _receipt_from_row(row: tuple[object, ...]) -> CurationActionReceipt:
         before_token=None if row[5] is None else str(row[5]),
         after_token=None if row[6] is None else str(row[6]),
         mutation_event_id=None if row[7] is None else UUID(str(row[7])),
-        error_code=None if row[8] is None else str(row[8]),
-        applied_at=_datetime_value(row[9]),
-        verified_at=_datetime_value(row[10]),
+        intent_hash=None if row[8] is None else str(row[8]),
+        error_code=None if row[9] is None else str(row[9]),
+        applied_at=_datetime_value(row[10]),
+        verified_at=_datetime_value(row[11]),
     )
 
 

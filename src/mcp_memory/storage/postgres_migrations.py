@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 14
+POSTGRES_SCHEMA_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -624,6 +624,7 @@ POSTGRES_MIGRATIONS = (
                 before_token TEXT,
                 after_token TEXT,
                 mutation_event_id TEXT,
+                intent_hash TEXT,
                 error_code TEXT,
                 applied_at TEXT,
                 verified_at TEXT,
@@ -663,6 +664,13 @@ POSTGRES_MIGRATIONS = (
         name="add_curation_disclosure_audit",
         statements=(
             "ALTER TABLE curation_runs ADD COLUMN IF NOT EXISTS disclosure_audit_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ),
+    ),
+    PostgresMigration(
+        version=15,
+        name="add_curation_action_intent_hash",
+        statements=(
+            "ALTER TABLE curation_action_receipts ADD COLUMN IF NOT EXISTS intent_hash TEXT",
         ),
     ),
 )

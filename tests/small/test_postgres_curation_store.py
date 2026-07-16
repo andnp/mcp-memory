@@ -58,7 +58,7 @@ class FakeConnection:
             CREATE TABLE curation_action_receipts (
                 run_id TEXT NOT NULL, action_id TEXT NOT NULL, operation TEXT NOT NULL,
                 affected_ids_json TEXT NOT NULL, status TEXT NOT NULL, before_token TEXT,
-                after_token TEXT, mutation_event_id TEXT, error_code TEXT, applied_at TEXT,
+                after_token TEXT, mutation_event_id TEXT, intent_hash TEXT, error_code TEXT, applied_at TEXT,
                 verified_at TEXT, PRIMARY KEY (run_id, action_id),
                 FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE,
                 FOREIGN KEY (mutation_event_id) REFERENCES memory_mutation_events(id)
@@ -106,7 +106,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 14
+    assert POSTGRES_SCHEMA_VERSION == 15
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"

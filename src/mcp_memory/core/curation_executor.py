@@ -89,6 +89,8 @@ class CurationExecutor:
             target_ids=[str(action.target_id)],
             expected_tokens={str(action.target_id): token},
             preconditions=action.preconditions,
+            operation=action.operation,
+            payload={"title": action.title, "summary": action.summary, "tags": action.tags},
             apply=apply,
         )
 
@@ -156,6 +158,8 @@ class CurationExecutor:
             target_ids=[str(endpoint_id) for endpoint_id in endpoint_ids],
             expected_tokens=expected_tokens,
             preconditions=action.preconditions,
+            operation=action.operation,
+            payload={"link_type": link_type, "context": context},
             apply=apply,
         )
 

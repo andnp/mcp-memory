@@ -545,6 +545,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     )
     create_mutation_history_schema(conn)
     create_curation_ledger_schema(conn)
+    ensure_column(conn, "curation_action_receipts", "intent_hash", "TEXT")
 
 
 def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
@@ -583,6 +584,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             before_token TEXT,
             after_token TEXT,
             mutation_event_id TEXT,
+            intent_hash TEXT,
             error_code TEXT,
             applied_at TEXT,
             verified_at TEXT,
