@@ -75,6 +75,10 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
     assert names == [
         "internal_search_memory_records",
         "internal_read_memory_record",
+        "internal_peek_record",
+        "internal_maintenance_search",
+        "internal_list_relationships",
+        "internal_bounded_adjacency",
         "internal_list_memory_records",
         "task_complete",
         "internal_task_complete",
