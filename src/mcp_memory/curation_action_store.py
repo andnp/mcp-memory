@@ -19,7 +19,14 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
-from mcp_memory.core.curation_identity import canonical_token, graph_token, link_token, record_snapshot, record_token
+from mcp_memory.core.curation_identity import (
+    action_intent_token,
+    canonical_token,
+    graph_token,
+    link_token,
+    record_snapshot,
+    record_token,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -1024,29 +1031,16 @@ def _action_intent_hash(
     payload: Any | None,
 ) -> str:
     try:
-        return canonical_token(
-            {
-                "schema_version": 1,
-                "operation": operation,
-                "target_ids": list(target_ids),
-                "expected_tokens": dict(sorted(expected_tokens.items())),
-                "preconditions": _identity_value(preconditions),
-                "payload": _identity_value(payload),
-            }
+        return action_intent_token(
+            operation=operation,
+            target_ids=target_ids,
+            expected_tokens=expected_tokens,
+            preconditions=preconditions,
+            payload=payload,
         )
     except (TypeError, ValueError) as exc:
         raise CurationActionFatalError("action intent is not canonically representable") from exc
 
-
-def _identity_value(value: Any) -> Any:
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(mode="json")
-    if isinstance(value, Mapping):
-        return {str(key): _identity_value(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_identity_value(item) for item in value]
-    return value
 
 
 __all__ = [

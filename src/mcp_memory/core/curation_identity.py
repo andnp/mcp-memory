@@ -71,6 +71,72 @@ def _set_values(values: Sequence[Any]) -> list[str]:
     return sorted({_identifier(value) for value in values}, key=lambda item: item.encode("utf-8"))
 
 
+_ACTION_SET_LIST_KEYS = frozenset(
+    {"tags", "evidence", "references", "target_ids", "source_ids", "required_links", "absent_links"}
+)
+_ACTION_IDENTIFIER_KEYS = frozenset(
+    {
+        "id",
+        "memory_id",
+        "source_id",
+        "target_id",
+        "canonical_id",
+        "link_type",
+        "status",
+        "tags",
+        "target_ids",
+        "source_ids",
+        "references",
+    }
+)
+
+
+def _canonical_action_value(value: Any, *, key: str | None = None) -> Any:
+    if isinstance(value, str):
+        return _identifier(value) if key in _ACTION_IDENTIFIER_KEYS else _text(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {
+            _text(str(name)): _canonical_action_value(item, key=_text(str(name)))
+            for name, item in value.items()
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items = [_canonical_action_value(item, key=key) for item in value]
+        if key in _ACTION_SET_LIST_KEYS:
+            unique = {canonical_json(item): item for item in items}
+            return [unique[item] for item in sorted(unique)]
+        return items
+    return _normalize(value)
+
+
+def canonicalize_action_value(value: Any) -> Any:
+    """Normalize action identity values while preserving semantic list order."""
+    return _canonical_action_value(value)
+
+
+def action_intent_token(
+    *,
+    operation: str,
+    target_ids: Sequence[Any],
+    expected_tokens: Mapping[Any, Any],
+    preconditions: Any | None,
+    payload: Any | None,
+) -> str:
+    return canonical_token(
+        canonicalize_action_value(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "operation": operation,
+                "target_ids": list(target_ids),
+                "expected_tokens": dict(expected_tokens),
+                "preconditions": preconditions,
+                "payload": payload,
+            }
+        )
+    )
+
+
 def _mapping_value(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, Mapping):
         return value.get(name, default)
@@ -183,7 +249,7 @@ def context_fingerprint(packet: Mapping[str, Any]) -> str:
 
 def action_id(plan_id: Any, position: int, action: CurationAction | Mapping[str, Any]) -> UUID:
     """Derive the action UUID from intent, never from provider advisory fields."""
-    data = action.model_dump(mode="json") if isinstance(action, BaseModel) else dict(action)
+    data = canonicalize_action_value(action.model_dump(mode="json") if isinstance(action, BaseModel) else dict(action))
     operation = _identifier(data["operation"])
     base = {"action_id", "confidence", "rationale", "operation", "evidence", "preconditions"}
     target_keys = ("target_id", "source_id", "canonical_id", "source_ids")
@@ -200,9 +266,9 @@ def action_id(plan_id: Any, position: int, action: CurationAction | Mapping[str,
         "position": position,
         "operation": operation,
         "target_ids": _set_values(target_ids),
-        "arguments": arguments,
-        "preconditions": preconditions,
-        "evidence": sorted(evidence, key=canonical_json),
+        "arguments": canonicalize_action_value(arguments),
+        "preconditions": canonicalize_action_value(preconditions),
+        "evidence": canonicalize_action_value(evidence),
     }
     return uuid5(CURATION_ACTION_NAMESPACE, canonical_json(name).decode("utf-8"))
 

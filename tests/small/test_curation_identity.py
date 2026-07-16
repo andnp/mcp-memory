@@ -2,6 +2,7 @@ from uuid import UUID
 
 from mcp_memory.core.curation_identity import (
     action_id,
+    action_intent_token,
     canonical_json,
     context_fingerprint,
     frontier_fingerprint,
@@ -12,6 +13,56 @@ from mcp_memory.core.curation_models import NormalizeMemoryAction
 
 MEMORY_ID = UUID("00000000-0000-0000-0000-000000000001")
 OTHER_ID = UUID("00000000-0000-0000-0000-000000000002")
+
+
+def test_action_identity_normalizes_set_like_permutations_but_not_positional_lists() -> None:
+    first = {
+        "operation": "merge_memories",
+        "action_id": str(UUID(int=3)),
+        "confidence": 0.8,
+        "rationale": "advisory",
+        "canonical_id": str(UUID(int=4)),
+        "source_ids": [str(UUID(int=2)), str(UUID(int=1))],
+        "tags": ["tag-b", "tag-a"],
+        "evidence": [{"memory_id": str(UUID(int=6))}, {"memory_id": str(UUID(int=5))}],
+        "preconditions": {
+            "required_statuses": {str(UUID(int=2)): "active", str(UUID(int=1)): "active"},
+            "required_links": [
+                {"source_id": str(UUID(int=2)), "target_id": str(UUID(int=1)), "link_type": "related"},
+                {"source_id": str(UUID(int=1)), "target_id": str(UUID(int=2)), "link_type": "related"},
+            ],
+            "absent_links": [{"source_id": str(UUID(int=1)), "target_id": str(UUID(int=2)), "link_type": "blocked"}],
+        },
+    }
+    second = {**first, "source_ids": list(reversed(first["source_ids"])), "tags": list(reversed(first["tags"]))}
+    second["evidence"] = list(reversed(first["evidence"]))
+    second["preconditions"] = {**first["preconditions"], "required_links": list(reversed(first["preconditions"]["required_links"]))}
+    assert action_id("plan", 0, first) == action_id("plan", 0, second)
+
+    ordered = {**first, "claim_manifest": {"preserved_claims": ["one", "two"]}}
+    reordered = {**ordered, "claim_manifest": {"preserved_claims": ["two", "one"]}}
+    assert action_id("plan", 0, ordered) != action_id("plan", 0, reordered)
+
+
+def test_intent_hash_normalizes_set_like_permutations_and_detects_changes() -> None:
+    common = {
+        "operation": "rewrite_memory",
+        "target_ids": ["b", "a"],
+        "expected_tokens": {"b": "token-b", "a": "token-a"},
+        "preconditions": {
+            "required_statuses": {"b": "active", "a": "active"},
+            "absent_links": [
+                {"source_id": "b", "target_id": "a", "link_type": "related"},
+                {"source_id": "a", "target_id": "b", "link_type": "related"},
+            ],
+        },
+        "payload": {"tags": ["b", "a"]},
+    }
+    permutation = {**common, "target_ids": ["a", "b"], "expected_tokens": {"a": "token-a", "b": "token-b"}}
+    permutation["preconditions"] = {**common["preconditions"], "absent_links": list(reversed(common["preconditions"]["absent_links"]))}
+    permutation["payload"] = {"tags": ["a", "b"]}
+    assert action_intent_token(**common) == action_intent_token(**permutation)
+    assert action_intent_token(**common) != action_intent_token(**{**permutation, "payload": {"tags": ["a", "c"]}})
 
 
 def test_canonical_json_normalizes_unicode_newlines_and_maps() -> None:
