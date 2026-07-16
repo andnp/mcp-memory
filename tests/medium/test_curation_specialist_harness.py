@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
-from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier
+from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
 from mcp_memory.core.curation_models import CurationPlan, CreateLinkAction, EvidenceRef
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_planner import FakeCurationPlanner, FakePlannerScenario
@@ -62,6 +62,7 @@ def _harness(db_manager: DatabaseManager) -> CurationDryRunHarness:
         curation_store=SQLiteCurationStore(db_manager),
         planner=_RequestBoundPlanner(),
         work_items=SQLiteWorkItemRepository(db_manager),
+        config=CurationHarnessConfig(execute_accepted_create_link_actions=True),
         clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
     )
 

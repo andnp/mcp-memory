@@ -114,7 +114,7 @@ def _seed_runtime(tmp_path: Path) -> tuple[Any, Any, Any, Any]:
 
 
 @pytest.mark.asyncio
-async def test_enabled_create_link_uses_verified_executor_history_and_exact_edge(
+async def test_enabled_create_link_routes_to_graph_specialist_without_mutation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -129,21 +129,18 @@ async def test_enabled_create_link_uses_verified_executor_history_and_exact_edge
         )
         result = await handle_memory_curator_task(runtime, _task(runtime, "curator-create-link-task"), object())
 
-        links = runtime.repository.get_links(source.id, direction="outgoing")
-        assert [(link.target_id, link.link_type, link.context) for link in links] == [
-            (target.id, "SUPPORTS", "The source records the target as supporting evidence.")
-        ]
-        receipt = runtime.curation.list_receipts(result["curation_run_id"])[0]
+        assert runtime.repository.get_links(source.id, direction="outgoing") == []
         assert result["execution_mode"] == "curation_verified_executor"
-        assert result["curation_outcome"] == "applied"
-        assert result["mutations"] == 1
-        assert receipt.operation == "create_link"
-        assert receipt.status.value == "verified"
-        assert receipt.mutation_event_id is not None
-        assert runtime.work_items.get_item(item.id).status == "completed"
+        assert result["curation_outcome"] == "deferred"
+        assert result["mutations"] == 0
+        assert runtime.work_items.get_item(item.id).status == "deferred"
+        specialist_items = runtime.work_items.list_items(family_key="graph_link_review")
+        assert len(specialist_items) == 1
+        assert specialist_items[0].payload["operation"] == "create_link"
+        assert specialist_items[0].payload["primary_family"] == "graph_linker"
         assert runtime.db_manager.get_connection().execute(
             "SELECT COUNT(*) FROM memory_link_revisions"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 0
     finally:
         runtime.close()
 

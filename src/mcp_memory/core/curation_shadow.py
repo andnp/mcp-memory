@@ -384,7 +384,17 @@ async def run_curator_verified_create_link_execution(
                 "operation": item.action.operation,
                 "decision": "accepted",
             }
-            for item in (*result.validation.accepted_actions, *result.validation.specialist_routes)
+            for item in result.validation.accepted_actions
+            if item.action.operation == "create_link"
+        ] + [
+            {
+                "action_id": str(item.action.action_id),
+                "operation": item.action.operation,
+                "decision": "specialist_route",
+                "primary_family": str(item.family),
+                "reason_codes": [str(item.reason_code)],
+            }
+            for item in result.validation.specialist_routes
             if item.action.operation == "create_link"
         ] + [
             {
@@ -397,7 +407,7 @@ async def run_curator_verified_create_link_execution(
         ]
         create_link_actions = [
             item.action
-            for item in (*result.validation.accepted_actions, *result.validation.specialist_routes)
+            for item in result.validation.accepted_actions
             if item.action.operation == "create_link"
         ]
     return sampling_payload(

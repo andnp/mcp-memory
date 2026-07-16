@@ -621,10 +621,10 @@ def _uuid_or_none(value: str | None) -> UUID | None:
 
 
 def _create_link_actions(validation: CurationValidationResult) -> tuple[CreateLinkAction, ...]:
-    """Return policy-valid create-links, including graph-specialist routes."""
+    """Return only curator-owned, policy-valid create-links for local execution."""
     actions = [
         item.action
-        for item in (*validation.accepted_actions, *validation.specialist_routes)
+        for item in validation.accepted_actions
         if isinstance(item.action, CreateLinkAction)
     ]
     return tuple(actions)
