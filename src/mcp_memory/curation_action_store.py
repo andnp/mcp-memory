@@ -179,8 +179,10 @@ class SQLiteCurationActionStore:
         normalized_tokens = {_canonical_id(key): str(value) for key, value in expected_tokens.items()}
         if any(not value for value in normalized_tokens.values()):
             raise CurationActionFatalError("revision tokens must be non-empty")
-        normalized_operation = None if operation is None else operation.strip()
-        if operation is not None and not normalized_operation:
+        if operation is None:
+            raise CurationActionFatalError("action operation is required")
+        normalized_operation = operation.strip()
+        if not normalized_operation:
             raise CurationActionFatalError("action operation must be non-empty")
 
         # The fast path avoids invoking the callback on every replay.  It is
@@ -986,9 +988,15 @@ def _check_replay_identity(
     payload: Any | None,
 ) -> None:
     if receipt.intent_hash is None:
-        return
+        raise CurationActionFatalError(
+            f"curation action identity collision: legacy-unverifiable receipt for {run_id}/{action_id}"
+        )
+    if operation is None:
+        raise CurationActionFatalError(
+            f"curation action identity collision: operation is required for {run_id}/{action_id}"
+        )
     candidate = _action_intent_hash(
-        operation=operation or receipt.operation,
+        operation=operation,
         target_ids=target_ids,
         expected_tokens=expected_tokens,
         preconditions=preconditions,

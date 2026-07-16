@@ -85,6 +85,7 @@ def _seed_event(runtime, *, created_at: datetime, with_receipt: bool = False) ->
                 status=CurationReceiptState.APPLIED_UNVERIFIED,
                 before_token="before-token",
                 after_token="after-token",
+                intent_hash="intent-hash",
                 mutation_event_id=event.id,
             )
         )

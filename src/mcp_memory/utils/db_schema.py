@@ -584,7 +584,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             before_token TEXT,
             after_token TEXT,
             mutation_event_id TEXT,
-            intent_hash TEXT,
+            intent_hash TEXT NOT NULL,
             error_code TEXT,
             applied_at TEXT,
             verified_at TEXT,

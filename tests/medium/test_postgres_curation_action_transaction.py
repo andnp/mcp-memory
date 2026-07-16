@@ -66,6 +66,7 @@ def test_postgres_action_faults_roll_back_every_authoritative_write(postgres_sto
             target_ids=[str(first.id)],
             expected_tokens={str(first.id): record_token(first)},
             apply=apply,
+            operation="rewrite_memory",
         )
 
     unchanged = repository.get_memory(str(first.id))
@@ -104,9 +105,13 @@ def test_postgres_action_replay_is_idempotent(postgres_storage_config) -> None:
         "target_ids": [str(first.id)],
         "expected_tokens": {str(first.id): record_token(first)},
         "apply": apply,
+        "operation": "rewrite_memory",
     }
     first_receipt = store.execute_action(**arguments)
     replayed_receipt = store.execute_action(**arguments)
+
+    with pytest.raises(CurationActionFatalError, match="operation is required"):
+        store.execute_action(**{key: value for key, value in arguments.items() if key != "operation"})
 
     assert replayed_receipt == first_receipt
     assert calls == 1
@@ -116,6 +121,54 @@ def test_postgres_action_replay_is_idempotent(postgres_storage_config) -> None:
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 row = cursor.fetchone()
                 assert row is not None and row[0] == 1
+    manager.close()
+
+
+def test_postgres_legacy_receipt_without_intent_hash_fails_closed(postgres_storage_config) -> None:
+    manager, repository, run, first, _second = _seed(postgres_storage_config)
+    action_id = uuid4()
+    calls = 0
+
+    def apply(transaction):
+        nonlocal calls
+        calls += 1
+        transaction.update_memory(str(first.id), content="once")
+        return MutationResult("rewrite_memory", [first.id])
+
+    store = PostgresCurationActionStore(manager)
+    arguments = {
+        "run_id": run.run_id,
+        "action_id": action_id,
+        "target_ids": [str(first.id)],
+        "expected_tokens": {str(first.id): record_token(first)},
+        "apply": apply,
+        "operation": "rewrite_memory",
+    }
+    receipt = store.execute_action(**arguments)
+    with manager.open_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE curation_action_receipts ALTER COLUMN intent_hash DROP NOT NULL"
+            )
+            cursor.execute(
+                "UPDATE curation_action_receipts SET intent_hash = NULL WHERE run_id = %s AND action_id = %s",
+                (str(run.run_id), str(action_id)),
+            )
+        connection.commit()
+
+    with pytest.raises(CurationActionFatalError, match="legacy-unverifiable"):
+        store.execute_action(**arguments)
+
+    assert calls == 1
+    with manager.open_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT intent_hash FROM curation_action_receipts WHERE run_id = %s AND action_id = %s",
+                (str(run.run_id), str(action_id)),
+            )
+            row = cursor.fetchone()
+            assert row is not None and row[0] is None
+    assert receipt.intent_hash is not None
     manager.close()
 
 
@@ -186,6 +239,7 @@ def test_postgres_action_stale_graph_token_writes_nothing(postgres_storage_confi
             target_ids=[str(first.id)],
             expected_tokens={"graph:" + str(first.id): old_graph_token},
             apply=apply,
+            operation="rewrite_memory",
         )
 
     assert not called
@@ -220,6 +274,7 @@ def test_postgres_action_reversed_concurrent_targets_have_no_deadlock(postgres_s
                 target_ids=target_ids,
                 expected_tokens=expected_tokens,
                 apply=apply,
+                operation="rewrite_memory",
             )
         finally:
             worker_manager.close()
@@ -293,6 +348,7 @@ def test_postgres_protection_writer_waits_for_action_commit(postgres_storage_con
                 target_ids=[str(first.id)],
                 expected_tokens={str(first.id): record_token(first)},
                 apply=apply,
+                operation="rewrite_memory",
             )
             assert action_callback_started.wait(timeout=10)
             protection_future = executor.submit(

@@ -92,6 +92,7 @@ def _receipt(run_id: UUID) -> CurationActionReceipt:
         affected_ids=[uuid4()],
         status=CurationReceiptState.APPLIED_UNVERIFIED,
         before_token="before",
+        intent_hash="intent-hash",
     )
 
 

@@ -32,10 +32,10 @@ def test_curation_metrics_use_persisted_receipts_and_history_not_provider_claims
     connection.execute(
         """
         INSERT INTO curation_action_receipts (
-            run_id, action_id, operation, status, error_code
-        ) VALUES (?, ?, ?, ?, ?)
+            run_id, action_id, operation, status, intent_hash, error_code
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (run_id, action_id, "normalize_memory", "verified", None),
+        (run_id, action_id, "normalize_memory", "verified", "intent-hash", None),
     )
     connection.execute(
         """

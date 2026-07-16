@@ -76,6 +76,7 @@ def test_sqlite_action_transaction_commits_all_authoritative_artifacts(db_manage
         target_ids=[str(second_id), str(first_id), str(first_id)],
         expected_tokens={str(first_id): record_token(first), str(second_id): record_token(second)},
         apply=apply,
+        operation="rewrite_memory",
     )
 
     assert receipt.status.value == "applied_unverified"
@@ -112,6 +113,7 @@ def test_stale_revision_token_writes_nothing_and_does_not_invoke_callback(db_man
             target_ids=[str(first_id)],
             expected_tokens={str(first_id): "v1:stale"},
             apply=apply,
+            operation="rewrite_memory",
         )
 
     assert not called
@@ -144,9 +146,13 @@ def test_replay_returns_original_receipt_without_reapplying_callback(db_manager:
         "target_ids": [str(first_id)],
         "expected_tokens": {str(first_id): record_token(record)},
         "apply": apply,
+        "operation": "rewrite_memory",
     }
     first_receipt = store.execute_action(**arguments)
     replayed_receipt = store.execute_action(**arguments)
+
+    with pytest.raises(CurationActionFatalError, match="operation is required"):
+        store.execute_action(**{key: value for key, value in arguments.items() if key != "operation"})
 
     assert replayed_receipt == first_receipt
     assert calls == 1
@@ -154,6 +160,79 @@ def test_replay_returns_original_receipt_without_reapplying_callback(db_manager:
     assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM embedding_repair_queue").fetchone()[0] == 1
+
+
+def test_sqlite_legacy_receipt_without_intent_hash_fails_closed(db_manager: DatabaseManager) -> None:
+    repository, run, first_id, _ = _seed(db_manager)
+    record = repository.get_memory(str(first_id))
+    assert record is not None
+    action_id = uuid4()
+    calls = 0
+
+    def apply(transaction):
+        nonlocal calls
+        calls += 1
+        transaction.update_memory(str(first_id), content="once")
+        return MutationResult("rewrite_memory", [first_id])
+
+    store = SQLiteCurationActionStore(db_manager)
+    arguments = {
+        "run_id": run.run_id,
+        "action_id": action_id,
+        "target_ids": [str(first_id)],
+        "expected_tokens": {str(first_id): record_token(record)},
+        "apply": apply,
+        "operation": "rewrite_memory",
+    }
+    receipt = store.execute_action(**arguments)
+    connection = db_manager.get_connection()
+    with connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            "ALTER TABLE curation_action_receipts RENAME TO curation_action_receipts_legacy"
+        )
+        connection.execute(
+            """
+            CREATE TABLE curation_action_receipts (
+                run_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                affected_ids_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL,
+                before_token TEXT,
+                after_token TEXT,
+                mutation_event_id TEXT,
+                intent_hash TEXT,
+                error_code TEXT,
+                applied_at TEXT,
+                verified_at TEXT,
+                PRIMARY KEY (run_id, action_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO curation_action_receipts
+            SELECT run_id, action_id, operation, affected_ids_json, status,
+                   before_token, after_token, mutation_event_id, intent_hash,
+                   error_code, applied_at, verified_at
+            FROM curation_action_receipts_legacy
+            """
+        )
+        connection.execute("DROP TABLE curation_action_receipts_legacy")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "UPDATE curation_action_receipts SET intent_hash = NULL WHERE run_id = ? AND action_id = ?",
+            (str(run.run_id), str(action_id)),
+        )
+
+    with pytest.raises(CurationActionFatalError, match="legacy-unverifiable"):
+        store.execute_action(**arguments)
+
+    assert calls == 1
+    stored = SQLiteCurationStore(db_manager).get_receipt(run.run_id, action_id)
+    assert stored is not None and stored.intent_hash is None
+    assert receipt.intent_hash is not None
 
 
 def test_action_identity_collision_rejects_operation_targets_preconditions_and_payload(
@@ -244,6 +323,7 @@ def test_committed_action_invalidates_affected_derivative_caches(
         target_ids=[str(first_id)],
         expected_tokens={str(first_id): record_token(first)},
         apply=apply,
+        operation="normalize_memory",
     )
 
     assert cache.load_read_response(str(first_id)) is None
@@ -275,6 +355,7 @@ def test_fault_at_each_stage_rolls_back_every_action_write(
             target_ids=[str(first_id)],
             expected_tokens={str(first_id): record_token(before)},
             apply=apply,
+            operation="rewrite_memory",
         )
 
     unchanged = repository.get_memory(str(first_id))

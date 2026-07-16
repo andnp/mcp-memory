@@ -129,6 +129,8 @@ class PostgresCurationStore:
                 return stored if updated == 1 or stored.state is CurationRunState.TERMINAL else None
 
     def put_receipt(self, receipt: CurationActionReceipt) -> CurationActionReceipt:
+        if receipt.intent_hash is None:
+            raise ValueError("curation action receipt intent_hash is required")
         normalized = receipt.model_copy(
             update={
                 "applied_at": receipt.applied_at
@@ -184,6 +186,8 @@ class PostgresCurationStore:
         expected_state: CurationReceiptState,
         receipt: CurationActionReceipt,
     ) -> CurationActionReceipt | None:
+        if receipt.intent_hash is None:
+            raise ValueError("curation action receipt intent_hash is required")
         with self._transaction() as connection:
             with connection.cursor() as cursor:
                 row = _fetchone_on_cursor(

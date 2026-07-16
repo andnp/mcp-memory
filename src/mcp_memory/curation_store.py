@@ -335,6 +335,8 @@ class SQLiteCurationStore:
         return None
 
     def put_receipt(self, receipt: CurationActionReceipt) -> CurationActionReceipt:
+        if receipt.intent_hash is None:
+            raise ValueError("curation action receipt intent_hash is required")
         normalized = receipt.model_copy(
             update={
                 "applied_at": receipt.applied_at or (_now() if receipt.status is CurationReceiptState.APPLIED_UNVERIFIED else None),
@@ -394,6 +396,8 @@ class SQLiteCurationStore:
         expected_state: CurationReceiptState,
         receipt: CurationActionReceipt,
     ) -> CurationActionReceipt | None:
+        if receipt.intent_hash is None:
+            raise ValueError("curation action receipt intent_hash is required")
         existing = self.get_receipt(run_id, action_id)
         if existing is None:
             return None
