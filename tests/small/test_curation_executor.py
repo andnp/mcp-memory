@@ -141,6 +141,30 @@ def test_normalize_rejects_generic_summary_without_writes(db_manager: DatabaseMa
     assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
 
 
+def test_normalize_rejects_empty_action_without_timestamp_history_or_receipt(db_manager: DatabaseManager) -> None:
+    repository, run, memory_id = _seed(db_manager)
+    before = repository.get_memory(str(memory_id))
+    assert before is not None
+    action = NormalizeMemoryAction.model_construct(
+        action_id=uuid4(),
+        target_id=memory_id,
+        confidence=1,
+        rationale="empty",
+        preconditions=ActionPreconditions(record_tokens={memory_id: record_token(before)}),
+    )
+
+    with pytest.raises(CurationPolicyRejection, match="empty_normalize"):
+        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
+            action, run_id=run.run_id, memory_type=before.type
+        )
+
+    assert repository.get_memory(str(memory_id)) == before
+    connection = db_manager.get_connection()
+    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM memory_record_revisions").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 0
+
+
 def test_normalize_rejects_protection_before_transaction(db_manager: DatabaseManager) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))
@@ -239,7 +263,7 @@ def test_normalize_executor_is_backend_neutral_and_never_passes_content() -> Non
 def test_normalize_requires_expected_record_token(db_manager: DatabaseManager) -> None:
     _repository, run, memory_id = _seed(db_manager)
     action = NormalizeMemoryAction(
-        action_id=uuid4(), target_id=memory_id, confidence=1, rationale="missing precondition"
+        action_id=uuid4(), target_id=memory_id, confidence=1, rationale="missing precondition", title="title"
     )
 
     with pytest.raises(CurationActionFatalError, match="expected record token"):

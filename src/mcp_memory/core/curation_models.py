@@ -101,6 +101,12 @@ class NormalizeMemoryAction(ActionEnvelope):
     summary: str | None = None
     tags: list[str] | None = None
 
+    @model_validator(mode="after")
+    def requires_metadata_change(self) -> NormalizeMemoryAction:
+        if self.title is None and self.summary is None and self.tags is None:
+            raise ValueError("normalize_memory requires at least one metadata field")
+        return self
+
 
 class RewriteMemoryAction(ActionEnvelope):
     operation: Literal["rewrite_memory"] = "rewrite_memory"

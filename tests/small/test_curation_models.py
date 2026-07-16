@@ -12,6 +12,7 @@ from mcp_memory.core.curation_models import (
     CurationRunResult,
     ClaimManifest,
     MutationReceipt,
+    NormalizeMemoryAction,
     ReceiptStatus,
     RetentionDecision,
     RetentionReason,
@@ -61,3 +62,13 @@ def test_archive_action_is_typed_and_has_no_delete_sibling() -> None:
         claim_manifest=ClaimManifest(preserved_claims=["claim"]),
     )
     assert action.operation == "archive_memory"
+
+
+def test_normalize_requires_at_least_one_metadata_field() -> None:
+    with pytest.raises(ValidationError, match="at least one metadata field"):
+        NormalizeMemoryAction(action_id=uuid4(), target_id=uuid4(), confidence=1, rationale="empty")
+
+    action = NormalizeMemoryAction(
+        action_id=uuid4(), target_id=uuid4(), confidence=1, rationale="clear tags", tags=[]
+    )
+    assert action.tags == []

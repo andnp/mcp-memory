@@ -26,6 +26,15 @@ def test_initial_policy_enables_only_low_risk_operations() -> None:
     assert decision.authorized
 
 
+def test_policy_rejects_empty_normalize_even_if_model_validation_is_bypassed() -> None:
+    action = NormalizeMemoryAction.model_construct(
+        action_id=uuid4(), target_id=uuid4(), confidence=1, rationale="empty"
+    )
+    decision = evaluate_curation_action(action, memory_types={action.target_id: "observation"})
+    assert RejectionCode.EMPTY_NORMALIZE in decision.rejection_codes
+    assert not decision.authorized
+
+
 def test_risky_action_requires_evidence_and_complete_manifest() -> None:
     action = MergeMemoriesAction(
         action_id=uuid4(), canonical_id=uuid4(), source_ids=[uuid4()], confidence=1, rationale="same subject",

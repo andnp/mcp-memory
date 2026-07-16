@@ -49,6 +49,7 @@ class RejectionCode(StrEnum):
     MANUAL_REVIEW_REQUIRED = "manual_review_required"
     PINNED_ACTIVE = "pinned_active"
     GENERIC_SUMMARY = "generic_summary"
+    EMPTY_NORMALIZE = "empty_normalize"
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,8 @@ def evaluate_curation_action(
             codes.append(RejectionCode.LINK_TYPE_NOT_CANONICAL)
     if isinstance(action, NormalizeMemoryAction) and action.summary is not None and is_generic_summary(action.summary):
         codes.append(RejectionCode.GENERIC_SUMMARY)
+    if isinstance(action, NormalizeMemoryAction) and action.title is None and action.summary is None and action.tags is None:
+        codes.append(RejectionCode.EMPTY_NORMALIZE)
 
     types = memory_types or {}
     affected_ids = _affected_ids(action)
