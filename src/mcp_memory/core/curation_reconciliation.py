@@ -232,6 +232,10 @@ def _default_action_resolver(_run: CurationRun, receipt: CurationActionReceipt) 
         target_id=receipt.affected_ids[0],
         confidence=1.0,
         rationale="daemon recovery postcondition verification",
+        # Recovery only needs the typed operation and target; the verifier does
+        # not consult the proposed metadata. Keep the action valid without
+        # implying a real metadata change.
+        tags=[],
     )
 
 
