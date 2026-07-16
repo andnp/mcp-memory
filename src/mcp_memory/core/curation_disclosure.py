@@ -27,7 +27,13 @@ class ProviderTrust:
     """The caller-supplied trust facts for one provider route."""
 
     trust_class: ProviderTrustClass
-    allowlisted: bool = True
+    allowlisted: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.allowlisted is None:
+            object.__setattr__(self, "allowlisted", self.trust_class is ProviderTrustClass.LOCAL)
+        elif not isinstance(self.allowlisted, bool):
+            raise TypeError("provider allowlist status must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -91,7 +97,7 @@ def decide_record_disclosure(
         return _denied(memory_id, "external provider disclosure is prohibited")
     if external and ProtectionMode.LOCAL_PROVIDER_ONLY in protections:
         return _denied(memory_id, "local provider execution is required", local=True)
-    if not provider.allowlisted:
+    if external and not provider.allowlisted:
         return _denied(memory_id, "provider is not operator-allowlisted", review=True)
 
     selected = tuple(record.items() if fields is None else ((name, record[name]) for name in fields if name in record))

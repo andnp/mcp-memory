@@ -205,6 +205,8 @@ def _build_provider_registry(
                 daily_call_limit=budget_limit,
                 model_burst_call_limit=config.provider_routing.model_burst_call_limit,
                 model_burst_window_seconds=config.provider_routing.model_burst_window_seconds,
+                provider_trust_class=ai_config.provider_trust_class,
+                provider_allowlisted=ai_config.provider_allowlisted,
             )
         agentic_provider = build_agentic_ai_provider(ai_config, workspace_root)
         if agentic_provider is not None and _provider_command_available(agentic_provider):
@@ -221,6 +223,8 @@ def _build_provider_registry(
                 daily_call_limit=budget_limit,
                 model_burst_call_limit=config.provider_routing.model_burst_call_limit,
                 model_burst_window_seconds=config.provider_routing.model_burst_window_seconds,
+                provider_trust_class=ai_config.provider_trust_class,
+                provider_allowlisted=ai_config.provider_allowlisted,
             )
         if bundle:
             registry[profile_key] = bundle

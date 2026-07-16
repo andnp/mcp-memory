@@ -17,6 +17,7 @@ from uuid import UUID
 from mcp_memory.core.curation_disclosure import (
     DisclosureDecision,
     ProviderTrust,
+    ProviderTrustClass,
     decide_record_disclosure,
 )
 from mcp_memory.core.curation_identity import (
@@ -26,6 +27,11 @@ from mcp_memory.core.curation_identity import (
     record_token,
 )
 from mcp_memory.mutation_history import ProtectionMode
+
+
+_MAX_PROVIDER_RELATIONSHIPS = 32
+_MAX_RELATIONSHIP_TYPE_CHARACTERS = 128
+_MAX_RELATIONSHIP_CONTEXT_CHARACTERS = 512
 
 
 class BudgetDimension(StrEnum):
@@ -281,6 +287,13 @@ def build_context_packet(
             )
             disclosures.append(_disclosure_payload(role, result))
             if result.decision is DisclosureDecision.DENY:
+                _, relationship_disclosures = _filter_provider_edges(
+                    read.edges,
+                    provider=provider,
+                    protections_by_memory=protections_by_memory,
+                    sensitive_fields_by_memory=sensitive_fields_by_memory,
+                )
+                disclosures.extend(relationship_disclosures)
                 omissions.append(
                     _freeze(
                         {
@@ -310,7 +323,16 @@ def build_context_packet(
                 0,
                 limits.max_seed_records if role == "seed" else limits.max_support_records,
             )
-            provider_record = _provider_record(raw_record, result, role, read.edges)
+            provider_record, relationship_disclosures = _provider_record(
+                raw_record,
+                result,
+                role,
+                read.edges,
+                provider=provider,
+                protections_by_memory=protections_by_memory,
+                sensitive_fields_by_memory=sensitive_fields_by_memory,
+            )
+            disclosures.extend(relationship_disclosures)
             chars = len(_json_text(provider_record))
             _check_limit(
                 BudgetDimension.CONTEXT_CHARACTERS,
@@ -382,6 +404,7 @@ def disclosure_audit_manifest(
             {
                 "memory_id": str(disclosure.get("memory_id", "")),
                 "role": str(disclosure.get("role", "")),
+                "kind": str(disclosure.get("kind", "record")),
                 "decision": str(disclosure.get("decision", "")),
                 "reason": str(disclosure.get("reason", "")),
                 "fields": [
@@ -393,6 +416,15 @@ def disclosure_audit_manifest(
                     for field in fields
                     if isinstance(field, Mapping)
                 ],
+                **(
+                    {
+                        "source_id": str(disclosure.get("source_id", "")),
+                        "target_id": str(disclosure.get("target_id", "")),
+                        "type": str(disclosure.get("type", "")),
+                    }
+                    if disclosure.get("kind") == "relationship"
+                    else {}
+                ),
             }
         )
     return {
@@ -454,8 +486,15 @@ def _support_fields(record: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _provider_record(
-    record: Mapping[str, Any], result: Any, role: str, edges: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
+    record: Mapping[str, Any],
+    result: Any,
+    role: str,
+    edges: Sequence[Mapping[str, Any]],
+    *,
+    provider: ProviderTrust,
+    protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None,
+    sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None,
+) -> tuple[dict[str, Any], list[Mapping[str, Any]]]:
     payload: dict[str, Any] = {"memory_id": _memory_id(record)}
     payload.update(result.disclosed_fields)
     if role == "support":
@@ -464,10 +503,15 @@ def _provider_record(
             "title": payload.get("title"),
             "summary": payload.get("summary"),
         }
-    normalized_edges = _provider_edges(edges)
+    normalized_edges, relationship_disclosures = _filter_provider_edges(
+        edges,
+        provider=provider,
+        protections_by_memory=protections_by_memory,
+        sensitive_fields_by_memory=sensitive_fields_by_memory,
+    )
     if normalized_edges:
         payload["relationships"] = normalized_edges
-    return payload
+    return payload, relationship_disclosures
 
 
 def _provider_edges(edges: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -489,6 +533,193 @@ def _provider_edges(edges: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _filter_provider_edges(
+    edges: Sequence[Mapping[str, Any]],
+    *,
+    provider: ProviderTrust,
+    protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None,
+    sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None,
+) -> tuple[list[dict[str, Any]], list[Mapping[str, Any]]]:
+    """Filter relationship metadata without trusting an unverified endpoint."""
+
+    normalized: list[dict[str, Any]] = []
+    disclosures: list[Mapping[str, Any]] = []
+    for edge in edges[:_MAX_PROVIDER_RELATIONSHIPS]:
+        link = _relationship_link(edge)
+        source_id = _relationship_endpoint(link.get("source_id"))
+        target_id = _relationship_endpoint(link.get("target_id"))
+        raw_type = link.get("type", link.get("link_type"))
+        link_type = raw_type.strip() if isinstance(raw_type, str) else None
+        type_was_bounded = link_type is not None and len(link_type) > _MAX_RELATIONSHIP_TYPE_CHARACTERS
+        if type_was_bounded:
+            assert link_type is not None
+            link_type = link_type[:_MAX_RELATIONSHIP_TYPE_CHARACTERS]
+        raw_context = link.get("context")
+        context = raw_context if isinstance(raw_context, str) else None
+        if source_id is None or target_id is None or link_type is None or not link_type:
+            disclosures.append(_relationship_disclosure_payload("deny", "relationship identity or type is invalid"))
+            continue
+
+        endpoint_results = []
+        for endpoint_id in (source_id, target_id):
+            if provider.trust_class is ProviderTrustClass.LOCAL:
+                endpoint_protections = frozenset()
+                endpoint_sensitive_fields = frozenset()
+                authoritative = True
+            elif not _has_mapping_entry(protections_by_memory, endpoint_id) or not _has_mapping_entry(
+                sensitive_fields_by_memory, endpoint_id
+            ):
+                endpoint_results = []
+                break
+            else:
+                endpoint_protections = _lookup(protections_by_memory, endpoint_id)
+                endpoint_sensitive_fields = _lookup(sensitive_fields_by_memory, endpoint_id)
+                authoritative = True
+            endpoint_results.append(
+                decide_record_disclosure(
+                    {
+                        "memory_id": _as_uuid(endpoint_id),
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "type": link_type,
+                        "context": context,
+                    },
+                    provider=provider,
+                    protections=endpoint_protections,
+                    sensitive_fields=endpoint_sensitive_fields,
+                    fields=("source_id", "target_id", "type", "context"),
+                    max_characters=_MAX_RELATIONSHIP_CONTEXT_CHARACTERS,
+                    authoritative_context_available=authoritative,
+                )
+            )
+
+        if len(endpoint_results) != 2:
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "deny",
+                    "relationship endpoint policy is unavailable",
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                )
+            )
+            continue
+        if any(item.decision is DisclosureDecision.DENY for item in endpoint_results):
+            reason = next(item.reason for item in endpoint_results if item.decision is DisclosureDecision.DENY)
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "deny",
+                    reason,
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                )
+            )
+            continue
+
+        disclosed = endpoint_results[0].disclosed_fields
+        if disclosed.get("source_id") != source_id or disclosed.get("target_id") != target_id:
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "deny",
+                    "relationship endpoint identity was redacted",
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                )
+            )
+            continue
+        if any(item.decision is DisclosureDecision.REDACT for item in endpoint_results):
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "redact",
+                    "bounded or sensitive relationship fields were redacted",
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                    fields=endpoint_results[0].fields,
+                )
+            )
+        elif not type_was_bounded:
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "allow",
+                    "relationship endpoints are eligible",
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                    fields=endpoint_results[0].fields,
+                )
+            )
+        else:
+            disclosures.append(
+                _relationship_disclosure_payload(
+                    "redact",
+                    "relationship type character bound",
+                    source_id=source_id,
+                    target_id=target_id,
+                    relationship_type=link_type,
+                    fields=endpoint_results[0].fields,
+                )
+            )
+        normalized.append(
+            {
+                "source_id": disclosed.get("source_id", source_id),
+                "target_id": disclosed.get("target_id", target_id),
+                "type": disclosed.get("type", link_type),
+                "context": disclosed.get("context"),
+            }
+        )
+
+    if len(edges) > _MAX_PROVIDER_RELATIONSHIPS:
+        disclosures.append(_relationship_disclosure_payload("deny", "relationship limit exceeded"))
+    return normalized, disclosures
+
+
+def _relationship_link(edge: Mapping[str, Any]) -> Mapping[str, Any]:
+    nested_link = edge.get("link")
+    return nested_link if isinstance(nested_link, Mapping) else edge
+
+
+def _relationship_endpoint(value: Any) -> str | None:
+    if not isinstance(value, (str, UUID)):
+        return None
+    try:
+        return str(UUID(str(value)))
+    except ValueError:
+        return None
+
+
+def _relationship_disclosure_payload(
+    decision: str,
+    reason: str,
+    *,
+    source_id: str | None = None,
+    target_id: str | None = None,
+    relationship_type: str | None = None,
+    fields: Sequence[Any] = (),
+) -> Mapping[str, Any]:
+    return _freeze(
+        {
+            "kind": "relationship",
+            "role": "relationship",
+            "source_id": source_id or "",
+            "target_id": target_id or "",
+            "type": relationship_type or "",
+            "decision": decision,
+            "reason": reason,
+            "fields": [
+                {
+                    "field": str(item.field),
+                    "decision": item.decision.value,
+                    "reason": item.reason,
+                }
+                for item in fields
+            ],
+        }
+    )
 
 
 def _edges_from_mapping(value: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -531,6 +762,7 @@ def _has_mapping_entry(mapping: Mapping[UUID | str, Any] | None, memory_id: str)
 def _disclosure_payload(role: str, result: Any) -> Mapping[str, Any]:
     return _freeze(
         {
+            "kind": "record",
             "memory_id": str(result.memory_id),
             "role": role,
             "decision": result.decision.value,

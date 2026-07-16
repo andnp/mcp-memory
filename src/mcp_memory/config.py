@@ -80,6 +80,8 @@ class AIConfig:
     model: str = "gpt-5.4-mini"
     timeout_seconds: float = 900.0
     max_retries: int = 0
+    provider_trust_class: str | None = None
+    provider_allowlisted: bool | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in {"none", "copilot-sdk"}:
@@ -88,6 +90,16 @@ class AIConfig:
             raise ValueError("ai.timeout_seconds must be > 0")
         if self.max_retries < 0:
             raise ValueError("ai.max_retries must be >= 0")
+        if self.provider_trust_class is not None and self.provider_trust_class not in {
+            "local",
+            "trusted_external",
+            "external",
+        }:
+            raise ValueError(
+                "ai.provider_trust_class must be one of 'local', 'trusted_external', or 'external'"
+            )
+        if self.provider_allowlisted is not None and not isinstance(self.provider_allowlisted, bool):
+            raise ValueError("ai.provider_allowlisted must be a boolean")
 
 
 @dataclass

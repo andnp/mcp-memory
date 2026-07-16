@@ -72,10 +72,15 @@ class InstrumentedAIProvider:
         self._provider_trust_class = provider_trust_class or str(
             getattr(provider, "provider_trust_class", "external")
         )
-        self._provider_allowlisted = (
-            bool(getattr(provider, "provider_allowlisted", True))
+        configured_allowlist = (
+            getattr(provider, "provider_allowlisted", None)
             if provider_allowlisted is None
             else provider_allowlisted
+        )
+        self._provider_allowlisted = (
+            self._provider_trust_class == "local"
+            if configured_allowlist is None
+            else bool(configured_allowlist)
         )
 
     def with_usage_context(

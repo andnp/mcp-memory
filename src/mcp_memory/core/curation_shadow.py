@@ -480,12 +480,20 @@ def _disclosure_context(
         # missing provider metadata visible as a disclosure denial.
         return ProviderTrust(ProviderTrustClass.EXTERNAL, allowlisted=False), None, None, True
 
-    allowlisted = bool(
-        getattr(
-            provider,
-            "provider_allowlisted",
-            getattr(provider, "_provider_allowlisted", getattr(underlying, "provider_allowlisted", True)),
-        )
+    raw_allowlisted = next(
+        (
+            getattr(provider, name, None)
+            for name in ("provider_allowlisted", "_provider_allowlisted")
+            if getattr(provider, name, None) is not None
+        ),
+        None,
+    )
+    if raw_allowlisted is None and underlying is not None:
+        raw_allowlisted = getattr(underlying, "provider_allowlisted", None)
+    allowlisted = (
+        trust_class is ProviderTrustClass.LOCAL
+        if raw_allowlisted is None
+        else bool(raw_allowlisted)
     )
     provider_trust = ProviderTrust(trust_class, allowlisted=allowlisted)
     if trust_class is ProviderTrustClass.LOCAL:
