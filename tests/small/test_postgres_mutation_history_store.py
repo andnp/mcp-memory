@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 
+from mcp_memory.mutation_history import Protection, ProtectionMode
 from mcp_memory.storage.postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from tests.small.mutation_history_repository_contract import assert_mutation_history_repository_contract
@@ -29,6 +31,7 @@ class FakePostgresCursor:
         return self._cursor.rowcount
 
     def execute(self, query: str, params: tuple[object, ...] | None = None) -> None:
+        self._connection.statements.append(query)
         self._cursor.execute(_sqlite_query(query), tuple(() if params is None else params))
 
     def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
@@ -44,6 +47,7 @@ class FakePostgresCursor:
 class FakePostgresConnection:
     def __init__(self) -> None:
         self._database = sqlite3.connect(":memory:")
+        self.statements: list[str] = []
         self._database.execute("PRAGMA foreign_keys = ON")
         self._database.executescript(
             """
@@ -55,6 +59,7 @@ class FakePostgresConnection:
                 status TEXT NOT NULL, restores_event_id TEXT REFERENCES memory_mutation_events(id),
                 idempotency_key TEXT, created_at TEXT NOT NULL, terminalized_at TEXT
             );
+            CREATE TABLE memories (id TEXT PRIMARY KEY);
             CREATE UNIQUE INDEX uq_events_action ON memory_mutation_events(curation_run_id, action_id);
             CREATE UNIQUE INDEX uq_events_idempotency ON memory_mutation_events(idempotency_key);
             CREATE TABLE memory_record_revisions (
@@ -118,7 +123,12 @@ class FakePostgresSessionManager:
 
 
 def _sqlite_query(query: str) -> str:
-    return query.replace("'{}'::jsonb", "'{}'").replace("%s::jsonb", "?").replace("%s", "?")
+    return (
+        query.replace(" FOR UPDATE", "")
+        .replace("'{}'::jsonb", "'{}'")
+        .replace("%s::jsonb", "?")
+        .replace("%s", "?")
+    )
 
 
 def test_postgres_mutation_history_repository_contract() -> None:
@@ -126,6 +136,36 @@ def test_postgres_mutation_history_repository_contract() -> None:
     assert_mutation_history_repository_contract(
         lambda: PostgresMutationHistoryStore(cast(Any, session_manager))
     )
+
+
+def test_postgres_protection_writers_lock_existing_targets_and_preserve_missing_target_contract() -> None:
+    session_manager = FakePostgresSessionManager()
+    repository = PostgresMutationHistoryStore(cast(Any, session_manager))
+    existing_id = "00000000-0000-0000-0000-000000000010"
+    missing_id = "00000000-0000-0000-0000-000000000011"
+    session_manager.connection._database.execute("INSERT INTO memories (id) VALUES (?)", (existing_id,))
+    session_manager.connection.commit()
+
+    repository.set_protection(
+        Protection(
+            memory_id=UUID(existing_id),
+            mode=ProtectionMode.PINNED_ACTIVE,
+            reason="lock test",
+        )
+    )
+    repository.remove_protection(UUID(existing_id), ProtectionMode.PINNED_ACTIVE)
+    repository.set_protection(
+        Protection(
+            memory_id=UUID(missing_id),
+            mode=ProtectionMode.PINNED_ACTIVE,
+            reason="retention test",
+        )
+    )
+    repository.remove_protection(UUID(missing_id), ProtectionMode.PINNED_ACTIVE)
+
+    lock_statements = [statement for statement in session_manager.connection.statements if "FOR UPDATE" in statement]
+    assert len(lock_statements) == 4
+    assert all("SELECT id FROM memories WHERE id = %s FOR UPDATE" in statement for statement in lock_statements)
 
 
 def test_postgres_mutation_history_migration_remains_additive() -> None:

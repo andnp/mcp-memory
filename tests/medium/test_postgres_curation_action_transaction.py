@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -14,11 +15,14 @@ from mcp_memory.curation_action_store import (
     MutationResult,
 )
 from mcp_memory.curation_store import CurationRun, CurationRunState
+from mcp_memory.mutation_history import Protection, ProtectionMode
 from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
 from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
 from mcp_memory.storage.postgres import ensure_postgres_schema
+from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
+from mcp_memory.storage.session import CursorLike
 
 
 pytestmark = pytest.mark.medium
@@ -242,3 +246,70 @@ def test_postgres_action_reversed_concurrent_targets_have_no_deadlock(postgres_s
                 assert row is not None and row[0] == 1
     finally:
         manager.close()
+
+
+def test_postgres_protection_writer_waits_for_action_commit(postgres_storage_config) -> None:
+    manager, repository, run, first, _second = _seed(postgres_storage_config)
+    manager.close()
+    action_manager = PostgresConnectionManager(postgres_storage_config)
+    protection_manager = PostgresConnectionManager(postgres_storage_config)
+    action_callback_started = threading.Event()
+    protection_lock_attempted = threading.Event()
+    order: list[str] = []
+    order_lock = threading.Lock()
+
+    def record_order(value: str) -> None:
+        with order_lock:
+            order.append(value)
+
+    class SignalingActionStore(PostgresCurationActionStore):
+        def _invalidate_derivative_caches(self, memory_ids: Sequence[str]) -> None:
+            record_order("action_commit")
+
+    class SignalingProtectionStore(PostgresMutationHistoryStore):
+        def _lock_targets(self, cursor: CursorLike, target_ids: Sequence[str]) -> None:
+            protection_lock_attempted.set()
+            super()._lock_targets(cursor, target_ids)
+
+        def set_protection(self, protection: Protection) -> Protection:
+            stored = super().set_protection(protection)
+            record_order("protection_commit")
+            return stored
+
+    def apply(transaction):
+        action_callback_started.set()
+        assert protection_lock_attempted.wait(timeout=10)
+        transaction.update_memory(str(first.id), content="action committed")
+        return MutationResult("rewrite_memory", [first.id])
+
+    try:
+        action_store = SignalingActionStore(action_manager)
+        protection_store = SignalingProtectionStore(protection_manager)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            action_future = executor.submit(
+                action_store.execute_action,
+                run_id=run.run_id,
+                action_id=uuid4(),
+                target_ids=[str(first.id)],
+                expected_tokens={str(first.id): record_token(first)},
+                apply=apply,
+            )
+            assert action_callback_started.wait(timeout=10)
+            protection_future = executor.submit(
+                protection_store.set_protection,
+                Protection(
+                    memory_id=UUID(str(first.id)),
+                    mode=ProtectionMode.NO_AUTONOMOUS_MUTATION,
+                    reason="concurrency test",
+                ),
+            )
+            action_future.result(timeout=20)
+            protection_future.result(timeout=20)
+
+        assert order == ["action_commit", "protection_commit"]
+        changed = repository.get_memory(str(first.id))
+        assert changed is not None and changed.content == "action committed"
+        assert len(protection_store.get_protections(UUID(str(first.id)))) == 1
+    finally:
+        action_manager.close()
+        protection_manager.close()

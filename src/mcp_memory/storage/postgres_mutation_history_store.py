@@ -29,7 +29,7 @@ from mcp_memory.mutation_history_store import (
     _event_identity_matches,
     _restore_request_identity_matches,
 )
-from mcp_memory.storage.session import DbConnectionLike, SessionManager
+from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
 
 class PostgresMutationHistoryStore:
@@ -254,6 +254,7 @@ class PostgresMutationHistoryStore:
         normalized = protection.model_copy(update={"created_at": protection.created_at or _now()})
         with self._open_connection() as connection:
             with connection.cursor() as cursor:
+                self._lock_targets(cursor, [str(normalized.memory_id)])
                 cursor.execute(
                     """
                     INSERT INTO memory_protections (memory_id, mode, reason, actor_id, created_at, expires_at)
@@ -279,11 +280,24 @@ class PostgresMutationHistoryStore:
     def remove_protection(self, memory_id: UUID, mode: ProtectionMode) -> None:
         with self._open_connection() as connection:
             with connection.cursor() as cursor:
+                self._lock_targets(cursor, [str(memory_id)])
                 cursor.execute(
                     "DELETE FROM memory_protections WHERE memory_id = %s AND mode = %s",
                     (str(memory_id), str(mode)),
                 )
             connection.commit()
+
+    def _lock_targets(self, cursor: CursorLike, target_ids: Sequence[str]) -> None:
+        """Lock existing targets in the action store's canonical order.
+
+        Protection rows intentionally outlive deleted memories, so a missing
+        target has no row to lock and remains a valid protection write. The
+        attempted lock still uses the same transaction and ordering as an
+        action for every existing target.
+        """
+        for memory_id in sorted(target_ids, key=lambda value: value.encode("utf-8")):
+            cursor.execute("SELECT id FROM memories WHERE id = %s FOR UPDATE", (memory_id,))
+            cursor.fetchone()
 
     def terminalize_event(
         self,
