@@ -37,6 +37,24 @@ def test_record_token_sorts_semantic_sets_and_excludes_access_telemetry() -> Non
     assert record_token(record) != record_token({**record, "content": "Changed"})
 
 
+def test_record_token_includes_durable_metadata_from_metadata() -> None:
+    record = {
+        "id": MEMORY_ID,
+        "title": "Title",
+        "content": "Content",
+        "summary": None,
+        "type": "observation",
+        "status": "active",
+        "metadata": {"lineage": {"parent_id": "parent"}, "mutation_metadata": {"reason": "initial"}},
+    }
+    assert record_token(record) != record_token(
+        {**record, "metadata": {**record["metadata"], "lineage": {"parent_id": "other"}}}
+    )
+    assert record_token(record) != record_token(
+        {**record, "metadata": {**record["metadata"], "mutation_metadata": {"reason": "changed"}}}
+    )
+
+
 def test_graph_token_deduplicates_and_sorts_edges() -> None:
     edges = [
         {"source_id": OTHER_ID, "target_id": MEMORY_ID, "type": " relates ", "context": "c"},

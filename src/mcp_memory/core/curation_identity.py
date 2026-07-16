@@ -77,6 +77,15 @@ def _mapping_value(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
+def _durable_metadata_value(record: Any, name: str, override: Mapping[str, Any] | None) -> Any:
+    if override is not None:
+        return override
+    metadata = _mapping_value(record, "metadata", {})
+    if isinstance(metadata, Mapping):
+        return metadata.get(name, {}) or {}
+    return {}
+
+
 def record_snapshot(
     record: Mapping[str, Any] | Any,
     *,
@@ -98,10 +107,8 @@ def record_snapshot(
             "status": _identifier(_mapping_value(record, "status")),
             "tags": _set_values(tags),
             "workspace_ids": _set_values(workspaces),
-            "lineage": _normalize(lineage if lineage is not None else (_mapping_value(record, "lineage", {}) or {})),
-            "mutation_metadata": _normalize(
-                mutation_metadata if mutation_metadata is not None else (_mapping_value(record, "mutation_metadata", {}) or {})
-            ),
+            "lineage": _normalize(_durable_metadata_value(record, "lineage", lineage)),
+            "mutation_metadata": _normalize(_durable_metadata_value(record, "mutation_metadata", mutation_metadata)),
         },
     }
     return snapshot

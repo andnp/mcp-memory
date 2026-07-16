@@ -112,6 +112,41 @@ def test_normalize_restore_preserves_telemetry_creates_event_and_replays(
     assert len(history.list_events()) == 2
 
 
+def test_normalize_restore_preserves_lineage_and_mutation_metadata(db_manager: DatabaseManager) -> None:
+    repository, run, memory_id = _seed(db_manager)
+    durable_metadata: dict[str, object] = {
+        "lineage": {"parent_id": "parent", "split_index": 1},
+        "mutation_metadata": {"source": "import", "revision": 3},
+    }
+    repository.update_memory(str(memory_id), metadata=durable_metadata)
+    before = repository.get_memory(str(memory_id))
+    assert before is not None
+    original = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
+        _normalize(memory_id, record_token(before)),
+        run_id=run.run_id,
+        memory_type=before.type,
+    )
+    changed = repository.get_memory(str(memory_id))
+    assert changed is not None
+    result = RestoreExecutor(
+        SQLiteCurationActionStore(db_manager),
+        SQLiteMutationHistoryStore(db_manager),
+        curation_store=SQLiteCurationStore(db_manager),
+    ).execute(
+        RestoreRequest(
+            target_event_id=original.mutation_event_id,  # type: ignore[arg-type]
+            expected_record_tokens={memory_id: record_token(changed)},
+            reason="restore durable metadata",
+            idempotency_key="restore-normalize-metadata-1",
+        )
+    )
+
+    assert result.status is RestoreResultStatus.APPLIED
+    restored = repository.get_memory(str(memory_id))
+    assert restored is not None
+    assert restored.metadata == durable_metadata
+
+
 def test_restore_of_later_edited_normalization_is_a_typed_conflict(db_manager: DatabaseManager) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))

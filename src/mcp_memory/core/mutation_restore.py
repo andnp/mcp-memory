@@ -320,6 +320,9 @@ class RestoreExecutor:
                 lineage = record.get("lineage")
                 if isinstance(lineage, Mapping):
                     metadata["lineage"] = dict(lineage)
+                mutation_metadata = record.get("mutation_metadata")
+                if isinstance(mutation_metadata, Mapping):
+                    metadata["mutation_metadata"] = dict(mutation_metadata)
                 transaction.update_memory(
                     str(change.memory_id),
                     title=record["title"],
