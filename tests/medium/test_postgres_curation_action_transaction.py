@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -250,6 +251,59 @@ def test_postgres_action_stale_graph_token_writes_nothing(postgres_storage_confi
             cursor.execute("SELECT COUNT(*) FROM curation_action_receipts")
             row = cursor.fetchone()
             assert row is not None and row[0] == 0
+    manager.close()
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_postgres_action_store_uses_active_protections_only(postgres_storage_config, active: bool) -> None:
+    manager, repository, run, first, _second = _seed(postgres_storage_config)
+    PostgresMutationHistoryStore(manager).set_protection(
+        Protection(
+            memory_id=UUID(str(first.id)),
+            mode=ProtectionMode.NO_AUTONOMOUS_MUTATION,
+            reason="protection expiry test",
+            expires_at=datetime.now(UTC) + (timedelta(days=1) if active else -timedelta(days=1)),
+        )
+    )
+    called = False
+
+    def apply(transaction):
+        nonlocal called
+        called = True
+        transaction.update_memory(str(first.id), content="changed")
+        return MutationResult("rewrite_memory", [first.id])
+
+    store = PostgresCurationActionStore(manager)
+    if active:
+        with pytest.raises(CurationActionFatalError, match="autonomous mutation is protected"):
+            store.execute_action(
+                run_id=run.run_id,
+                action_id=uuid4(),
+                target_ids=[str(first.id)],
+                expected_tokens={str(first.id): record_token(first)},
+                apply=apply,
+                operation="rewrite_memory",
+            )
+    else:
+        store.execute_action(
+            run_id=run.run_id,
+            action_id=uuid4(),
+            target_ids=[str(first.id)],
+            expected_tokens={str(first.id): record_token(first)},
+            apply=apply,
+            operation="rewrite_memory",
+        )
+
+    assert called is not active
+    refreshed = repository.get_memory(str(first.id))
+    assert refreshed is not None and refreshed.content == ("changed" if not active else first.content)
+    with manager.open_connection() as connection:
+        with connection.cursor() as cursor:
+            expected_writes = 0 if active else 1
+            for table in ("memory_mutation_events", "memory_record_revisions", "embedding_repair_queue", "curation_action_receipts"):
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                row = cursor.fetchone()
+                assert row is not None and row[0] == expected_writes
     manager.close()
 
 

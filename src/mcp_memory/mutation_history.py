@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 from uuid import UUID
@@ -113,6 +113,36 @@ class Protection(MutationHistoryModel):
     actor_id: str | None = None
     created_at: datetime | None = None
     expires_at: datetime | None = None
+
+
+def is_protection_active(
+    expires_at: object,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether a protection is active at one UTC instant.
+
+    Expiry is strict: a protection whose expiry equals ``now`` is expired.
+    Naive timestamps are interpreted as UTC for compatibility with older
+    records, while malformed timestamps fail closed as active protections.
+    """
+    if expires_at is None:
+        return True
+    try:
+        if isinstance(expires_at, str):
+            expiry = datetime.fromisoformat(expires_at)
+        elif isinstance(expires_at, datetime):
+            expiry = expires_at
+        else:
+            return True
+    except ValueError:
+        return True
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return expiry > current
 
 
 class RestoreRequest(MutationHistoryModel):

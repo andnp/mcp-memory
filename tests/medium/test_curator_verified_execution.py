@@ -11,6 +11,7 @@ from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.mutation_history import Protection, ProtectionMode
 from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 
 
@@ -110,6 +111,58 @@ async def test_enabled_normalize_uses_verified_executor_and_completes_claimed_wo
         assert receipt.status.value == "verified"
         assert receipt.mutation_event_id is not None
         assert runtime.work_items.get_item(item.id).status == "completed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_local_manual_review_protection_denies_normalize_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
+
+    try:
+        runtime.ai_json_provider = _NormalizeJSONProvider()
+        runtime.config = replace(runtime.config, curation=CurationConfig(normalize_execution_enabled=True))
+        record = runtime.repository.create_memory(
+            title="Protected authentication target",
+            content="JWT coverage is required for client authentication.",
+            summary="Generic summary.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert record is not None
+        runtime.mutation_history.set_protection(
+            Protection(
+                memory_id=record.id,
+                mode=ProtectionMode.MANUAL_REVIEW_REQUIRED,
+                reason="operator review required",
+            )
+        )
+        item, _ = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [record.id]},
+            idempotency_key="curator-protected-normalize",
+        )
+
+        result = await handle_memory_curator_task(runtime, _task(runtime, "curator-protected-task"), object())
+
+        refreshed = runtime.repository.get_memory(record.id)
+        assert result["curation_outcome"] == "deferred"
+        assert "manual_review_required" in result["curation_rejection_codes"]
+        assert refreshed is not None and refreshed.summary == record.summary
+        assert runtime.work_items.get_item(item.id).status == "deferred"
+        connection = runtime.db_manager.get_connection()
+        for table in ("memory_mutation_events", "memory_record_revisions", "embedding_repair_queue", "curation_action_receipts"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     finally:
         runtime.close()
 

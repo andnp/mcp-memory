@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -14,6 +15,8 @@ from mcp_memory.curation_action_store import (
     SQLiteCurationActionStore,
 )
 from mcp_memory.curation_store import CurationRun, CurationRunState, SQLiteCurationStore
+from mcp_memory.mutation_history import Protection, ProtectionMode
+from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.storage.shared_read_cache import (
     SharedReadCache,
@@ -124,6 +127,59 @@ def test_stale_revision_token_writes_nothing_and_does_not_invoke_callback(db_man
     assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM embedding_repair_queue").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_sqlite_action_store_uses_active_protections_only(
+    db_manager: DatabaseManager,
+    active: bool,
+) -> None:
+    repository, run, first_id, _ = _seed(db_manager)
+    record = repository.get_memory(str(first_id))
+    assert record is not None
+    SQLiteMutationHistoryStore(db_manager).set_protection(
+        Protection(
+            memory_id=first_id,
+            mode=ProtectionMode.NO_AUTONOMOUS_MUTATION,
+            reason="protection expiry test",
+            expires_at=datetime.now(UTC) + (timedelta(days=1) if active else -timedelta(days=1)),
+        )
+    )
+    called = False
+
+    def apply(transaction):
+        nonlocal called
+        called = True
+        transaction.update_memory(str(first_id), content="changed")
+        return MutationResult("rewrite_memory", [first_id])
+
+    store = SQLiteCurationActionStore(db_manager)
+    if active:
+        with pytest.raises(CurationActionFatalError, match="autonomous mutation is protected"):
+            store.execute_action(
+                run_id=run.run_id,
+                action_id=uuid4(),
+                target_ids=[str(first_id)],
+                expected_tokens={str(first_id): record_token(record)},
+                apply=apply,
+                operation="rewrite_memory",
+            )
+    else:
+        store.execute_action(
+            run_id=run.run_id,
+            action_id=uuid4(),
+            target_ids=[str(first_id)],
+            expected_tokens={str(first_id): record_token(record)},
+            apply=apply,
+            operation="rewrite_memory",
+        )
+
+    assert called is not active
+    assert repository.get_memory(str(first_id)).content == ("changed" if not active else record.content)  # type: ignore[union-attr]
+    connection = db_manager.get_connection()
+    expected_writes = 0 if active else 1
+    for table in ("memory_mutation_events", "memory_record_revisions", "embedding_repair_queue", "curation_action_receipts"):
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == expected_writes
 
 
 def test_replay_returns_original_receipt_without_reapplying_callback(db_manager: DatabaseManager) -> None:

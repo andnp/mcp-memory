@@ -31,6 +31,7 @@ from mcp_memory.mutation_history import (
     MutationEventStatus,
     ProtectionMode,
     RevisionRole,
+    is_protection_active,
 )
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
 from mcp_memory.utils.db import DatabaseManager
@@ -433,15 +434,23 @@ class SQLiteCurationActionStore:
 
     def _check_protections(self, connection: sqlite3.Connection, target_ids: Sequence[str], operation: str | None) -> None:
         destructive = operation is not None and operation in _DESTRUCTIVE_OPERATIONS
+        now = datetime.now(UTC)
         placeholders = ",".join("?" for _ in target_ids)
         rows = connection.execute(
-            f"SELECT memory_id, mode FROM memory_protections WHERE memory_id IN ({placeholders})",
+            f"SELECT memory_id, mode, expires_at FROM memory_protections WHERE memory_id IN ({placeholders})",
             list(target_ids),
         ).fetchall()
         for row in rows:
+            if not is_protection_active(row[2], now=now):
+                continue
             mode = str(row[1])
             if mode == ProtectionMode.NO_AUTONOMOUS_MUTATION.value:
                 raise CurationActionFatalError(f"autonomous mutation is protected for {row[0]!r}")
+            if mode == ProtectionMode.MANUAL_REVIEW_REQUIRED.value and operation in {
+                "normalize_memory",
+                "create_link",
+            }:
+                raise CurationActionFatalError(f"manual review is required for {row[0]!r}")
             if destructive and mode in {
                 ProtectionMode.NO_AUTONOMOUS_DESTRUCTIVE_CHANGE.value,
                 ProtectionMode.PINNED_ACTIVE.value,

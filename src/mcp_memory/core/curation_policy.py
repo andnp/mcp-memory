@@ -165,7 +165,7 @@ def evaluate_curation_action(
         codes.append(RejectionCode.DESTRUCTIVE_CHANGE_REQUIRES_REVIEW)
     if ProtectionMode.MANUAL_REVIEW_REQUIRED in protections:
         codes.append(RejectionCode.MANUAL_REVIEW_REQUIRED)
-    if operation in {"archive_memory", "delete_memory"} and ProtectionMode.PINNED_ACTIVE in protections:
+    if operation in _DESTRUCTIVE_OPERATIONS and ProtectionMode.PINNED_ACTIVE in protections:
         codes.append(RejectionCode.PINNED_ACTIVE)
     if memory_types is not None and any(
         types.get(memory_id) not in {"journal", "observation", "fact", "reflection", "plan"}

@@ -16,7 +16,7 @@ from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.mutation_history import ProtectionMode
+from mcp_memory.mutation_history import ProtectionMode, is_protection_active
 
 
 def curator_shadow_mode_enabled(ctx: ApplicationContext) -> bool:
@@ -496,9 +496,6 @@ def _disclosure_context(
         else bool(raw_allowlisted)
     )
     provider_trust = ProviderTrust(trust_class, allowlisted=allowlisted)
-    if trust_class is ProviderTrustClass.LOCAL:
-        return provider_trust, None, None, False
-
     history = getattr(ctx, "mutation_history", None)
     if history is None:
         return provider_trust, None, None, True
@@ -512,7 +509,7 @@ def _disclosure_context(
             active_modes = set()
             for protection in history.get_protections(memory_id):
                 expires_at = getattr(protection, "expires_at", None)
-                if expires_at is None or expires_at > now:
+                if is_protection_active(expires_at, now=now):
                     mode = getattr(protection, "mode", None)
                     if mode is not None:
                         active_modes.add(ProtectionMode(str(mode)))
@@ -524,6 +521,8 @@ def _disclosure_context(
             ) if isinstance(raw_fields, (list, tuple, set, frozenset)) else frozenset()
     except (AttributeError, TypeError, ValueError):
         return provider_trust, None, None, True
+    if trust_class is ProviderTrustClass.LOCAL:
+        return provider_trust, protections, None, False
     return provider_trust, protections, sensitive_fields, True
 
 
