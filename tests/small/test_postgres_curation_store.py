@@ -52,7 +52,8 @@ class FakeConnection:
                 model_id TEXT, policy_version TEXT NOT NULL, schema_version INTEGER NOT NULL,
                 state TEXT NOT NULL, outcome TEXT, plan_id TEXT,
                 rejection_codes_json TEXT NOT NULL, retry_reason TEXT,
-                budget_usage_json TEXT NOT NULL, created_at TEXT NOT NULL, terminalized_at TEXT
+                budget_usage_json TEXT NOT NULL, disclosure_audit_json TEXT NOT NULL,
+                created_at TEXT NOT NULL, terminalized_at TEXT
             );
             CREATE TABLE curation_action_receipts (
                 run_id TEXT NOT NULL, action_id TEXT NOT NULL, operation TEXT NOT NULL,
@@ -105,7 +106,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 13
+    assert POSTGRES_SCHEMA_VERSION == 14
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"

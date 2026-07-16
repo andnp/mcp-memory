@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_context import AcceptedMaintenanceRead
+from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
@@ -14,6 +16,7 @@ from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.mutation_history import ProtectionMode
 
 
 def curator_shadow_mode_enabled(ctx: ApplicationContext) -> bool:
@@ -91,11 +94,17 @@ async def run_curator_shadow_mode(
         if claimed_work_item is not None
         else CurationFrontier.direct(**frontier_args)
     )
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, seed_records)
     harness = CurationDryRunHarness(
         curation_store=ctx.curation,
         planner=planner,
         work_items=ctx.work_items,
-        config=None,
+        config=CurationHarnessConfig(
+            provider=provider_trust,
+            require_authoritative_disclosure_context=require_policy,
+        ),
+        protections_by_memory=protections,
+        sensitive_fields_by_memory=sensitive_fields,
     )
     try:
         result = await harness.run(frontier)
@@ -209,13 +218,20 @@ async def run_curator_verified_normalize_execution(
         if claimed_work_item is not None
         else CurationFrontier.direct(**frontier_args)
     )
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, seed_records)
     memory_types = {UUID(record.id): record.type for record in seed_records}
     harness = CurationDryRunHarness(
         curation_store=ctx.curation,
         planner=planner,
         work_items=ctx.work_items,
-        config=CurationHarnessConfig(execute_accepted_normalize_actions=True),
+        config=CurationHarnessConfig(
+            provider=provider_trust,
+            execute_accepted_normalize_actions=True,
+            require_authoritative_disclosure_context=require_policy,
+        ),
         memory_types=memory_types,
+        protections_by_memory=protections,
+        sensitive_fields_by_memory=sensitive_fields,
         executor=CurationExecutor(action_store),
         verifier=CurationVerifier(ctx.curation, ctx.relational_search),
     )
@@ -335,13 +351,20 @@ async def run_curator_verified_create_link_execution(
         if claimed_work_item is not None
         else CurationFrontier.direct(**frontier_args)
     )
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, seed_records)
     memory_types = {UUID(record.id): record.type for record in seed_records}
     harness = CurationDryRunHarness(
         curation_store=ctx.curation,
         planner=planner,
         work_items=ctx.work_items,
-        config=CurationHarnessConfig(execute_accepted_create_link_actions=True),
+        config=CurationHarnessConfig(
+            provider=provider_trust,
+            execute_accepted_create_link_actions=True,
+            require_authoritative_disclosure_context=require_policy,
+        ),
         memory_types=memory_types,
+        protections_by_memory=protections,
+        sensitive_fields_by_memory=sensitive_fields,
         executor=CurationExecutor(action_store),
         verifier=CurationVerifier(ctx.curation, ctx.relational_search),
     )
@@ -408,6 +431,82 @@ def _supports_json_planning(provider: Any) -> bool:
         return False
     supports_agentic = getattr(provider, "supports_agentic", None)
     return not callable(supports_agentic) or not bool(supports_agentic())
+
+
+def _disclosure_context(
+    ctx: ApplicationContext,
+    provider: Any,
+    records: list[Any],
+) -> tuple[
+    ProviderTrust,
+    dict[UUID, frozenset[ProtectionMode]] | None,
+    dict[UUID, frozenset[str]] | None,
+    bool,
+]:
+    """Resolve provider and policy facts before constructing provider context."""
+
+    raw_trust = next(
+        (
+            getattr(provider, name, None)
+            for name in ("provider_trust_class", "_provider_trust_class", "trust_class", "_trust_class")
+            if getattr(provider, name, None) is not None
+        ),
+        None,
+    )
+    underlying = getattr(provider, "_provider", None)
+    if raw_trust is None and underlying is not None:
+        raw_trust = next(
+            (
+                getattr(underlying, name, None)
+                for name in ("provider_trust_class", "trust_class")
+                if getattr(underlying, name, None) is not None
+            ),
+            None,
+        )
+    try:
+        trust_class = ProviderTrustClass(str(raw_trust))
+    except (TypeError, ValueError):
+        # An unannotated route is not safe to treat as local.  This also makes
+        # missing provider metadata visible as a disclosure denial.
+        return ProviderTrust(ProviderTrustClass.EXTERNAL, allowlisted=False), None, None, True
+
+    allowlisted = bool(
+        getattr(
+            provider,
+            "provider_allowlisted",
+            getattr(provider, "_provider_allowlisted", getattr(underlying, "provider_allowlisted", True)),
+        )
+    )
+    provider_trust = ProviderTrust(trust_class, allowlisted=allowlisted)
+    if trust_class is ProviderTrustClass.LOCAL:
+        return provider_trust, None, None, False
+
+    history = getattr(ctx, "mutation_history", None)
+    if history is None:
+        return provider_trust, None, None, True
+
+    protections: dict[UUID, frozenset[ProtectionMode]] = {}
+    sensitive_fields: dict[UUID, frozenset[str]] = {}
+    now = datetime.now(UTC)
+    try:
+        for record in records:
+            memory_id = UUID(str(record.id))
+            active_modes = set()
+            for protection in history.get_protections(memory_id):
+                expires_at = getattr(protection, "expires_at", None)
+                if expires_at is None or expires_at > now:
+                    mode = getattr(protection, "mode", None)
+                    if mode is not None:
+                        active_modes.add(ProtectionMode(str(mode)))
+            protections[memory_id] = frozenset(active_modes)
+            metadata = getattr(record, "metadata", {})
+            raw_fields = metadata.get("sensitive_fields", ()) if isinstance(metadata, dict) else ()
+            sensitive_fields[memory_id] = frozenset(
+                field for field in raw_fields if isinstance(field, str) and field.strip()
+            ) if isinstance(raw_fields, (list, tuple, set, frozenset)) else frozenset()
+    except (AttributeError, TypeError, ValueError):
+        return provider_trust, None, None, True
+    return provider_trust, protections, sensitive_fields, True
 
 
 def _record_read(record: Any) -> AcceptedMaintenanceRead:

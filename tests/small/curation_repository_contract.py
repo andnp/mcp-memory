@@ -66,7 +66,22 @@ RepositoryFactory = Callable[[], CurationRepositoryLike]
 
 
 def _run() -> CurationRun:
-    return CurationRun(run_id=uuid4(), frontier_key="frontier", context_fingerprint="context")
+    return CurationRun(
+        run_id=uuid4(),
+        frontier_key="frontier",
+        context_fingerprint="context",
+        disclosure_audit={
+            "version": 1,
+            "provider_trust_class": "external",
+            "records": [
+                {
+                    "memory_id": str(uuid4()),
+                    "decision": "redact",
+                    "fields": [{"field": "content", "decision": "redact"}],
+                }
+            ],
+        },
+    )
 
 
 def _receipt(run_id: UUID) -> CurationActionReceipt:

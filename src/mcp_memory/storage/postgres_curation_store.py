@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Iterator
+from typing import Any, Iterator, cast
 from uuid import UUID
 
 from mcp_memory.core.curation_models import CurationBudgetUsage, CurationRunOutcome
@@ -38,8 +38,8 @@ class PostgresCurationStore:
                         context_fingerprint, planner_id, provider_id, model_id,
                         policy_version, schema_version, state, outcome, plan_id,
                         rejection_codes_json, retry_reason, budget_usage_json,
-                        created_at, terminalized_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s, %s)
+                        disclosure_audit_json, created_at, terminalized_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s)
                     """,
                     _run_values(normalized),
                 )
@@ -83,7 +83,7 @@ class PostgresCurationStore:
                         context_fingerprint = %s, planner_id = %s, provider_id = %s, model_id = %s,
                         policy_version = %s, schema_version = %s, state = %s, outcome = %s, plan_id = %s,
                         rejection_codes_json = %s::jsonb, retry_reason = %s, budget_usage_json = %s::jsonb,
-                        created_at = %s, terminalized_at = %s
+                        disclosure_audit_json = %s::jsonb, created_at = %s, terminalized_at = %s
                     WHERE run_id = %s AND state = %s
                     """,
                     (*_run_values(normalized)[1:], str(run_id), str(expected_state)),
@@ -282,7 +282,7 @@ _RUN_SELECT = """
 SELECT run_id, task_id, work_item_id, frontier_key, selector_strategy,
        context_fingerprint, planner_id, provider_id, model_id, policy_version,
        schema_version, state, outcome, plan_id, rejection_codes_json,
-       retry_reason, budget_usage_json, created_at, terminalized_at
+       retry_reason, budget_usage_json, disclosure_audit_json, created_at, terminalized_at
 FROM curation_runs
 """
 _RECEIPT_SELECT = """
@@ -356,6 +356,7 @@ def _run_values(run: CurationRun) -> tuple[object, ...]:
         _json_text(run.rejection_codes),
         run.retry_reason,
         _json_text(run.budget_usage.model_dump(mode="json")),
+        _json_text(run.disclosure_audit),
         _datetime_text(run.created_at),
         _datetime_text(run.terminalized_at),
     )
@@ -411,8 +412,9 @@ def _run_from_row(row: tuple[object, ...]) -> CurationRun:
         rejection_codes=[str(value) for value in _json_list(row[14])],
         retry_reason=None if row[15] is None else str(row[15]),
         budget_usage=CurationBudgetUsage.model_validate(_json_value(row[16], default={})),
-        created_at=_datetime_value(row[17]),
-        terminalized_at=_datetime_value(row[18]),
+        disclosure_audit=cast(dict[str, Any], _json_value(row[17], default={})),
+        created_at=_datetime_value(row[18]),
+        terminalized_at=_datetime_value(row[19]),
     )
 
 

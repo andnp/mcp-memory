@@ -228,6 +228,7 @@ def build_context_packet(
     protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
     sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None = None,
     max_record_characters: int | None = None,
+    require_authoritative_disclosure_context: bool = False,
     clock: Callable[[], float] = monotonic,
 ) -> CurationContextPacket:
     """Build one bounded packet from accepted maintenance reads.
@@ -270,6 +271,13 @@ def build_context_packet(
                 sensitive_fields=sensitive_fields,
                 fields=selected_fields,
                 max_characters=max_record_characters,
+                authoritative_context_available=(
+                    not require_authoritative_disclosure_context
+                    or (
+                        _has_mapping_entry(protections_by_memory, memory_id)
+                        and _has_mapping_entry(sensitive_fields_by_memory, memory_id)
+                    )
+                ),
             )
             disclosures.append(_disclosure_payload(role, result))
             if result.decision is DisclosureDecision.DENY:
@@ -347,6 +355,53 @@ def build_context_packet(
         usage=usage,
         context_fingerprint=fingerprint,
     )
+
+
+def disclosure_audit_manifest(
+    context: CurationContextPacket,
+    provider: ProviderTrust,
+    *,
+    max_records: int = 256,
+    max_fields: int = 32,
+) -> dict[str, Any]:
+    """Return bounded disclosure metadata without copying provider content."""
+
+    if max_records < 1 or max_fields < 1:
+        raise ValueError("disclosure audit bounds must be positive")
+    records: list[dict[str, Any]] = []
+    truncated = False
+    for disclosure in context.disclosure:
+        if len(records) >= max_records:
+            truncated = True
+            break
+        fields = list(disclosure.get("fields", ()))
+        if len(fields) > max_fields:
+            truncated = True
+            fields = fields[:max_fields]
+        records.append(
+            {
+                "memory_id": str(disclosure.get("memory_id", "")),
+                "role": str(disclosure.get("role", "")),
+                "decision": str(disclosure.get("decision", "")),
+                "reason": str(disclosure.get("reason", "")),
+                "fields": [
+                    {
+                        "field": str(field.get("field", "")),
+                        "decision": str(field.get("decision", "")),
+                        "reason": None if field.get("reason") is None else str(field["reason"]),
+                    }
+                    for field in fields
+                    if isinstance(field, Mapping)
+                ],
+            }
+        )
+    return {
+        "version": 1,
+        "provider_trust_class": str(provider.trust_class),
+        "provider_allowlisted": provider.allowlisted,
+        "records": records,
+        "truncated": truncated,
+    }
 
 
 # Descriptive aliases for callers that use "construct" or "build" language.
@@ -465,6 +520,12 @@ def _lookup(mapping: Mapping[UUID | str, Any] | None, memory_id: str) -> Any:
     if mapping is None:
         return frozenset()
     return mapping.get(memory_id, mapping.get(_as_uuid(memory_id), frozenset()))
+
+
+def _has_mapping_entry(mapping: Mapping[UUID | str, Any] | None, memory_id: str) -> bool:
+    if mapping is None:
+        return False
+    return memory_id in mapping or _as_uuid(memory_id) in mapping
 
 
 def _disclosure_payload(role: str, result: Any) -> Mapping[str, Any]:

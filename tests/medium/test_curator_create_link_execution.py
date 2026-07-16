@@ -19,6 +19,8 @@ pytestmark = pytest.mark.medium
 
 
 class _CreateLinkJSONProvider:
+    provider_trust_class = "local"
+
     async def ask_json(self, prompt: str) -> dict[str, object]:
         payload = json.loads(prompt.split("\n", 1)[1])
         request = payload["request"]

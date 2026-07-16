@@ -8,6 +8,7 @@ from mcp_memory.core.curation_disclosure import (
     build_provider_packet,
     decide_record_disclosure,
 )
+from mcp_memory.core.curation_context import build_context_packet
 
 
 def test_strict_protection_denies_external_disclosure_and_explains_local_execution() -> None:
@@ -63,3 +64,38 @@ def test_denied_records_never_enter_provider_packet() -> None:
     )
     assert [record["memory_id"] for record in packet.records] == [allowed]
     assert packet.decisions[0].decision is DisclosureDecision.DENY
+
+
+def test_external_context_denies_when_authoritative_policy_is_unavailable() -> None:
+    memory_id = uuid4()
+    context = build_context_packet(
+        family="curator",
+        strategy="focused",
+        seed_reads=[{"id": memory_id, "content": "private"}],
+        provider=ProviderTrust(ProviderTrustClass.EXTERNAL),
+        require_authoritative_disclosure_context=True,
+    )
+    assert context.seeds == ()
+    assert context.disclosure[0]["decision"] == DisclosureDecision.DENY
+    assert context.disclosure[0]["memory_id"] == str(memory_id)
+
+
+def test_external_context_persists_only_redaction_metadata_for_authorized_records() -> None:
+    denied, redacted = uuid4(), uuid4()
+    context = build_context_packet(
+        family="curator",
+        strategy="focused",
+        seed_reads=[
+            {"id": denied, "content": "must not leave the store"},
+            {"id": redacted, "content": "sensitive content"},
+        ],
+        provider=ProviderTrust(ProviderTrustClass.EXTERNAL),
+        protections_by_memory={denied: {ProtectionMode.NO_EXTERNAL_PROVIDER_DISCLOSURE}, redacted: set()},
+        sensitive_fields_by_memory={denied: set(), redacted: {"content"}},
+        require_authoritative_disclosure_context=True,
+    )
+    assert [record["memory_id"] for record in context.seeds] == [str(redacted)]
+    assert context.seeds[0]["content"] == "[REDACTED]"
+    assert "must not leave the store" not in str(context.as_dict())
+    assert context.disclosure[0]["decision"] == DisclosureDecision.DENY
+    assert next(field for field in context.disclosure[1]["fields"] if field["field"] == "content")["decision"] == DisclosureDecision.REDACT

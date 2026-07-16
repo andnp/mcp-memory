@@ -62,6 +62,7 @@ class CurationRun(CurationStoreModel):
     rejection_codes: list[str] = Field(default_factory=list)
     retry_reason: str | None = None
     budget_usage: CurationBudgetUsage = Field(default_factory=CurationBudgetUsage)
+    disclosure_audit: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
     terminalized_at: datetime | None = None
 
@@ -244,8 +245,8 @@ class SQLiteCurationStore:
                     context_fingerprint, planner_id, provider_id, model_id,
                     policy_version, schema_version, state, outcome, plan_id,
                     rejection_codes_json, retry_reason, budget_usage_json,
-                    created_at, terminalized_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    disclosure_audit_json, created_at, terminalized_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _run_values(normalized),
             )
@@ -292,7 +293,7 @@ class SQLiteCurationStore:
                     context_fingerprint = ?, planner_id = ?, provider_id = ?, model_id = ?,
                     policy_version = ?, schema_version = ?, state = ?, outcome = ?, plan_id = ?,
                     rejection_codes_json = ?, retry_reason = ?, budget_usage_json = ?,
-                    created_at = ?, terminalized_at = ?
+                    disclosure_audit_json = ?, created_at = ?, terminalized_at = ?
                 WHERE run_id = ? AND state = ?
                 """,
                 [*_run_values(normalized)[1:], str(run_id), str(expected_state)],
@@ -510,6 +511,7 @@ def _run_values(run: CurationRun) -> tuple[object, ...]:
         _json_text(run.rejection_codes),
         run.retry_reason,
         _json_text(run.budget_usage.model_dump(mode="json")),
+        _json_text(run.disclosure_audit),
         _datetime_text(run.created_at),
         _datetime_text(run.terminalized_at),
     )
@@ -534,6 +536,7 @@ def _run_from_row(row: sqlite3.Row) -> CurationRun:
         rejection_codes=list(_json_value(row["rejection_codes_json"], default=[])),
         retry_reason=row["retry_reason"],
         budget_usage=CurationBudgetUsage.model_validate(_json_value(row["budget_usage_json"], default={})),
+        disclosure_audit=dict(_json_value(row["disclosure_audit_json"], default={})),
         created_at=_datetime_value(row["created_at"]),
         terminalized_at=_datetime_value(row["terminalized_at"]),
     )

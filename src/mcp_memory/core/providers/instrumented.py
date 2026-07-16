@@ -50,6 +50,8 @@ class InstrumentedAIProvider:
         model_burst_call_limit: int | None = None,
         model_burst_window_seconds: float | None = None,
         block_test_execution: bool = False,
+        provider_trust_class: str | None = None,
+        provider_allowlisted: bool | None = None,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
@@ -67,6 +69,14 @@ class InstrumentedAIProvider:
         self._model_burst_call_limit = model_burst_call_limit
         self._model_burst_window_seconds = model_burst_window_seconds
         self._block_test_execution = block_test_execution
+        self._provider_trust_class = provider_trust_class or str(
+            getattr(provider, "provider_trust_class", "external")
+        )
+        self._provider_allowlisted = (
+            bool(getattr(provider, "provider_allowlisted", True))
+            if provider_allowlisted is None
+            else provider_allowlisted
+        )
 
     def with_usage_context(
         self,
@@ -93,6 +103,8 @@ class InstrumentedAIProvider:
             model_burst_call_limit=self._model_burst_call_limit,
             model_burst_window_seconds=self._model_burst_window_seconds,
             block_test_execution=self._block_test_execution,
+            provider_trust_class=self._provider_trust_class,
+            provider_allowlisted=self._provider_allowlisted,
         )
 
     def _record_attempt_start(self, *, request_id: str, event: ProviderAttemptStartedEvent) -> None:

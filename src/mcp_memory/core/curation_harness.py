@@ -15,6 +15,7 @@ from mcp_memory.core.curation_context import (
     CurationContextPacket as ImmutableCurationContextPacket,
     CurationReadBudget,
     build_context_packet,
+    disclosure_audit_manifest,
 )
 from mcp_memory.core.curation_identity import candidate_revision_token
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
@@ -184,6 +185,7 @@ class CurationHarnessConfig:
     no_op_cooldown_seconds: float = 3600.0
     execute_accepted_normalize_actions: bool = False
     execute_accepted_create_link_actions: bool = False
+    require_authoritative_disclosure_context: bool = False
 
 
 class CurationDryRunHarness:
@@ -199,6 +201,7 @@ class CurationDryRunHarness:
         memory_types: Mapping[UUID, str] | None = None,
         contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset(),
         protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
+        sensitive_fields_by_memory: Mapping[UUID, set[str] | frozenset[str]] | None = None,
         clock: Callable[[], datetime] | None = None,
         executor: CurationExecutor | None = None,
         verifier: CurationVerifier | None = None,
@@ -210,6 +213,7 @@ class CurationDryRunHarness:
         self._memory_types = memory_types
         self._contradictory_memory_ids = contradictory_memory_ids
         self._protections_by_memory = protections_by_memory
+        self._sensitive_fields_by_memory = sensitive_fields_by_memory
         self._clock = clock or (lambda: datetime.now(UTC))
         self._executor = executor
         self._verifier = verifier
@@ -223,6 +227,8 @@ class CurationDryRunHarness:
             provider=self._config.provider,
             budget=self._config.read_budget,
             protections_by_memory=cast(Any, self._protections_by_memory),
+            sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
+            require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
         )
         run_id = uuid4()
         plan_id = uuid4()
@@ -236,6 +242,7 @@ class CurationDryRunHarness:
                 selector_strategy=frontier.strategy,
                 context_fingerprint=context.context_fingerprint,
                 plan_id=plan_id,
+                disclosure_audit=disclosure_audit_manifest(context, self._config.provider),
             )
         )
         planning = run.model_copy(update={"state": CurationRunState.PLANNING, "planner_id": type(self._planner).__name__})

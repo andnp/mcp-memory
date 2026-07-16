@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 13
+POSTGRES_SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -609,6 +609,7 @@ POSTGRES_MIGRATIONS = (
                 rejection_codes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                 retry_reason TEXT,
                 budget_usage_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                disclosure_audit_json JSONB NOT NULL DEFAULT '{}'::jsonb,
                 created_at TEXT NOT NULL,
                 terminalized_at TEXT
             )
@@ -655,6 +656,13 @@ POSTGRES_MIGRATIONS = (
         name="add_embedding_memory_versions",
         statements=(
             "ALTER TABLE embeddings ADD COLUMN IF NOT EXISTS memory_updated_at TEXT",
+        ),
+    ),
+    PostgresMigration(
+        version=14,
+        name="add_curation_disclosure_audit",
+        statements=(
+            "ALTER TABLE curation_runs ADD COLUMN IF NOT EXISTS disclosure_audit_json JSONB NOT NULL DEFAULT '{}'::jsonb",
         ),
     ),
 )

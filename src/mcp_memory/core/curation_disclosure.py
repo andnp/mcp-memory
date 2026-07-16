@@ -72,6 +72,7 @@ def decide_record_disclosure(
     sensitive_fields: set[str] | frozenset[str] = frozenset(),
     fields: tuple[str, ...] | None = None,
     max_characters: int | None = None,
+    authoritative_context_available: bool = True,
 ) -> DisclosureResult:
     """Decide disclosure using only explicit caller-supplied sensitivity facts.
 
@@ -84,6 +85,8 @@ def decide_record_disclosure(
         raise ValueError("record must contain a UUID memory_id")
 
     external = provider.trust_class is not ProviderTrustClass.LOCAL
+    if external and not authoritative_context_available:
+        return _denied(memory_id, "authoritative disclosure policy is unavailable", review=True)
     if external and ProtectionMode.NO_EXTERNAL_PROVIDER_DISCLOSURE in protections:
         return _denied(memory_id, "external provider disclosure is prohibited")
     if external and ProtectionMode.LOCAL_PROVIDER_ONLY in protections:

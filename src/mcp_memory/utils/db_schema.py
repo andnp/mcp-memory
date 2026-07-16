@@ -569,6 +569,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             rejection_codes_json TEXT NOT NULL DEFAULT '[]',
             retry_reason TEXT,
             budget_usage_json TEXT NOT NULL DEFAULT '{}',
+            disclosure_audit_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             terminalized_at TEXT
         );
@@ -604,6 +605,7 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    ensure_column(conn, "curation_runs", "disclosure_audit_json", "TEXT NOT NULL DEFAULT '{}'")
 
 
 def create_mutation_history_schema(conn: sqlite3.Connection) -> None:

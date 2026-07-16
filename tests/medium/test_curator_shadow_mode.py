@@ -18,6 +18,8 @@ pytestmark = pytest.mark.medium
 
 
 class _ShadowJSONProvider:
+    provider_trust_class = "local"
+
     def __init__(self) -> None:
         self.calls = 0
 
