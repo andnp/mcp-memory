@@ -491,11 +491,19 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "request": request.model_dump(mode="json"),
         "context": context_payload,
         "available_tools": [],
+        "schema": CurationPlan.model_json_schema(),
     }
+    retry_feedback = getattr(tools, "retry_feedback", None)
+    if retry_feedback is not None:
+        payload["retry_feedback"] = {
+            "reason_code": str(retry_feedback.reason_code),
+            "message": str(retry_feedback.message)[:1000],
+        }
     return (
         "You are a curation planner. Return exactly one JSON object matching the "
-        "CurationPlan schema. Do not execute mutations, call tools, or report a "
-        "claimed action count; actions are counted only after validation.\n"
+        "provided CurationPlan JSON schema. Planning only: do not execute mutations, "
+        "call tools, or report a claimed action count; actions are counted only after "
+        "validation.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
 

@@ -1,11 +1,19 @@
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_models import CurationPlan, CurationPlanningRequest, RetentionDecision, RetentionReason
+from mcp_memory.core.curation_models import (
+    CurationPlan,
+    CurationPlanningRequest,
+    RetentionDecision,
+    RetentionReason,
+)
+from mcp_memory.core.curation_validation import CurationRetryFeedback
+from mcp_memory.core.curation_harness import CurationPlannerTools
 from mcp_memory.core.curation_planner import (
     CurationPlannerCancelledError,
     CurationPlannerProviderError,
@@ -14,6 +22,7 @@ from mcp_memory.core.curation_planner import (
     FakePlannerScenario,
     InstrumentedCurationPlanner,
     PlannerExecutionStatus,
+    _build_planner_prompt,
 )
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
@@ -34,6 +43,49 @@ def _plan(request: CurationPlanningRequest, seed_id: UUID) -> CurationPlan:
         retained=[RetentionDecision(memory_id=seed_id, reason=RetentionReason.ALREADY_FOCUSED, rationale="still useful")],
         rationale="no change",
     )
+
+
+def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
+    request = _request(uuid4())
+    payload = json.loads(_build_planner_prompt(request, CurationPlannerTools(context=cast(Any, {}))).split("\n", 1)[1])
+    schema = payload["schema"]
+
+    assert payload["available_tools"] == []
+    assert set(schema["required"]) >= {
+        "run_id",
+        "plan_id",
+        "frontier_key",
+        "context_fingerprint",
+    }
+    assert {"actions", "retained", "seed_memory_ids"} <= schema["properties"].keys()
+    action_schema = schema["properties"]["actions"]["items"]
+    assert set(action_schema["discriminator"]["mapping"]) == {
+        "archive_memory",
+        "create_link",
+        "merge_memories",
+        "normalize_memory",
+        "remove_link",
+        "rewrite_memory",
+        "split_memory",
+    }
+    assert "delete" not in action_schema["discriminator"]["mapping"]
+    assert "RetentionDecision" in schema["$defs"]
+    assert set(schema["$defs"]["RetentionDecision"]["required"]) >= {"memory_id", "reason", "rationale"}
+
+
+def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> None:
+    request = _request(uuid4())
+    context = cast(Any, {})
+    initial = json.loads(_build_planner_prompt(request, CurationPlannerTools(context=context)).split("\n", 1)[1])
+    feedback = CurationRetryFeedback(reason_code="formatting_only", message="fix the JSON" + "!" * 2000)
+    retry = json.loads(
+        _build_planner_prompt(request, CurationPlannerTools(context=context, retry_feedback=feedback)).split("\n", 1)[1]
+    )
+
+    assert "retry_feedback" not in initial
+    assert retry["retry_feedback"]["reason_code"] == "formatting_only"
+    assert len(retry["retry_feedback"]["message"]) == 1000
+    assert retry["retry_feedback"]["message"].startswith("fix the JSON")
 
 
 @pytest.mark.asyncio
