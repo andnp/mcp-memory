@@ -492,6 +492,14 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "context": context_payload,
         "available_tools": [],
         "schema": CurationPlan.model_json_schema(),
+        "planner_contract": [
+            "Every target_id, source_id, canonical_id, source_ids entry, and retained memory_id must refer to a memory visible in context.",
+            "merge_memories canonical_id must be an existing visible record; merging never creates a record.",
+            "create_link and remove_link require both endpoints to be visible in context.",
+            "Only split_memory may introduce child records, and only through its typed children surface; never invent child IDs.",
+            "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
+            "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
+        ],
     }
     retry_feedback = getattr(tools, "retry_feedback", None)
     if retry_feedback is not None:
@@ -503,7 +511,12 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "You are a curation planner. Return exactly one JSON object matching the "
         "provided CurationPlan JSON schema. Planning only: do not execute mutations, "
         "call tools, or report a claimed action count; actions are counted only after "
-        "validation.\n"
+        "validation. Every memory ID in an action or retention decision must be copied "
+        "from a memory visible in the provided context. A merge canonical_id must be "
+        "an existing visible record and merge never creates records; both create-link "
+        "endpoints must be visible. Only split may introduce child records through its "
+        "typed children surface. If no visible canonical is appropriate, retain the "
+        "memory instead of inventing an ID.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
 

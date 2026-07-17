@@ -74,6 +74,21 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     for action_name in ("CreateLinkAction", "RemoveLinkAction"):
         assert schema["$defs"][action_name]["properties"]["link_type"]["pattern"] == r"^[A-Z][A-Z0-9_]*$"
 
+    contract = " ".join(payload["planner_contract"])
+    assert "visible in context" in contract
+    assert "merging never creates a record" in contract
+    assert "both endpoints to be visible" in contract
+    assert "Only split_memory may introduce child records" in contract
+    assert "retention decision instead of inventing an ID" in contract
+    assert "fail-closed" in contract
+    assert "existing visible memory ID" in schema["$defs"]["CreateLinkAction"]["properties"]["source_id"]["description"]
+    assert "never creates a record" in schema["$defs"]["MergeMemoriesAction"]["properties"]["canonical_id"]["description"]
+    assert "Typed child content only" in schema["$defs"]["SplitMemoryAction"]["properties"]["children"]["description"]
+
+    prompt = _build_planner_prompt(request, CurationPlannerTools(context=cast(Any, {})))
+    assert "Every memory ID in an action or retention decision must be copied" in prompt
+    assert "If no visible canonical is appropriate, retain the memory" in prompt
+
 
 def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> None:
     request = _request(uuid4())

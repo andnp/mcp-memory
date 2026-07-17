@@ -83,7 +83,7 @@ class RetentionReason(StrEnum):
 
 
 class RetentionDecision(CurationModel):
-    memory_id: UUID
+    memory_id: UUID = Field(description="An existing memory ID from the planner context.")
     reason: RetentionReason
     rationale: str
     evidence: list[EvidenceRef] = Field(default_factory=list)
@@ -99,7 +99,7 @@ class ActionEnvelope(CurationModel):
 
 class NormalizeMemoryAction(ActionEnvelope):
     operation: Literal["normalize_memory"] = "normalize_memory"
-    target_id: UUID
+    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
     title: str | None = None
     summary: str | None = None
     tags: list[str] | None = None
@@ -113,7 +113,7 @@ class NormalizeMemoryAction(ActionEnvelope):
 
 class RewriteMemoryAction(ActionEnvelope):
     operation: Literal["rewrite_memory"] = "rewrite_memory"
-    target_id: UUID
+    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
     title: str | None = None
     content: str
     summary: str | None = None
@@ -122,24 +122,29 @@ class RewriteMemoryAction(ActionEnvelope):
 
 class CreateLinkAction(ActionEnvelope):
     operation: Literal["create_link"] = "create_link"
-    source_id: UUID
-    target_id: UUID
+    source_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
     link_type: CanonicalLinkType
     context: str | None = None
 
 
 class RemoveLinkAction(ActionEnvelope):
     operation: Literal["remove_link"] = "remove_link"
-    source_id: UUID
-    target_id: UUID
+    source_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
     link_type: CanonicalLinkType
     context: str | None = None
 
 
 class MergeMemoriesAction(ActionEnvelope):
     operation: Literal["merge_memories"] = "merge_memories"
-    canonical_id: UUID
-    source_ids: list[UUID] = Field(min_length=1)
+    canonical_id: UUID = Field(
+        description="An existing visible memory ID to retain; merge never creates a record."
+    )
+    source_ids: list[UUID] = Field(
+        min_length=1,
+        description="Existing visible memory IDs to merge into canonical_id; do not invent IDs.",
+    )
     title: str | None = None
     content: str
     summary: str | None = None
@@ -148,8 +153,11 @@ class MergeMemoriesAction(ActionEnvelope):
 
 class SplitMemoryAction(ActionEnvelope):
     operation: Literal["split_memory"] = "split_memory"
-    target_id: UUID
-    children: list[ClaimMapping] = Field(min_length=1)
+    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    children: list[ClaimMapping] = Field(
+        min_length=1,
+        description="Typed child content only; child record IDs are assigned by execution, not invented here.",
+    )
     claim_manifest: ClaimManifest
 
 
