@@ -1168,6 +1168,72 @@ async def test_runtime_task_worker_keeps_long_running_handler_fresh_without_subp
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_excludes_owned_task_during_event_loop_starvation(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "starved-runtime-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="starved-runtime-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    recovery_finished = threading.Event()
+    recovery_results: list[object] = []
+    recovery_errors: list[BaseException] = []
+
+    def run_recovery() -> None:
+        try:
+            recovery_results.append(worker._recover_running_tasks(100.0))  # noqa: SLF001
+        except BaseException as exc:
+            recovery_errors.append(exc)
+        finally:
+            recovery_finished.set()
+
+    async def starved_handler(context, queued_task):
+        del context, queued_task
+        threading.Thread(target=run_recovery).start()
+        while not recovery_finished.is_set():
+            time.sleep(0.01)
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"starved-runtime-task": starved_handler},
+        abandoned_task_stale_after_seconds=10.0,
+    )
+
+    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+
+    if recovery_errors:
+        raise recovery_errors[0]
+    assert recovery_results == [[]]
+    assert queue.get_task(task.id).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_cleans_up_owned_task_after_processing(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue("owned-runtime-task", available_at=0.0, task_id="owned-runtime-task")
+    claimed = queue.claim_next(now=1.0)
+    assert claimed is not None
+    ownership_seen: list[bool] = []
+
+    async def handler(context, queued_task):
+        del context, queued_task
+        ownership_seen.append((task.id, claimed.execution_epoch) in worker._owned_task_attempts)  # noqa: SLF001
+
+    worker = RuntimeTaskWorker(ctx, handlers={"owned-runtime-task": handler})
+
+    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+
+    assert ownership_seen == [True]
+    assert worker._owned_task_attempts == set()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     seen_payloads: list[dict[str, str]] = []
@@ -1952,6 +2018,33 @@ async def test_runtime_task_worker_uses_attempt_heartbeat_to_keep_running_task_a
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_only_excludes_owned_task_epoch(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "epoch-mismatch-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="epoch-mismatch-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"epoch-mismatch-task": lambda context, queued_task: None},
+        abandoned_task_stale_after_seconds=10.0,
+    )
+    worker._owned_task_attempts.add((task.id, claimed.execution_epoch + 1))  # noqa: SLF001
+
+    await worker._run_reconciliation_pass(now=100.0, reason="epoch-mismatch")  # noqa: SLF001
+
+    recovered = queue.get_task(task.id)
+    assert recovered.status == "failed"
+    assert recovered.last_error == "Task was abandoned without an active provider subprocess"
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_reconciles_attempt_for_recovered_dead_process(db_manager, monkeypatch) -> None:
     queue = SQLiteTaskQueue(db_manager)
     attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
@@ -2000,97 +2093,33 @@ async def test_runtime_task_worker_reconciles_attempt_for_recovered_dead_process
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_provider_cancellation(
-    db_manager,
-    monkeypatch,
-) -> None:
+async def test_runtime_task_worker_cancels_processing_after_external_terminalization(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
-    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
-    provider_usage = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
-    ctx = ApplicationContext(
-        db_manager=db_manager,
-        task_queue=queue,
-        task_execution_attempts=attempt_repository,
-        provider_usage=provider_usage,
-        workspace_id="workspace-a",
-    )
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
     task = queue.enqueue(
-        "late-cancel-task",
+        "externally-terminalized-task",
         workspace_id="workspace-a",
         available_at=0.0,
-        task_id="late-cancel-task",
+        task_id="externally-terminalized-task",
     )
 
     started = asyncio.Event()
     cancelled = asyncio.Event()
+    parked = asyncio.Event()
 
     async def blocking_handler(_ctx: ApplicationContext, queued_task: TaskRecord) -> None:
-        queue.set_running_process(
-            queued_task.id,
-            subprocess_pid=9999,
-            request_id="req-late-cancel",
-            updated_at=2.0,
-            execution_epoch=queued_task.execution_epoch,
-        )
-        attempt_repository.start_attempt(
-            task_id=queued_task.id,
-            execution_epoch=queued_task.execution_epoch,
-            task_name=queued_task.task_name,
-            request_id="req-late-cancel",
-            subprocess_pid=9999,
-            provider_key="gemini-cli",
-            provider_name="Gemini CLI",
-            model_name="gemini-3-flash-preview",
-            started_at=2.0,
-        )
-        provider_usage.record_conversation(
-            request_id="req-late-cancel",
-            attempt=1,
-            task_name=queued_task.task_name,
-            task_id=queued_task.id,
-            provider_key="gemini-cli",
-            provider_name="Gemini CLI",
-            model_name="gemini-3-flash-preview",
-            subprocess_pid=9999,
-            prompt_text="keep running",
-            response_text="",
-            parsed=None,
-            status="running",
-            error_text=None,
-            started_at=2.0,
-            completed_at=2.0,
-        )
+        del queued_task
         started.set()
         try:
-            await asyncio.Future()
+            await parked.wait()
         except asyncio.CancelledError:
             cancelled.set()
-            attempt_repository.finish_attempt(
-                task_id=queued_task.id,
-                execution_epoch=queued_task.execution_epoch,
-                status="cancelled",
-                completed_at=50.0,
-                request_id="req-late-cancel",
-                subprocess_pid=9999,
-                error_text="Command cancelled",
-                termination_reason="provider_cancelled",
-            )
-            provider_usage.finalize_running_conversation(
-                request_id="req-late-cancel",
-                status="cancelled",
-                error_text="Command cancelled",
-                reason_category="cancellation",
-                reason_code="provider_cancelled",
-                completed_at=50.0,
-            )
             raise
 
-    monkeypatch.setattr("mcp_memory.core.tasks._is_process_alive", lambda pid: False)
     worker = RuntimeTaskWorker(
         ctx,
-        handlers={"late-cancel-task": blocking_handler},
+        handlers={"externally-terminalized-task": blocking_handler},
         poll_interval_seconds=0.01,
-        retry_delay_seconds=45.0,
         abandoned_recovery_interval_seconds=0.01,
         abandoned_task_stale_after_seconds=0.0,
     )
@@ -2098,41 +2127,25 @@ async def test_runtime_task_worker_preserves_retry_recovery_reason_after_late_pr
     await worker.start()
     try:
         await asyncio.wait_for(started.wait(), timeout=1.0)
+        externally_failed = queue.fail_permanently(
+            task.id,
+            "externally terminalized",
+            failed_at=3.0,
+            execution_epoch=1,
+        )
+        assert externally_failed.status == "failed"
         await asyncio.wait_for(cancelled.wait(), timeout=1.0)
-        for _ in range(100):
-            retried = queue.get_task(task.id)
-            attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
-            conversations = provider_usage.get_conversation("req-late-cancel")
-            if (
-                retried.status == "pending"
-                and attempt.termination_reason == "provider_subprocess_exited_retry"
-                and conversations
-                and conversations[0].reason_code == "provider_subprocess_exited_retry"
-            ):
-                break
-            await asyncio.sleep(0.01)
     finally:
+        parked.set()
         await worker.stop(0.05)
 
-    retried = queue.get_task(task.id)
-    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=1)
-    conversation = provider_usage.get_conversation("req-late-cancel")[0]
-
-    assert retried.status == "pending"
-    assert retried.last_error == "Provider subprocess 9999 exited unexpectedly"
-    assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
-    assert attempt.status == "error"
-    assert attempt.completed_at == pytest.approx(retried.updated_at)
-    assert attempt.error_text == "Provider subprocess 9999 exited unexpectedly"
-    assert attempt.termination_reason == "provider_subprocess_exited_retry"
-    assert conversation.status == "error"
-    assert conversation.error_text == "Provider subprocess 9999 exited unexpectedly"
-    assert conversation.reason_category == "recovery"
-    assert conversation.reason_code == "provider_subprocess_exited_retry"
+    terminal = queue.get_task(task.id)
+    assert terminal.status == "failed"
+    assert terminal.last_error == "externally terminalized"
 
 
 @pytest.mark.asyncio
-async def test_runtime_task_worker_cancels_stalled_task_after_reconciliation_and_drains_queue(
+async def test_runtime_task_worker_does_not_recover_owned_stalled_task_and_drains_queue(
     db_manager,
     monkeypatch,
 ) -> None:
@@ -2182,19 +2195,21 @@ async def test_runtime_task_worker_cancels_stalled_task_after_reconciliation_and
     await worker.start()
     try:
         await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0.1)
+        assert queue.get_task(stalled_task.id).status == "running"
+        assert queue.get_task(follow_up_task.id).status == "pending"
+        assert not cancelled.is_set()
+        parked.set()
         for _ in range(100):
-            stalled_status = queue.get_task(stalled_task.id).status
-            follow_up_status = queue.get_task(follow_up_task.id).status
-            if stalled_status == "failed" and follow_up_status == "completed":
+            if queue.get_task(follow_up_task.id).status == "completed":
                 break
             await asyncio.sleep(0.01)
     finally:
         parked.set()
         await worker.stop(0.05)
 
-    assert cancelled.is_set()
-    assert queue.get_task(stalled_task.id).status == "failed"
-    assert queue.get_task(stalled_task.id).last_error == "Provider subprocess 9999 exited unexpectedly"
+    assert not cancelled.is_set()
+    assert queue.get_task(stalled_task.id).status == "completed"
     assert queue.get_task(follow_up_task.id).status == "completed"
     assert completed == [follow_up_task.id]
 

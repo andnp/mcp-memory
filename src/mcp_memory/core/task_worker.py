@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from inspect import isawaitable, iscoroutinefunction
 import logging
+import threading
 import time
 from typing import Any, cast
 
@@ -137,6 +138,9 @@ class RuntimeTaskWorker:
             self._provider_usage = ProviderUsageRepository(None, workspace_id=None)
         self._next_abandoned_recovery_at = 0.0
         self._reconciliation_lock = asyncio.Lock()
+        # Deliberately process-local so restart recovery still sees stale attempts.
+        self._owned_task_attempts: set[tuple[str, int]] = set()
+        self._owned_task_attempts_lock = threading.Lock()
         self._last_reconciliation_snapshot: tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]] | None = None
 
     async def start(self) -> None:
@@ -214,8 +218,12 @@ class RuntimeTaskWorker:
                 await self._recover_unexpected_task_error(task, exc)
 
     async def _process_task_with_reconciliation(self, task: TaskRecord) -> None:
-        processing_task = asyncio.create_task(self._process_task(task))
+        owned_attempt = (task.id, task.execution_epoch)
+        with self._owned_task_attempts_lock:
+            self._owned_task_attempts.add(owned_attempt)
+        processing_task: asyncio.Task[None] | None = None
         try:
+            processing_task = asyncio.create_task(self._process_task(task))
             while True:
                 try:
                     await asyncio.wait_for(
@@ -245,9 +253,11 @@ class RuntimeTaskWorker:
                     await asyncio.gather(processing_task, return_exceptions=True)
                     return
         finally:
-            if not processing_task.done():
+            if processing_task is not None and not processing_task.done():
                 processing_task.cancel()
                 await asyncio.gather(processing_task, return_exceptions=True)
+            with self._owned_task_attempts_lock:
+                self._owned_task_attempts.discard(owned_attempt)
 
     async def _recover_unexpected_task_error(self, task: TaskRecord, exc: Exception) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -606,9 +616,13 @@ class RuntimeTaskWorker:
         if task_queue is None:
             return []
         attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
+        with self._owned_task_attempts_lock:
+            owned_task_attempts = set(self._owned_task_attempts)
         recovered: list[_RecoveredTaskOutcome] = []
         running_tasks = task_queue.list_tasks(status="running", workspace_id=None, limit=200)
         for task in running_tasks:
+            if (task.id, task.execution_epoch) in owned_task_attempts:
+                continue
             recovered_task = self._recover_running_task(
                 task_queue,
                 task,

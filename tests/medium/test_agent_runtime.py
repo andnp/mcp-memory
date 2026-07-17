@@ -2777,6 +2777,7 @@ async def test_runtime_task_worker_recovers_genuinely_stale_task_on_startup(db_m
         abandoned_task_stale_after_seconds=10.0,
     )
 
+    assert worker._owned_task_attempts == set()  # noqa: SLF001
     await worker._run_reconciliation_pass(now=100.0, reason="startup")  # noqa: SLF001
 
     recovered = queue.get_task(task.id)
