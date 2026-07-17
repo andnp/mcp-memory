@@ -78,6 +78,7 @@ _CURATOR_MUTATION_SUMMARY_PATTERNS = (
     re.compile(r"\bmerg(?:e|ed|ing)\b"),
     re.compile(r"\barchiv(?:e|ed|ing)\b"),
     re.compile(r"\bdelet(?:e|ed|ing)\b"),
+    re.compile(r"\b(?:add(?:ed|ing)?|creat(?:e|ed|ing)|remov(?:e|ed|ing)|link(?:ed|ing)|restor(?:e|ed|ing))\b"),
     re.compile(r"\brewrot(?:e|ten)\b|\brewrit(?:e|ing)\b"),
     re.compile(r"\bretitl(?:e|ed|ing)\b|\bresummar(?:ize|ized|izing)\b|\bretagg(?:ed|ing)\b"),
     re.compile(r"\bclean(?:ed|ing)?(?: up)? tags?\b"),
@@ -164,9 +165,15 @@ def curator_summary_claims_mutating_actions(summary: str | None) -> bool:
     normalized = _normalize_curator_text(summary)
     if not normalized:
         return False
-    if any(fragment in normalized for fragment in _CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS):
-        return False
-    return any(pattern.search(normalized) for pattern in _CURATOR_MUTATION_SUMMARY_PATTERNS)
+    for clause in re.split(r"[.!?;]+|\b(?:but|however)\b", normalized):
+        clause = clause.strip()
+        if not clause or clause.startswith(("no ", "none ", "without ")):
+            continue
+        if any(fragment in clause for fragment in _CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS):
+            continue
+        if any(pattern.search(clause) for pattern in _CURATOR_MUTATION_SUMMARY_PATTERNS):
+            return True
+    return False
 
 
 def unsupported_curator_no_tool_response_error(response: dict[str, Any], tool_calls_executed: int) -> str | None:
