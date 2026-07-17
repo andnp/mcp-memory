@@ -12,8 +12,10 @@ from uuid import UUID, uuid4
 
 from mcp_memory.core.curation_context import (
     AcceptedMaintenanceRead,
+    CurationBudgetExhausted,
     CurationContextPacket as ImmutableCurationContextPacket,
     CurationReadBudget,
+    accept_maintenance_read,
     build_context_packet,
     disclosure_audit_manifest,
 )
@@ -152,6 +154,71 @@ class CurationDryRunResult:
         return self.result.outcome
 
 
+def _context_record_counts(
+    context: ImmutableCurationContextPacket,
+    *,
+    source_seed_count: int,
+    source_support_count: int,
+) -> dict[str, int]:
+    return {
+        "included_seed_count": len(context.seeds),
+        "included_support_count": len(context.support),
+        "omitted_seed_count": max(source_seed_count - len(context.seeds), 0),
+        "omitted_support_count": max(source_support_count - len(context.support), 0),
+    }
+
+
+def _materialize_read(
+    value: Mapping[str, Any] | AcceptedMaintenanceRead,
+) -> AcceptedMaintenanceRead:
+    return value if isinstance(value, AcceptedMaintenanceRead) else accept_maintenance_read(value)
+
+
+def _assemble_context(
+    *,
+    family: str,
+    strategy: str,
+    seed_reads: tuple[AcceptedMaintenanceRead, ...],
+    support_reads: tuple[AcceptedMaintenanceRead, ...],
+    provider: ProviderTrust,
+    budget: CurationReadBudget,
+    protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None,
+    sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None,
+    require_authoritative_disclosure_context: bool,
+) -> ImmutableCurationContextPacket:
+    """Build the largest deterministic packet that fits the read budget.
+
+    Support is advisory, so it is removed from the trailing edge first.  If
+    the seeds still do not fit, trailing seeds are removed while preserving
+    the highest-priority seed.  A single seed that cannot fit remains a typed
+    budget failure instead of being silently dropped.
+    """
+
+    selected_seeds = list(seed_reads)
+    selected_support = list(support_reads)
+    while True:
+        try:
+            return build_context_packet(
+                family=family,
+                strategy=strategy,
+                seed_reads=selected_seeds,
+                support_reads=selected_support,
+                provider=provider,
+                budget=budget,
+                protections_by_memory=cast(Any, protections_by_memory),
+                sensitive_fields_by_memory=cast(Any, sensitive_fields_by_memory),
+                require_authoritative_disclosure_context=require_authoritative_disclosure_context,
+            )
+        except CurationBudgetExhausted:
+            if selected_support:
+                selected_support.pop()
+                continue
+            if len(selected_seeds) > 1:
+                selected_seeds.pop()
+                continue
+            raise
+
+
 class WorkItemRepository(Protocol):
     def enqueue_unique(
         self,
@@ -219,20 +286,52 @@ class CurationDryRunHarness:
         self._verifier = verifier
 
     async def run(self, frontier: CurationFrontier) -> CurationDryRunResult:
-        context = build_context_packet(
-            family=frontier.family,
-            strategy=frontier.strategy,
-            seed_reads=frontier.seed_reads,
-            support_reads=frontier.support_reads,
-            provider=self._config.provider,
-            budget=self._config.read_budget,
-            protections_by_memory=cast(Any, self._protections_by_memory),
-            sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
-            require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+        seed_reads = tuple(_materialize_read(value) for value in frontier.seed_reads)
+        support_reads = tuple(_materialize_read(value) for value in frontier.support_reads)
+        context_failure: CurationBudgetExhausted | None = None
+        try:
+            context = _assemble_context(
+                family=frontier.family,
+                strategy=frontier.strategy,
+                seed_reads=seed_reads,
+                support_reads=support_reads,
+                provider=self._config.provider,
+                budget=self._config.read_budget,
+                protections_by_memory=cast(Any, self._protections_by_memory),
+                sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
+                require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+            )
+        except CurationBudgetExhausted as error:
+            context_failure = error
+            context = build_context_packet(
+                family=frontier.family,
+                strategy=frontier.strategy,
+                seed_reads=(),
+                support_reads=(),
+                provider=self._config.provider,
+                budget=self._config.read_budget,
+                protections_by_memory=cast(Any, self._protections_by_memory),
+                sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
+                require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+            )
+        context_record_counts = _context_record_counts(
+            context,
+            source_seed_count=len(seed_reads),
+            source_support_count=len(support_reads),
         )
         run_id = uuid4()
         plan_id = uuid4()
-        frontier_key = frontier.frontier_key or context.frontier_fingerprint
+        frontier_key = context.frontier_fingerprint
+        disclosure_audit = disclosure_audit_manifest(context, self._config.provider)
+        disclosure_audit["record_counts"] = context_record_counts
+        if context_failure is not None:
+            disclosure_audit["budget_failure"] = {
+                "reason_code": context_failure.reason_code,
+                "dimension": context_failure.dimension.value,
+                "used": context_failure.used,
+                "requested": context_failure.requested,
+                "limit": context_failure.limit,
+            }
         run = self._curation_store.create_run(
             CurationRun(
                 run_id=run_id,
@@ -242,7 +341,7 @@ class CurationDryRunHarness:
                 selector_strategy=frontier.strategy,
                 context_fingerprint=context.context_fingerprint,
                 plan_id=plan_id,
-                disclosure_audit=disclosure_audit_manifest(context, self._config.provider),
+                disclosure_audit=disclosure_audit,
             )
         )
         planning = run.model_copy(update={"state": CurationRunState.PLANNING, "planner_id": type(self._planner).__name__})
@@ -250,28 +349,39 @@ class CurationDryRunHarness:
         if stored is not None:
             run = stored
 
-        request = CurationPlanningRequest(
-            run_id=run_id,
-            plan_id=plan_id,
-            frontier_key=frontier_key,
-            context_fingerprint=context.context_fingerprint,
-            context=CurationContextPacket(
-                seed_memory_ids=[UUID(value) for value in context.seed_memory_ids],
-                support_memory_ids=[UUID(value) for value in context.support_memory_ids],
+        if context_failure is not None:
+            outcome = CurationRunOutcome.BUDGET_EXHAUSTED
+            reason_code = context_failure.reason_code
+            rejection_codes: list[str] = []
+            budget_usage = _budget_usage(context, [], None)
+            retry_reason = context_failure.reason_code
+            latest = None
+            plan: CurationPlan | None = None
+            validation: CurationValidationResult | None = None
+            envelopes: list[PlannerExecutionEnvelope[Any]] = []
+        else:
+            request = CurationPlanningRequest(
+                run_id=run_id,
+                plan_id=plan_id,
+                frontier_key=frontier_key,
                 context_fingerprint=context.context_fingerprint,
-            ),
-        )
-        plan, validation, envelopes, retry_reason, failure = await self._plan(
-            request=request,
-            context=context,
-        )
+                context=CurationContextPacket(
+                    seed_memory_ids=[UUID(value) for value in context.seed_memory_ids],
+                    support_memory_ids=[UUID(value) for value in context.support_memory_ids],
+                    context_fingerprint=context.context_fingerprint,
+                ),
+            )
+            plan, validation, envelopes, retry_reason, failure = await self._plan(
+                request=request,
+                context=context,
+            )
 
-        outcome, reason_code = self._classify_outcome(plan, validation, failure)
-        rejection_codes = _rejection_codes(validation)
-        if not rejection_codes and isinstance(failure, CurationPlannerSchemaError):
-            rejection_codes.append("schema_invalid")
-        budget_usage = _budget_usage(context, envelopes, validation)
-        latest = envelopes[-1] if envelopes else None
+            outcome, reason_code = self._classify_outcome(plan, validation, failure)
+            rejection_codes = _rejection_codes(validation)
+            if not rejection_codes and isinstance(failure, CurationPlannerSchemaError):
+                rejection_codes.append("schema_invalid")
+            budget_usage = _budget_usage(context, envelopes, validation)
+            latest = envelopes[-1] if envelopes else None
         executing = run.model_copy(
             update={
                 "state": CurationRunState.EXECUTING,
@@ -349,6 +459,7 @@ class CurationDryRunHarness:
             rejection_codes=rejection_codes,
             retry_reason=retry_reason,
             budget_usage=budget_usage,
+            context_record_counts=context_record_counts,
         )
         return CurationDryRunResult(
             run=terminal,
@@ -488,6 +599,12 @@ class CurationDryRunHarness:
         reason_code: str,
         envelope: PlannerExecutionEnvelope[Any] | None,
     ) -> CurationWorkItemDecision:
+        if outcome is CurationRunOutcome.BUDGET_EXHAUSTED:
+            return CurationWorkItemDecision(
+                WorkItemAction.DEFER,
+                reason_code,
+                self._config.no_op_cooldown_seconds,
+            )
         if outcome is CurationRunOutcome.NO_OP:
             return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
         if outcome is CurationRunOutcome.APPLIED:

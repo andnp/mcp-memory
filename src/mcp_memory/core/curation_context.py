@@ -247,10 +247,8 @@ def build_context_packet(
     limits = budget or CurationReadBudget()
     if max_record_characters is not None and max_record_characters < 0:
         raise ValueError("max_record_characters must be non-negative")
-    seed_values = tuple(seed_reads)
-    support_values = tuple(support_reads)
-    seed_ids = [_memory_id(_coerce_read(value).record) for value in seed_values]
-    frontier = frontier_fingerprint(family, strategy, seed_ids)
+    seed_values = tuple(_coerce_read(value) for value in seed_reads)
+    support_values = tuple(_coerce_read(value) for value in support_reads)
     started = clock()
     usage = CurationReadCounters()
     seeds: list[Mapping[str, Any]] = []
@@ -354,6 +352,7 @@ def build_context_packet(
             record_tokens[memory_id] = _record_revision_token(raw_record)
             graph_tokens[memory_id] = _graph_revision_token(memory_id, read)
 
+    frontier = frontier_fingerprint(family, strategy, [record["memory_id"] for record in seeds])
     packet_fields = {
         "frontier_fingerprint": frontier,
         "seeds": seeds,
@@ -431,6 +430,12 @@ def disclosure_audit_manifest(
         "version": 1,
         "provider_trust_class": str(provider.trust_class),
         "provider_allowlisted": provider.allowlisted,
+        "record_counts": {
+            "included_seed_count": len(context.seeds),
+            "included_support_count": len(context.support),
+            "omitted_seed_count": sum(1 for item in context.omissions if item.get("role") == "seed"),
+            "omitted_support_count": sum(1 for item in context.omissions if item.get("role") == "support"),
+        },
         "records": records,
         "truncated": truncated,
     }

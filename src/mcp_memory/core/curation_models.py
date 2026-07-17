@@ -276,6 +276,7 @@ class CurationRunResult(CurationModel):
     rejection_codes: list[str] = Field(default_factory=list)
     retry_reason: str | None = None
     budget_usage: CurationBudgetUsage = Field(default_factory=CurationBudgetUsage)
+    context_record_counts: dict[str, int] = Field(default_factory=dict)
     verified_action_count: int = 0
     affected_memory_count: int = 0
 

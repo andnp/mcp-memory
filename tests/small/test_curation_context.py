@@ -117,6 +117,21 @@ def test_budget_exhaustion_is_typed_and_deterministic() -> None:
     assert str(first.value) == str(second.value)
 
 
+def test_single_seed_that_cannot_fit_remains_typed() -> None:
+    with pytest.raises(CurationBudgetExhausted) as error:
+        build_context_packet(
+            family="curator",
+            strategy="recent",
+            seed_reads=[AcceptedMaintenanceRead(_record(SEED_ID, "too large"))],
+            provider=ProviderTrust(ProviderTrustClass.LOCAL),
+            budget=CurationReadBudget(max_context_characters=1),
+        )
+
+    assert error.value.dimension.value == "context_characters"
+    assert error.value.used == 0
+    assert error.value.requested > error.value.limit
+
+
 def test_time_budget_uses_injected_clock() -> None:
     ticks = iter((0.0, 2.0))
     with pytest.raises(CurationBudgetExhausted) as error:

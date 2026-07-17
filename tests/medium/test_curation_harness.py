@@ -6,10 +6,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
+from mcp_memory.core.curation_context import AcceptedMaintenanceRead, CurationReadBudget, build_context_packet
 from mcp_memory.core.curation_harness import (
     CurationDryRunHarness,
     CurationFrontier,
+    CurationHarnessConfig,
     WorkItemAction,
 )
 from mcp_memory.core.curation_models import CurationPlan, CurationRunOutcome, RetentionDecision, RetentionReason
@@ -50,7 +51,12 @@ def _frontier(seed: UUID, *, work_item_id: str | None = None) -> CurationFrontie
     )
 
 
-def _plan(frontier: CurationFrontier, seed: UUID) -> CurationPlan:
+def _plan(
+    frontier: CurationFrontier,
+    seed: UUID,
+    *,
+    seed_ids: tuple[UUID, ...] | None = None,
+) -> CurationPlan:
     context = build_context_packet(
         family=frontier.family,
         strategy=frontier.strategy,
@@ -62,8 +68,11 @@ def _plan(frontier: CurationFrontier, seed: UUID) -> CurationPlan:
         run_id=UUID("00000000-0000-0000-0000-000000000001"),
         frontier_key=context.frontier_fingerprint,
         context_fingerprint=context.context_fingerprint,
-        seed_memory_ids=[seed],
-        retained=[RetentionDecision(memory_id=seed, reason=RetentionReason.ALREADY_FOCUSED, rationale="still focused")],
+        seed_memory_ids=list(seed_ids or (seed,)),
+        retained=[
+            RetentionDecision(memory_id=memory_id, reason=RetentionReason.ALREADY_FOCUSED, rationale="still focused")
+            for memory_id in (seed_ids or (seed,))
+        ],
         rationale="no mutation is needed",
     )
 
@@ -93,11 +102,17 @@ class _RequestBoundFakePlanner:
                 model_name=scenario.model_name,
             )
         return await FakeCurationPlanner([scenario]).create_plan(request, tools)
-def _harness(db_manager: DatabaseManager, planner) -> CurationDryRunHarness:
+def _harness(
+    db_manager: DatabaseManager,
+    planner,
+    *,
+    config: CurationHarnessConfig | None = None,
+) -> CurationDryRunHarness:
     return CurationDryRunHarness(
         curation_store=SQLiteCurationStore(db_manager),
         planner=planner,
         work_items=SQLiteWorkItemRepository(db_manager),
+        config=config,
         clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
     )
 
@@ -227,3 +242,122 @@ async def test_provider_and_cancellation_failures_defer_claimed_work(
     assert result.outcome is expected
     assert result.work_item.action is WorkItemAction.DEFER
     assert work_items.get_item(item.id).status == WORK_ITEM_STATUS_DEFERRED
+
+
+@pytest.mark.asyncio
+async def test_context_budget_trims_support_before_seeds(db_manager: DatabaseManager) -> None:
+    first, second, support = uuid4(), uuid4(), uuid4()
+    retained_frontier = CurationFrontier(
+        family="curator",
+        strategy="focused",
+        seed_reads=(AcceptedMaintenanceRead(_record(first)), AcceptedMaintenanceRead(_record(second))),
+    )
+    frontier = CurationFrontier(
+        family="curator",
+        strategy="focused",
+        seed_reads=retained_frontier.seed_reads,
+        support_reads=(AcceptedMaintenanceRead(_record(support)),),
+    )
+    planner = _RequestBoundFakePlanner([
+        FakePlannerScenario(plan=_plan(retained_frontier, first, seed_ids=(first, second)))
+    ])
+    result = await _harness(
+        db_manager,
+        planner,
+        config=CurationHarnessConfig(read_budget=CurationReadBudget(max_context_characters=450)),
+    ).run(frontier)
+
+    assert result.context.seed_memory_ids == (str(first), str(second))
+    assert result.context.support_memory_ids == ()
+    assert result.result.context_record_counts == {
+        "included_seed_count": 2,
+        "included_support_count": 0,
+        "omitted_seed_count": 0,
+        "omitted_support_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_context_budget_trims_lowest_priority_trailing_seed(db_manager: DatabaseManager) -> None:
+    first, second = uuid4(), uuid4()
+    retained_frontier = _frontier(first)
+    frontier = CurationFrontier(
+        family="curator",
+        strategy="focused",
+        seed_reads=(AcceptedMaintenanceRead(_record(first)), AcceptedMaintenanceRead(_record(second))),
+    )
+    planner = _RequestBoundFakePlanner([FakePlannerScenario(plan=_plan(retained_frontier, first))])
+    result = await _harness(
+        db_manager,
+        planner,
+        config=CurationHarnessConfig(read_budget=CurationReadBudget(max_context_characters=250)),
+    ).run(frontier)
+
+    assert result.context.seed_memory_ids == (str(first),)
+    assert result.result.context_record_counts["omitted_seed_count"] == 1
+    assert result.run.frontier_key == result.context.frontier_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_context_identity_is_deterministic_after_seed_trimming(db_manager: DatabaseManager) -> None:
+    first, second = uuid4(), uuid4()
+    frontier = CurationFrontier(
+        family="curator",
+        strategy="focused",
+        seed_reads=(AcceptedMaintenanceRead(_record(first)), AcceptedMaintenanceRead(_record(second))),
+        frontier_key="stale-frontier-key",
+    )
+    planner = _RequestBoundFakePlanner([FakePlannerScenario(plan=_plan(_frontier(first), first))])
+    config = CurationHarnessConfig(read_budget=CurationReadBudget(max_context_characters=250))
+
+    first_result = await _harness(db_manager, planner, config=config).run(frontier)
+    second_result = await _harness(
+        db_manager,
+        _RequestBoundFakePlanner([FakePlannerScenario(plan=_plan(_frontier(first), first))]),
+        config=config,
+    ).run(frontier)
+
+    assert first_result.context.context_fingerprint == second_result.context.context_fingerprint
+    assert first_result.context.frontier_fingerprint == second_result.context.frontier_fingerprint
+    assert first_result.run.frontier_key == first_result.context.frontier_fingerprint
+    assert first_result.run.frontier_key != "stale-frontier-key"
+
+
+@pytest.mark.asyncio
+async def test_impossible_seed_budget_persists_and_defers_without_planner_or_mutation(
+    db_manager: DatabaseManager,
+) -> None:
+    seed = uuid4()
+    work_items = SQLiteWorkItemRepository(db_manager)
+    item, _ = work_items.enqueue_unique(
+        family_key="curator",
+        execution_lane="agentic",
+        idempotency_key="curation-harness-impossible-budget",
+    )
+    claimed = work_items.claim_batch(family_key="curator", execution_lane="agentic", lease_owner="worker", limit=1)[0]
+
+    class _NoCallPlanner:
+        calls = 0
+
+        async def create_plan(self, request, tools):
+            self.calls += 1
+            raise AssertionError("planner must not be called for an impossible context")
+
+    planner = _NoCallPlanner()
+    result = await _harness(
+        db_manager,
+        planner,
+        config=CurationHarnessConfig(
+            read_budget=CurationReadBudget(max_context_characters=100),
+            execute_accepted_normalize_actions=True,
+        ),
+    ).run(_frontier(seed, work_item_id=claimed.id))
+
+    assert planner.calls == 0
+    assert result.outcome is CurationRunOutcome.BUDGET_EXHAUSTED
+    assert result.run.retry_reason == "budget_exhausted"
+    assert result.run.disclosure_audit["budget_failure"]["dimension"] == "context_characters"
+    assert result.work_item.action is WorkItemAction.DEFER
+    assert result.work_item.retry_delay_seconds == 3600.0
+    assert work_items.get_item(item.id).status == WORK_ITEM_STATUS_DEFERRED
+    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
