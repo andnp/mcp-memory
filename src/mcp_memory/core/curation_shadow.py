@@ -56,9 +56,7 @@ async def run_curator_shadow_mode(
 ) -> dict[str, Any]:
     """Plan one curator frontier without invoking a mutation executor."""
 
-    planner_provider = getattr(ctx, "ai_json_provider", None)
-    if planner_provider is None and _supports_json_planning(provider):
-        planner_provider = provider
+    planner_provider = _curator_json_provider(ctx, task, provider)
     if planner_provider is None or not _supports_json_planning(planner_provider):
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -165,9 +163,7 @@ async def run_curator_verified_normalize_execution(
     work_item_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Plan with the provider, then execute accepted normalizes locally."""
-    planner_provider = getattr(ctx, "ai_json_provider", None)
-    if planner_provider is None and _supports_json_planning(provider):
-        planner_provider = provider
+    planner_provider = _curator_json_provider(ctx, task, provider)
     if planner_provider is None or not _supports_json_planning(planner_provider):
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -298,9 +294,7 @@ async def run_curator_verified_create_link_execution(
     work_item_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Plan with the provider, then execute accepted create-links locally."""
-    planner_provider = getattr(ctx, "ai_json_provider", None)
-    if planner_provider is None and _supports_json_planning(provider):
-        planner_provider = provider
+    planner_provider = _curator_json_provider(ctx, task, provider)
     if planner_provider is None or not _supports_json_planning(planner_provider):
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -441,6 +435,26 @@ def _supports_json_planning(provider: Any) -> bool:
         return False
     supports_agentic = getattr(provider, "supports_agentic", None)
     return not callable(supports_agentic) or not bool(supports_agentic())
+
+
+def _curator_json_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
+    """Prefer the task route and bind the registry fallback to this execution."""
+    if _supports_json_planning(provider):
+        return provider
+
+    planner_provider = getattr(ctx, "ai_json_provider", None)
+    if not _supports_json_planning(planner_provider):
+        return planner_provider
+
+    with_usage_context = getattr(planner_provider, "with_usage_context", None)
+    if callable(with_usage_context):
+        return with_usage_context(
+            task_name=task.task_name,
+            task_id=task.id,
+            execution_epoch=task.execution_epoch,
+            workspace_id=task.workspace_id,
+        )
+    return planner_provider
 
 
 def _disclosure_context(
