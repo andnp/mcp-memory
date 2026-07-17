@@ -71,6 +71,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "delete" not in action_schema["discriminator"]["mapping"]
     assert "RetentionDecision" in schema["$defs"]
     assert set(schema["$defs"]["RetentionDecision"]["required"]) >= {"memory_id", "reason", "rationale"}
+    for action_name in ("CreateLinkAction", "RemoveLinkAction"):
+        assert schema["$defs"][action_name]["properties"]["link_type"]["pattern"] == r"^[A-Z][A-Z0-9_]*$"
 
 
 def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> None:

@@ -6,7 +6,10 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+
+
+CanonicalLinkType = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
 
 
 class CurationModel(BaseModel):
@@ -121,7 +124,7 @@ class CreateLinkAction(ActionEnvelope):
     operation: Literal["create_link"] = "create_link"
     source_id: UUID
     target_id: UUID
-    link_type: str
+    link_type: CanonicalLinkType
     context: str | None = None
 
 
@@ -129,7 +132,7 @@ class RemoveLinkAction(ActionEnvelope):
     operation: Literal["remove_link"] = "remove_link"
     source_id: UUID
     target_id: UUID
-    link_type: str
+    link_type: CanonicalLinkType
     context: str | None = None
 
 

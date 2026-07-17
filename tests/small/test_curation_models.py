@@ -11,8 +11,10 @@ from mcp_memory.core.curation_models import (
     CurationRunOutcome,
     CurationRunResult,
     ClaimManifest,
+    CreateLinkAction,
     MutationReceipt,
     NormalizeMemoryAction,
+    RemoveLinkAction,
     ReceiptStatus,
     RetentionDecision,
     RetentionReason,
@@ -72,3 +74,31 @@ def test_normalize_requires_at_least_one_metadata_field() -> None:
         action_id=uuid4(), target_id=uuid4(), confidence=1, rationale="clear tags", tags=[]
     )
     assert action.tags == []
+
+
+@pytest.mark.parametrize("action_type", [CreateLinkAction, RemoveLinkAction])
+@pytest.mark.parametrize("link_type", ["", "documents_cause", "1CAUSE", "CAUSE-HAS"])
+def test_link_actions_require_canonical_link_type(
+    action_type: type[CreateLinkAction] | type[RemoveLinkAction], link_type: str
+) -> None:
+    with pytest.raises(ValidationError):
+        action_type(
+            action_id=uuid4(),
+            source_id=uuid4(),
+            target_id=uuid4(),
+            link_type=link_type,
+            confidence=1,
+            rationale="link memories",
+        )
+
+
+def test_link_actions_allow_project_defined_canonical_link_type() -> None:
+    action = CreateLinkAction(
+        action_id=uuid4(),
+        source_id=uuid4(),
+        target_id=uuid4(),
+        link_type="PROJECT_CAUSES_V2",
+        confidence=1,
+        rationale="link memories",
+    )
+    assert action.link_type == "PROJECT_CAUSES_V2"
