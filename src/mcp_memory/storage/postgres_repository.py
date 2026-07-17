@@ -794,7 +794,7 @@ class PostgresRelationalMemoryRepository:
             clauses.append(quality_clause)
             params.extend(quality_params)
         else:
-            order_by = "md5(CONCAT(%s, ':', memories.id)) ASC, memories.id ASC"
+            order_by = "md5(CONCAT(%s::text, ':', memories.id)) ASC, memories.id ASC"
             params.append(str(seed))
 
         with self._sessions.open_connection() as connection:

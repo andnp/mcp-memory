@@ -723,6 +723,36 @@ def test_postgres_integration_task_retry_clears_stale_cancellation_state(postgre
         assert reclaimed.cancellation_requested_at is None
 
 
+def test_postgres_integration_seeded_random_candidates_accept_status_filter(
+    postgres_storage_config,
+) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        repository = PostgresRelationalMemoryRepository(manager)
+        active = repository.create_memory(
+            title="Active maintenance candidate",
+            content="Eligible for seeded random maintenance selection.",
+            workspace_ids=["workspace-a"],
+            status="active",
+        )
+        stale = repository.create_memory(
+            title="Stale maintenance candidate",
+            content="Excluded by the status filter.",
+            workspace_ids=["workspace-a"],
+            status="stale",
+        )
+
+        assert active is not None
+        assert stale is not None
+        candidates = repository.query_seeded_random_candidates(
+            "status-filter-regression",
+            status="active",
+            limit=10,
+        )
+        assert [record.id for record in candidates] == [active.id]
+
+
 def test_postgres_integration_maintenance_housekeeping_handlers_update_state(
     postgres_storage_config,
     monkeypatch: pytest.MonkeyPatch,
