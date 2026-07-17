@@ -23,15 +23,25 @@ _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
 def build_curation_metrics(
     db_manager,
     *,
+    config=None,
     window_hours: int = 24,
     now: float | None = None,
 ) -> CurationMetricsPayload:
     """Build curation metrics exclusively from durable curation evidence."""
+    curation_config = getattr(config, "curation", None)
+    shadow_mode_enabled = bool(getattr(curation_config, "shadow_mode_enabled", False))
+    normalize_execution_enabled = bool(getattr(curation_config, "normalize_execution_enabled", False))
+    create_link_execution_enabled = bool(getattr(curation_config, "create_link_execution_enabled", False))
     generated_at = time.time() if now is None else now
     cutoff = generated_at - (max(window_hours, 0) * 3600)
     runner = ManagementQueryRunner(db_manager)
     if not runner.available:
-        return CurationMetricsPayload(window_hours=window_hours)
+        return CurationMetricsPayload(
+            window_hours=window_hours,
+            shadow_mode_enabled=shadow_mode_enabled,
+            normalize_execution_enabled=normalize_execution_enabled,
+            create_link_execution_enabled=create_link_execution_enabled,
+        )
 
     run_rows = runner.fetchall(
         """
@@ -187,6 +197,9 @@ def build_curation_metrics(
         verified_yield=verified_yield,
         verified_receipt_count=verified_receipts,
         terminal_receipt_count=terminal_receipts,
+        shadow_mode_enabled=shadow_mode_enabled,
+        normalize_execution_enabled=normalize_execution_enabled,
+        create_link_execution_enabled=create_link_execution_enabled,
     )
 
 

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from mcp_memory.config import Config, StorageCacheMode
+from mcp_memory.config import Config, CurationConfig, StorageCacheMode
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.daemon_models import DaemonControllerView
@@ -91,6 +91,39 @@ def test_management_service_accepts_structural_management_context(db_manager) ->
 
     assert health.storage_backend == "sqlite"
     assert service.workspace_id == "workspace-a"
+
+
+def test_management_service_exposes_effective_curation_rollout_config(db_manager) -> None:
+    config = Config(
+        curation=CurationConfig(
+            shadow_mode_enabled=True,
+            normalize_execution_enabled=True,
+            create_link_execution_enabled=False,
+        )
+    )
+    service = ManagementService(
+        ApplicationContext(
+            config=config,
+            memory_path=db_manager.db_path.parent,
+            db_manager=db_manager,
+            repository=RelationalMemoryRepository(db_manager),
+            task_queue=SQLiteTaskQueue(db_manager),
+        ),
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+
+    health = service.get_health()
+    metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
+
+    expected = {
+        "shadow_mode_enabled": True,
+        "normalize_execution_enabled": True,
+        "create_link_execution_enabled": False,
+    }
+    assert health.model_dump()["shadow_mode_enabled"] == expected["shadow_mode_enabled"]
+    assert health.model_dump()["normalize_execution_enabled"] == expected["normalize_execution_enabled"]
+    assert health.model_dump()["create_link_execution_enabled"] == expected["create_link_execution_enabled"]
+    assert metrics.curation.model_dump(include=set(expected)) == expected
 
 
 def test_management_service_health_tolerates_hook_client_count_failures(db_manager, caplog: pytest.LogCaptureFixture) -> None:

@@ -302,6 +302,7 @@ def build_nerd_metrics(
     )
     curation = build_curation_metrics(
         db_manager,
+        config=config,
         window_hours=window_hours,
         now=generated_at,
     )
