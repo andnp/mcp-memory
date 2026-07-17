@@ -1136,6 +1136,38 @@ async def test_runtime_task_worker_accepts_structural_task_runtime_context(db_ma
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_keeps_long_running_handler_fresh_without_subprocess(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "slow-runtime-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="slow-runtime-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    async def slow_handler(context, queued_task):
+        del context, queued_task
+        await asyncio.sleep(0.1)
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"slow-runtime-task": slow_handler},
+        abandoned_recovery_interval_seconds=0.01,
+        abandoned_task_stale_after_seconds=0.03,
+    )
+
+    await worker._process_task_with_reconciliation(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert completed.subprocess_pid is None
+    assert completed.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_completes_claimed_tasks(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     seen_payloads: list[dict[str, str]] = []

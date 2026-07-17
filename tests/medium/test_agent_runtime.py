@@ -2758,6 +2758,33 @@ async def test_runtime_task_worker_periodically_recovers_dead_subprocess_tasks(d
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_recovers_genuinely_stale_task_on_startup(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    task = queue.enqueue(
+        "stale-runtime-task",
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="stale-runtime-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.touch_running_task(task.id, updated_at=1.0, execution_epoch=claimed.execution_epoch)
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={"stale-runtime-task": lambda context, queued_task: None},
+        abandoned_task_stale_after_seconds=10.0,
+    )
+
+    await worker._run_reconciliation_pass(now=100.0, reason="startup")  # noqa: SLF001
+
+    recovered = queue.get_task(task.id)
+    assert recovered.status == "failed"
+    assert recovered.last_error == "Task was abandoned without an active provider subprocess"
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_survives_unexpected_post_claim_errors(db_manager, monkeypatch) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")

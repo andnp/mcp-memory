@@ -227,9 +227,19 @@ class RuntimeTaskWorker:
                     task_queue = getattr(self._ctx, "task_queue", None)
                     if task_queue is None:
                         continue
+                    current_task = await asyncio.to_thread(task_queue.get_task, task.id)
+                    if current_task.status != "running" or current_task.execution_epoch != task.execution_epoch:
+                        processing_task.cancel()
+                        await asyncio.gather(processing_task, return_exceptions=True)
+                        return
+                    await asyncio.to_thread(
+                        task_queue.touch_running_task,
+                        task.id,
+                        execution_epoch=task.execution_epoch,
+                    )
                     await self._recover_abandoned_tasks(task_queue)
                     current_task = await asyncio.to_thread(task_queue.get_task, task.id)
-                    if current_task.status == "running":
+                    if current_task.status == "running" and current_task.execution_epoch == task.execution_epoch:
                         continue
                     processing_task.cancel()
                     await asyncio.gather(processing_task, return_exceptions=True)
