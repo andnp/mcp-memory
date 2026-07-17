@@ -95,7 +95,7 @@ def build_runtime_task_worker(
         poll_interval_seconds=0.05,
         retry_delay_seconds=DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS,
         curation_reconciler=(
-            CurationReconciler(ctx.curation, ctx.relational_search)
+            CurationReconciler(ctx.curation, ctx.relational_search, task_queue=ctx.task_queue)
             if ctx.curation is not None and ctx.relational_search is not None
             else None
         ),

@@ -6,10 +6,12 @@ import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import TypeVar
 from uuid import UUID
 
+from mcp_memory.context import TaskQueueProtocol
 from mcp_memory.core.curation_models import NormalizeMemoryAction
 from mcp_memory.core.curation_verifier import (
     CurationVerificationError,
@@ -30,6 +32,7 @@ from mcp_memory.relational.search import MaintenanceReadRepositoryLike
 CURATION_RECONCILIATION_LOCK_RETRY_ATTEMPTS = 3
 CURATION_RECONCILIATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 CURATION_RECONCILIATION_RUN_LIMIT = 200
+CURATION_RECONCILIATION_STALE_AFTER_SECONDS = 300.0
 
 
 class CurationReconciliationDisposition(StrEnum):
@@ -65,11 +68,17 @@ class CurationReconciler:
         *,
         action_resolver: ActionResolver | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        task_queue: TaskQueueProtocol | None = None,
+        clock: Callable[[], float] = time.time,
+        stale_after_seconds: float = CURATION_RECONCILIATION_STALE_AFTER_SECONDS,
     ) -> None:
         self._curation_store = curation_store
         self._verifier = CurationVerifier(curation_store, maintenance_reads)
         self._action_resolver = action_resolver or _default_action_resolver
         self._sleep = sleep
+        self._task_queue = task_queue
+        self._clock = clock
+        self._stale_after_seconds = stale_after_seconds
 
     def reconcile(self) -> list[CurationReconciliationOutcome]:
         """Reconcile all non-terminal runs with committed unverified receipts."""
@@ -163,7 +172,7 @@ class CurationReconciler:
         verified_receipt_count: int,
     ) -> CurationReconciliationOutcome | None:
         if not receipts:
-            return None
+            return self._reconcile_empty_run(run)
         if any(receipt.status is CurationReceiptState.APPLIED_UNVERIFIED for receipt in receipts):
             return _defer(run, "receipt_unresolved")
         failed = any(receipt.status is not CurationReceiptState.VERIFIED for receipt in receipts)
@@ -190,6 +199,65 @@ class CurationReconciler:
             run_id=run.run_id,
             work_item_id=run.work_item_id,
             verified_receipt_count=verified_receipt_count,
+            run=terminal,
+        )
+
+    def _reconcile_empty_run(self, run: CurationRun) -> CurationReconciliationOutcome | None:
+        """Recover provider/task lifecycle failures that produced no receipts."""
+        task_queue = self._task_queue
+        if task_queue is not None and run.task_id is not None:
+            try:
+                task = self._with_lock_retries(lambda: task_queue.get_task(str(run.task_id)))
+            except (KeyError, ValueError):
+                task = None
+            except sqlite3.OperationalError as exc:
+                if _is_locked(exc):
+                    return _defer(run, "sqlite_locked")
+                raise
+            if task is not None:
+                if task.status in {"pending", "running"}:
+                    return None
+                if task.status == "cancelled":
+                    return self._terminalize_empty_run(run, CurationRunOutcome.CANCELLED, "task_cancelled")
+                if task.status in {"failed", "completed"}:
+                    return self._terminalize_empty_run(run, CurationRunOutcome.PROVIDER_FAILED, "task_finished_without_run")
+                return None
+
+        if not self._is_stale(run.created_at):
+            return None
+        return self._terminalize_empty_run(run, CurationRunOutcome.PROVIDER_FAILED, "stale_task_missing")
+
+    def _is_stale(self, created_at: datetime | None) -> bool:
+        if created_at is None:
+            return False
+        age_seconds = max(self._clock() - created_at.timestamp(), 0.0)
+        return age_seconds >= self._stale_after_seconds
+
+    def _terminalize_empty_run(
+        self,
+        run: CurationRun,
+        outcome: CurationRunOutcome,
+        reason_code: str,
+    ) -> CurationReconciliationOutcome:
+        try:
+            terminal = self._with_lock_retries(
+                lambda: self._curation_store.terminalize_run(run.run_id, run.state, outcome)
+            )
+        except sqlite3.OperationalError as exc:
+            if _is_locked(exc):
+                return _defer(run, "sqlite_locked")
+            return _block(run, "run_terminalization_failed")
+        if terminal is None:
+            terminal = self._curation_store.get_run(run.run_id)
+        if terminal is None:
+            return _block(run, "run_missing")
+        if terminal.outcome is not None and terminal.outcome is not outcome:
+            return _continue_after_terminal(run, terminal, 0)
+        return CurationReconciliationOutcome(
+            CurationReconciliationDisposition.CONTINUE,
+            reason_code,
+            run_id=run.run_id,
+            work_item_id=run.work_item_id,
             run=terminal,
         )
 
@@ -292,4 +360,5 @@ __all__ = [
     "CurationReconciler",
     "CURATION_RECONCILIATION_LOCK_RETRY_ATTEMPTS",
     "CURATION_RECONCILIATION_LOCK_RETRY_DELAY_SECONDS",
+    "CURATION_RECONCILIATION_STALE_AFTER_SECONDS",
 ]

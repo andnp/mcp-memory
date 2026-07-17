@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from uuid import UUID, uuid4
@@ -134,6 +135,158 @@ def test_failed_reconciliation_blocks_and_late_terminal_writes_are_ignored(
         assert late.outcome is CurationRunOutcome.VERIFICATION_FAILED
         assert stored_receipt is not None
         assert stored_receipt.status is CurationReceiptState.VERIFICATION_FAILED
+    finally:
+        runtime.close()
+
+
+def _empty_run(runtime, *, task_id: UUID | None, created_at: datetime) -> CurationRun:
+    run = CurationRun(
+        run_id=uuid4(),
+        task_id=task_id,
+        frontier_key="empty-run-frontier",
+        context_fingerprint="empty-run-context",
+        state=CurationRunState.PLANNING,
+        created_at=created_at,
+    )
+    return runtime.curation.create_run(run)
+
+
+def _empty_run_reconciler(runtime, now: float) -> CurationReconciler:
+    return CurationReconciler(
+        runtime.curation,
+        runtime.relational_search,
+        task_queue=runtime.task_queue,
+        clock=lambda: now,
+        stale_after_seconds=60.0,
+        sleep=lambda _delay: None,
+    )
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_empty_run_stays_active_while_task_is_pending_or_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    running: bool,
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        now = 1_000.0
+        task_id = uuid4()
+        task = runtime.task_queue.enqueue(CURATOR_TASK_NAME, task_id=str(task_id))
+        if running:
+            assert runtime.task_queue.claim_next() is not None
+        run = _empty_run(
+            runtime,
+            task_id=task_id,
+            created_at=datetime.fromtimestamp(now - 600.0, UTC),
+        )
+
+        assert _empty_run_reconciler(runtime, now).reconcile() == []
+        stored = runtime.curation.get_run(run.run_id)
+        assert stored is not None
+        assert stored.state is CurationRunState.PLANNING
+        assert runtime.task_queue.get_task(task.id).status == ("running" if running else "pending")
+    finally:
+        runtime.close()
+
+
+def test_empty_run_follows_cancelled_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        now = 1_000.0
+        task_id = uuid4()
+        runtime.task_queue.enqueue(CURATOR_TASK_NAME, task_id=str(task_id))
+        runtime.task_queue.request_cancel(
+            str(task_id), cancelled_by="test", reason="abandoned trial"
+        )
+        run = _empty_run(
+            runtime,
+            task_id=task_id,
+            created_at=datetime.fromtimestamp(now - 10.0, UTC),
+        )
+
+        outcomes = _empty_run_reconciler(runtime, now).reconcile()
+        stored = runtime.curation.get_run(run.run_id)
+        assert len(outcomes) == 1
+        assert outcomes[0].reason_code == "task_cancelled"
+        assert stored is not None
+        assert stored.outcome is CurationRunOutcome.CANCELLED
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("task_status", ["failed", "completed"])
+def test_empty_run_follows_finished_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, task_status: str
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        now = 1_000.0
+        task_id = uuid4()
+        task = runtime.task_queue.enqueue(CURATOR_TASK_NAME, task_id=str(task_id))
+        claimed = runtime.task_queue.claim_next()
+        assert claimed is not None
+        if task_status == "failed":
+            runtime.task_queue.fail_permanently(task.id, "provider stopped", execution_epoch=claimed.execution_epoch)
+        else:
+            runtime.task_queue.complete(task.id, completed_at=now, execution_epoch=claimed.execution_epoch)
+        run = _empty_run(
+            runtime,
+            task_id=task_id,
+            created_at=datetime.fromtimestamp(now - 10.0, UTC),
+        )
+
+        outcomes = _empty_run_reconciler(runtime, now).reconcile()
+        stored = runtime.curation.get_run(run.run_id)
+        assert len(outcomes) == 1
+        assert outcomes[0].reason_code == "task_finished_without_run"
+        assert stored is not None
+        assert stored.outcome is CurationRunOutcome.PROVIDER_FAILED
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("task_id", [None, "missing-task"])
+def test_empty_run_missing_task_is_terminalized_only_when_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, task_id: str | None
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        now = 1_000.0
+        run = _empty_run(
+            runtime,
+            task_id=None if task_id is None else UUID(int=0),
+            created_at=datetime.fromtimestamp(now - 61.0, UTC),
+        )
+
+        outcomes = _empty_run_reconciler(runtime, now).reconcile()
+        stored = runtime.curation.get_run(run.run_id)
+        assert len(outcomes) == 1
+        assert outcomes[0].reason_code == "stale_task_missing"
+        assert stored is not None
+        assert stored.outcome is CurationRunOutcome.PROVIDER_FAILED
+    finally:
+        runtime.close()
+
+
+def test_empty_run_missing_task_recent_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        now = 1_000.0
+        run = _empty_run(
+            runtime,
+            task_id=UUID(int=0),
+            created_at=datetime.fromtimestamp(now - 59.0, UTC),
+        )
+
+        assert _empty_run_reconciler(runtime, now).reconcile() == []
+        stored = runtime.curation.get_run(run.run_id)
+        assert stored is not None
+        assert stored.state is CurationRunState.PLANNING
     finally:
         runtime.close()
 
