@@ -144,15 +144,39 @@ async def handle_memory_curator_task(
     supports_agentic = getattr(provider, "supports_agentic", None)
     reset_agentic_tool_tracking(ctx, task.id)
     if callable(run_agent) and (not callable(supports_agentic) or supports_agentic()):
+        agentic_prompt = _curator_support.build_agentic_prompt(
+            task,
+            strategy_used=seed_batch.strategy_used,
+            seed_records=seed_records,
+            guardrails=curator_guardrails,
+        )
+        validation_retry_count = 0
+        agentic_result: Any = None
+        normalized_agentic: dict[str, Any] = {}
         try:
-            agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(
-                _curator_support.build_agentic_prompt(
-                    task,
-                    strategy_used=seed_batch.strategy_used,
-                    seed_records=seed_records,
-                    guardrails=curator_guardrails,
+            for attempt in range(2):
+                agentic_result = await cast(Callable[[str], Awaitable[Any]], run_agent)(agentic_prompt)
+                deterministic_counts = finalize_agentic_tool_tracking(ctx, task.id)
+                normalized_agentic = prefer_deterministic_agentic_counts(
+                    _curator_support.normalize_curator_agentic_result(agentic_result),
+                    deterministic_counts=deterministic_counts,
                 )
-            )
+                raw_summary = getattr(agentic_result, "summary", None)
+                if (
+                    attempt == 0
+                    and int(normalized_agentic["tool_calls_executed"]) <= 0
+                    and _curator_support.curator_summary_claims_mutating_actions(raw_summary)
+                ):
+                    validation_retry_count = 1
+                    reset_agentic_tool_tracking(ctx, task.id)
+                    agentic_prompt = (
+                        agentic_prompt
+                        + "\n\nvalidation_error: Your previous response claimed maintenance actions, "
+                        "but no internal MCP tool calls were observed. Execute the claimed actions "
+                        "through the internal MCP tools before returning the final JSON summary."
+                    )
+                    continue
+                break
         except Exception:
             if claimed_review_item is not None:
                 release_work_item(ctx, claimed_review_item.id)
@@ -160,11 +184,6 @@ async def handle_memory_curator_task(
             raise
         if claimed_review_item is not None:
             complete_work_item(ctx, claimed_review_item.id)
-        deterministic_counts = finalize_agentic_tool_tracking(ctx, task.id)
-        normalized_agentic = prefer_deterministic_agentic_counts(
-            _curator_support.normalize_curator_agentic_result(agentic_result),
-            deterministic_counts=deterministic_counts,
-        )
         normalized_agentic["summary"] = _curator_support.normalize_curator_summary(
             {"summary": getattr(agentic_result, "summary", None)},
             tool_calls_executed=normalized_agentic["tool_calls_executed"],
@@ -184,6 +203,7 @@ async def handle_memory_curator_task(
                 normalized_agentic["tool_names_used"],
                 tool_name="internal_get_compatible_work_batch",
             ),
+            validation_retry_count=validation_retry_count,
         )
 
     try:

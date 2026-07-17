@@ -6176,6 +6176,94 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_memory_curator_retries_mixed_action_claims_without_tool_calls(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+
+    task = TaskRecord(
+        id="memory-curator-mixed-claim-retry-task",
+        task_name=CURATOR_TASK_NAME,
+        data={"workspace_id": runtime.workspace_id},
+        workspace_id=runtime.workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+
+    class _AgenticProvider:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.call_count += 1
+            if self.call_count == 1:
+                return AgenticRunResult(
+                    status="success",
+                    summary=(
+                        "Rewrote and retagged the target. Reviewed adjacent clusters; "
+                        "declined merges because the records were distinct."
+                    ),
+                )
+
+            await call_internal_memory_tool(
+                runtime,
+                "internal_update_memory_record",
+                {
+                    "memory_id": record.id,
+                    "summary": "The target now states its durable authentication conclusion.",
+                    "tags": ["auth", "curated"],
+                },
+            )
+            await call_internal_memory_tool(
+                runtime,
+                "task_complete",
+                {"task_id": task.id, "task_name": CURATOR_TASK_NAME, "summary": "done"},
+            )
+            return AgenticRunResult(
+                status="success",
+                summary="Rewrote and retagged the target through MCP tools.",
+            )
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Authentication cleanup target",
+            content="JWT coverage is required for client authentication.",
+            summary="Old generic summary.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth", "cleanup"],
+        )
+        assert record is not None
+
+        provider = _AgenticProvider()
+        result = await handle_memory_curator_task(runtime, task, provider)
+        refreshed = runtime.repository.get_memory(record.id)
+
+        assert provider.call_count == 2
+        assert result["validation_retry_count"] == 1
+        assert result["tool_calls_executed"] == 2
+        assert result["mutations"] == 1
+        assert refreshed is not None
+        assert refreshed.summary == "The target now states its durable authentication conclusion."
+        assert refreshed.tags == ["auth", "curated"]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_curator_agentic_prefers_deterministic_internal_tool_counts(
     monkeypatch,
     tmp_path: Path,
