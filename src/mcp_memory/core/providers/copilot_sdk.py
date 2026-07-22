@@ -6,11 +6,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from copilot import CopilotClient
-from copilot.session import PermissionHandler
-from copilot.session_events import AssistantMessageData
-from copilot.session_events import SessionErrorData
-
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers._json_cli import PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS
 from mcp_memory.core.providers._json_cli import build_cli_failure_exception
@@ -26,6 +21,21 @@ import copy
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _import_copilot_modules():
+    """Lazily import copilot modules to allow daemon startup without the package."""
+    try:
+        from copilot import CopilotClient
+        from copilot.session import PermissionHandler
+        from copilot.session_events import AssistantMessageData
+        from copilot.session_events import SessionErrorData
+        return CopilotClient, PermissionHandler, AssistantMessageData, SessionErrorData
+    except ImportError as exc:
+        raise ImportError(
+            "The 'github-copilot-sdk' package is required to use the Copilot SDK provider. "
+            "Install it with: pip install github-copilot-sdk"
+        ) from exc
 
 
 class CopilotSDKProvider:
@@ -103,6 +113,7 @@ class CopilotSDKProvider:
         return response
 
     async def _send_with_heartbeat(self, prompt: str, *, started_at: float, attempt: int):
+        CopilotClient, PermissionHandler, _, _ = _import_copilot_modules()
         async with CopilotClient(working_directory=self._cwd) as client:
             session = await client.create_session(
                 model=self._model,
@@ -241,6 +252,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
 
 
 def _to_ai_response(event: Any) -> AIResponse:
+    _, _, AssistantMessageData, SessionErrorData = _import_copilot_modules()
     if event is None:
         return AIResponse(raw_text="", parsed=None, error="No assistant message received")
     if isinstance(event.data, SessionErrorData):
