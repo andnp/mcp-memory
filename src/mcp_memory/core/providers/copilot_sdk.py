@@ -22,20 +22,49 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for lazy imports (allows tests to patch these)
+_imported_modules = None
+CopilotClient = None
+PermissionHandler = None
+AssistantMessageData = None
+SessionErrorData = None
+
 
 def _import_copilot_modules():
     """Lazily import copilot modules to allow daemon startup without the package."""
+    global _imported_modules, CopilotClient, PermissionHandler, AssistantMessageData, SessionErrorData
+
+    # Return cached versions if already imported
+    if _imported_modules is not None:
+        return _imported_modules
+
     try:
-        from copilot import CopilotClient
-        from copilot.session import PermissionHandler
-        from copilot.session_events import AssistantMessageData
-        from copilot.session_events import SessionErrorData
-        return CopilotClient, PermissionHandler, AssistantMessageData, SessionErrorData
+        from copilot import CopilotClient as _CopilotClient
+        from copilot.session import PermissionHandler as _PermissionHandler
+        from copilot.session_events import AssistantMessageData as _AssistantMessageData
+        from copilot.session_events import SessionErrorData as _SessionErrorData
+
+        # Cache and set module-level attributes for test patching
+        _imported_modules = (_CopilotClient, _PermissionHandler, _AssistantMessageData, _SessionErrorData)
+        CopilotClient = _CopilotClient
+        PermissionHandler = _PermissionHandler
+        AssistantMessageData = _AssistantMessageData
+        SessionErrorData = _SessionErrorData
+
+        return _imported_modules
     except ImportError as exc:
         raise ImportError(
             "The 'github-copilot-sdk' package is required to use the Copilot SDK provider. "
             "Install it with: pip install github-copilot-sdk"
         ) from exc
+
+
+# Try to import on module load so tests can patch the modules
+try:
+    _import_copilot_modules()
+except ImportError:
+    # It's okay if copilot is not installed - it will be lazily imported on first use
+    pass
 
 
 class CopilotSDKProvider:
@@ -113,11 +142,15 @@ class CopilotSDKProvider:
         return response
 
     async def _send_with_heartbeat(self, prompt: str, *, started_at: float, attempt: int):
-        CopilotClient, PermissionHandler, _, _ = _import_copilot_modules()
-        async with CopilotClient(working_directory=self._cwd) as client:
+        # Use global CopilotClient (may be patched in tests)
+        if globals()['CopilotClient'] is None:
+            _import_copilot_modules()
+        _CopilotClient = globals()['CopilotClient']
+        _PermissionHandler = globals()['PermissionHandler']
+        async with _CopilotClient(working_directory=self._cwd) as client:
             session = await client.create_session(
                 model=self._model,
-                on_permission_request=PermissionHandler.approve_all,
+                on_permission_request=_PermissionHandler.approve_all,
                 mcp_servers=self._mcp_servers(),
             )
             try:
@@ -252,12 +285,17 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
 
 
 def _to_ai_response(event: Any) -> AIResponse:
-    _, _, AssistantMessageData, SessionErrorData = _import_copilot_modules()
+    # Use global modules (may be patched in tests)
+    if globals()['AssistantMessageData'] is None:
+        _import_copilot_modules()
+    _AssistantMessageData = globals()['AssistantMessageData']
+    _SessionErrorData = globals()['SessionErrorData']
+
     if event is None:
         return AIResponse(raw_text="", parsed=None, error="No assistant message received")
-    if isinstance(event.data, SessionErrorData):
+    if isinstance(event.data, _SessionErrorData):
         return AIResponse(raw_text="", parsed=None, error=f"{event.data.error_type}: {event.data.message}")
-    if not isinstance(event.data, AssistantMessageData):
+    if not isinstance(event.data, _AssistantMessageData):
         return AIResponse(raw_text="", parsed=None, error="No assistant message content found")
     content = event.data.content
     parsed = _extract_json_object(content)
