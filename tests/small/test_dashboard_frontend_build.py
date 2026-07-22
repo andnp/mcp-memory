@@ -47,9 +47,10 @@ def test_ensure_dashboard_frontend_built_runs_build_when_bundle_is_stale(tmp_pat
 
     called: dict[str, object] = {}
 
-    def _fake_run(command, *, cwd, check, capture_output, text):
+    def _fake_run(command, *, cwd, check, capture_output, text, timeout):
         called["command"] = command
         called["cwd"] = cwd
+        called["timeout"] = timeout
         dist_index.write_text("fresh", encoding="utf-8")
         dist_index.touch()
         return SimpleNamespace(returncode=0, stdout="vite build ok", stderr="")
@@ -68,7 +69,7 @@ def test_ensure_dashboard_frontend_built_reports_missing_npm(tmp_path: Path, mon
     static_root, dist_index = _seed_frontend_tree(tmp_path)
     dist_index.write_text("old", encoding="utf-8")
 
-    def _missing_run(command, *, cwd, check, capture_output, text):
+    def _missing_run(command, *, cwd, check, capture_output, text, timeout):
         raise OSError("npm not found")
 
     monkeypatch.setattr("mcp_memory.management.frontend_build.subprocess.run", _missing_run)
@@ -80,3 +81,47 @@ def test_ensure_dashboard_frontend_built_reports_missing_npm(tmp_path: Path, mon
 
     assert result.status == "build_unavailable"
     assert result.message == "npm not found"
+
+
+def test_ensure_dashboard_frontend_built_skips_repeat_build_after_failure(tmp_path: Path, monkeypatch) -> None:
+    static_root, dist_index = _seed_frontend_tree(tmp_path)
+    dist_index.write_text("old", encoding="utf-8")
+    source_file = tmp_path / "frontend" / "src" / "App.tsx"
+    source_file.write_text("export const App = () => <div />;", encoding="utf-8")
+    source_file.touch()
+
+    call_count = 0
+
+    def _failing_run(command, *, cwd, check, capture_output, text, timeout):
+        nonlocal call_count
+        call_count += 1
+        return SimpleNamespace(returncode=127, stdout="", stderr="vite: command not found")
+
+    monkeypatch.setattr("mcp_memory.management.frontend_build.subprocess.run", _failing_run)
+
+    first = ensure_dashboard_frontend_built(static_root=static_root)
+    assert first.status == "build_failed"
+    assert call_count == 1
+
+    second = ensure_dashboard_frontend_built(static_root=static_root)
+    assert second.status == "build_failed_cached"
+    assert call_count == 1
+
+
+def test_ensure_dashboard_frontend_built_times_out(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    static_root, dist_index = _seed_frontend_tree(tmp_path)
+    dist_index.write_text("old", encoding="utf-8")
+    source_file = tmp_path / "frontend" / "src" / "App.tsx"
+    source_file.write_text("export const App = () => <div />;", encoding="utf-8")
+    source_file.touch()
+
+    def _hanging_run(command, *, cwd, check, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd=command, timeout=timeout)
+
+    monkeypatch.setattr("mcp_memory.management.frontend_build.subprocess.run", _hanging_run)
+
+    result = ensure_dashboard_frontend_built(static_root=static_root)
+
+    assert result.status == "build_timed_out"
