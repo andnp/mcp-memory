@@ -114,6 +114,20 @@ def _reclaim_stale_lock(lock_path: Path) -> None:
             continue
 
 
+def _daemon_lock_acquire_timeout_seconds(timeout_seconds: float) -> float:
+    """Bound how long a caller waits to acquire the shared daemon.lock.
+
+    Both prepare_daemon_start and ensure_daemon_started contend for the same
+    lock, and ensure_daemon_started can legitimately hold it through all three
+    of its readiness-wait phase deadlines (readiness, metadata grace, health
+    grace) before giving up. Every acquirer -- including prepare_daemon_start,
+    which only needs the lock briefly itself -- must be willing to wait at
+    least that long, or it spuriously raises DaemonLockTimeoutError while
+    another caller is still legitimately starting the daemon.
+    """
+    return timeout_seconds + max(20.0, timeout_seconds) + max(5.0, timeout_seconds * 2)
+
+
 def prepare_daemon_start(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -145,7 +159,7 @@ def prepare_daemon_start(
         spec.config.daemon.healthcheck_interval_seconds,
     )
     _reclaim_stale_lock(lock_path)
-    lock.acquire(timeout_seconds=timeout_seconds)
+    lock.acquire(timeout_seconds=_daemon_lock_acquire_timeout_seconds(timeout_seconds))
     try:
         return _reclaim_daemon_slot(
             spec,
@@ -238,18 +252,7 @@ def ensure_daemon_started(
         ),
         spec.config.daemon.healthcheck_interval_seconds,
     )
-    # ensure_daemon_started holds this lock for the whole spawn-and-wait
-    # sequence below (unlike prepare_daemon_start, which only reclaims the
-    # slot). The readiness wait can legitimately run through all three phase
-    # deadlines (readiness, metadata grace, health grace) before giving up, so
-    # the lock-acquire timeout must cover that same worst case -- otherwise
-    # concurrent callers spuriously raise DaemonLockTimeoutError long before
-    # the caller actually holding the lock could have finished starting the
-    # daemon.
-    lock_acquire_timeout_seconds = (
-        timeout_seconds + max(20.0, timeout_seconds) + max(5.0, timeout_seconds * 2)
-    )
-    lock.acquire(timeout_seconds=lock_acquire_timeout_seconds)
+    lock.acquire(timeout_seconds=_daemon_lock_acquire_timeout_seconds(timeout_seconds))
     try:
         existing = _reclaim_daemon_slot(
             spec,
