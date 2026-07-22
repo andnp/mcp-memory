@@ -34,7 +34,15 @@ from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 logger = logging.getLogger(__name__)
-_IDLE_SHUTDOWN_DELAY_SECONDS = 0.25
+# This is the sleep at the top of every _shutdown_daemon_when_idle poll
+# iteration, so it also doubles as the grace window between the last client
+# disappearing and the daemon actually killing itself. It used to be 0.25s,
+# which gave a reconnecting client (e.g. a client restart across `/clear`, an
+# IDE reload, or a brief network drop) no realistic chance to send a fresh
+# session-start and cancel the shutdown via _cancel_idle_shutdown_task before
+# SIGTERM fired -- causing avoidable cold-start churn (~15-20s Postgres +
+# embedding-model init) for every reconnect that raced the shutdown.
+_IDLE_SHUTDOWN_DELAY_SECONDS = 15.0
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
 _RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = 5.0
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
