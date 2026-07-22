@@ -53,10 +53,14 @@ def inspect_postgres_bootstrap_state(config: PostgresStorageConfig) -> StorageBo
     return state
 
 
-def ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+def ensure_postgres_schema(
+    config: PostgresStorageConfig,
+    *,
+    connect_timeout_seconds: float | None = None,
+) -> StorageBootstrapState:
     state: StorageBootstrapState | None = None
     with PostgresConnectionManager(config) as manager:
-        with manager.open_connection() as connection:
+        with manager.open_connection(timeout=connect_timeout_seconds) as connection:
             with connection.cursor() as cursor:
                 current_state = _inspect_postgres_bootstrap_state_on_cursor(cursor)
                 apply_postgres_migrations(
@@ -103,13 +107,24 @@ def _inspect_postgres_bootstrap_state_on_cursor(cursor: CursorLike) -> StorageBo
     )
 
 
+_STARTUP_SCHEMA_BOOTSTRAP_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
 def _ensure_postgres_schema_tolerating_outage(
     config: PostgresStorageConfig,
     *,
     tolerate_outage: bool,
 ) -> StorageBootstrapState | None:
     try:
-        return ensure_postgres_schema(config)
+        # Daemon startup only needs this connection attempt to prove Postgres
+        # is reachable before proceeding; the pool's 30s default getconn
+        # timeout meant every startup during an outage blocked for 30s before
+        # failing (or degrading), making retry/respawn cycles far more
+        # expensive than they need to be.
+        return ensure_postgres_schema(
+            config,
+            connect_timeout_seconds=_STARTUP_SCHEMA_BOOTSTRAP_CONNECT_TIMEOUT_SECONDS,
+        )
     except psycopg.OperationalError:
         if not tolerate_outage:
             raise

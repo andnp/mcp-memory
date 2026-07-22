@@ -96,9 +96,9 @@ class PostgresConnectionManager(SessionManager[DbConnectionLike]):
         self.close()
         return False
 
-    def open_connection(self) -> PooledPostgresConnectionLease:
+    def open_connection(self, *, timeout: float | None = None) -> PooledPostgresConnectionLease:
         pool = self._ensure_pool()
-        connection = pool.getconn()
+        connection = pool.getconn(timeout=timeout)
         return PooledPostgresConnectionLease(pool=pool, connection=connection)
 
     def close(self) -> None:

@@ -38,7 +38,7 @@ def test_storage_factory_builds_postgres_repository_resources_with_explicit_unsu
         workspace_id="workspace-123",
     )
 
-    def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+    def fake_ensure_postgres_schema(config: PostgresStorageConfig, *, connect_timeout_seconds: float | None = None) -> StorageBootstrapState:
         assert config.dsn == "postgresql://memory@example.invalid/mcp_memory"
         return StorageBootstrapState(
             backend="postgres",
@@ -80,7 +80,7 @@ def test_storage_factory_builds_postgres_shared_read_cache_only_for_enabled_read
         workspace_id="workspace-123",
     )
 
-    def fake_ensure_postgres_schema(config: PostgresStorageConfig) -> StorageBootstrapState:
+    def fake_ensure_postgres_schema(config: PostgresStorageConfig, *, connect_timeout_seconds: float | None = None) -> StorageBootstrapState:
         assert config.dsn == "postgresql://memory@example.invalid/mcp_memory"
         return StorageBootstrapState(
             backend="postgres",
@@ -116,7 +116,7 @@ def test_storage_factory_starts_degraded_when_postgres_unreachable_and_writeback
         workspace_id="workspace-123",
     )
 
-    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig) -> StorageBootstrapState:
+    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig, *, connect_timeout_seconds: float | None = None) -> StorageBootstrapState:
         raise psycopg.OperationalError("couldn't get a connection after 30.00 sec")
 
     monkeypatch.setattr(
@@ -148,7 +148,7 @@ def test_storage_factory_still_fails_startup_when_postgres_unreachable_without_w
         workspace_id="workspace-123",
     )
 
-    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig) -> StorageBootstrapState:
+    def fake_ensure_postgres_schema_unreachable(config: PostgresStorageConfig, *, connect_timeout_seconds: float | None = None) -> StorageBootstrapState:
         raise psycopg.OperationalError("couldn't get a connection after 30.00 sec")
 
     monkeypatch.setattr(
@@ -249,7 +249,7 @@ def test_inspect_postgres_bootstrap_state_reads_schema_version(monkeypatch: pyte
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return FakeConnection()
 
         def putconn(self, connection: FakeConnection) -> None:
@@ -348,7 +348,7 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return FakeConnection()
 
         def putconn(self, connection: FakeConnection) -> None:
@@ -450,7 +450,7 @@ def test_ensure_postgres_schema_adds_optional_vector_column_when_extension_is_av
             self.cursor = FakeCursor()
             holder["cursor"] = self.cursor
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return FakeConnection(self.cursor)
 
         def putconn(self, connection: FakeConnection) -> None:
@@ -553,7 +553,7 @@ def test_ensure_postgres_schema_skips_optional_vector_column_when_extension_is_u
             self.cursor = FakeCursor()
             holder["cursor"] = self.cursor
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return FakeConnection(self.cursor)
 
         def putconn(self, connection: FakeConnection) -> None:

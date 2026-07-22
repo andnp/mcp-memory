@@ -72,7 +72,7 @@ def test_postgres_connection_manager_returns_borrow_to_pool_on_close(monkeypatch
                 "options": "-c statement_timeout=30000ms -c lock_timeout=5000ms",
             }
 
-        def getconn(self) -> object:
+        def getconn(self, timeout: float | None = None) -> object:
             borrowed_connections.append(raw_connection)
             return raw_connection
 
@@ -134,7 +134,7 @@ def test_postgres_connection_lease_rolls_back_on_exception(monkeypatch: pytest.M
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return raw_connection
 
         def putconn(self, connection: object) -> None:
@@ -184,7 +184,7 @@ def test_postgres_connection_lease_resets_transaction_before_context_exit(monkey
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return raw_connection
 
         def putconn(self, connection: object) -> None:
@@ -237,7 +237,7 @@ def test_postgres_connection_lease_discards_broken_borrow_before_returning_to_po
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return raw_connection
 
         def putconn(self, connection: object) -> None:
@@ -292,7 +292,7 @@ def test_postgres_connection_lease_discards_connection_when_exception_cleanup_re
         def __init__(self, **kwargs) -> None:
             del kwargs
 
-        def getconn(self) -> FakeConnection:
+        def getconn(self, timeout: float | None = None) -> FakeConnection:
             return raw_connection
 
         def putconn(self, connection: object) -> None:
