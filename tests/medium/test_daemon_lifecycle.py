@@ -118,7 +118,7 @@ def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, t
     current = ensure_daemon_started()
 
     assert current.pid == metadata.pid
-    assert acquired_timeouts == [0.25]
+    assert acquired_timeouts == [pytest.approx(25.25)]
     assert released == [True]
 
 
@@ -495,7 +495,7 @@ def test_ensure_daemon_started_gives_readiness_a_fresh_timeout_after_cleanup(mon
     current = ensure_daemon_started()
 
     assert current.pid == ready_metadata.pid
-    assert acquired_timeouts == [0.2]
+    assert acquired_timeouts == [pytest.approx(25.2)]
     assert cleanup_deadlines == [0.2]
     assert spawned == [(spec.workspace_root, spec.config.daemon.host, 4242)]
 

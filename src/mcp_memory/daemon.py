@@ -189,7 +189,18 @@ def ensure_daemon_started(
         ),
         spec.config.daemon.healthcheck_interval_seconds,
     )
-    lock.acquire(timeout_seconds=timeout_seconds)
+    # ensure_daemon_started holds this lock for the whole spawn-and-wait
+    # sequence below (unlike prepare_daemon_start, which only reclaims the
+    # slot). The readiness wait can legitimately run through all three phase
+    # deadlines (readiness, metadata grace, health grace) before giving up, so
+    # the lock-acquire timeout must cover that same worst case -- otherwise
+    # concurrent callers spuriously raise DaemonLockTimeoutError long before
+    # the caller actually holding the lock could have finished starting the
+    # daemon.
+    lock_acquire_timeout_seconds = (
+        timeout_seconds + max(20.0, timeout_seconds) + max(5.0, timeout_seconds * 2)
+    )
+    lock.acquire(timeout_seconds=lock_acquire_timeout_seconds)
     try:
         existing = _reclaim_daemon_slot(
             spec,
