@@ -67,6 +67,53 @@ class DaemonStopResult:
         return self.metadata.pid
 
 
+def _reclaim_stale_lock(lock_path: Path) -> None:
+    """Detect and clean up locks held by dead processes.
+
+    If the lock file exists and is held by a process that has died (either
+    exited normally or is a zombie), force-kill the process and remove the
+    lock file. This handles the case where a daemon crashed after acquiring
+    the lock but before publishing readiness metadata.
+    """
+    if not lock_path.exists():
+        return
+
+    # Find which process holds this lock by scanning /proc/*/fd
+    lock_path_str = str(lock_path.resolve())
+    for proc_dir in Path('/proc').iterdir():
+        if not proc_dir.is_dir():
+            continue
+        try:
+            fd_dir = proc_dir / 'fd'
+            if not fd_dir.exists():
+                continue
+            for fd_path in fd_dir.iterdir():
+                try:
+                    target = fd_path.resolve()
+                    if str(target) == lock_path_str:
+                        # Found the process holding the lock
+                        try:
+                            pid = int(proc_dir.name)
+                        except ValueError:
+                            continue
+                        # Check if process is still alive
+                        if not _is_process_running(pid):
+                            logger.warning("Reclaiming stale lock held by dead process: pid=%s", pid)
+                            try:
+                                os.kill(pid, signal.SIGKILL)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                            try:
+                                lock_path.unlink()
+                            except OSError:
+                                pass
+                            return
+                except (OSError, RuntimeError):
+                    continue
+        except (OSError, RuntimeError):
+            continue
+
+
 def prepare_daemon_start(
     workspace_root_override: str | None = None,
     cwd: Path | None = None,
@@ -86,7 +133,8 @@ def prepare_daemon_start(
     spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
     current_state_dir = _normalize_state_dir(resolve_state_dir())
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
-    lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
+    lock_path = resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY)
+    lock = FilesystemLock(lock_path)
     timeout_seconds = spec.config.daemon.auto_start_timeout_seconds
     probe_timeout_seconds = max(min(spec.config.daemon.healthcheck_interval_seconds, 0.1), 0.05)
     health_confirmation_timeout_seconds = max(
@@ -96,6 +144,7 @@ def prepare_daemon_start(
         ),
         spec.config.daemon.healthcheck_interval_seconds,
     )
+    _reclaim_stale_lock(lock_path)
     lock.acquire(timeout_seconds=timeout_seconds)
     try:
         return _reclaim_daemon_slot(
