@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -11,6 +12,11 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - daemon deployment targets Unix
+    fcntl = None  # type: ignore[assignment]
+
 from mcp_memory.config import resolve_daemon_startup_log_path
 from mcp_memory.daemon_transport import request_daemon_json
 from mcp_memory.daemon_models import DaemonMetadata
@@ -18,6 +24,34 @@ from mcp_memory.daemon_models import DaemonMetadata
 
 class _PollableProcess(Protocol):
     def poll(self) -> int | None: ...
+
+
+DAEMON_STARTUP_LOG_MAX_BYTES = 5 * 1024 * 1024
+DAEMON_STARTUP_LOG_BACKUP_COUNT = 3
+
+
+def _rotate_startup_log(path: Path) -> None:
+    """Rotate an oversized startup log while serializing competing spawns."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    with lock_path.open("a+") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                oversized = path.stat().st_size >= DAEMON_STARTUP_LOG_MAX_BYTES
+            except FileNotFoundError:
+                oversized = False
+            if not oversized:
+                return
+            for index in range(DAEMON_STARTUP_LOG_BACKUP_COUNT - 1, 0, -1):
+                source = path.with_name(f"{path.name}.{index}")
+                destination = path.with_name(f"{path.name}.{index + 1}")
+                if source.exists():
+                    os.replace(source, destination)
+            os.replace(path, path.with_name(f"{path.name}.1"))
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -88,6 +122,7 @@ def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> DaemonSp
     ]
     startup_log_path = resolve_daemon_startup_log_path()
     startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_startup_log(startup_log_path)
     with startup_log_path.open("a", encoding="utf-8") as startup_log:
         startup_log.write(
             "\n=== daemon spawn "

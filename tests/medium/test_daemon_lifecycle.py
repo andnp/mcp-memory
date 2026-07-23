@@ -10,6 +10,7 @@ import threading
 from click.testing import CliRunner
 import pytest
 import mcp_memory.daemon as daemon_module
+import mcp_memory.daemon_process as daemon_process_module
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
 
 from mcp_memory.cli import main
@@ -178,6 +179,31 @@ def test_spawn_daemon_process_uses_workspace_root_as_cwd(monkeypatch, tmp_path: 
     assert details.pid == 4321
     assert details.command[1:4] == ('-m', 'mcp_memory.cli', 'daemon')
     assert details.startup_log_path.name == 'daemon.log'
+
+
+def test_spawn_daemon_process_rotates_oversized_startup_log(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(daemon_process_module, "DAEMON_STARTUP_LOG_MAX_BYTES", 8)
+    monkeypatch.setattr(daemon_process_module, "DAEMON_STARTUP_LOG_BACKUP_COUNT", 2)
+
+    def _fake_popen(command, **kwargs):
+        class _DummyProcess:
+            pid = 4321
+
+        return _DummyProcess()
+
+    monkeypatch.setattr(daemon_process_module.subprocess, "Popen", _fake_popen)
+    log_path = tmp_path / "state" / "mcp-memory" / "daemons" / "daemon.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("x" * 8, encoding="utf-8")
+    log_path.with_name("daemon.log.1").write_text("old", encoding="utf-8")
+    log_path.with_name("daemon.log.2").write_text("older", encoding="utf-8")
+
+    spawn_daemon_process(tmp_path / "workspace", "127.0.0.1", 8123)
+
+    assert log_path.with_name("daemon.log.1").read_text(encoding="utf-8") == "x" * 8
+    assert log_path.with_name("daemon.log.2").read_text(encoding="utf-8") == "old"
+    assert "daemon spawn" in log_path.read_text(encoding="utf-8")
 
 
 def test_ensure_daemon_started_includes_startup_log_tail_when_spawned_child_exits(monkeypatch, tmp_path: Path) -> None:
