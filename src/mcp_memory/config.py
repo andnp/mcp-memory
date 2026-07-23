@@ -571,6 +571,25 @@ def _merge_provider_routing_defaults(raw_provider_routing: object) -> dict[str, 
     return merged
 
 
+def _provider_routing_data_for_config(raw: dict[str, Any]) -> dict[str, Any]:
+    """Resolve provider routing while honoring the legacy top-level AI switch.
+
+    Older configs used ``[ai].provider = "none"`` without a routing section.
+    In that shape, injecting the modern routing defaults would unexpectedly
+    construct Copilot providers.  An explicitly present ``provider_routing``
+    section remains authoritative and keeps its normal default backfilling.
+    """
+    raw_provider_routing = raw.get("provider_routing")
+    raw_ai = raw.get("ai")
+    if (
+        "provider_routing" not in raw
+        and isinstance(raw_ai, dict)
+        and raw_ai.get("provider") == "none"
+    ):
+        return {}
+    return _merge_provider_routing_defaults(raw_provider_routing)
+
+
 def _load_ingest_suppression_config(data: dict[str, Any]) -> IngestSuppressionConfig:
     windows: list[IngestSuppressionWindow] = []
     raw_windows = data.get("windows", [])
@@ -748,9 +767,7 @@ def load_config(config_path: Path | None = None) -> Config:
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
-        provider_routing=_load_provider_routing_config(
-            _merge_provider_routing_defaults(raw.get("provider_routing", {}))
-        ),
+        provider_routing=_load_provider_routing_config(_provider_routing_data_for_config(raw)),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
         curation=_load_dataclass_from_dict(CurationConfig, raw.get("curation", {})),

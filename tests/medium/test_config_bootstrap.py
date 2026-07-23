@@ -128,7 +128,7 @@ def test_load_config_reads_provider_routing_overrides(tmp_path: Path) -> None:
     assert config.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
 
 
-def test_load_config_backfills_provider_routing_defaults_for_legacy_config(tmp_path: Path) -> None:
+def test_load_config_disables_implicit_provider_routing_for_legacy_ai_none(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[ai]\n"
@@ -139,10 +139,25 @@ def test_load_config_backfills_provider_routing_defaults_for_legacy_config(tmp_p
 
     config = load_config(config_path)
 
-    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
-    assert config.provider_routing.task_routes["memory-curator"] == ["copilot-strong", "copilot-mini"]
+    assert config.provider_routing.task_routes == {}
+    assert config.provider_routing.default_json_route == []
+    assert config.provider_routing.default_agentic_route == []
+    assert config.provider_routing.profiles == {}
+
+
+def test_load_config_preserves_explicit_provider_routing_with_legacy_ai_none(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[ai]\nprovider = "none"\n\n'
+        '[provider_routing]\n'
+        'default_json_route = ["copilot-mini"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
     assert config.provider_routing.default_json_route == ["copilot-mini"]
-    assert config.provider_routing.default_agentic_route == ["copilot-mini"]
+    assert config.provider_routing.task_routes["ingest-system1"] == ["copilot-mini"]
     assert config.provider_routing.profiles["copilot-mini"].provider == "copilot-sdk"
 
 
