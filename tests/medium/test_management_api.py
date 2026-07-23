@@ -20,10 +20,10 @@ from fastapi.testclient import TestClient
 import pytest
 import mcp_memory.daemon_app as daemon_app_module
 
-from mcp_memory.daemon import create_daemon_app
+from mcp_memory.daemon import create_daemon_app, read_daemon_metadata
 from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.daemon_transport import DaemonZmqServer, request_daemon_json
-from mcp_memory.config import Config
+from mcp_memory.config import Config, resolve_daemon_metadata_path
 from mcp_memory.context import ApplicationContext
 from mcp_memory.hook_reminders import HookReminderService
 from mcp_memory.management.service import ManagementService
@@ -1156,10 +1156,22 @@ def test_daemon_lifespan_ensures_dashboard_frontend_is_built(monkeypatch, tmp_pa
     workspace.mkdir(parents=True)
 
     ensured_static_roots: list[Path] = []
+
+    async def skip_embedding_warmup(_embedder) -> bool:
+        return False
+
+    def ensure_dashboard_after_readiness(static_root: Path) -> None:
+        metadata_path = resolve_daemon_metadata_path()
+        metadata = read_daemon_metadata(metadata_path)
+        assert metadata is not None
+        assert metadata.status == "ready"
+        ensured_static_roots.append(static_root)
+
     monkeypatch.setattr(
         "mcp_memory.daemon_app._ensure_dashboard_frontend_ready",
-        lambda static_root: ensured_static_roots.append(static_root),
+        ensure_dashboard_after_readiness,
     )
+    monkeypatch.setattr("mcp_memory.daemon_app._warm_embedding_model", skip_embedding_warmup)
 
     app = create_daemon_app(workspace_root_override=None, cwd=workspace)
 

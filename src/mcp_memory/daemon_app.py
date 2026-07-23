@@ -349,6 +349,23 @@ def create_daemon_app(
             hook_service=hook_service,
             metadata_path=metadata_path,
         )
+        app.state.routes = routes
+        app.state.metadata = DaemonMetadata(
+            host=daemon_host,
+            port=daemon_port,
+            pid=os.getpid(),
+            started_at=time.time(),
+            status="ready",
+            daemon_scope=GLOBAL_DAEMON_IDENTITY,
+            binary_path=sys.executable,
+            version=_resolve_runtime_version(),
+            transport="zmq",
+            socket_path=str(socket_path),
+        )
+        # The MCP transport is ready at this point. Publish readiness before
+        # checking the optional dashboard bundle so a slow or failed frontend
+        # build cannot delay MCP startup.
+        write_metadata(metadata_path, app.state.metadata)
         await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
         record_thought_writeback_flush_executor: ThreadPoolExecutor | None = None
         record_thought_writeback_flush_task: asyncio.Task[None] | None = None
@@ -363,7 +380,6 @@ def create_daemon_app(
                     executor=record_thought_writeback_flush_executor,
                 )
             )
-        app.state.routes = routes
         app.state.idle_shutdown_task = None
         app.state.idle_shutdown_scheduler_task = None
         app.state.backup_task = backup_task
@@ -376,19 +392,6 @@ def create_daemon_app(
             app.state.idle_shutdown_scheduler_task = asyncio.create_task(
                 _run_periodic_idle_shutdown_scheduler(app)
             )
-        app.state.metadata = DaemonMetadata(
-            host=daemon_host,
-            port=daemon_port,
-            pid=os.getpid(),
-            started_at=time.time(),
-            status="ready",
-            daemon_scope=GLOBAL_DAEMON_IDENTITY,
-            binary_path=sys.executable,
-            version=_resolve_runtime_version(),
-            transport="zmq",
-            socket_path=str(socket_path),
-        )
-        write_metadata(metadata_path, app.state.metadata)
         try:
             yield
         finally:
