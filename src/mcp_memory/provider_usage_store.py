@@ -153,6 +153,23 @@ class ProviderUsageRepository:
     def get_conversation(self, request_id: str) -> list[AIConversationRecord]:
         return self.list_conversations(request_id=request_id, limit=200)
 
+    def count_conversation_statuses_since(
+        self,
+        *,
+        after: float,
+        workspace_id: str | None,
+    ) -> dict[str, int]:
+        if self._db_manager is None:
+            return {}
+        query = "SELECT status, COUNT(*) FROM ai_conversations WHERE completed_at >= ?"
+        params: list[object] = [after]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        query += " GROUP BY status"
+        rows = self._db_manager.get_connection().execute(query, params).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
+
     def finalize_running_conversation(
         self,
         *,

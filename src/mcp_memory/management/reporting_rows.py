@@ -1037,6 +1037,9 @@ def count_recent_conversation_statuses(
 ) -> dict[str, int]:
     if provider_usage_repo is None:
         return {}
+    count_fn = getattr(provider_usage_repo, "count_conversation_statuses_since", None)
+    if count_fn is not None:
+        return {str(status): int(count) for status, count in count_fn(after=after, workspace_id=workspace_id).items()}
     counts: dict[str, int] = {}
     for record in provider_usage_repo.list_conversations(
         workspace_id=workspace_id,

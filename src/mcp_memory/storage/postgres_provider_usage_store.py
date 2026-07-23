@@ -203,6 +203,25 @@ class PostgresProviderUsageRepository:
     def get_conversation(self, request_id: str) -> list[AIConversationRecord]:
         return self.list_conversations(request_id=request_id, limit=200)
 
+    def count_conversation_statuses_since(
+        self,
+        *,
+        after: float,
+        workspace_id: str | None,
+    ) -> dict[str, int]:
+        query = "SELECT status, COUNT(*) FROM ai_conversations WHERE completed_at >= %s"
+        params: list[object] = [after]
+        if workspace_id is not None:
+            query += " AND workspace_id = %s"
+            params.append(workspace_id)
+        query += " GROUP BY status"
+        with optional_connection(self._sessions) as connection:
+            if connection is None:
+                return {}
+            with connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
+
     def finalize_running_conversation(
         self,
         *,

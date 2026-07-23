@@ -127,6 +127,17 @@ class FakeCursor:
             rows.sort(key=lambda row: (_as_float(row["completed_at"]), _as_int(row["id"])), reverse=True)
             self._result = [self._conversation_row(row) for row in rows[:limit]]
             return
+        if normalized.startswith("SELECT status, COUNT(*) FROM ai_conversations WHERE completed_at >= %s"):
+            cutoff = _as_float(arguments[0])
+            rows = [row for row in self._state.ai_conversations if _as_float(row["completed_at"]) >= cutoff]
+            if "AND workspace_id = %s" in normalized:
+                rows = [row for row in rows if row["workspace_id"] == arguments[1]]
+            counts: dict[str, int] = {}
+            for row in rows:
+                status = str(row["status"])
+                counts[status] = counts.get(status, 0) + 1
+            self._result = [(status, count) for status, count in counts.items()]
+            return
         if normalized.startswith("UPDATE ai_conversations SET completed_at = %s"):
             request_id = str(arguments[4])
             count = 0
@@ -498,6 +509,39 @@ def test_postgres_provider_usage_repository_tracks_conversation_lifecycle() -> N
     assert conversation.response_text == "world"
     assert conversation.parsed == {"answer": 42}
     assert conversation.duration_seconds == pytest.approx(5.0)
+
+
+def test_postgres_provider_usage_repository_counts_conversation_statuses_since() -> None:
+    session_manager = FakeSessionManager()
+    repository = PostgresProviderUsageRepository(session_manager, workspace_id="workspace-a")
+    for request_id, status, completed_at, workspace_id in (
+        ("req-1", "success", 100.0, "workspace-a"),
+        ("req-2", "error", 110.0, "workspace-a"),
+        ("req-3", "success", 120.0, "workspace-a"),
+        ("req-4", "running", 120.0, "workspace-b"),
+    ):
+        PostgresProviderUsageRepository(session_manager, workspace_id=workspace_id).record_conversation(
+            request_id=request_id,
+            attempt=1,
+            task_name="task",
+            task_id=None,
+            provider_key="provider",
+            provider_name="Provider",
+            model_name="model",
+            subprocess_pid=None,
+            prompt_text="prompt",
+            response_text="response",
+            parsed=None,
+            status=status,
+            error_text=None,
+            started_at=completed_at,
+            completed_at=completed_at,
+        )
+
+    assert repository.count_conversation_statuses_since(after=105.0, workspace_id="workspace-a") == {
+        "error": 1,
+        "success": 1,
+    }
 
 
 def test_postgres_provider_usage_repository_preserves_first_terminal_conversation_finalization() -> None:

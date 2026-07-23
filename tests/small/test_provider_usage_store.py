@@ -53,3 +53,35 @@ def test_provider_usage_repository_normalizes_invalid_persisted_conversation_pay
         return repository.get_conversation(request_id)[0]
 
     assert_normalizes_invalid_persisted_conversation_payloads(load_conversation)
+
+
+def test_provider_usage_repository_counts_conversation_statuses_since(db_manager) -> None:
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    for request_id, status, completed_at, workspace_id in (
+        ("req-1", "success", 100.0, "workspace-a"),
+        ("req-2", "error", 110.0, "workspace-a"),
+        ("req-3", "success", 120.0, "workspace-a"),
+        ("req-4", "running", 120.0, "workspace-b"),
+    ):
+        ProviderUsageRepository(db_manager, workspace_id=workspace_id).record_conversation(
+            request_id=request_id,
+            attempt=1,
+            task_name="task",
+            task_id=None,
+            provider_key="provider",
+            provider_name="Provider",
+            model_name="model",
+            subprocess_pid=None,
+            prompt_text="prompt",
+            response_text="response",
+            parsed=None,
+            status=status,
+            error_text=None,
+            started_at=completed_at,
+            completed_at=completed_at,
+        )
+
+    assert repository.count_conversation_statuses_since(after=105.0, workspace_id="workspace-a") == {
+        "error": 1,
+        "success": 1,
+    }
