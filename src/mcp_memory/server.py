@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import inspect
 import logging
 import os
@@ -58,6 +59,7 @@ class MCPServer:
         self._consecutive_client_timeout_failures = 0
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
+        self._session_started = False
         self._suspend_monitor_task: asyncio.Task[None] | None = None
         self._health_monitor_task: asyncio.Task[None] | None = None
         self._setup_handlers()
@@ -249,6 +251,7 @@ class MCPServer:
         # to start (e.g., when the database is unreachable after a network change or
         # sleep/wake cycle).
         self._start_background_daemon_recovery()
+        session_start_task = asyncio.create_task(self._register_session_start())
         try:
             async with stdio_server() as (read_stream, write_stream):
                 await self.server.run(
@@ -271,17 +274,30 @@ class MCPServer:
                 except asyncio.CancelledError:
                     pass
                 self._health_monitor_task = None
-            # Wait for background daemon startup to complete (up to 5 s) so that
-            # the session-start hook can be sent before session-end.
-            _pending_recovery = self._daemon_recovery_task
-            if _pending_recovery is not None and not _pending_recovery.done():
+            # Give asynchronous startup a short window to register this proxy
+            # before sending session-end. This keeps normal MCP startup
+            # responsive while ensuring quick stdio disconnects still clean up.
+            if not session_start_task.done():
                 try:
-                    await asyncio.wait_for(asyncio.shield(_pending_recovery), timeout=5.0)
+                    await asyncio.wait_for(asyncio.shield(session_start_task), timeout=5.0)
                 except Exception:
-                    pass
-            if self._daemon is not None:
-                await asyncio.to_thread(self._send_session_hook, "session-start")
-            await asyncio.to_thread(self._send_session_hook, "session-end")
+                    session_start_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await session_start_task
+            if self._session_started:
+                await asyncio.to_thread(self._send_session_hook, "session-end")
+
+    async def _register_session_start(self) -> None:
+        """Register this stdio proxy once its background daemon is available."""
+        recovery_task = self._daemon_recovery_task
+        if recovery_task is not None and not recovery_task.done():
+            try:
+                await asyncio.shield(recovery_task)
+            except Exception:
+                return
+        if self._daemon is None:
+            return
+        self._session_started = await asyncio.to_thread(self._send_session_hook, "session-start")
 
     def _request_json(
         self,
@@ -354,9 +370,9 @@ class MCPServer:
             return request_method(path, payload, timeout_seconds=timeout_seconds)
         return request_method(path, payload)
 
-    def _send_session_hook(self, event_name: str) -> None:
+    def _send_session_hook(self, event_name: str) -> bool:
         if self._session_id is None:
-            return
+            return False
         try:
             self._request_json_with_recovery(
                 f"/api/hooks/{event_name}",
@@ -366,7 +382,8 @@ class MCPServer:
                     "workspace_root": self.workspace_root,
                 },
             )
-        except (OSError, TimeoutError, ValueError) as exc:
+            return True
+        except (OSError, TimeoutError, ValueError, RuntimeError) as exc:
             transport_health_snapshot = self._probe_transport_health_snapshot()
             logger.warning(
                 "Failed to send %s hook for session %s: %s",
@@ -379,6 +396,7 @@ class MCPServer:
                     "transport_health_snapshot": transport_health_snapshot,
                 },
             )
+            return False
 
     def _probe_transport_health_snapshot(self) -> dict[str, Any] | None:
         if self._daemon is None:

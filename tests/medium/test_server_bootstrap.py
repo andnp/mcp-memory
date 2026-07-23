@@ -1494,10 +1494,12 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     write_stream = object()
     captured: dict[str, object] = {}
     hook_calls: list[tuple[str, dict[str, object]]] = []
+    events: list[str] = []
 
     server = MCPServer(workspace_root="demo")
 
     async def fake_run(read_arg, write_arg, init_options) -> None:
+        events.append("stdio-run")
         captured["read_stream"] = read_arg
         captured["write_stream"] = write_arg
         captured["init_options"] = init_options
@@ -1509,7 +1511,7 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     monkeypatch.setattr(
         server,
         "_request_json",
-        lambda path, payload: hook_calls.append((path, payload)) or {"status": "ok"},
+        lambda path, payload: events.append(path) or hook_calls.append((path, payload)) or {"status": "ok"},
     )
     monkeypatch.setattr(
         "mcp_memory.server.stdio_server",
@@ -1523,6 +1525,7 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     assert captured["write_stream"] is write_stream
     assert captured["init_options"] is not None
     assert [path for path, _ in hook_calls] == ["/api/hooks/session-start", "/api/hooks/session-end"]
+    assert events.index("/api/hooks/session-start") < events.index("/api/hooks/session-end")
     start_payload = hook_calls[0][1]
     end_payload = hook_calls[1][1]
     assert start_payload["session_id"] == end_payload["session_id"]
@@ -1557,6 +1560,34 @@ async def test_mcp_server_run_still_sends_session_end_hook_on_failure(monkeypatc
 
     assert [path for path, _ in hook_calls] == ["/api/hooks/session-start", "/api/hooks/session-end"]
     assert hook_calls[0][1]["session_id"] == hook_calls[1][1]["session_id"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_run_does_not_start_daemon_only_for_session_end(monkeypatch) -> None:
+    hook_calls: list[str] = []
+    server = MCPServer(workspace_root="demo")
+
+    def _daemon_unavailable(*_args, **_kwargs):
+        raise RuntimeError("daemon unavailable")
+
+    async def fake_run(*_args) -> None:
+        return None
+
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", _daemon_unavailable)
+    monkeypatch.setattr(
+        server,
+        "_request_json",
+        lambda path, payload: hook_calls.append(path) or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        "mcp_memory.server.stdio_server",
+        lambda: FakeAsyncContextManager((object(), object())),
+    )
+    monkeypatch.setattr(server.server, "run", fake_run)
+
+    await server.run()
+
+    assert hook_calls == []
 
 
 def test_cli_help_lists_grouped_public_commands() -> None:
