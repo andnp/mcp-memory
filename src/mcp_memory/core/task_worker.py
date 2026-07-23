@@ -98,6 +98,21 @@ class _RunningTaskRecoveryPlan:
         )
 
     @classmethod
+    def retry_abandoned(
+        cls,
+        *,
+        recovered_at: float,
+        retry_delay_seconds: float,
+    ) -> _RunningTaskRecoveryPlan:
+        return cls(
+            action=RecoveryAction.RETRY_DEAD_SUBPROCESS,
+            recovered_at=recovered_at,
+            error_text="Task was abandoned without an active provider subprocess",
+            retry_delay_seconds=retry_delay_seconds,
+            retry_termination_reason="abandoned_no_subprocess_retry",
+        )
+
+    @classmethod
     def fail_abandoned(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
         return cls(
             action=RecoveryAction.FAIL_ABANDONED,
@@ -699,7 +714,10 @@ class RuntimeTaskWorker:
             return _RunningTaskRecoveryPlan.finalize_cancellation(recovered_at=current_time)
         if not is_stale:
             return None
-        return _RunningTaskRecoveryPlan.fail_abandoned(recovered_at=current_time)
+        return _RunningTaskRecoveryPlan.retry_abandoned(
+            recovered_at=current_time,
+            retry_delay_seconds=self._retry_delay_seconds,
+        )
 
     def _apply_running_task_recovery_plan(
         self,

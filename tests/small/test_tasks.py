@@ -613,7 +613,7 @@ def test_runtime_task_worker_recover_running_task_routes_requested_cancellation_
     assert recovered.reconciliation_policy.termination_reason is None
 
 
-def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_is_terminal_failure(
+def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_is_retryable(
     db_manager,
 ) -> None:
     queue = SQLiteTaskQueue(db_manager)
@@ -626,7 +626,12 @@ def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_i
     )
     claimed = queue.claim_next(now=10.0, workspace_id="workspace-a")
     assert claimed is not None
-    worker = RuntimeTaskWorker(ctx, handlers={}, abandoned_task_stale_after_seconds=300.0)
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={},
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=300.0,
+    )
 
     recovered = worker._recover_running_task(  # noqa: SLF001
         queue,
@@ -636,10 +641,10 @@ def test_runtime_task_worker_recover_running_task_abandoned_without_subprocess_i
     )
 
     assert recovered is not None
-    assert recovered.task.status == "failed"
+    assert recovered.task.status == "pending"
     assert recovered.task.last_error == "Task was abandoned without an active provider subprocess"
-    assert recovered.reconciliation_policy.is_retryable_interruption is False
-    assert recovered.reconciliation_policy.termination_reason is None
+    assert recovered.reconciliation_policy.is_retryable_interruption is True
+    assert recovered.reconciliation_policy.termination_reason == "abandoned_no_subprocess_retry"
 
 
 def test_runtime_task_worker_recover_running_task_does_not_mark_retry_reason_after_retry_exhaustion(
@@ -1812,14 +1817,14 @@ async def test_runtime_task_worker_recovers_abandoned_running_tasks_on_start(db_
     try:
         await worker.start()
         for _ in range(20):
-            if queue.get_task(task.id).status == "failed":
+            if queue.get_task(task.id).status == "completed":
                 break
             await asyncio.sleep(0.01)
         await worker.stop(0.05)
     finally:
         monkeypatch.undo()
 
-    assert queue.get_task(task.id).status == "failed"
+    assert queue.get_task(task.id).status == "completed"
 
 
 @pytest.mark.asyncio
@@ -1857,14 +1862,14 @@ async def test_runtime_task_worker_releases_orphaned_journal_claims_on_start(db_
     try:
         await worker.start()
         for _ in range(20):
-            if queue.get_task(task.id).status == "failed":
+            if queue.get_task(task.id).status == "completed":
                 break
             await asyncio.sleep(0.01)
         await worker.stop(0.05)
     finally:
         monkeypatch.undo()
 
-    assert queue.get_task(task.id).status == "failed"
+    assert queue.get_task(task.id).status == "completed"
     assert [pending.id for pending in journal.get_pending(workspace_id="workspace-a")] == [entry.id]
 
 
@@ -2040,7 +2045,7 @@ async def test_runtime_task_worker_only_excludes_owned_task_epoch(db_manager) ->
     await worker._run_reconciliation_pass(now=100.0, reason="epoch-mismatch")  # noqa: SLF001
 
     recovered = queue.get_task(task.id)
-    assert recovered.status == "failed"
+    assert recovered.status == "pending"
     assert recovered.last_error == "Task was abandoned without an active provider subprocess"
 
 

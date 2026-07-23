@@ -646,7 +646,7 @@ class PostgresTaskQueue:
                 recovered.append(self._retry_recovery_transition(lambda: self.finalize_cancellation(task.id, cancelled_at=current_time)))
                 continue
             if is_stale:
-                recovered.append(self._retry_recovery_transition(lambda: self.fail_permanently(task.id, "Task was abandoned without an active provider subprocess", failed_at=current_time)))
+                recovered.append(self._retry_recovery_transition(lambda: self.fail(task.id, "Task was abandoned without an active provider subprocess", retry_delay_seconds=5.0, failed_at=current_time)))
         return recovered
 
     def _retry_recovery_transition(self, callback: Callable[[], TaskRecord]) -> TaskRecord:

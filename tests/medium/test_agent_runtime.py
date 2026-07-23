@@ -2781,7 +2781,7 @@ async def test_runtime_task_worker_recovers_genuinely_stale_task_on_startup(db_m
     await worker._run_reconciliation_pass(now=100.0, reason="startup")  # noqa: SLF001
 
     recovered = queue.get_task(task.id)
-    assert recovered.status == "failed"
+    assert recovered.status == "pending"
     assert recovered.last_error == "Task was abandoned without an active provider subprocess"
 
 
