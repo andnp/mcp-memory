@@ -443,7 +443,7 @@ def test_record_thought_service_queues_writeback_entry_on_authoritative_failure(
     assert [entry.workspace_id for entry in outbox_entries] == ["workspace-123"]
 
 
-def test_record_thought_service_flushes_writeback_queue_after_authoritative_success(tmp_path: Path) -> None:
+def test_record_thought_service_leaves_writeback_queue_for_background_flush(tmp_path: Path) -> None:
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     config = Config()
     config.storage.cache.enabled = True
@@ -464,11 +464,10 @@ def test_record_thought_service_flushes_writeback_queue_after_authoritative_succ
 
     assert first == {"status": "recorded"}
     assert second == {"status": "recorded"}
-    assert cache.list_record_thought_outbox_entries(limit=10) == []
-    assert {entry.content for entry in journal.entries} == {
-        "queue this thought",
-        "write the current thought",
-    }
+    assert [entry.content for entry in cache.list_record_thought_outbox_entries(limit=10)] == [
+        "queue this thought"
+    ]
+    assert [entry.content for entry in journal.entries] == ["write the current thought"]
 
 
 def test_record_thought_service_queues_writeback_entry_on_authoritative_timeout(
