@@ -40,6 +40,39 @@ def test_record_thought_falls_back_to_writeback_outbox_on_journal_unavailable(
     assert cache.count_record_thought_outbox_entries() == 1
 
 
+def test_record_thought_does_not_flush_writeback_outbox_on_request_path(
+    db_manager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = System1Journal(db_manager)
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    assert cache.enqueue_record_thought_outbox_entry(
+        content="older queued thought",
+        workspace_id="workspace-a",
+        timestamp=1.0,
+        max_entries=10,
+    ) is not None
+
+    def _unexpected_flush(*args, **kwargs):
+        raise AssertionError("writeback flushing belongs to the daemon loop")
+
+    monkeypatch.setattr(journal_operations_module, "flush_record_thought_writeback_outbox", _unexpected_flush)
+
+    payload = RecordThoughtOperation(
+        journal,
+        task_queue=None,
+        workspace_id="workspace-a",
+        writeback_cache=cache,
+        max_outbox_entries=10,
+    ).execute("new thought")
+
+    assert payload["status"] == "recorded"
+    assert "flushed_writeback_entries" not in payload
+    assert cache.count_record_thought_outbox_entries() == 1
+    assert [entry.content for entry in journal.get_pending(limit=10)] == ["new thought"]
+
+
 def test_flush_record_thought_writeback_outbox_resumes_maintenance_and_schedules_ingest_for_flushed_workspaces(
     db_manager,
     tmp_path: Path,

@@ -212,10 +212,6 @@ class RecordThoughtOperation:
                 payload["writeback_queue_depth"] = self._writeback_cache.count_record_thought_outbox_entries()
             return payload
 
-        flush_result = self._flush_writeback_outbox_entries()
-        if flush_result.flushed_count > 0:
-            payload["flushed_writeback_entries"] = flush_result.flushed_count
-
         resumed_tasks, scheduled_ingests = _schedule_record_thought_follow_up(
             journal=self._journal,
             task_queue=self._task_queue,
@@ -283,11 +279,3 @@ class RecordThoughtOperation:
                 timestamp=queued_entry.timestamp,
                 status="queued_writeback",
             )
-
-    def _flush_writeback_outbox_entries(self) -> RecordThoughtWritebackFlushResult:
-        return flush_record_thought_writeback_outbox(
-            self._journal,
-            task_queue=self._task_queue,
-            suppression_config=self._suppression_config,
-            writeback_cache=self._writeback_cache,
-        )
