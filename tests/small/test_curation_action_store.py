@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -196,7 +197,7 @@ def test_replay_returns_original_receipt_without_reapplying_callback(db_manager:
         return MutationResult("rewrite_memory", [first_id])
 
     store = SQLiteCurationActionStore(db_manager)
-    arguments = {
+    arguments: dict[str, Any] = {
         "run_id": run.run_id,
         "action_id": action_id,
         "target_ids": [str(first_id)],
@@ -309,7 +310,7 @@ def test_action_identity_collision_rejects_operation_targets_preconditions_and_p
         return MutationResult("rewrite_memory", [first_id])
 
     store = SQLiteCurationActionStore(db_manager)
-    arguments = {
+    arguments: dict[str, Any] = {
         "run_id": run.run_id,
         "action_id": action_id,
         "target_ids": [str(first_id)],
@@ -329,7 +330,7 @@ def test_action_identity_collision_rejects_operation_targets_preconditions_and_p
         {"payload": {"content": "twice"}},
     ]
     for mismatch in mismatches:
-        replay_arguments = {**arguments, **mismatch}
+        replay_arguments: dict[str, Any] = {**arguments, **mismatch}
         with pytest.raises(CurationActionFatalError, match="identity collision"):
             store.execute_action(**replay_arguments)
 

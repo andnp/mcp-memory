@@ -125,7 +125,7 @@ def test_management_restore_api_eligibility_and_request_are_idempotent(db_manage
         f"/api/mutation-history/{event_id}/restore-eligibility",
         {},
     )
-    request_payload = {
+    request_payload: dict[str, object] = {
         "expected_record_tokens": {str(memory_id): record_token(changed)},
         "reason": "restore the accepted normalization",
         "idempotency_key": "management-restore-1",

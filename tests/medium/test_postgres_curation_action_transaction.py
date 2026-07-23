@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,6 +13,7 @@ from mcp_memory.core.curation_identity import graph_token, record_token
 from mcp_memory.curation_action_store import (
     CurationActionFatalError,
     CurationActionInjectedFailure,
+    CurationActionReceipt,
     CurationActionStaleError,
     MutationResult,
 )
@@ -100,7 +102,7 @@ def test_postgres_action_replay_is_idempotent(postgres_storage_config) -> None:
         return MutationResult("rewrite_memory", [first.id])
 
     store = PostgresCurationActionStore(manager)
-    arguments = {
+    arguments: dict[str, Any] = {
         "run_id": run.run_id,
         "action_id": action_id,
         "target_ids": [str(first.id)],
@@ -186,7 +188,7 @@ def test_postgres_action_identity_collision_rejects_mismatched_intent(postgres_s
         return MutationResult("rewrite_memory", [first.id])
 
     store = PostgresCurationActionStore(manager)
-    arguments = {
+    arguments: dict[str, Any] = {
         "run_id": run.run_id,
         "action_id": action_id,
         "target_ids": [str(first.id)],
@@ -207,7 +209,8 @@ def test_postgres_action_identity_collision_rejects_mismatched_intent(postgres_s
     ]
     for mismatch in mismatches:
         with pytest.raises(CurationActionFatalError, match="identity collision"):
-            store.execute_action(**{**arguments, **mismatch})
+            merged: dict[str, Any] = {**arguments, **mismatch}
+            store.execute_action(**merged)
 
     assert calls == 1
     with manager.open_connection() as connection:
@@ -338,7 +341,7 @@ def test_postgres_action_reversed_concurrent_targets_have_no_deadlock(postgres_s
             executor.submit(execute, [str(first.id), str(second.id)], uuid4()),
             executor.submit(execute, [str(second.id), str(first.id)], uuid4()),
         ]
-        outcomes = []
+        outcomes: list[CurationActionReceipt | None] = []
         for future in futures:
             try:
                 outcomes.append(future.result(timeout=20))
