@@ -1053,22 +1053,13 @@ def count_recent_memory_updates(
     *,
     cutoff: datetime,
     workspace_id: str | None,
-    limit: int = 1_000_000,
 ) -> int:
     if repository is None:
         return 0
-    updated_count = 0
-    for record in repository.list_memories(
-        workspace_id=workspace_id,
-        limit=limit,
-    ):
-        try:
-            updated_at = datetime.fromisoformat(record.updated_at)
-        except ValueError:
-            continue
-        if updated_at >= cutoff:
-            updated_count += 1
-    return updated_count
+    count_fn = getattr(repository, "count_memories_updated_since", None)
+    if count_fn is None:
+        return 0
+    return int(count_fn(cutoff.isoformat(), workspace_id=workspace_id))
 
 
 def list_ai_conversation_rows_since(

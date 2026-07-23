@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 15
+POSTGRES_SCHEMA_VERSION = 16
 
 
 @dataclass(frozen=True)
@@ -671,6 +671,13 @@ POSTGRES_MIGRATIONS = (
         name="add_curation_action_intent_hash",
         statements=(
             "ALTER TABLE curation_action_receipts ADD COLUMN IF NOT EXISTS intent_hash TEXT",
+        ),
+    ),
+    PostgresMigration(
+        version=16,
+        name="add_memories_updated_at_index",
+        statements=(
+            "CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at)",
         ),
     ),
 )

@@ -505,6 +505,34 @@ class PostgresRelationalMemoryRepository:
                 rows = cursor.fetchall()
                 return [str(row[0]) for row in rows]
 
+    def count_memories_updated_since(
+        self,
+        cutoff: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> int:
+        joins: list[str] = []
+        clauses: list[str] = []
+        params: list[object] = []
+        if workspace_id is not None:
+            joins.append("JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id")
+            clauses.append("memory_workspaces.workspace_id = %s")
+            params.append(workspace_id)
+        clauses.append("memories.updated_at >= %s")
+        params.append(cutoff)
+
+        query = "SELECT COUNT(*) FROM memories "
+        if joins:
+            query += " ".join(joins) + " "
+        if clauses:
+            query += "WHERE " + " AND ".join(clauses) + " "
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                return self._coerce_int(row[0]) if row is not None else 0
+
     def search_keyword_memory_ids(
         self,
         query: str,
@@ -1541,7 +1569,7 @@ class PostgresRelationalMemoryRepository:
         signal = None if quality_signal is None else quality_signal.strip().lower()
         if signal is not None:
             signal = _QUALITY_SIGNAL_ALIASES.get(signal, signal)
-        clauses = {
+        clauses: dict[str, tuple[str, list[object]]] = {
             "trace_like_memory_count": (
                 "(LOWER(TRIM(memories.title)) LIKE 'task_complete%' OR "
                 "LOWER(TRIM(memories.title)) LIKE 'task complete%' OR "

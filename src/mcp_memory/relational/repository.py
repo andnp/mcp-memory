@@ -1055,6 +1055,26 @@ class RelationalMemoryRepository:
         rows = conn.execute(query, params).fetchall()
         return [self._hydrate_record(conn, row) for row in rows]
 
+    def count_memories_updated_since(
+        self,
+        cutoff: str,
+        *,
+        workspace_id: str | None = None,
+    ) -> int:
+        conn = self._db.get_connection()
+        clauses = ["memories.updated_at >= ?"]
+        params: list[object] = [cutoff]
+
+        query = "SELECT COUNT(DISTINCT memories.id) FROM memories"
+        if workspace_id is not None:
+            query += " JOIN memory_workspaces ON memory_workspaces.memory_id = memories.id"
+            clauses.append("memory_workspaces.workspace_id = ?")
+            params.append(workspace_id)
+        query += " WHERE " + " AND ".join(clauses)
+
+        row = conn.execute(query, params).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def list_memory_ids(
         self,
         workspace_id: str | None = None,
@@ -1232,7 +1252,7 @@ def _quality_signal_clause(quality_signal: str | None) -> tuple[str, list[object
     signal = None if quality_signal is None else quality_signal.strip().lower()
     if signal is not None:
         signal = _QUALITY_SIGNAL_ALIASES.get(signal, signal)
-    clauses = {
+    clauses: dict[str, tuple[str, list[object]]] = {
         "trace_like_memory_count": (
             "(LOWER(TRIM(memories.title)) LIKE 'task_complete%' OR "
             "LOWER(TRIM(memories.title)) LIKE 'task complete%' OR "
