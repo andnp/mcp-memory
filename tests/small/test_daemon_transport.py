@@ -305,6 +305,50 @@ async def test_daemon_transport_does_not_relabel_handler_timeout_as_transport_ti
     }
 
 
+@pytest.mark.asyncio
+async def test_daemon_transport_replies_to_unexpected_handler_failure_and_accepts_next_request(tmp_path) -> None:
+    daemon_transport = _daemon_transport_module()
+    socket_path = tmp_path / "daemon.sock"
+
+    async def _failing_handler(_payload: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError("database connection details must stay server-side")
+
+    server = daemon_transport.DaemonZmqServer(
+        context_factory=lambda _arguments: ApplicationContext(),
+        hook_handlers={"/api/hooks/failing": _failing_handler},
+        routes_provider=lambda: None,
+        socket_path=socket_path,
+        metadata_provider=lambda: {"status": "ready"},
+    )
+    await server.start()
+    await asyncio.sleep(0.01)
+
+    try:
+        metadata = SimpleNamespace(socket_path=str(socket_path), transport="zmq")
+        failed = await asyncio.to_thread(
+            daemon_transport.request_daemon_json,
+            metadata,
+            "/api/hooks/failing",
+            {},
+            timeout_seconds=0.5,
+        )
+        health = await asyncio.to_thread(
+            daemon_transport.request_daemon_json,
+            metadata,
+            "/internal/health",
+            None,
+            timeout_seconds=0.5,
+        )
+    finally:
+        await server.stop()
+
+    assert failed == {
+        "status": "error",
+        "error": "daemon_request_failed",
+    }
+    assert health["status"] == "ready"
+
+
 def test_mcp_server_request_json_uses_transport_default_timeout(monkeypatch) -> None:
     """Verify proxy requests preserve deterministic routing metadata.
 

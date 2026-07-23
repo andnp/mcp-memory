@@ -419,8 +419,12 @@ class DaemonZmqServer:
             tracked_request.phase = "dispatch_failed"
             tracked_request.error = f"{type(exc).__name__}: {exc}"
             self._log_request_warning("Daemon transport request failed before reply", tracked_request, exc_info=exc)
-            self._finalize_request_tracking(tracked_request)
-            raise
+            # Always send a reply for handler/tool failures.  Letting the
+            # dispatch task escape here means the ROUTER loop has no payload
+            # to send, leaving the DEALER client waiting until its timeout.
+            response = _dispatch_failure_payload()
+            tracked_request.response_status = _response_status(response)
+            return identity, response, tracked_request.request_id
         finally:
             self._active_request_count = max(self._active_request_count - 1, 0)
             if uses_request_semaphore:
@@ -644,6 +648,15 @@ def _dispatch_timeout_payload(path: str, *, timeout_seconds: float) -> dict[str,
         "error": "daemon_request_timed_out",
         "path": path,
         "timeout_seconds": timeout_seconds,
+    }
+
+
+def _dispatch_failure_payload() -> dict[str, str]:
+    """Return the stable client-facing error for an unexpected dispatch failure."""
+
+    return {
+        "status": "error",
+        "error": "daemon_request_failed",
     }
 
 
