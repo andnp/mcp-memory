@@ -18,8 +18,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
-from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
+from mcp_memory.core.ports.providers import ProviderUsagePort, TaskExecutionAttemptPort
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ class InstrumentedAIProvider:
         self,
         provider,
         *,
-        usage_repository: ProviderUsageRepository,
+        usage_repository: ProviderUsagePort,
         provider_key: str,
         provider_name: str,
         model_name: str,
@@ -44,7 +43,7 @@ class InstrumentedAIProvider:
         execution_epoch: int | None = None,
         workspace_id: str | None = None,
         task_queue = None,
-        task_execution_attempts: TaskExecutionAttemptRepository | None = None,
+        task_execution_attempts: TaskExecutionAttemptPort | None = None,
         budget_key: str | None = None,
         daily_call_limit: int | None = None,
         model_burst_call_limit: int | None = None,

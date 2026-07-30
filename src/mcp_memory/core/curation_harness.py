@@ -67,7 +67,7 @@ from mcp_memory.core.ports.curation import (
     CurationRunState,
 )
 from mcp_memory.mutation_history import ProtectionMode
-from mcp_memory.work_item_store import WorkItemRecord
+from mcp_memory.core.ports.work_items import WorkItemRecordLike
 
 WorkItemAction = _WorkItemAction
 
@@ -107,7 +107,7 @@ class CurationFrontier:
     @classmethod
     def claimed(
         cls,
-        work_item: WorkItemRecord | str,
+        work_item: WorkItemRecordLike | str,
         *,
         family: str,
         strategy: str,
@@ -116,7 +116,7 @@ class CurationFrontier:
         task_id: UUID | None = None,
         frontier_key: str | None = None,
     ) -> CurationFrontier:
-        work_item_id = work_item.id if isinstance(work_item, WorkItemRecord) else str(work_item)
+        work_item_id = work_item.id if not isinstance(work_item, str) else work_item
         return cls(
             family=family,
             strategy=strategy,
@@ -138,7 +138,7 @@ class CurationDryRunResult:
     validation: CurationValidationResult | None
     work_item: CurationWorkItemDecision
     planner_attempts: int
-    specialist_work_items: tuple[WorkItemRecord, ...] = ()
+    specialist_work_items: tuple[WorkItemRecordLike, ...] = ()
 
     @property
     def outcome(self) -> CurationRunOutcome:
@@ -401,7 +401,7 @@ class CurationDryRunHarness:
             self._persist_no_op_dispositions(plan.retained, context, run_id, frontier_key)
 
         work_item = self._work_item_service.decide(outcome, reason_code, latest)
-        specialist_work_items: tuple[WorkItemRecord, ...] = ()
+        specialist_work_items: tuple[WorkItemRecordLike, ...] = ()
         specialist_routes = () if validation is None else validation.specialist_routes
         if self._config.execute_accepted_actions:
             specialist_routes = ()

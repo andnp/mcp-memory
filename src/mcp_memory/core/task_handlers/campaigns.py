@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from mcp_memory.work_item_store import compatibility_group_families
+from mcp_memory.core.ports.work_items import compatibility_group_families
 
 
 def campaign_metadata(

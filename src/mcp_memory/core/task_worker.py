@@ -31,7 +31,7 @@ from mcp_memory.core.task_handlers import (
 )
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.task_execution_store import TaskExecutionAttemptRecord
+from mcp_memory.core.ports.providers import TaskExecutionAttemptPort, TaskExecutionAttemptRecordLike
 
 
 logger = logging.getLogger(__name__)
@@ -653,7 +653,7 @@ class RuntimeTaskWorker:
         task_queue,
         task: TaskRecord,
         *,
-        attempt_repository,
+        attempt_repository: TaskExecutionAttemptPort | None,
         current_time: float,
     ) -> _RecoveredTaskOutcome | None:
         attempt = self._get_running_task_attempt(task, attempt_repository=attempt_repository)
@@ -667,7 +667,7 @@ class RuntimeTaskWorker:
         task: TaskRecord,
         *,
         attempt_repository,
-    ) -> TaskExecutionAttemptRecord | None:
+    ) -> TaskExecutionAttemptRecordLike | None:
         if attempt_repository is None:
             return None
         try:
@@ -679,7 +679,7 @@ class RuntimeTaskWorker:
         self,
         task: TaskRecord,
         *,
-        attempt: TaskExecutionAttemptRecord | None,
+        attempt: TaskExecutionAttemptRecordLike | None,
         current_time: float,
     ) -> _RunningTaskRecoveryPlan | None:
         recent_activity_at = max(

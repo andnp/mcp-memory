@@ -8,7 +8,7 @@ from mcp_memory.core.providers.interfaces import ProviderAdmissionDeferred
 from mcp_memory.core.providers.interfaces import ProviderAuthenticationRequired
 from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.providers.interfaces import ProviderRateLimitExceeded
-from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.core.ports.providers import ProviderUsagePort
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class ProviderOutcomeReason:
 
 
 def evaluate_provider_admission(
-    usage_repository: ProviderUsageRepository,
+    usage_repository: ProviderUsagePort,
     *,
     provider_key: str,
     budget_key: str,

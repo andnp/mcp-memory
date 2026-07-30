@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any
 
 from mcp_memory.core.curation_models import CurationRunOutcome
 from mcp_memory.core.ports.planner import PlannerExecutionEnvelope
-from mcp_memory.work_item_store import WorkItemRecord
+from mcp_memory.core.ports.work_items import WorkItemRepository
 
 
 class WorkItemAction(StrEnum):
@@ -24,31 +24,6 @@ class CurationWorkItemDecision:
     action: WorkItemAction
     reason_code: str
     retry_delay_seconds: float | None = None
-
-
-class WorkItemRepository(Protocol):
-    def enqueue_unique(
-        self,
-        *,
-        family_key: str,
-        execution_lane: str,
-        payload: dict[str, Any] | None = None,
-        workspace_id: str | None = None,
-        priority: int = 100,
-        available_at: float | None = None,
-        idempotency_key: str | None = None,
-    ) -> tuple[WorkItemRecord, bool]: ...
-
-    def complete_item(self, item_id: str, *, completed_at: float | None = None) -> WorkItemRecord: ...
-
-    def defer_item(
-        self,
-        item_id: str,
-        *,
-        error: str,
-        retry_delay_seconds: float,
-        deferred_at: float | None = None,
-    ) -> WorkItemRecord: ...
 
 
 class CurationWorkItemService:

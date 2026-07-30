@@ -12,6 +12,8 @@ FORBIDDEN = {
     "mcp_memory.runtime",
     "mcp_memory.runtime_facades",
     "mcp_memory.work_item_store",
+    "mcp_memory.provider_usage_store",
+    "mcp_memory.task_execution_store",
 }
 ROOT = Path(__file__).parents[2] / "src/mcp_memory/core"
 
@@ -28,8 +30,6 @@ COMPATIBILITY_ROOTS = {
 DEFERRED_IMPORTS = {
     ("curation_verifier.py", "mcp_memory.relational.repository", "MemoryLink"),
     ("curation_verifier.py", "mcp_memory.relational.repository", "RelationalMemoryReadContext"),
-    ("curation_work_items.py", "mcp_memory.work_item_store", "WorkItemRecord"),
-    ("curation_harness.py", "mcp_memory.work_item_store", "WorkItemRecord"),
 }
 ALLOWED_COMPATIBILITY_IMPORTS = {
     ("curation.py", "mcp_memory.curation_store", "CandidateDisposition"),
@@ -58,11 +58,30 @@ def test_curation_application_imports_use_ports():
     paths = (
         list(ROOT.glob("curation*.py"))
         + list((ROOT / "task_handlers").glob("curator*.py"))
+        + [
+            ROOT / "task_handlers" / "campaigns.py",
+            ROOT / "task_handlers" / "deduplicator_handlers.py",
+            ROOT / "task_handlers" / "maintenance_work_items.py",
+            ROOT / "task_handlers" / "relationship_review_handlers.py",
+            ROOT / "task_handlers" / "taxonomist_support.py",
+        ]
         + list((ROOT / "ports").glob("*.py"))
     )
     for path in paths:
         violations.extend(_find_violations(path, ast.parse(path.read_text())))
     assert not violations, "direct persistence/runtime imports: " + ", ".join(violations)
+
+
+def test_provider_application_imports_use_provider_ports():
+    violations = []
+    paths = [
+        ROOT / "provider_admission.py",
+        ROOT / "providers" / "instrumented.py",
+        ROOT / "ports" / "providers.py",
+    ]
+    for path in paths:
+        violations.extend(_find_violations(path, ast.parse(path.read_text())))
+    assert not violations, "direct provider adapter imports: " + ", ".join(violations)
 
 
 def test_compatibility_roots_reject_unlisted_forbidden_imports():

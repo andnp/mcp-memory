@@ -11,14 +11,14 @@ from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.models import NerdQualityRemediationSignalPayload
-from mcp_memory.work_item_store import (
+from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_CONFLICT_REVIEW,
     WORK_FAMILY_GRAPH_LINK_REVIEW,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
     WORK_FAMILY_MEMORY_TAGGING,
     WORK_FAMILY_OPERATOR_REVIEW,
-    WorkItemRecord,
+    WorkItemRecordLike,
 )
 
 
@@ -37,10 +37,10 @@ def enqueue_specialist_routes(
     context: Any | None = None,
     workspace_id: str | None = None,
     priority: int = 100,
-) -> tuple[WorkItemRecord, ...]:
+) -> tuple[WorkItemRecordLike, ...]:
     """Persist accepted specialist routes without claiming or executing them."""
 
-    records: list[WorkItemRecord] = []
+    records: list[WorkItemRecordLike] = []
     for route in routes:
         record, _ = enqueue_specialist_route(
             work_items,
@@ -60,7 +60,7 @@ def enqueue_specialist_route(
     context: Any | None = None,
     workspace_id: str | None = None,
     priority: int = 100,
-) -> tuple[WorkItemRecord, bool]:
+) -> tuple[WorkItemRecordLike, bool]:
     """Create one idempotent work item for a validated specialist route."""
 
     requested_family = _family_value(route.family)
@@ -123,9 +123,9 @@ def enqueue_producer_remediation_signals(
     *,
     workspace_id: str | None = None,
     priority: int = 100,
-) -> tuple[WorkItemRecord, ...]:
+) -> tuple[WorkItemRecordLike, ...]:
     """Persist producer-defect signals using the operator-review work family."""
-    records: list[WorkItemRecord] = []
+    records: list[WorkItemRecordLike] = []
     for signal in signals:
         payload = signal.model_dump(mode="json")
         payload.update(

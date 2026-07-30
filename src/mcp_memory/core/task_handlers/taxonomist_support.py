@@ -29,7 +29,7 @@ from mcp_memory.core.task_handlers.campaigns import (
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates, sampling_payload
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.work_item_store import (
+from mcp_memory.core.ports.work_items import (
     COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_TAGGING,
