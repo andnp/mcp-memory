@@ -10,10 +10,10 @@ import os
 from pathlib import Path
 import time
 from time import perf_counter
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from mcp_memory.context import ManagementContext
+from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.curation_identity import link_token, record_token
 from mcp_memory.core.journal_operations import RecordThoughtOperation
@@ -321,33 +321,45 @@ def _resolve_manual_maintenance_task_name(task_name: str) -> tuple[str, str | No
 
 
 class ManagementService:
-    def __init__(self, ctx: ManagementContext, controller) -> None:
-        pipeline = MemoryPipeline.from_context(ctx, controller)
-        resources = ensure_management_context_resources(ctx)
+    def __init__(
+        self,
+        ctx: ManagementRuntimeCapabilities | ManagementContext,
+        controller,
+    ) -> None:
+        capabilities = (
+            ctx
+            if isinstance(ctx, ManagementRuntimeCapabilities)
+            else ManagementRuntimeCapabilities.from_context(ctx)
+        )
+        memory = capabilities.memory
+        mutation = capabilities.mutation
+        provider = capabilities.provider
+        pipeline = MemoryPipeline.from_context(memory, controller, mutation=mutation)
+        resources = ensure_management_context_resources(capabilities)
         self._controller = controller
-        self._db_manager = ctx.db_manager
-        self._storage_backend = ctx.storage_backend or "sqlite"
-        self._workspace_id = ctx.workspace_id
+        self._db_manager = cast(Any, memory.db_manager)
+        self._storage_backend = capabilities.storage_backend or "sqlite"
+        self._workspace_id = memory.workspace_id
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
-        self._repository = ctx.repository
-        self._mutation_history = getattr(ctx, "mutation_history", None)
-        self._curation = getattr(ctx, "curation", None)
-        self._action_store = getattr(ctx, "curation_action_store", None)
+        self._repository = cast(Any, mutation.repository)
+        self._mutation_history = cast(Any, mutation.mutation_history)
+        self._curation = cast(Any, mutation.curation)
+        self._action_store = cast(Any, mutation.curation_action_store)
         self._provider_usage = resources.provider_usage
         self._runtime_logs = resources.runtime_logs
         self._embedding_integrity_events = resources.embedding_integrity_events
         self._retrieval_telemetry = resources.retrieval_telemetry
-        self._read_cache = getattr(ctx, "read_cache", None)
-        self._embedder = ctx.embedder
-        self._vector_store = getattr(ctx, "vector_store", None)
-        self._relational_search = ctx.relational_search
-        self._config = ctx.config
-        self._ai_json_provider = ctx.ai_json_provider
-        self._ai_agent_provider = ctx.ai_agent_provider
-        self._ai_provider_registry = ctx.ai_provider_registry or {}
+        self._read_cache = cast(Any, memory.read_cache)
+        self._embedder = cast(Any, memory.embedder)
+        self._vector_store = cast(Any, memory.vector_store)
+        self._relational_search = cast(Any, memory.relational_search)
+        self._config = memory.config
+        self._ai_json_provider = provider.ai_json_provider
+        self._ai_agent_provider = provider.ai_agent_provider
+        self._ai_provider_registry = provider.ai_provider_registry or {}
         self._dashboard_static_root = Path(__file__).with_name("static")
         self._dashboard_static_path = self._dashboard_static_root / "index.html"
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from mcp_memory.context import MemoryPipelineContext
+from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
@@ -23,18 +23,37 @@ class RuntimeInfoFacade:
     @classmethod
     def from_context(
         cls,
-        ctx: MemoryPipelineContext,
+        ctx: MemoryReadCapabilities | MemoryPipelineContext,
         controller: Any | None = None,
     ) -> RuntimeInfoFacade:
-        db_manager: DatabaseManager | Any | None = ctx.db_manager
+        capabilities = (
+            ctx
+            if isinstance(ctx, MemoryReadCapabilities)
+            else MemoryReadCapabilities.from_context(ctx)
+        )
+        return cls.from_capabilities(
+            capabilities,
+            task_queue=getattr(ctx, "task_queue", None),
+            controller=controller,
+        )
+
+    @classmethod
+    def from_capabilities(
+        cls,
+        capabilities: MemoryReadCapabilities,
+        *,
+        task_queue: object | None,
+        controller: Any | None = None,
+    ) -> RuntimeInfoFacade:
+        db_manager: DatabaseManager | Any | None = cast(DatabaseManager | None, capabilities.db_manager)
         return cls(
-            workspace_id=ctx.workspace_id,
-            workspace_root=ctx.workspace_root,
-            memory_path=ctx.memory_path,
+            workspace_id=capabilities.workspace_id,
+            workspace_root=capabilities.workspace_root,
+            memory_path=capabilities.memory_path,
             db_path=getattr(db_manager, "db_path", None) if db_manager is not None else None,
             runtime_active=bool(getattr(controller, "has_runtime", False)),
             client_count=int(getattr(controller, "client_count", 0)),
-            task_queue_enabled=ctx.task_queue is not None,
+            task_queue_enabled=task_queue is not None,
         )
 
 
@@ -43,8 +62,9 @@ class JournalFacade:
     journal: System1Journal | None
 
     @classmethod
-    def from_context(cls, ctx: MemoryPipelineContext) -> JournalFacade:
-        return cls(journal=ctx.journal)
+    def from_context(cls, ctx: MemoryReadCapabilities | MemoryPipelineContext) -> JournalFacade:
+        journal = None if isinstance(ctx, MemoryReadCapabilities) else ctx.journal
+        return cls(journal=cast(System1Journal | None, journal))
 
     def count_by_status(self) -> dict[str, int]:
         if self.journal is None:
@@ -58,7 +78,7 @@ class TaskQueueFacade:
 
     @classmethod
     def from_context(cls, ctx: MemoryPipelineContext) -> TaskQueueFacade:
-        return cls(task_queue=ctx.task_queue)
+        return cls(task_queue=cast(SQLiteTaskQueue | None, ctx.task_queue))
 
     def count_by_status(self) -> dict[str, int]:
         if self.task_queue is None:

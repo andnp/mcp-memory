@@ -3,9 +3,16 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
-from mcp_memory.context import BackgroundTaskBootstrapContext, ProviderSelectionContext, TaskRuntimeContext
+from mcp_memory.context import (
+    BackgroundTaskBootstrapContext,
+    BackgroundTaskCapabilities,
+    ProviderCapabilities,
+    ProviderSelectionContext,
+    TaskRuntimeCapabilities,
+    TaskRuntimeContext,
+)
 from mcp_memory.core.maintenance_idle import drain_legacy_cleanup_tasks, should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
@@ -52,16 +59,22 @@ DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS = 300.0
 
 
 def build_runtime_task_worker(
-    ctx: TaskRuntimeContext,
+    ctx: TaskRuntimeCapabilities | TaskRuntimeContext,
     provider: Any = None,
 ) -> RuntimeTaskWorker:
-    provider_selection_inputs = _provider_selection_inputs_from_context(ctx)
+    capabilities = (
+        ctx
+        if isinstance(ctx, TaskRuntimeCapabilities)
+        else TaskRuntimeCapabilities.from_context(ctx)
+    )
+    runtime_context = capabilities.as_context()
+    provider_selection_inputs = _provider_selection_inputs_from_context(capabilities.provider)
     active_json_provider = (
         provider
         if provider is not None
-        else ctx.ai_json_provider
+        else capabilities.provider.ai_json_provider
     )
-    active_agentic_provider = ctx.ai_agent_provider
+    active_agentic_provider = capabilities.provider.ai_agent_provider
     handlers = build_default_task_handlers(active_json_provider, active_agentic_provider, provider_selection_inputs=provider_selection_inputs)
     expected_handlers = {
         SYSTEM1_INGEST_TASK_NAME,
@@ -89,14 +102,19 @@ def build_runtime_task_worker(
             extra={"handler_names": sorted(handlers), "handler_count": len(handlers)},
         )
     return RuntimeTaskWorker(
-        ctx,
+        runtime_context,
         handlers=handlers,
         handler_factory=lambda: build_default_task_handlers(active_json_provider, active_agentic_provider, provider_selection_inputs=provider_selection_inputs),
         poll_interval_seconds=0.05,
         retry_delay_seconds=DEFAULT_RUNTIME_TASK_RETRY_DELAY_SECONDS,
         curation_reconciler=(
-            CurationReconciler(ctx.curation, ctx.relational_search, task_queue=ctx.task_queue)
-            if ctx.curation is not None and ctx.relational_search is not None
+            CurationReconciler(
+                cast(Any, capabilities.mutation.curation),
+                cast(Any, capabilities.mutation.relational_search),
+                task_queue=cast(Any, capabilities.mutation.task_queue),
+            )
+            if capabilities.mutation.curation is not None
+            and capabilities.mutation.relational_search is not None
             else None
         ),
     )
@@ -128,7 +146,15 @@ def build_default_task_handlers(
     }
 
 
-def _provider_selection_inputs_from_context(ctx: ProviderSelectionContext) -> ProviderSelectionInputs:
+def _provider_selection_inputs_from_context(
+    ctx: ProviderCapabilities | ProviderSelectionContext,
+) -> ProviderSelectionInputs:
+    if isinstance(ctx, ProviderCapabilities):
+        return ProviderSelectionInputs(
+            config=ctx.config,
+            ai_provider_registry=ctx.ai_provider_registry,
+            provider_policy_events=ctx.provider_policy_events,
+        )
     return ProviderSelectionInputs(
         config=ctx.config,
         ai_provider_registry=ctx.ai_provider_registry,
@@ -157,12 +183,19 @@ def _provider_for_task(ctx: ProviderSelectionContext, provider: Any, agentic_pro
     return _provider_for_task_inputs(_provider_selection_inputs_from_context(ctx), provider, agentic_provider, task_name, task)
 
 
-def bootstrap_background_tasks(ctx: BackgroundTaskBootstrapContext) -> None:
-    task_queue = getattr(ctx, "task_queue", None)
+def bootstrap_background_tasks(
+    ctx: BackgroundTaskCapabilities | BackgroundTaskBootstrapContext,
+) -> None:
+    capabilities = (
+        ctx
+        if isinstance(ctx, BackgroundTaskCapabilities)
+        else BackgroundTaskCapabilities.from_context(ctx)
+    )
+    task_queue = cast(Any, capabilities.task_queue)
     if task_queue is None:
         return
 
-    journal = getattr(ctx, "journal", None)
+    journal = cast(Any, capabilities.journal)
 
     drain_legacy_cleanup_tasks(task_queue)
 
@@ -171,7 +204,11 @@ def bootstrap_background_tasks(ctx: BackgroundTaskBootstrapContext) -> None:
             task_queue,
             journal,
             None,
-            suppression_config=None if ctx.config is None else ctx.config.ingest_suppression,
+            suppression_config=(
+                None
+                if capabilities.config is None
+                else capabilities.config.ingest_suppression
+            ),
         )
 
     for task_name, interval_seconds in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS.items():

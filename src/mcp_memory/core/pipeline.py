@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from mcp_memory.context import MemoryPipelineContext
+from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities, MutationCapabilities
 from mcp_memory.relational.queries import RelationalMemoryQueries
 from mcp_memory.runtime_facades import JournalFacade, RuntimeInfoFacade, TaskQueueFacade
 
@@ -20,18 +20,48 @@ class MemoryPipeline:
     @classmethod
     def from_context(
         cls,
-        ctx: MemoryPipelineContext,
+        ctx: MemoryReadCapabilities | MemoryPipelineContext,
         controller: Any | None = None,
+        *,
+        mutation: MutationCapabilities | None = None,
     ) -> MemoryPipeline:
+        capabilities = (
+            ctx
+            if isinstance(ctx, MemoryReadCapabilities)
+            else MemoryReadCapabilities.from_context(ctx)
+        )
+        compatibility_mutation = (
+            mutation
+            if mutation is not None
+            else (
+                None
+                if isinstance(ctx, MemoryReadCapabilities)
+                else MutationCapabilities.from_context(ctx)
+            )
+        )
+        task_queue = (
+            compatibility_mutation.task_queue
+            if compatibility_mutation is not None
+            else getattr(ctx, "task_queue", None)
+        )
+        journal = (
+            compatibility_mutation.journal
+            if compatibility_mutation is not None
+            else None
+        )
         return cls(
-            runtime_info=RuntimeInfoFacade.from_context(ctx, controller),
-            journal=JournalFacade.from_context(ctx),
-            task_queue=TaskQueueFacade.from_context(ctx),
+            runtime_info=RuntimeInfoFacade.from_capabilities(
+                capabilities,
+                task_queue=task_queue,
+                controller=controller,
+            ),
+            journal=JournalFacade(journal=cast(Any, journal)),
+            task_queue=TaskQueueFacade(task_queue=cast(Any, task_queue)),
             memory_queries=(
-                RelationalMemoryQueries(ctx.repository)
-                if ctx.repository is not None
+                RelationalMemoryQueries(cast(Any, capabilities.repository))
+                if capabilities.repository is not None
                 else None
             ),
-            repository=ctx.repository,
-            search=ctx.relational_search,
+            repository=capabilities.repository,
+            search=capabilities.relational_search,
         )

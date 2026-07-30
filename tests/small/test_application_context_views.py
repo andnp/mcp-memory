@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import (
+    ApplicationContext,
+    BackgroundTaskCapabilities,
+    ManagementRuntimeCapabilities,
+    MemoryReadCapabilities,
+    MutationCapabilities,
+    ProviderCapabilities,
+    TaskRuntimeCapabilities,
+)
 
 
 pytestmark = pytest.mark.small
@@ -53,3 +61,61 @@ def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
 
     with pytest.raises(AttributeError):
         getattr(view, "read_cache")
+
+
+def test_capability_bundles_isolate_concerns() -> None:
+    ctx = ApplicationContext(
+        repository="repository",
+        task_queue="queue",
+        read_cache="cache",
+        ai_json_provider="json",
+        provider_policy_events="policy",
+        runtime_logs="logs",
+        internal_tool_call_tracker="tracker",
+    )
+
+    memory = ctx.memory_capabilities()
+    mutation = ctx.mutation_capabilities()
+    provider = ctx.provider_capabilities()
+    background = ctx.background_task_capabilities()
+    task_runtime = ctx.task_runtime_capabilities()
+    management = ctx.management_capabilities()
+
+    assert isinstance(memory, MemoryReadCapabilities)
+    assert memory.repository == "repository"
+    assert not hasattr(memory, "task_queue")
+    assert not hasattr(memory, "journal")
+    assert isinstance(mutation, MutationCapabilities)
+    assert mutation.task_queue == "queue"
+    assert not hasattr(mutation, "read_cache")
+    assert isinstance(provider, ProviderCapabilities)
+    assert provider.ai_json_provider == "json"
+    assert not hasattr(provider, "repository")
+    assert isinstance(background, BackgroundTaskCapabilities)
+    assert background.task_queue == "queue"
+    assert isinstance(task_runtime, TaskRuntimeCapabilities)
+    assert task_runtime.memory.repository == "repository"
+    assert task_runtime.mutation.task_queue == "queue"
+    assert isinstance(management, ManagementRuntimeCapabilities)
+    assert management.runtime_logs == "logs"
+    assert management.memory.read_cache == "cache"
+
+
+def test_task_runtime_capabilities_adapt_to_legacy_handler_context() -> None:
+    ctx = ApplicationContext(
+        workspace_id="workspace-a",
+        session_id="session-a",
+        repository="repository",
+        task_queue="queue",
+        ai_json_provider="json",
+        internal_tool_call_tracker="tracker",
+    )
+
+    adapted = ctx.task_runtime_capabilities().as_context()
+
+    assert adapted.workspace_id == "workspace-a"
+    assert adapted.session_id == "session-a"
+    assert adapted.repository == "repository"
+    assert adapted.task_queue == "queue"
+    assert adapted.ai_json_provider == "json"
+    assert adapted.internal_tool_call_tracker == "tracker"

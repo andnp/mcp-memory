@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from mcp_memory.config import Config
+from mcp_memory.core.ports.providers import ProviderUsagePort, TaskExecutionAttemptPort
+from mcp_memory.core.ports.work_items import WorkItemRepository
+from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
 if TYPE_CHECKING:
     from mcp_memory.core.tasks import TaskRecord
@@ -105,6 +108,202 @@ class BackgroundTaskBootstrapContext(Protocol):
     config: Config | None
     journal: Any
     task_queue: Any
+
+
+@dataclass(frozen=True)
+class MemoryReadCapabilities:
+    config: Config | None = None
+    workspace_id: str | None = None
+    workspace_root: Path | None = None
+    memory_path: Path | None = None
+    db_manager: object | None = None
+    repository: object | None = None
+    relational_search: object | None = None
+    read_cache: object | None = None
+    embedder: object | None = None
+    vector_store: object | None = None
+
+    @classmethod
+    def from_context(cls, ctx: MemoryPipelineContext) -> MemoryReadCapabilities:
+        return cls(
+            config=ctx.config,
+            workspace_id=ctx.workspace_id,
+            workspace_root=ctx.workspace_root,
+            memory_path=ctx.memory_path,
+            db_manager=ctx.db_manager,
+            repository=ctx.repository,
+            relational_search=ctx.relational_search,
+            read_cache=getattr(ctx, "read_cache", None),
+            embedder=getattr(ctx, "embedder", None),
+            vector_store=getattr(ctx, "vector_store", None),
+        )
+
+
+@dataclass(frozen=True)
+class MutationCapabilities:
+    workspace_id: str | None = None
+    journal: object | None = None
+    repository: object | None = None
+    relational_search: object | None = None
+    task_queue: object | None = None
+    curation: object | None = None
+    mutation_history: object | None = None
+    curation_action_store: object | None = None
+
+    @classmethod
+    def from_context(cls, ctx: MemoryPipelineContext) -> MutationCapabilities:
+        return cls(
+            workspace_id=ctx.workspace_id,
+            journal=ctx.journal,
+            repository=ctx.repository,
+            relational_search=ctx.relational_search,
+            task_queue=getattr(ctx, "task_queue", None),
+            curation=getattr(ctx, "curation", None),
+            mutation_history=getattr(ctx, "mutation_history", None),
+            curation_action_store=getattr(ctx, "curation_action_store", None),
+        )
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    config: Config | None = None
+    ai_json_provider: JSONTaskProvider | None = None
+    ai_agent_provider: AgenticTaskProvider | None = None
+    ai_provider_registry: dict[str, dict[str, object]] | None = None
+    provider_usage: ProviderUsagePort | None = None
+    provider_policy_events: object | None = None
+    task_execution_attempts: TaskExecutionAttemptPort | None = None
+
+    @classmethod
+    def from_context(
+        cls,
+        ctx: ProviderSelectionContext | ManagementContext | TaskRuntimeContext,
+    ) -> ProviderCapabilities:
+        return cls(
+            config=ctx.config,
+            ai_json_provider=cast(JSONTaskProvider | None, getattr(ctx, "ai_json_provider", None)),
+            ai_agent_provider=cast(AgenticTaskProvider | None, getattr(ctx, "ai_agent_provider", None)),
+            ai_provider_registry=cast(
+                dict[str, dict[str, object]] | None,
+                ctx.ai_provider_registry,
+            ),
+            provider_usage=cast(ProviderUsagePort | None, getattr(ctx, "provider_usage", None)),
+            provider_policy_events=getattr(ctx, "provider_policy_events", None),
+            task_execution_attempts=cast(
+                TaskExecutionAttemptPort | None,
+                getattr(ctx, "task_execution_attempts", None),
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class BackgroundTaskCapabilities:
+    config: Config | None = None
+    journal: object | None = None
+    task_queue: object | None = None
+
+    @classmethod
+    def from_context(
+        cls,
+        ctx: BackgroundTaskBootstrapContext,
+    ) -> BackgroundTaskCapabilities:
+        return cls(config=ctx.config, journal=ctx.journal, task_queue=ctx.task_queue)
+
+
+@dataclass(frozen=True)
+class TaskRuntimeCapabilities:
+    memory: MemoryReadCapabilities
+    mutation: MutationCapabilities
+    provider: ProviderCapabilities
+    session_id: str | None = None
+    work_items: WorkItemRepository | None = None
+    embedding_repair_queue: object | None = None
+    internal_tool_call_tracker: object | None = None
+
+    @classmethod
+    def from_context(cls, ctx: TaskRuntimeContext) -> TaskRuntimeCapabilities:
+        return cls(
+            memory=MemoryReadCapabilities.from_context(ctx),
+            mutation=MutationCapabilities.from_context(ctx),
+            provider=ProviderCapabilities.from_context(ctx),
+            session_id=ctx.session_id,
+            work_items=cast(WorkItemRepository | None, getattr(ctx, "work_items", None)),
+            embedding_repair_queue=getattr(ctx, "embedding_repair_queue", None),
+            internal_tool_call_tracker=getattr(ctx, "internal_tool_call_tracker", None),
+        )
+
+    def as_context(self) -> TaskRuntimeContext:
+        return cast(TaskRuntimeContext, _TaskRuntimeContextAdapter(
+            config=self.provider.config,
+            workspace_id=self.memory.workspace_id,
+            workspace_root=self.memory.workspace_root,
+            session_id=self.session_id,
+            memory_path=self.memory.memory_path,
+            db_manager=self.memory.db_manager,
+            journal=self.mutation.journal,
+            repository=self.mutation.repository,
+            relational_search=self.mutation.relational_search,
+            task_queue=self.mutation.task_queue,
+            curation=self.mutation.curation,
+            mutation_history=self.mutation.mutation_history,
+            ai_json_provider=self.provider.ai_json_provider,
+            ai_agent_provider=self.provider.ai_agent_provider,
+            ai_provider_registry=self.provider.ai_provider_registry,
+            provider_usage=self.provider.provider_usage,
+            provider_policy_events=self.provider.provider_policy_events,
+            task_execution_attempts=self.provider.task_execution_attempts,
+            work_items=self.work_items,
+            embedding_repair_queue=self.embedding_repair_queue,
+            internal_tool_call_tracker=self.internal_tool_call_tracker,
+        ))
+
+
+@dataclass(frozen=True)
+class ManagementRuntimeCapabilities:
+    memory: MemoryReadCapabilities
+    mutation: MutationCapabilities
+    provider: ProviderCapabilities
+    storage_backend: str | None = None
+    runtime_logs: object | None = None
+    retrieval_telemetry: object | None = None
+    embedding_integrity_events: object | None = None
+
+    @classmethod
+    def from_context(cls, ctx: ManagementContext) -> ManagementRuntimeCapabilities:
+        return cls(
+            memory=MemoryReadCapabilities.from_context(ctx),
+            mutation=MutationCapabilities.from_context(ctx),
+            provider=ProviderCapabilities.from_context(ctx),
+            storage_backend=ctx.storage_backend,
+            runtime_logs=ctx.runtime_logs,
+            retrieval_telemetry=ctx.retrieval_telemetry,
+            embedding_integrity_events=ctx.embedding_integrity_events,
+        )
+
+
+@dataclass(frozen=True)
+class _TaskRuntimeContextAdapter:
+    config: Config | None
+    workspace_id: str | None
+    workspace_root: Path | None
+    session_id: str | None
+    memory_path: Path | None
+    db_manager: object | None
+    journal: object | None
+    repository: object | None
+    relational_search: object | None
+    task_queue: object | None
+    curation: object | None
+    mutation_history: object | None
+    ai_json_provider: JSONTaskProvider | None
+    ai_agent_provider: AgenticTaskProvider | None
+    ai_provider_registry: dict[str, dict[str, object]] | None
+    provider_usage: ProviderUsagePort | None
+    provider_policy_events: object | None
+    task_execution_attempts: TaskExecutionAttemptPort | None
+    work_items: WorkItemRepository | None
+    embedding_repair_queue: object | None
+    internal_tool_call_tracker: object | None
 
 
 class _ApplicationContextView:
@@ -235,6 +434,24 @@ class ApplicationContext:
 
     def memory_pipeline_view(self) -> MemoryPipelineContext:
         return cast(MemoryPipelineContext, _ApplicationContextView(self, _MEMORY_PIPELINE_FIELDS))
+
+    def memory_capabilities(self) -> MemoryReadCapabilities:
+        return MemoryReadCapabilities.from_context(self)
+
+    def mutation_capabilities(self) -> MutationCapabilities:
+        return MutationCapabilities.from_context(self)
+
+    def provider_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities.from_context(self)
+
+    def background_task_capabilities(self) -> BackgroundTaskCapabilities:
+        return BackgroundTaskCapabilities.from_context(self.background_task_bootstrap_view())
+
+    def task_runtime_capabilities(self) -> TaskRuntimeCapabilities:
+        return TaskRuntimeCapabilities.from_context(self.task_runtime_view())
+
+    def management_capabilities(self) -> ManagementRuntimeCapabilities:
+        return ManagementRuntimeCapabilities.from_context(self.management_view())
 
     def management_view(self) -> ManagementContext:
         return cast(ManagementContext, _ApplicationContextView(self, _MANAGEMENT_FIELDS))
