@@ -49,6 +49,7 @@ class _TaskRuntimeContextStub:
     config: Config | None = None
     workspace_id: str | None = None
     workspace_root: Path | None = None
+    session_id: str | None = None
     memory_path: Path | None = None
     db_manager: object = None
     journal: object = None
@@ -64,6 +65,7 @@ class _TaskRuntimeContextStub:
     task_execution_attempts: object = None
     work_items: object = None
     embedding_repair_queue: object = None
+    internal_tool_call_tracker: object = None
 
 
 def test_sqlite_task_queue_enqueue_and_claim_order(db_manager) -> None:

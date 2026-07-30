@@ -220,7 +220,10 @@ class PostgresProviderUsageRepository:
                 return {}
             with connection.cursor() as cursor:
                 cursor.execute(query, tuple(params))
-                return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
+                return {
+                    str(row[0]): int(cast(int | float | str, row[1]))
+                    for row in cursor.fetchall()
+                }
 
     def finalize_running_conversation(
         self,
