@@ -21,7 +21,6 @@ from mcp_memory.core.task_handlers.campaigns import campaign_metadata, count_nam
 import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import (
-    claim_work_batch,
     complete_work_item,
     release_work_item,
     work_item_result_metadata,
@@ -32,6 +31,7 @@ from mcp_memory.work_item_store import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
+    compatibility_group_families,
 )
 
 
@@ -69,8 +69,13 @@ async def handle_memory_curator_task(
         support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
         seed_records = sampled_records + support_records
 
+    claimed_family_key = (
+        claimed_review_item.family_key
+        if claimed_review_item is not None
+        else WORK_FAMILY_MEMORY_CURATION_REVIEW
+    )
     work_item_metadata = work_item_result_metadata(
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+        family_key=claimed_family_key,
         execution_lane=EXECUTION_LANE_AGENTIC,
         seed_source="claimed_review_work_item" if claimed_review_item is not None else "direct_sampling",
         seed_records=seed_records,
@@ -79,7 +84,7 @@ async def handle_memory_curator_task(
     work_item_metadata.update(
         campaign_metadata(
             compatibility_group=COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
-            origin_family=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            origin_family=claimed_family_key,
             execution_lane=EXECUTION_LANE_AGENTIC,
         )
     )
@@ -216,6 +221,7 @@ async def handle_memory_curator_task(
                 "internal_read_memory_record",
                 "internal_list_memory_records",
                 "internal_get_next_curator_batch",
+                "internal_get_compatible_work_batch",
                 "task_complete",
                 "internal_task_complete",
                 "internal_heartbeat_work_item",
@@ -279,10 +285,13 @@ def _claim_curator_review_work_batch(
     task: TaskRecord,
     limit: int,
 ) -> list[Any]:
-    return claim_work_batch(
-        ctx,
-        task=task,
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+    work_items = getattr(ctx, "work_items", None)
+    if work_items is None or limit < 1:
+        return []
+    return work_items.claim_compatible_batch(
+        family_keys=compatibility_group_families(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW),
         execution_lane=EXECUTION_LANE_AGENTIC,
+        lease_owner=task.id,
         limit=limit,
+        workspace_id=task.workspace_id,
     )

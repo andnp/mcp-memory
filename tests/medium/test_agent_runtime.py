@@ -69,7 +69,9 @@ from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_CONFLICT_REVIEW,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
+    WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
 from tests.sdk.providers import FakeAIProvider
 
@@ -6170,8 +6172,8 @@ async def test_memory_curator_can_use_agentic_provider(monkeypatch, tmp_path: Pa
         assert "Judge success at the neighborhood level" in provider.prompts[0]
         assert "Small-to-medium records beat large mixed-topic blobs." in provider.prompts[0]
         assert "Prefer split-and-link over expanding a memory that already spans multiple topics" in provider.prompts[0]
-        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
-        assert record.id not in provider.prompts[0]
+        assert "Claimed seed memories (compact view)" in provider.prompts[0]
+        assert record.id in provider.prompts[0]
     finally:
         runtime.close()
 
@@ -6594,9 +6596,90 @@ async def test_memory_curator_consumes_seeded_review_work_item_first(monkeypatch
         assert result["claimed_work_item_id"] == work_item.id
         assert refreshed.status == "completed"
         assert provider.prompts
-        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
-        assert record.id not in provider.prompts[0]
+        assert "Claimed seed memories (compact view)" in provider.prompts[0]
+        assert record.title in provider.prompts[0]
+        assert record.id in provider.prompts[0]
         assert "exclude_memory_ids" in provider.prompts[0]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize(
+    ("family_key", "payload_key"),
+    [
+        (WORK_FAMILY_MEMORY_DEDUP_REVIEW, "seed_memory_ids"),
+        (WORK_FAMILY_CONFLICT_REVIEW, "candidate_memory_ids"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_memory_curator_consumes_compatible_structural_review_work(
+    family_key: str,
+    payload_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    runtime = create_runtime(workspace_root_override=None, cwd=workspace)
+    assert runtime.repository is not None
+    assert runtime.work_items is not None
+
+    class _AgenticProvider:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            assert "Structural review families" in prompt
+            return AgenticRunResult(status="success", summary="Reviewed the structural cleanup batch.")
+
+    try:
+        record = runtime.repository.create_memory(
+            title="Structural review target",
+            content="JWT coverage is required for client authentication.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        assert record is not None
+        item, created = runtime.work_items.enqueue_unique(
+            family_key=family_key,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={
+                "workspace_id": runtime.workspace_id,
+                payload_key: [record.id],
+            },
+            idempotency_key=f"{family_key}:{record.id}",
+        )
+        assert created is True
+
+        result = await handle_memory_curator_task(
+            runtime,
+            TaskRecord(
+                id=f"memory-curator-{family_key}-task",
+                task_name=CURATOR_TASK_NAME,
+                data={"workspace_id": runtime.workspace_id},
+                workspace_id=runtime.workspace_id,
+                status="running",
+                priority=95,
+                retries_count=0,
+                max_retries=3,
+                created_at=0.0,
+                updated_at=0.0,
+                available_at=0.0,
+                claimed_at=0.0,
+                started_at=0.0,
+                completed_at=None,
+                last_error=None,
+            ),
+            _AgenticProvider(),
+        )
+
+        assert result["claimed_work_item_count"] == 1
+        assert result["work_item_family"] == family_key
+        assert result["campaign_origin_family"] == family_key
+        assert result["seed_record_count"] == 1
+        assert runtime.work_items.get_item(item.id).status == "completed"
     finally:
         runtime.close()
 
@@ -6753,8 +6836,8 @@ async def test_memory_curator_accepts_copilot_style_agentic_summary_payload(monk
         assert "A local read of the current batch alone is not enough to declare the frontier healthy" in provider.prompts[0]
         assert "Report final results once this batch is done." in provider.prompts[0]
         assert "output final JSON only in the form {\"summary\": \"...\"}" in provider.prompts[0]
-        assert "Do not expect inline seed-memory payloads in this prompt" in provider.prompts[0]
-        assert record.id not in provider.prompts[0]
+        assert "Claimed seed memories (compact view)" in provider.prompts[0]
+        assert record.id in provider.prompts[0]
     finally:
         runtime.close()
 

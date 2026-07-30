@@ -26,6 +26,10 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.work_item_store import (
+    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
+    compatibility_group_families,
+)
 
 CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
@@ -340,6 +344,7 @@ def build_json_tool_loop_prompt(
     guardrails: str,
 ) -> str:
     seed_payload = [curator_seed_payload_item(record) for record in seed_records]
+    structural_families = list(compatibility_group_families(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
     return (
         "You are the curator maintenance agent for the global memory store.\n"
         "Improve retrieval quality with justified maintenance: merge, rewrite, retag, relink, split, archive, or delete only when clearly justified.\n"
@@ -353,7 +358,8 @@ def build_json_tool_loop_prompt(
         "5. A local read alone is not enough for suspicious records; either mutate the nearby cluster or make an explicit no-op decision after adjacency review.\n"
         "6. Summarize once this batch is done. Do not fetch another batch or claim additional work items in this session.\n"
         "Treat seed memories as a starting frontier, not a hard boundary; widen only for nearby duplicates, contradictions, or oversized clusters.\n"
-        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids.\n"
+        "For claimed structural review items, continue from the claimed payload: use seed_memory_ids for curator or deduplication review and candidate_memory_ids for conflict review.\n"
+        f"Structural review families are {structural_families}.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records. Avoid growing a memory past that size unless no reasonable split exists.\n"
         "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for closeout instead.\n"
@@ -371,6 +377,8 @@ def build_agentic_prompt(
     seed_records: list[Any],
     guardrails: str,
 ) -> str:
+    structural_families = list(compatibility_group_families(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
+    seed_payload = [curator_seed_payload_item(record) for record in seed_records]
     return (
         "You are the memory-curator maintenance agent for the global memory store.\n"
         "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
@@ -387,10 +395,11 @@ def build_agentic_prompt(
         "3. For the highest-risk records or clusters in that batch, you must spend some budget on adjacency discovery before concluding no-op. Use search/list/read to inspect nearby duplicates, canonicals, contradictions, taxonomy cleanup opportunities, split candidates, merge candidates, or reorganization opportunities when records look broad, append-heavy, heavily linked, frequently surfaced, or otherwise noisy.\n"
         "4. Build a shortlist of concrete possible mutations from that review, including multi-memory reorganizations when appropriate, and score each one roughly for confidence and impact. Execute every safe candidate that is high-confidence and at least medium-impact instead of merely reporting it.\n"
         "5. Split, archive, merge, rewrite, relabel, resummarize, relink, canonicalize, or otherwise improve the memory base when justified. If a record is structurally acceptable but its title, summary, or wording is still weak, prefer a lightweight internal_update_memory_record rather than defaulting to no-op. A local read of the current batch alone is not enough to declare the frontier healthy when suspicious records or suspicious clusters exist.\n"
-        "6. Report final results once this batch is done. Do not fetch another batch or claim additional work items in this session.\n"
+        "6. Report final results once this batch is done. If the claimed batch is complete and time remains, you may claim one compatible structural review batch with internal_get_compatible_work_batch using the same task_id, compatibility_group='structural_review', execution_lane='agentic', and limit=1; process and finalize each returned item before stopping.\n"
         "Treat the fetched frontier as the active working set for this run; widen only when it implies nearby duplicates, contradictions, taxonomy cleanup, merge opportunities, or oversized clusters.\n"
         "When you successfully split or merge a cluster, do one extra neighborhood cleanup pass before moving on: remove obsolete links, tighten summaries/titles/tags on the new children or canonicals if needed, and archive/delete stale leftovers when the resulting structure is clearly better and lineage is preserved.\n"
-        "For claimed memory_curation_review items, continue curator work from payload.seed_memory_ids.\n"
+        "For claimed structural review items, continue from the claimed payload: use seed_memory_ids for curator or deduplication review and candidate_memory_ids for conflict review.\n"
+        f"Structural review families are {structural_families}.\n"
         "Aim for multiple coherent, high-value maintenance actions on this batch when justified, with clear lineage and archive-before-delete when possible.\n"
         f"{guardrails}\n"
         f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records.\n"
@@ -402,7 +411,8 @@ def build_agentic_prompt(
         f"When your full looping pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
         "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
         f"Sampling strategy: {strategy_used}\n"
-        "Do not expect inline seed-memory payloads in this prompt; discover the real working set through the MCP tools."
+        "Claimed seed memories (compact view):\n"
+        f"{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))}"
     )
 
 
@@ -810,7 +820,7 @@ def _resolve_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | No
 
 def _ordered_packet_memory_ids(payload: dict[str, Any]) -> list[str]:
     ordered_ids: list[str] = []
-    for key in ("seed_memory_ids", "support_memory_ids"):
+    for key in ("seed_memory_ids", "candidate_memory_ids", "support_memory_ids"):
         memory_ids = payload.get(key)
         if not isinstance(memory_ids, list):
             continue
