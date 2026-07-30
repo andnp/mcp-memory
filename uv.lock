@@ -1128,7 +1128,7 @@ wheels = [
 [[package]]
 name = "mcp-markdown-ragdocs"
 version = "0.1.0"
-source = { git = "https://github.com/andnp/ragdocs-mcp.git?rev=0ebac8b3cd65958df92e636bb0fca03948056f9a#0ebac8b3cd65958df92e636bb0fca03948056f9a" }
+source = { git = "https://github.com/andnp/ragdocs-mcp.git?rev=baa403b65addfa78a95c7413942de55355be0d45#baa403b65addfa78a95c7413942de55355be0d45" }
 dependencies = [
     { name = "click" },
     { name = "faiss-cpu" },
@@ -1190,7 +1190,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "github-copilot-sdk", specifier = ">=1.0.1" },
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mcp-markdown-ragdocs", git = "https://github.com/andnp/ragdocs-mcp.git?rev=0ebac8b3cd65958df92e636bb0fca03948056f9a" },
+    { name = "mcp-markdown-ragdocs", git = "https://github.com/andnp/ragdocs-mcp.git?rev=baa403b65addfa78a95c7413942de55355be0d45" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.9" },
     { name = "psycopg-pool", specifier = ">=3.2.6" },
     { name = "pydantic", specifier = ">=2.0.0" },
