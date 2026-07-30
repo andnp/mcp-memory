@@ -392,13 +392,6 @@ class ManagementService:
             cache=self._build_cache_health(),
             transport_diagnostics=self._build_transport_diagnostics(),
             execution_attempts=build_execution_attempt_health(self._db_manager),
-            shadow_mode_enabled=bool(getattr(getattr(self._config, "curation", None), "shadow_mode_enabled", False)),
-            normalize_execution_enabled=bool(
-                getattr(getattr(self._config, "curation", None), "normalize_execution_enabled", False)
-            ),
-            create_link_execution_enabled=bool(
-                getattr(getattr(self._config, "curation", None), "create_link_execution_enabled", False)
-            ),
         )
 
     def _build_transport_diagnostics(self) -> TransportDiagnosticsPayload:

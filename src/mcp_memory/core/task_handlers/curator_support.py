@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
 import re
 from typing import Any, cast
 from uuid import UUID
@@ -26,10 +25,6 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.work_item_store import (
-    COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
-    compatibility_group_families,
-)
 
 CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
@@ -73,10 +68,6 @@ _CURATOR_BACKEND_STRATEGIES = (
 CURATOR_SIZE_BAND_TARGET = "target"
 CURATOR_SIZE_BAND_ACCEPTABLE = "acceptable"
 CURATOR_SIZE_BAND_OVERSIZED = "oversized"
-CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY = (
-    "Provider claimed maintenance actions without MCP tool execution; "
-    "no curator maintenance actions were executed."
-)
 _CURATOR_MUTATION_SUMMARY_PATTERNS = (
     re.compile(r"\bsplit(?:ting)?\b"),
     re.compile(r"\bmerg(?:e|ed|ing)\b"),
@@ -121,49 +112,6 @@ CURATOR_SIZE_POLICY = CuratorSizePolicy(
 )
 
 
-def normalize_curator_summary(response: dict[str, Any], *, tool_calls_executed: int) -> str | None:
-    raw_summary = response.get("summary")
-    summary = raw_summary.strip() if isinstance(raw_summary, str) and raw_summary.strip() else None
-    if summary is None:
-        return None
-
-    reported_actions_taken = response.get("actions_taken")
-    if tool_calls_executed <= 0 and isinstance(reported_actions_taken, int) and reported_actions_taken > 0:
-        return (
-            f"Provider reported actions_taken={reported_actions_taken} without using internal tools; "
-            "no curator maintenance actions were executed."
-        )
-    if tool_calls_executed <= 0 and curator_summary_claims_mutating_actions(summary):
-        return CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY
-    return summary
-
-
-def normalize_curator_agentic_result(response: Any) -> dict[str, Any]:
-    parsed = response.parsed if isinstance(getattr(response, "parsed", None), dict) else {}
-    tool_stats: dict[str, Any] = {}
-    tool_payload: dict[str, Any] = {}
-    tool_counts: dict[str, Any] = {}
-    raw_tool_stats = parsed.get("stats") if isinstance(parsed, dict) else None
-    if isinstance(raw_tool_stats, dict):
-        tool_stats = raw_tool_stats
-        raw_tool_payload = tool_stats.get("tools")
-        if isinstance(raw_tool_payload, dict):
-            tool_payload = raw_tool_payload
-            raw_tool_counts = tool_payload.get("byName")
-            if isinstance(raw_tool_counts, dict):
-                tool_counts = raw_tool_counts
-    tool_names_used = _extract_agentic_tool_names(tool_counts)
-    summary = getattr(response, "summary", None)
-    tool_calls_executed = _coerce_non_negative_int(tool_payload.get("totalCalls"))
-    if tool_calls_executed <= 0 and curator_summary_claims_mutating_actions(summary):
-        summary = CURATOR_UNSUPPORTED_NO_TOOL_MUTATION_SUMMARY
-    return {
-        "summary": summary,
-        "tool_calls_executed": tool_calls_executed,
-        "mutations": _count_mutating_agentic_tool_calls(tool_counts),
-        "tool_names_used": tool_names_used,
-    }
-
 
 def curator_summary_claims_mutating_actions(summary: str | None) -> bool:
     normalized = _normalize_curator_text(summary)
@@ -179,18 +127,6 @@ def curator_summary_claims_mutating_actions(summary: str | None) -> bool:
             return True
     return False
 
-
-def unsupported_curator_no_tool_response_error(response: dict[str, Any], tool_calls_executed: int) -> str | None:
-    if tool_calls_executed > 0:
-        return None
-    raw_summary = response.get("summary")
-    summary = raw_summary.strip() if isinstance(raw_summary, str) and raw_summary.strip() else None
-    if not curator_summary_claims_mutating_actions(summary):
-        return None
-    return (
-        "Do not claim curator maintenance actions in the summary without first issuing tool_calls. "
-        "If no tools were used, return a no-op summary that does not describe mutations."
-    )
 
 
 def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
@@ -335,85 +271,6 @@ def curator_seed_payload_item(record) -> dict[str, Any]:
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
     }
 
-
-def build_json_tool_loop_prompt(
-    task: TaskRecord,
-    *,
-    strategy_used: str,
-    seed_records: list[Any],
-    guardrails: str,
-) -> str:
-    seed_payload = [curator_seed_payload_item(record) for record in seed_records]
-    structural_families = list(compatibility_group_families(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
-    return (
-        "You are the curator maintenance agent for the global memory store.\n"
-        "Improve retrieval quality with justified maintenance: merge, rewrite, retag, relink, split, archive, or delete only when clearly justified.\n"
-        "Prefer focused durable memories with specific titles/summaries. Treat frequently surfaced but rarely read records as retrieval-friction candidates.\n"
-        f"{_curator_size_policy_prompt()}\n"
-        "Process exactly one curator batch this run; this is not an open-ended loop.\n"
-        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the active curator batch.\n"
-        "2. For each returned memory, use read/search/list plus mutation tools as needed.\n"
-        "3. For the highest-risk records, you must spend some budget on adjacency discovery before concluding no-op. Use search/list/read to inspect nearby duplicates, canonicals, contradictions, taxonomy cleanup, or split candidates when records look broad, noisy, heavily linked, or frequently surfaced.\n"
-        "4. Build a shortlist of concrete mutations, score each roughly for confidence and impact, and execute every safe candidate that clears the high-confidence/medium-impact bar.\n"
-        "5. A local read alone is not enough for suspicious records; either mutate the nearby cluster or make an explicit no-op decision after adjacency review.\n"
-        "6. Summarize once this batch is done. Do not fetch another batch or claim additional work items in this session.\n"
-        "Treat seed memories as a starting frontier, not a hard boundary; widen only for nearby duplicates, contradictions, or oversized clusters.\n"
-        "For claimed structural review items, continue from the claimed payload: use seed_memory_ids for curator or deduplication review and candidate_memory_ids for conflict review.\n"
-        f"Structural review families are {structural_families}.\n"
-        f"{guardrails}\n"
-        f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records. Avoid growing a memory past that size unless no reasonable split exists.\n"
-        "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for closeout instead.\n"
-        "Before stopping, check once more for adjacent worthwhile maintenance. No-op is fine only when no concrete safe cleanup remains above the high-confidence/medium-impact bar, and your final summary must make clear whether adjacency review was actually performed.\n"
-        f"When this batch is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
-        "Return final JSON like {\"summary\":\"...\",\"actions_taken\":N}.\n\n"
-        f"Seed memories (compact view):\n{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))}"
-    )
-
-
-def build_agentic_prompt(
-    task: TaskRecord,
-    *,
-    strategy_used: str,
-    seed_records: list[Any],
-    guardrails: str,
-) -> str:
-    structural_families = list(compatibility_group_families(COMPATIBILITY_GROUP_STRUCTURAL_REVIEW))
-    seed_payload = [curator_seed_payload_item(record) for record in seed_records]
-    return (
-        "You are the memory-curator maintenance agent for the global memory store.\n"
-        "Use the workspace-local internal MCP maintenance tools directly to inspect and mutate memories.\n"
-        "Good memory anatomy: one focused durable takeaway plus enough evidence to stand alone, a title/summary that names the conclusion, and tags that make the record discoverable later.\n"
-        f"{_curator_size_policy_prompt()}\n"
-        "Bad memory smells from live retrieval telemetry include generic summaries, mixed-topic blobs, thin split-child fragments, repeated overlap across neighboring memories, and memories that keep getting surfaced but almost never opened.\n"
-        "Your standing curator jobs are: retitle vague memories; resummarize generic memories; rewrite memories into more durable language; trim noise, filler, and unnecessary detail; retag or normalize taxonomy; split oversized or mixed-topic records; merge near-duplicates; reorganize overlapping clusters into a smaller clearer set; archive/delete low-value leftovers after preserving lineage; and relink or remove misleading edges when clearly justified.\n"
-        "Tool mapping: use internal_update_memory_record for retitling, resummarizing, rewriting for durability, trimming noise, and retagging; use internal_split_memory_record for decompositions; use internal_merge_memory_into_canonical for canonicalization; use internal_archive_memory_record or internal_delete_memory_record for safe cleanup of leftovers; and use internal_create_memory_link or internal_delete_memory_link for structural edge cleanup.\n"
-        "Actively look for multi-memory cleanups, not just single-record edits. If two similar memories should become one canonical memory, or three-to-five overlapping memories should become a smaller set of cleaner focused records, do that reorganization instead of merely describing it. Think in rotations in memory space: 5 noisy memories can become 3 durable ones, 3 overlapping memories can become 2 organized ones, and 1 giant blob can become several focused memories.\n"
-        "Prefer mutations that improve future retrieval decisions: fewer clearer durable memories, stronger canonicals, better summaries/titles, less overlap, less filler, and cleaner neighborhood structure. Judge success at the neighborhood level, not just the single-record level. Prefer reversible low-risk cleanup when ambiguity remains.\n"
-        "Process exactly one curator batch this run; this is not an open-ended loop.\n"
-        f"1. Immediately call internal_get_next_curator_batch with task_id='{task.id}', strategy='{strategy_used}', and exclude_memory_ids=[] to fetch the active curator batch.\n"
-        "2. For each memory in the returned batch, use search/read/list and any other available tools to gain enough context to make high-value edits.\n"
-        "3. For the highest-risk records or clusters in that batch, you must spend some budget on adjacency discovery before concluding no-op. Use search/list/read to inspect nearby duplicates, canonicals, contradictions, taxonomy cleanup opportunities, split candidates, merge candidates, or reorganization opportunities when records look broad, append-heavy, heavily linked, frequently surfaced, or otherwise noisy.\n"
-        "4. Build a shortlist of concrete possible mutations from that review, including multi-memory reorganizations when appropriate, and score each one roughly for confidence and impact. Execute every safe candidate that is high-confidence and at least medium-impact instead of merely reporting it.\n"
-        "5. Split, archive, merge, rewrite, relabel, resummarize, relink, canonicalize, or otherwise improve the memory base when justified. If a record is structurally acceptable but its title, summary, or wording is still weak, prefer a lightweight internal_update_memory_record rather than defaulting to no-op. A local read of the current batch alone is not enough to declare the frontier healthy when suspicious records or suspicious clusters exist.\n"
-        "6. Report final results once this batch is done. If the claimed batch is complete and time remains, you may claim one compatible structural review batch with internal_get_compatible_work_batch using the same task_id, compatibility_group='structural_review', execution_lane='agentic', and limit=1; process and finalize each returned item before stopping.\n"
-        "Treat the fetched frontier as the active working set for this run; widen only when it implies nearby duplicates, contradictions, taxonomy cleanup, merge opportunities, or oversized clusters.\n"
-        "When you successfully split or merge a cluster, do one extra neighborhood cleanup pass before moving on: remove obsolete links, tighten summaries/titles/tags on the new children or canonicals if needed, and archive/delete stale leftovers when the resulting structure is clearly better and lineage is preserved.\n"
-        "For claimed structural review items, continue from the claimed payload: use seed_memory_ids for curator or deduplication review and candidate_memory_ids for conflict review.\n"
-        f"Structural review families are {structural_families}.\n"
-        "Aim for multiple coherent, high-value maintenance actions on this batch when justified, with clear lineage and archive-before-delete when possible.\n"
-        f"{guardrails}\n"
-        f"Treat memories above {CURATOR_SIZE_POLICY.split_threshold_chars} characters as oversized and prefer splitting them into focused linked records.\n"
-        "If you split or rewrite a record, make each resulting memory self-contained enough to stand alone in search results.\n"
-        "When you materially rewrite a memory and already understand it, refresh a concise summary in the same tool call.\n"
-        "Do not create journal or memory records for routine completion, counters, or status-only traces; use task_complete for operational closeout instead.\n"
-        "Before finishing, do one more quick search/list/read pass for any adjacent high-value maintenance opportunity, and make your final summary explicit about whether risky records received adjacency review before a no-op decision, whether any shortlisted mutations cleared the high-confidence/medium-impact bar, and which 1-3 mutation classes were considered but declined with a brief reason when relevant.\n"
-        "Do not claim work you did not actually execute through MCP tools.\n"
-        f"When your full looping pass is complete, call task_complete with task_id='{task.id}', task_name='memory-curator', and a short summary before your final JSON response.\n"
-        "When finished, output final JSON only in the form {\"summary\": \"...\"}.\n\n"
-        f"Sampling strategy: {strategy_used}\n"
-        "Claimed seed memories (compact view):\n"
-        f"{json.dumps(seed_payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))}"
-    )
 
 
 def review_seed_records(ctx: ApplicationContext, payload: dict[str, Any]) -> list[Any]:

@@ -754,7 +754,6 @@ async def test_impossible_seed_budget_persists_and_defers_without_planner_or_mut
         planner,
         config=CurationHarnessConfig(
             read_budget=CurationReadBudget(max_context_characters=100),
-            execute_accepted_normalize_actions=True,
         ),
     ).run(_frontier(seed, work_item_id=claimed.id))
 

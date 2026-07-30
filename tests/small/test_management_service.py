@@ -93,14 +93,8 @@ def test_management_service_accepts_structural_management_context(db_manager) ->
     assert service.workspace_id == "workspace-a"
 
 
-def test_management_service_exposes_effective_curation_rollout_config(db_manager) -> None:
-    config = Config(
-        curation=CurationConfig(
-            shadow_mode_enabled=True,
-            normalize_execution_enabled=True,
-            create_link_execution_enabled=False,
-        )
-    )
+def test_management_service_omits_legacy_curation_mode_flags(db_manager) -> None:
+    config = Config(curation=CurationConfig())
     service = ManagementService(
         ApplicationContext(
             config=config,
@@ -115,15 +109,12 @@ def test_management_service_exposes_effective_curation_rollout_config(db_manager
     health = service.get_health()
     metrics = service.get_nerd_metrics(window_hours=24, bucket_minutes=60, now=100.0)
 
-    expected = {
-        "shadow_mode_enabled": True,
-        "normalize_execution_enabled": True,
-        "create_link_execution_enabled": False,
-    }
-    assert health.model_dump()["shadow_mode_enabled"] == expected["shadow_mode_enabled"]
-    assert health.model_dump()["normalize_execution_enabled"] == expected["normalize_execution_enabled"]
-    assert health.model_dump()["create_link_execution_enabled"] == expected["create_link_execution_enabled"]
-    assert metrics.curation.model_dump(include=set(expected)) == expected
+    assert not hasattr(health, "shadow_mode_enabled")
+    assert not hasattr(health, "normalize_execution_enabled")
+    assert not hasattr(health, "create_link_execution_enabled")
+    assert not hasattr(metrics.curation, "shadow_mode_enabled")
+    assert not hasattr(metrics.curation, "normalize_execution_enabled")
+    assert not hasattr(metrics.curation, "create_link_execution_enabled")
 
 
 def test_management_service_health_tolerates_hook_client_count_failures(db_manager, caplog: pytest.LogCaptureFixture) -> None:

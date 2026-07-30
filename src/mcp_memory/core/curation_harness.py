@@ -259,8 +259,6 @@ class CurationHarnessConfig:
     mutation_budget: CurationMutationBudget = field(default_factory=CurationMutationBudget)
     no_op_cooldown_seconds: float = 3600.0
     execute_accepted_actions: bool = False
-    execute_accepted_normalize_actions: bool = False
-    execute_accepted_create_link_actions: bool = False
     require_authoritative_disclosure_context: bool = False
 
 
@@ -419,29 +417,6 @@ class CurationDryRunHarness:
                 executing=executing,
                 validation=validation,
                 context=context,
-                allowed_operations=None,
-            )
-        elif (
-            (self._config.execute_accepted_normalize_actions or self._config.execute_accepted_create_link_actions)
-            and validation is not None
-            and validation.valid
-            and validation.accepted_actions
-        ):
-            outcome, reason_code, terminal_state, receipts = self._execute_accepted_actions(
-                run_id=run_id,
-                executing=executing,
-                validation=validation,
-                context=context,
-                allowed_operations=(
-                    {
-                        "normalize_memory",
-                        "create_link",
-                    }
-                    if self._config.execute_accepted_normalize_actions and self._config.execute_accepted_create_link_actions
-                    else {"normalize_memory"}
-                    if self._config.execute_accepted_normalize_actions
-                    else {"create_link"}
-                ),
             )
         else:
             receipts = ()
@@ -459,15 +434,6 @@ class CurationDryRunHarness:
         specialist_routes = () if validation is None else validation.specialist_routes
         if self._config.execute_accepted_actions:
             specialist_routes = ()
-        if (
-            self._config.execute_accepted_create_link_actions
-            and validation is not None
-            and validation.valid
-        ):
-            executed_ids = {action.action_id for action in _create_link_actions(validation)}
-            specialist_routes = tuple(
-                route for route in specialist_routes if route.action.action_id not in executed_ids
-            )
         if validation is not None and validation.valid and specialist_routes and self._work_items is not None:
             from mcp_memory.core.task_handlers.maintenance_work_items import enqueue_specialist_routes
 
@@ -666,7 +632,6 @@ class CurationDryRunHarness:
         executing: CurationRun,
         validation: CurationValidationResult,
         context: ImmutableCurationContextPacket,
-        allowed_operations: set[str] | None = None,
     ) -> tuple[CurationRunOutcome, str, CurationRunState, tuple[CurationActionReceipt, ...]]:
         """Execute and verify accepted actions through the deterministic pipeline."""
         executor = self._executor
@@ -677,7 +642,6 @@ class CurationDryRunHarness:
         actions = [
             item.action
             for item in validation.accepted_actions
-            if allowed_operations is None or item.action.operation in allowed_operations
         ]
         if not actions:
             return CurationRunOutcome.DEFERRED, "unsupported_execution_action", CurationRunState.EXECUTING, ()
@@ -807,16 +771,6 @@ class CurationDryRunHarness:
 
 def _uuid_or_none(value: str | None) -> UUID | None:
     return None if value is None else UUID(str(value))
-
-
-def _create_link_actions(validation: CurationValidationResult) -> tuple[CreateLinkAction, ...]:
-    """Return only curator-owned, policy-valid create-links for local execution."""
-    actions = [
-        item.action
-        for item in validation.accepted_actions
-        if isinstance(item.action, CreateLinkAction)
-    ]
-    return tuple(actions)
 
 
 def _count_verified_receipts(receipts: tuple[CurationActionReceipt, ...]) -> int:

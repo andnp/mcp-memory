@@ -949,24 +949,6 @@ def build_nerd_alerts(
                 unit="count",
             )
         )
-    curator_route = next((item for item in route_audit if item.task_name == "memory-curator"), None)
-    if (
-        curator_route is not None
-        and curator_route.configured_primary_route is not None
-        and curator_route.recent_provider_key is not None
-        and not curator_route.recent_provider_key.startswith(curator_route.configured_primary_route)
-    ):
-        alerts.append(
-            NerdAlertPayload(
-                key="curator_route_fallback",
-                severity="warning",
-                label="Curator off premium lane",
-                message="Recent curator runs used a non-primary provider route; review premium-lane fallback behavior.",
-                value=float(curator_route.recent_failure_count),
-                threshold=0.0,
-                unit="count",
-            )
-        )
     return alerts
 
 
@@ -1169,4 +1151,3 @@ def _prefer_nonzero_int(primary: int | None, fallback: int | None) -> int | None
     if fallback is not None and fallback > 0:
         return fallback
     return primary if primary is not None else fallback
-

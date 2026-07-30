@@ -49,7 +49,7 @@ That product goal shapes the maintenance architecture:
 - **Shared-Mode Local Cache**: In Postgres shared mode, an optional local SQLite sidecar can serve fresh exact search hits, validated read hits, and degraded cached search/read fallbacks without becoming a second source of truth.
 - **Global Daemon**: One global daemon per user environment owns runtime state, background workers, and transport coordination.
 - **Stable IPC Transport**: The thin MCP proxy talks to the daemon over a stable ZeroMQ ROUTER/DEALER transport on a Unix socket.
-- **Agentic Maintenance Agents**: Curator, deduplicator, and ingest now run through a trusted internal MCP maintenance surface when an agentic provider is configured.
+- **Agentic Maintenance Agents**: The canonical `memory-curator` campaign and ingest can run through a trusted internal MCP maintenance surface when an agentic provider is configured. Historical cleanup task names are compatibility aliases, not independent campaigns.
 - **Crash-Safe Ingest Finalization**: Agentic ingest preserves durable journal claim/delete/release semantics while still allowing direct MCP create/append mutations.
 - **Hardened Daemon Recovery**: Daemon stop/restart now terminates stale process groups, escalates from `SIGTERM` to `SIGKILL` when needed, and cleans stale sockets instead of merely dropping metadata.
 - **Operational Views**: Health, overview, and lineage inspection remain available through the daemon management surface and CLI.
@@ -117,7 +117,7 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 - `uv run mcp-memory admin install`: install local tool integrations.
 - `uv run mcp-memory admin dashboard open`: ensure the daemon is running and open the operator dashboard.
 - `uv run mcp-memory admin agent run memory-curator`: trigger one background agent for the active workspace.
-- `uv run mcp-memory admin agent run --all`: enqueue all background agents for the active workspace.
+- `uv run mcp-memory admin agent run --all`: enqueue the active background campaigns for the active workspace.
 - `uv run mcp-memory admin health --json`: print an AI-friendly health snapshot, including active backend and cache state.
 - `uv run mcp-memory admin overview`: print background task and memory statistics from the active backend.
 - `uv run mcp-memory admin search health`: show semantic search health for the current runtime context.
@@ -126,8 +126,8 @@ For trusted maintenance agents, the repo also now includes a workspace-local int
 
 Current maintenance/runtime highlights:
 
-- `deduplicator` can merge highly similar fact memories into canonical facts and absorb matching observation memories with lineage preserved.
-- When an agentic provider is configured, `memory-curator`, `deduplicator`, and `ingest-system1` can run through the trusted internal maintenance MCP surface.
+- Existing-memory cleanup and curation run through `memory-curator`; its policy covers normalization, linking, deduplication, decomposition, retention, and specialist review routing.
+- Historical cleanup names such as `deduplicator`, `graph-linker`, and `project-manager` redirect to `memory-curator` for manual triggers. `ingest-system1` remains a separate write-stream campaign.
 - Agentic ingest prefers ingest-specific internal tools, preserving lineage and summarize-task enqueueing in the tool layer rather than in prompt-only behavior.
 - Deduplicator observation absorption stays deterministic; provider-assisted rewriting is reserved for fact-to-fact merges.
 - Provider usage reporting in `admin overview` and the dashboard is task-attributed, so you can see which background task is actually consuming model time.

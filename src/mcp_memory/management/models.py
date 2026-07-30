@@ -158,9 +158,6 @@ class HealthPayload(BaseModel):
     cache: CacheHealthPayload = Field(default_factory=CacheHealthPayload)
     transport_diagnostics: TransportDiagnosticsPayload = Field(default_factory=TransportDiagnosticsPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
-    shadow_mode_enabled: bool = False
-    normalize_execution_enabled: bool = False
-    create_link_execution_enabled: bool = False
 
 
 class OperatorLogDigestPayload(BaseModel):
@@ -1110,9 +1107,6 @@ class CurationMetricsPayload(BaseModel):
     verified_yield: float = 0.0
     verified_receipt_count: int = 0
     terminal_receipt_count: int = 0
-    shadow_mode_enabled: bool = False
-    normalize_execution_enabled: bool = False
-    create_link_execution_enabled: bool = False
 
 
 class MutationHistoryListPayload(BaseModel):

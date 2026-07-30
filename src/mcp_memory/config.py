@@ -194,11 +194,7 @@ class IngestEscalationConfig:
 
 @dataclass
 class CurationConfig:
-    """Operational switches for the curator rollout."""
-
-    shadow_mode_enabled: bool = False
-    normalize_execution_enabled: bool = False
-    create_link_execution_enabled: bool = False
+    """Curator runtime configuration."""
 
 
 
@@ -713,11 +709,6 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "agentic_pending_count_threshold": 8,
         "novelty_threshold": 0.6,
         "preview_entry_limit": 8,
-    }
-    document["curation"] = {
-        "shadow_mode_enabled": False,
-        "normalize_execution_enabled": False,
-        "create_link_execution_enabled": False,
     }
     memory_table = tomlkit.table()
     memory_table.update({

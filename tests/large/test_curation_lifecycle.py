@@ -115,8 +115,7 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
     assert runtime_one.task_queue is not None
     assert runtime_one.workspace_id is not None
     assert runtime_one.config is not None
-    assert runtime_one.config.curation.normalize_execution_enabled is False
-    assert runtime_one.config.curation.create_link_execution_enabled is False
+    assert not vars(runtime_one.config.curation)
 
     try:
         assert _payload(await call_memory_tool(runtime_one, "record_thought", {"content": _THOUGHT})) == {
@@ -149,7 +148,7 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
             curation_store=runtime_one.curation,
             planner=planner,
             work_items=runtime_one.work_items,
-            config=CurationHarnessConfig(execute_accepted_normalize_actions=True),
+            config=CurationHarnessConfig(execute_accepted_actions=True),
             memory_types={seed_id: original.type},
             executor=CurationExecutor(SQLiteCurationActionStore(runtime_one.db_manager)),
             verifier=CurationVerifier(runtime_one.curation, runtime_one.relational_search),

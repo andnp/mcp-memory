@@ -127,9 +127,6 @@ export interface HealthResponse {
   runtime_active: boolean;
   client_count: number;
   task_queue_enabled: boolean;
-  shadow_mode_enabled: boolean;
-  normalize_execution_enabled: boolean;
-  create_link_execution_enabled: boolean;
 }
 
 export interface MemorySearchResult {
@@ -655,9 +652,6 @@ export interface CurationMetricsPayload {
   verified_yield: number;
   verified_receipt_count: number;
   terminal_receipt_count: number;
-  shadow_mode_enabled: boolean;
-  normalize_execution_enabled: boolean;
-  create_link_execution_enabled: boolean;
 }
 
 export interface NerdMetricsResponse {
