@@ -6,8 +6,7 @@ import asyncio
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from mcp_memory.core.curation_context import (
@@ -53,6 +52,12 @@ from mcp_memory.core.curation_validation import (
     CurationValidationResult,
     validate_curation_plan,
 )
+from mcp_memory.core.curation_work_items import (
+    CurationWorkItemDecision,
+    CurationWorkItemService,
+    WorkItemRepository,
+    WorkItemAction as _WorkItemAction,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -65,20 +70,7 @@ from mcp_memory.curation_store import (
 from mcp_memory.mutation_history import ProtectionMode
 from mcp_memory.work_item_store import WorkItemRecord
 
-
-class WorkItemAction(StrEnum):
-    NONE = "none"
-    COMPLETE = "complete"
-    DEFER = "defer"
-
-
-@dataclass(frozen=True, slots=True)
-class CurationWorkItemDecision:
-    """The lifecycle decision made from persisted harness evidence."""
-
-    action: WorkItemAction
-    reason_code: str
-    retry_delay_seconds: float | None = None
+WorkItemAction = _WorkItemAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,31 +219,6 @@ def _assemble_context(
             raise
 
 
-class WorkItemRepository(Protocol):
-    def enqueue_unique(
-        self,
-        *,
-        family_key: str,
-        execution_lane: str,
-        payload: dict[str, Any] | None = None,
-        workspace_id: str | None = None,
-        priority: int = 100,
-        available_at: float | None = None,
-        idempotency_key: str | None = None,
-    ) -> tuple[WorkItemRecord, bool]: ...
-
-    def complete_item(self, item_id: str, *, completed_at: float | None = None) -> WorkItemRecord: ...
-
-    def defer_item(
-        self,
-        item_id: str,
-        *,
-        error: str,
-        retry_delay_seconds: float,
-        deferred_at: float | None = None,
-    ) -> WorkItemRecord: ...
-
-
 @dataclass(slots=True)
 class CurationHarnessConfig:
     provider: ProviderTrust = field(default_factory=lambda: ProviderTrust(ProviderTrustClass.LOCAL))
@@ -279,6 +246,7 @@ class CurationDryRunHarness:
         clock: Callable[[], datetime] | None = None,
         executor: CurationExecutor | None = None,
         verifier: CurationVerifier | None = None,
+        work_item_service: CurationWorkItemService | None = None,
     ) -> None:
         self._curation_store = curation_store
         self._planner = planner
@@ -291,6 +259,10 @@ class CurationDryRunHarness:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._executor = executor
         self._verifier = verifier
+        self._work_item_service = work_item_service or CurationWorkItemService(
+            work_items,
+            no_op_cooldown_seconds=self._config.no_op_cooldown_seconds,
+        )
 
     async def run(self, frontier: CurationFrontier) -> CurationDryRunResult:
         seed_reads = tuple(_materialize_read(value) for value in frontier.seed_reads)
@@ -429,7 +401,7 @@ class CurationDryRunHarness:
         if outcome is CurationRunOutcome.NO_OP and plan is not None:
             self._persist_no_op_dispositions(plan.retained, context, run_id, frontier_key)
 
-        work_item = self._work_item_decision(outcome, reason_code, latest)
+        work_item = self._work_item_service.decide(outcome, reason_code, latest)
         specialist_work_items: tuple[WorkItemRecord, ...] = ()
         specialist_routes = () if validation is None else validation.specialist_routes
         if self._config.execute_accepted_actions:
@@ -442,7 +414,7 @@ class CurationDryRunHarness:
                 specialist_routes,
                 context=context,
             )
-        self._apply_work_item_decision(frontier.work_item_id, work_item)
+        self._work_item_service.apply(frontier.work_item_id, work_item)
         receipt_models = [
             MutationReceipt.model_validate(
                 receipt.model_dump(mode="json", exclude={"mutation_event_id", "intent_hash"})
@@ -593,37 +565,6 @@ class CurationDryRunHarness:
         if validation.rejected_actions and not validation.accepted_actions and not validation.specialist_routes:
             return CurationRunOutcome.DEFERRED, "policy_rejected"
         return CurationRunOutcome.DEFERRED, "dry_run_requires_executor"
-
-    def _work_item_decision(
-        self,
-        outcome: CurationRunOutcome,
-        reason_code: str,
-        envelope: PlannerExecutionEnvelope[Any] | None,
-    ) -> CurationWorkItemDecision:
-        if outcome is CurationRunOutcome.BUDGET_EXHAUSTED:
-            return CurationWorkItemDecision(
-                WorkItemAction.DEFER,
-                reason_code,
-                self._config.no_op_cooldown_seconds,
-            )
-        if outcome is CurationRunOutcome.NO_OP:
-            return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
-        if outcome is CurationRunOutcome.APPLIED:
-            return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
-        delay = None if envelope is None else envelope.retry_delay_seconds
-        return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, delay)
-
-    def _apply_work_item_decision(self, work_item_id: str | None, decision: CurationWorkItemDecision) -> None:
-        if work_item_id is None or self._work_items is None:
-            return
-        if decision.action is WorkItemAction.COMPLETE:
-            self._work_items.complete_item(work_item_id)
-        elif decision.action is WorkItemAction.DEFER:
-            self._work_items.defer_item(
-                work_item_id,
-                error=decision.reason_code,
-                retry_delay_seconds=decision.retry_delay_seconds or 0.0,
-            )
 
     def _execute_accepted_actions(
         self,
