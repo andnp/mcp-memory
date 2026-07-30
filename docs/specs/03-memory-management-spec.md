@@ -82,23 +82,23 @@ Selection design requirements:
 - agents may combine deterministic prioritization with stochastic tie-breaking or seed selection
 
 Suggested initial assignment:
-- `memory-curator`: anomaly, cold-storage, never-surfaced, orphan/low-support, bounded-noise
-- `deduplicator`: semantic, anomaly, cooldown-escape
-- `graph-linker`: semantic, graph-bridge, bounded-noise
-- `conflict-detector`: semantic, conflict-frontier, never-surfaced
-- `defragmenter`: cold-storage, semantic, orphan/low-support
-- `taxonomist`: cold-storage, never-surfaced, bounded-noise
+- `memory-curator`: anomaly, cold-storage, never-surfaced, orphan/low-support, bounded-noise, semantic, graph-bridge, conflict-frontier, and cooldown-escape
 - `ingest-system1`: deterministic FIFO claim ordering with semantic grouping only inside the claimed batch
 
+The curator is the single production campaign for existing-memory content and graph cleanup. The historical specialist names remain policy and routing concepts, but are not independently scheduled or manually executed.
+
 ### 4.2 The Agent Roster
+
+Existing-memory curation has one production entrypoint: `memory-curator`. The specialist roles below describe policy ownership and review routing inside that campaign; they are not independent cleanup campaigns.
+
 1. **The Ingestor**: Flushes System 1 → System 2. In the current agentic path it claims journal batches through an internal MCP tool, performs direct MCP create/append mutations through ingest-specific internal tools, and still relies on handler-owned claim finalization so delete/release semantics stay crash-safe. It preserves and accumulates memory workspace associations as relevance metadata when thoughts from additional workspaces are incorporated.
-2. **The Summarizer**: Maintains the 2-sentence `summary` field for all memories.
-3. **The Graph Linker**: Discovers new semantic relationships between silos and is a natural future consumer of strategy-roulette batch selection.
-4. **The Conflict Detector**: Identifies contradictions and flags them in the Web UI inbox.
-5. **The Defragmenter**: Synthesizes clusters of old journals into single `reflection` memories and creates `SUPERSEDES` links.
-6. **The Taxonomist**: Normalizes and deduplicates the tag ontology autonomously.
-7. **The Fact Checker**: Verifies `ext:` file paths still exist; marks memories as `degraded` if missing.
-8. **The Project Manager**: Flags `plan` memories older than 60 days as `stale`.
+2. **The Summarizer policy**: Maintains the 2-sentence `summary` field for all memories when curation selects summary work.
+3. **The Graph Linker policy**: Discovers new semantic relationships between silos and routes approved relationship work through the curator campaign.
+4. **The Conflict Detector policy**: Identifies contradictions and routes them for review without silently resolving durable claims.
+5. **The Defragmenter policy**: Synthesizes clusters of old journals into single `reflection` memories and creates `SUPERSEDES` links through curator execution.
+6. **The Taxonomist policy**: Normalizes and deduplicates the tag ontology within the approved curation policy.
+7. **The Fact Checker policy**: Verifies `ext:` file paths still exist and routes degradation evidence through the curation policy.
+8. **The Project Manager policy**: Flags `plan` memories older than 60 days as `stale` through the appropriate review route.
 9. **The Sweeper**: Purges telemetry (`tasks`, `journal`) older than 7 days.
     - Also reports lineage/relationship hotspots before cleanup: active split originals, oversized lineage metadata, and high relationship-density memories.
     - Metadata garbage collection for dead internal maintenance keys must stay backend-parity across SQLite and Postgres.

@@ -2,7 +2,7 @@
 
 - Implemented: autonomous recurring maintenance pauses after 1 hour with no new thought.
 
-- Implemented: `memory-curator` runs hourly.
+- Implemented: `memory-curator` is the canonical recurring existing-memory cleanup campaign.
 
 - Implemented: curator seed selection includes a bounded recency-biased slice.
 

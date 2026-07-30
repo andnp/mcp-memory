@@ -34,10 +34,9 @@ In shared mode, Postgres stores the authoritative task queue and task-run record
 
 ### 3.1.2 Current Agentic Maintenance Mode
 - trusted maintenance agents may run through an internal MCP maintenance surface when an agentic provider is configured
-- `memory-curator` and `deduplicator` now use this path for real maintenance mutations
+- `memory-curator` is the canonical campaign for existing-memory content and graph cleanup. Its typed, verified execution path covers curator actions and specialist review routing.
 - `ingest-system1` now also uses an agentic MCP path: it claims work through `internal_get_next_ingest_batch`, prefers ingest-specific append/create tools, and still relies on handler-owned claim finalization so journal safety is preserved outside the model loop
 - ingest create mutations can enqueue summarize follow-up work directly from the internal tool layer, and append mutations can merge `workspace_ids` plus ingest lineage metadata (`appended_entry_ids`, `ingest_task_id`) without relying on prompt-only discipline
-- deduplicator observation absorption now stays on a deterministic local path; provider-assisted rewriting is reserved for fact-to-fact merges to reduce per-run fan-out
 - split-oriented maintenance now stamps shared split-group and sibling metadata so later reads and cleanup passes can reconstruct the decomposition structure from either the parent or child side
 
 ### 3.2 Execute
@@ -63,16 +62,12 @@ The `record_thought` writeback flusher is not a general durable task family.
 - durable maintenance tasks remain in the normal task system
 
 ## 5. Current Implemented Task Families
+- memory-curator (canonical existing-memory cleanup and curation campaign)
 - ingest
 - summarize
-- graph linker
-- conflict detector
-- defragmenter
-- deduplicator
-- taxonomist
-- fact checker
-- project manager
 - sweeper
+
+The historical cleanup names `graph-linker`, `conflict-detector`, `defragmenter`, `deduplicator`, `taxonomist`, `fact-checker`, and `project-manager` remain recognizable for migration and historical task-run records, but are no longer active recurring or independent manual campaigns. Manual requests for them redirect to `memory-curator`.
 
 ## 6. Current Non-Goals
 The present runtime does **not** require:
@@ -81,7 +76,7 @@ The present runtime does **not** require:
 - task-queue-level random scheduling
 - always-on daemon behavior
 
-Trusted maintenance agents may use a separate internal MCP surface for read/search/archive/append/merge operations; this surface is intentionally separate from the public assistant-facing MCP tool set.
+Trusted maintenance agents may use a separate internal MCP surface for read/search/archive/append/merge operations; this surface is intentionally separate from the public assistant-facing MCP tool set. Existing-memory mutations enter through the verified `memory-curator` campaign, while ingest and sweeper remain separate runtime concerns.
 
 That trusted surface is no longer hypothetical: it is now the active execution path for multiple maintenance agents in the shipped runtime.
 
