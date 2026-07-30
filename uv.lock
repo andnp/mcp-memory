@@ -1189,7 +1189,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "github-copilot-sdk", specifier = ">=1.0.1" },
-    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "mcp-markdown-ragdocs", git = "https://github.com/andnp/ragdocs-mcp.git?rev=baa403b65addfa78a95c7413942de55355be0d45" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.9" },
     { name = "psycopg-pool", specifier = ">=3.2.6" },
