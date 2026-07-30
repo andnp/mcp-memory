@@ -38,7 +38,8 @@ from mcp_memory.core.task_handlers.constants import DEFAULT_INGEST_BATCH_SIZE
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.embeddings import cosine_similarity
+from searchkernel.ingestion import embed_in_batches
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 
 # ---------------------------------------------------------------------------
@@ -508,9 +509,13 @@ def _build_ingest_groups(
         return _group_related_entries(entries, seed_entries=seed_entries)
 
     entry_map = {entry.id: entry for entry in entries}
-    embeddings = embedder.embed([entry.content for entry in entries])
+    embeddings = embed_in_batches(
+        [entry.content for entry in entries],
+        provider=embedder,
+        batch_size=max(len(entries), 1),
+    )
     by_id = {}
-    for entry, embedding in zip(entries, embeddings, strict=False):
+    for entry, embedding in zip(entries, embeddings, strict=True):
         by_id[entry.id] = embedding
         vector_store.upsert(
             source_kind="thought",
@@ -533,7 +538,7 @@ def _build_ingest_groups(
                 _entry_similarity(
                     entry_map[entry.id].content,
                     entry_map[candidate_id].content,
-                    cosine_similarity(seed_embedding, by_id[candidate_id]),
+                    cosine_similarity_lists(seed_embedding, by_id[candidate_id]),
                 ),
             )
             for candidate_id in pending_ids

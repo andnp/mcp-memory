@@ -1128,7 +1128,7 @@ wheels = [
 [[package]]
 name = "mcp-markdown-ragdocs"
 version = "0.1.0"
-source = { git = "https://github.com/andnp/ragdocs-mcp.git?rev=0ebac8b3cd65958df92e636bb0fca03948056f9a#0ebac8b3cd65958df92e636bb0fca03948056f9a" }
+source = { directory = "../mcp-markdown-ragdocs" }
 dependencies = [
     { name = "click" },
     { name = "faiss-cpu" },
@@ -1149,6 +1149,42 @@ dependencies = [
     { name = "tree-sitter-markdown" },
     { name = "uvicorn" },
     { name = "watchdog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.1.0" },
+    { name = "faiss-cpu", specifier = ">=1.9.0" },
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "huey", specifier = ">=2.5.0" },
+    { name = "llama-index-core", specifier = ">=0.12.0" },
+    { name = "llama-index-embeddings-huggingface", specifier = ">=0.4.0" },
+    { name = "llama-index-vector-stores-faiss", specifier = ">=0.3.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "psycopg2-binary", specifier = ">=2.9.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "pyzmq", specifier = ">=26.2.0" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "tenacity", specifier = ">=9.0.0" },
+    { name = "tomlkit", specifier = ">=0.13.0" },
+    { name = "tree-sitter", specifier = ">=0.23.0" },
+    { name = "tree-sitter-markdown", specifier = ">=0.3.2" },
+    { name = "uvicorn", specifier = ">=0.34.0" },
+    { name = "watchdog", specifier = ">=6.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "filelock", specifier = ">=3.0.0" },
+    { name = "import-linter", specifier = ">=2.0" },
+    { name = "pyright", specifier = ">=1.1.407" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "ruff", specifier = ">=0.14.10" },
+    { name = "ty", specifier = ">=0.0.12" },
 ]
 
 [[package]]
@@ -1190,7 +1226,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "github-copilot-sdk", specifier = ">=1.0.1" },
     { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mcp-markdown-ragdocs", git = "https://github.com/andnp/ragdocs-mcp.git?rev=0ebac8b3cd65958df92e636bb0fca03948056f9a" },
+    { name = "mcp-markdown-ragdocs", directory = "../mcp-markdown-ragdocs" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.9" },
     { name = "psycopg-pool", specifier = ">=3.2.6" },
     { name = "pydantic", specifier = ">=2.0.0" },

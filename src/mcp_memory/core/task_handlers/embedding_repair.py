@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.relational.search import _embedding_is_stale
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
+from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
 
 if TYPE_CHECKING:
     from mcp_memory.context import ApplicationContext
@@ -312,23 +313,27 @@ async def handle_embedding_repair_task(
         if not repair_pairs:
             continue
 
-        embeddings = embedder.embed([_memory_embedding_text(record) for record, _ in repair_pairs])
-        for (record, work_item), embedding in zip(repair_pairs, embeddings, strict=False):
-            stored = vector_store.upsert(
-                source_kind="memory",
-                source_id=record.id,
-                workspace_id=None,
-                model_name=embedder.model_name,
-                embedding=embedding,
-                memory_updated_at=record.updated_at,
-            )
+        embedding_result = embed_and_upsert(
+            [
+                EmbeddingInput(
+                    source_kind="memory",
+                    source_id=record.id,
+                    text=_memory_embedding_text(record),
+                    source_updated_at=record.updated_at,
+                )
+                for record, _ in repair_pairs
+            ],
+            provider=embedder,
+            sink=vector_store,
+            batch_size=len(repair_pairs),
+        )
+        for _, work_item in repair_pairs:
             if embedding_repair_queue is not None:
                 embedding_repair_queue.complete_item(work_item.id)
             else:
                 assert work_items is not None
                 work_items.complete_item(work_item.id)
-            if stored is not False:
-                repaired += 1
+        repaired += embedding_result.stored
 
     pruned_completed = 0
     if embedding_repair_queue is not None:

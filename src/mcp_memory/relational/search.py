@@ -5,15 +5,13 @@ import math
 import inspect
 import sqlite3
 import time
-from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from threading import Event, Lock
 from typing import Any, Protocol, TypedDict, cast
 
 from mcp_memory.config import Config
-from mcp_memory.embeddings import Embedder, is_fallback_embedding_model
+from mcp_memory.embeddings import is_fallback_embedding_model
 from mcp_memory.relational.repository import (
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
@@ -23,6 +21,9 @@ from mcp_memory.relational.repository import (
 )
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
+from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
+from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.runtime import get_or_compute_query_embedding
 
 
 ACCESS_HALF_LIFE_DAYS = 7
@@ -42,8 +43,6 @@ INLINE_EMBEDDING_REPAIR_LIMIT = 64
 BACKGROUND_REPAIR_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE = 32
 DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN = 8
-QUERY_EMBEDDING_CACHE_TTL_SECONDS = 300.0
-QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 128
 
 
 class _SemanticScoreKwargs(TypedDict, total=False):
@@ -54,24 +53,6 @@ class _SemanticScoreKwargs(TypedDict, total=False):
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class _CachedQueryEmbedding:
-    embedding: list[float]
-    expires_at_monotonic: float
-
-
-@dataclass(slots=True)
-class _InFlightQueryEmbedding:
-    completed: Event = field(default_factory=Event)
-    embedding: list[float] | None = None
-    error: Exception | None = None
-
-
-_QUERY_EMBEDDING_CACHE: OrderedDict[tuple[str, str], _CachedQueryEmbedding] = OrderedDict()
-_QUERY_EMBEDDING_INFLIGHT: dict[tuple[str, str], _InFlightQueryEmbedding] = {}
-_QUERY_EMBEDDING_LOCK = Lock()
 
 
 class SearchRepositoryLike(Protocol):
@@ -515,7 +496,7 @@ class RelationalMemorySearchService:
         repository: SearchRepositoryLike,
         config: Config,
         *,
-        embedder: Embedder | None = None,
+        embedder: EmbeddingBatchProvider | None = None,
         vector_store: Any | None = None,
         db_manager: DatabaseManager | None = None,
         task_queue = None,
@@ -923,43 +904,13 @@ class RelationalMemorySearchService:
         )
 
     def _get_query_embedding(self, query: str) -> list[float]:
-        assert self._embedder is not None
-        cache_key = (self._embedder.model_name, query)
-        cached_embedding = _load_cached_query_embedding(cache_key)
-        if cached_embedding is not None:
-            return cached_embedding
-
-        with _QUERY_EMBEDDING_LOCK:
-            inflight = _QUERY_EMBEDDING_INFLIGHT.get(cache_key)
-            if inflight is None:
-                inflight = _InFlightQueryEmbedding()
-                _QUERY_EMBEDDING_INFLIGHT[cache_key] = inflight
-                is_leader = True
-            else:
-                is_leader = False
-
-        if not is_leader:
-            inflight.completed.wait()
-            if inflight.embedding is not None:
-                return list(inflight.embedding)
-            if inflight.error is not None:
-                raise inflight.error
-            raise RuntimeError("Query embedding coalescing completed without embedding or error")
-
-        try:
-            embedding = list(self._embedder.embed([query])[0])
-            inflight.embedding = embedding
-            _store_cached_query_embedding(cache_key, embedding)
-            return list(embedding)
-        except Exception as exc:
-            inflight.error = exc
-            raise
-        finally:
-            inflight.completed.set()
-            with _QUERY_EMBEDDING_LOCK:
-                current = _QUERY_EMBEDDING_INFLIGHT.get(cache_key)
-                if current is inflight:
-                    _QUERY_EMBEDDING_INFLIGHT.pop(cache_key, None)
+        embedder = self._embedder
+        assert embedder is not None
+        return get_or_compute_query_embedding(
+            model_name=embedder.model_name,
+            query=query,
+            compute=lambda: list(embedder.embed([query])[0]),
+        )
 
     def _semantic_scores(
         self,
@@ -1488,16 +1439,19 @@ class RelationalMemorySearchService:
             )
             stale_or_missing = prioritized_candidates[:INLINE_EMBEDDING_REPAIR_LIMIT]
 
-        payloads = [_memory_embedding_text(candidate) for candidate in stale_or_missing]
-        embeddings = self._embedder.embed(payloads)
-        for candidate, embedding in zip(stale_or_missing, embeddings, strict=False):
-            self._vector_store.upsert(
-                source_kind="memory",
-                source_id=candidate.id,
-                workspace_id=None,
-                model_name=self._embedder.model_name,
-                embedding=embedding,
-            )
+        embed_and_upsert(
+            [
+                EmbeddingInput(
+                    source_kind="memory",
+                    source_id=candidate.id,
+                    text=_memory_embedding_text(candidate),
+                )
+                for candidate in stale_or_missing
+            ],
+            provider=self._embedder,
+            sink=self._vector_store,
+            batch_size=len(stale_or_missing),
+        )
 
     def _queue_memory_embedding_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
         from mcp_memory.core.task_handlers.constants import EMBEDDING_REPAIR_TASK_NAME, task_priority
@@ -1806,46 +1760,3 @@ def _record_timing_ms(timing_ms: dict[str, float] | None, key: str, started_at: 
         return
     elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 3)
     timing_ms[key] = round(timing_ms.get(key, 0.0) + elapsed_ms, 3)
-
-
-def _load_cached_query_embedding(cache_key: tuple[str, str]) -> list[float] | None:
-    now = time.monotonic()
-    with _QUERY_EMBEDDING_LOCK:
-        _evict_expired_query_embeddings_locked(now)
-        cached = _QUERY_EMBEDDING_CACHE.get(cache_key)
-        if cached is None:
-            return None
-        if cached.expires_at_monotonic <= now:
-            _QUERY_EMBEDDING_CACHE.pop(cache_key, None)
-            return None
-        _QUERY_EMBEDDING_CACHE.move_to_end(cache_key)
-        return list(cached.embedding)
-
-
-def _store_cached_query_embedding(cache_key: tuple[str, str], embedding: list[float]) -> None:
-    now = time.monotonic()
-    with _QUERY_EMBEDDING_LOCK:
-        _evict_expired_query_embeddings_locked(now)
-        _QUERY_EMBEDDING_CACHE[cache_key] = _CachedQueryEmbedding(
-            embedding=list(embedding),
-            expires_at_monotonic=now + QUERY_EMBEDDING_CACHE_TTL_SECONDS,
-        )
-        _QUERY_EMBEDDING_CACHE.move_to_end(cache_key)
-        while len(_QUERY_EMBEDDING_CACHE) > QUERY_EMBEDDING_CACHE_MAX_ENTRIES:
-            _QUERY_EMBEDDING_CACHE.popitem(last=False)
-
-
-def _evict_expired_query_embeddings_locked(now: float) -> None:
-    expired_keys = [
-        cache_key
-        for cache_key, cached in _QUERY_EMBEDDING_CACHE.items()
-        if cached.expires_at_monotonic <= now
-    ]
-    for cache_key in expired_keys:
-        _QUERY_EMBEDDING_CACHE.pop(cache_key, None)
-
-
-def _clear_query_embedding_cache_for_tests() -> None:
-    with _QUERY_EMBEDDING_LOCK:
-        _QUERY_EMBEDDING_CACHE.clear()
-        _QUERY_EMBEDDING_INFLIGHT.clear()

@@ -44,7 +44,7 @@ dev = [
 package = true
 
 [tool.uv.sources]
-mcp-markdown-ragdocs = { git = "https://github.com/andnp/ragdocs-mcp.git", rev = "0ebac8b3cd65958df92e636bb0fca03948056f9a" }
+mcp-markdown-ragdocs = { path = "../mcp-markdown-ragdocs" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,10 +9,12 @@ import time
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
+from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 
 logger = logging.getLogger(__name__)
@@ -23,15 +25,6 @@ _DEFAULT_TORCH_NUM_THREADS = 4
 _DEFAULT_TORCH_INTEROP_THREADS = 1
 _TORCH_THREAD_CAP_INITIALIZED = False
 _TORCH_THREAD_CAP_LOCK = threading.Lock()
-
-
-class Embedder(Protocol):
-    @property
-    def model_name(self) -> str:
-        ...
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        ...
 
 
 @dataclass(slots=True)
@@ -158,10 +151,10 @@ class SQLiteVectorStore:
         workspace_id: str | None,
         model_name: str,
         embedding: list[float],
-        memory_updated_at: str | None = None,
+        source_updated_at: str | None = None,
     ) -> bool:
         conn = self._db.get_connection()
-        if memory_updated_at is not None:
+        if source_updated_at is not None:
             owns_transaction = not conn.in_transaction
             if owns_transaction:
                 conn.execute("BEGIN IMMEDIATE")
@@ -170,7 +163,7 @@ class SQLiteVectorStore:
                     "SELECT updated_at FROM memories WHERE id = ?",
                     (source_id,),
                 ).fetchone()
-                if current is None or str(current["updated_at"]) != memory_updated_at:
+                if current is None or str(current["updated_at"]) != source_updated_at:
                     if owns_transaction:
                         conn.rollback()
                     return False
@@ -194,7 +187,7 @@ class SQLiteVectorStore:
                         workspace_id,
                         model_name,
                         json.dumps(embedding),
-                        memory_updated_at,
+                        source_updated_at,
                         time.time(),
                     ),
                 )
@@ -337,7 +330,7 @@ class SQLiteVectorStore:
         scored: list[tuple[str, float]] = []
         score_started = time.perf_counter()
         for source_id, embedding in decoded_rows:
-            score = cosine_similarity(query_embedding, embedding)
+            score = cosine_similarity_lists(query_embedding, embedding)
             scored.append((source_id, score))
         score_ms = (time.perf_counter() - score_started) * 1000.0
         sort_started = time.perf_counter()
@@ -375,7 +368,7 @@ class SQLiteVectorStore:
         return cursor.rowcount
 
 
-def build_embedder(config: EmbeddingsConfig) -> Embedder | None:
+def build_embedder(config: EmbeddingsConfig) -> EmbeddingBatchProvider | None:
     return SentenceTransformerEmbedder(config)
 
 
@@ -499,17 +492,6 @@ def _is_model_cached_locally(model_name: str) -> bool:
     snapshots_dir = repo_dir / "snapshots"
     refs_dir = repo_dir / "refs"
     return snapshots_dir.exists() and any(snapshots_dir.iterdir()) or refs_dir.exists()
-
-
-def cosine_similarity(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    dot = sum(a * b for a, b in zip(left, right, strict=False))
-    left_norm = math.sqrt(sum(a * a for a in left))
-    right_norm = math.sqrt(sum(b * b for b in right))
-    if left_norm == 0 or right_norm == 0:
-        return 0.0
-    return dot / (left_norm * right_norm)
 
 
 def _hash_text_to_unit_vector(text: str, dimensions: int) -> list[float]:

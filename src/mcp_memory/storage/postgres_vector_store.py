@@ -10,8 +10,9 @@ from mcp_memory.embedding_integrity_event_store import (
     EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
     EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
 )
-from mcp_memory.embeddings import EmbeddingRecord, cosine_similarity, is_fallback_embedding_model
+from mcp_memory.embeddings import EmbeddingRecord, is_fallback_embedding_model
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 
 logger = logging.getLogger(__name__)
@@ -325,7 +326,7 @@ class PostgresVectorStore:
         workspace_id: str | None,
         model_name: str,
         embedding: list[float],
-        memory_updated_at: str | None = None,
+        source_updated_at: str | None = None,
     ) -> bool:
         if is_fallback_embedding_model(model_name):
             self._raise_for_blocked_fallback_embedding_write(
@@ -341,13 +342,13 @@ class PostgresVectorStore:
         capabilities = self._get_search_capabilities()
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                if memory_updated_at is not None:
+                if source_updated_at is not None:
                     cursor.execute(
                         "SELECT updated_at FROM memories WHERE id = %s FOR SHARE",
                         (source_id,),
                     )
                     current = cursor.fetchone()
-                    if current is None or str(current[0]) != memory_updated_at:
+                    if current is None or str(current[0]) != source_updated_at:
                         connection.rollback()
                         return False
                 stored_dimensions = self._read_model_dimensions(cursor, model_name=model_name)
@@ -364,7 +365,7 @@ class PostgresVectorStore:
                         f"does not match new dimension {current_dimension}"
                     )
                 if capabilities.server_side_vector_search_available:
-                    if memory_updated_at is not None:
+                    if source_updated_at is not None:
                         cursor.execute(
                             """
                             INSERT INTO embeddings (
@@ -387,7 +388,7 @@ class PostgresVectorStore:
                                 workspace_id,
                                 model_name,
                                 payload_json,
-                                memory_updated_at,
+                                source_updated_at,
                                 _format_vector_literal(normalized_embedding),
                                 updated_at,
                             ),
@@ -416,7 +417,7 @@ class PostgresVectorStore:
                             ),
                         )
                 else:
-                    if memory_updated_at is not None:
+                    if source_updated_at is not None:
                         cursor.execute(
                             """
                             INSERT INTO embeddings (
@@ -438,7 +439,7 @@ class PostgresVectorStore:
                                 workspace_id,
                                 model_name,
                                 payload_json,
-                                memory_updated_at,
+                                source_updated_at,
                                 updated_at,
                             ),
                         )
@@ -646,7 +647,7 @@ class PostgresVectorStore:
         scored: list[tuple[str, float]] = []
         score_started = time.perf_counter()
         for source_id, embedding in decoded_rows:
-            score = cosine_similarity(query_embedding, embedding)
+            score = cosine_similarity_lists(query_embedding, embedding)
             scored.append((source_id, score))
         score_ms = (time.perf_counter() - score_started) * 1000.0
         sort_started = time.perf_counter()

@@ -10,13 +10,13 @@ from mcp_memory.embedding_integrity_event_store import (
     EMBEDDING_INTEGRITY_EVENT_KIND_BLOCKED_FALLBACK_WRITE,
     EMBEDDING_INTEGRITY_EVENT_KIND_SCAN_SUMMARY,
 )
-from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.storage.postgres_embedding_integrity_event_store import PostgresEmbeddingIntegrityEventRepository
 from mcp_memory.storage.postgres_embedding_repair_store import PostgresEmbeddingRepairQueue
 from mcp_memory.storage.postgres_journal import PostgresSystem1Journal
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC
+from searchkernel.utils.similarity import cosine_similarity_lists
 from tests.small.work_item_repository_contract import (
     assert_claim_batch_orders_ready_items,
     assert_enqueue_unique_deduplicates_idempotency_keys,
@@ -599,7 +599,7 @@ class FakePrimitiveCursor:
             scored_rows = [
                 (
                     str(row["source_id"]),
-                    cosine_similarity(query_embedding, [float(value) for value in json.loads(str(row["embedding_json"]))]),
+                    cosine_similarity_lists(query_embedding, [float(value) for value in json.loads(str(row["embedding_json"]))]),
                 )
                 for row in rows
             ]

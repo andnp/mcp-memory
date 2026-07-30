@@ -33,11 +33,12 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     work_item_result_metadata,
 )
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.embeddings import cosine_similarity
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,
 )
+from searchkernel.ingestion import embed_in_batches
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 # ---------------------------------------------------------------------------
 # deduplicator_merge: deterministic merging logic
@@ -155,10 +156,14 @@ def _embed_records(ctx: ApplicationContext, records: list) -> dict[str, list[flo
     if embedder is None:
         return {}
     payloads = [_record_embedding_text(record) for record in records]
-    embeddings = embedder.embed(payloads)
+    embeddings = embed_in_batches(
+        payloads,
+        provider=embedder,
+        batch_size=max(len(records), 1),
+    )
     return {
         record.id: embedding
-        for record, embedding in zip(records, embeddings, strict=False)
+        for record, embedding in zip(records, embeddings, strict=True)
     }
 
 
@@ -252,7 +257,7 @@ def _memory_similarity(left, right, embedding_by_id: dict[str, list[float]]) -> 
     lexical_similarity = _topic_token_overlap(left.title + " " + left.content, right.title + " " + right.content)
     semantic_similarity = 0.0
     if left.id in embedding_by_id and right.id in embedding_by_id:
-        semantic_similarity = cosine_similarity(embedding_by_id[left.id], embedding_by_id[right.id])
+        semantic_similarity = cosine_similarity_lists(embedding_by_id[left.id], embedding_by_id[right.id])
     if not shared_tags and lexical_similarity < 0.12:
         semantic_similarity = 0.0
     tag_bonus = 0.15 if shared_tags else 0.0

@@ -17,7 +17,6 @@ from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
     ScoringWeights,
-    _clear_query_embedding_cache_for_tests,
     _is_technical_single_token_query,
     _keyword_token_coverage,
     _query_tokens,
@@ -30,6 +29,7 @@ from mcp_memory.work_item_store import SQLiteWorkItemRepository
 from tests.small.maintenance_read_repository_contract import (
     assert_maintenance_read_preserves_telemetry,
 )
+from searchkernel.runtime import clear_query_embedding_cache
 
 
 pytestmark = pytest.mark.small
@@ -37,9 +37,9 @@ pytestmark = pytest.mark.small
 
 @pytest.fixture(autouse=True)
 def _clear_query_embedding_cache() -> Iterator[None]:
-    _clear_query_embedding_cache_for_tests()
+    clear_query_embedding_cache()
     yield
-    _clear_query_embedding_cache_for_tests()
+    clear_query_embedding_cache()
 
 
 def test_ranking_engine_fuses_rrf_across_vector_and_keyword_lists(db_manager) -> None:

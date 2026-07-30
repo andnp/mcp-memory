@@ -10,8 +10,8 @@ from mcp_memory.embeddings import (
     SentenceTransformerEmbedder,
     SQLiteVectorStore,
     _cap_torch_threads_before_sentence_transformer_load,
-    cosine_similarity,
 )
+from searchkernel.utils.similarity import cosine_similarity_lists
 
 
 class FakeTorch:
@@ -53,8 +53,8 @@ def _reset_torch_thread_cap_state(monkeypatch) -> None:
 
 
 def test_cosine_similarity_returns_expected_scores() -> None:
-    assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0
-    assert round(cosine_similarity([1.0, 0.0], [0.0, 1.0]), 6) == 0.0
+    assert cosine_similarity_lists([1.0, 0.0], [1.0, 0.0]) == 1.0
+    assert round(cosine_similarity_lists([1.0, 0.0], [0.0, 1.0]), 6) == 0.0
 
 
 def test_sqlite_vector_store_round_trips_embeddings(db_manager) -> None:

@@ -133,9 +133,9 @@ class _IntegrityScanVectorStore:
         workspace_id: str | None,
         model_name: str,
         embedding: list[float],
-        memory_updated_at: str | None = None,
+        source_updated_at: str | None = None,
     ) -> bool:
-        _ = memory_updated_at
+        _ = source_updated_at
         self._records[(source_kind, source_id, model_name)] = EmbeddingRecord(
             source_kind=source_kind,
             source_id=source_id,
@@ -346,7 +346,7 @@ def test_versioned_embedding_repair_rejects_a_stale_write(db_manager) -> None:
         workspace_id=None,
         model_name="versioned-model",
         embedding=[1.0, 0.0],
-        memory_updated_at=record.updated_at,
+        source_updated_at=record.updated_at,
     ) is True
     newer = repository.update_memory(record.id, content="second version")
     assert newer is not None
@@ -357,7 +357,7 @@ def test_versioned_embedding_repair_rejects_a_stale_write(db_manager) -> None:
         workspace_id=None,
         model_name="versioned-model",
         embedding=[0.0, 1.0],
-        memory_updated_at=newer.updated_at,
+        source_updated_at=newer.updated_at,
     ) is True
 
     assert vector_store.upsert(
@@ -366,7 +366,7 @@ def test_versioned_embedding_repair_rejects_a_stale_write(db_manager) -> None:
         workspace_id=None,
         model_name="versioned-model",
         embedding=[9.0, 9.0],
-        memory_updated_at=record.updated_at,
+        source_updated_at=record.updated_at,
     ) is False
     stored = vector_store.get(
         source_kind="memory",
