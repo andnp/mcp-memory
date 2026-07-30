@@ -336,15 +336,6 @@ class ManagementService:
         self._mutation_history = getattr(ctx, "mutation_history", None)
         self._curation = getattr(ctx, "curation", None)
         self._action_store = getattr(ctx, "curation_action_store", None)
-        if self._action_store is None and self._db_manager is not None:
-            if self._storage_backend == "postgres":
-                from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
-
-                self._action_store = PostgresCurationActionStore(self._db_manager)
-            else:
-                from mcp_memory.curation_action_store import SQLiteCurationActionStore
-
-                self._action_store = SQLiteCurationActionStore(self._db_manager)
         self._provider_usage = resources.provider_usage
         self._runtime_logs = resources.runtime_logs
         self._embedding_integrity_events = resources.embedding_integrity_events

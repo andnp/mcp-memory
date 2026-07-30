@@ -30,6 +30,7 @@ class StorageBackendResources:
     vector_store: Any
     mutation_history: Any = None
     curation: Any = None
+    curation_action_store: Any = None
 
 
 @dataclass(frozen=True)

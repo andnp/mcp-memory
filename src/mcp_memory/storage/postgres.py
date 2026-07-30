@@ -24,6 +24,7 @@ from mcp_memory.storage.postgres_runtime_log_store import PostgresRuntimeLogRepo
 from mcp_memory.storage.postgres_task_execution_store import PostgresTaskExecutionAttemptRepository
 from mcp_memory.storage.postgres_migrations import apply_postgres_migrations
 from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
+from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
 from mcp_memory.storage.postgres_mutation_history_store import PostgresMutationHistoryStore
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 from mcp_memory.storage.session import CursorLike
@@ -165,6 +166,7 @@ def build_postgres_runtime_components(
     embedding_repair_queue = PostgresEmbeddingRepairQueue(connection_manager)
     mutation_history = PostgresMutationHistoryStore(connection_manager)
     curation = PostgresCurationStore(connection_manager)
+    curation_action_store = PostgresCurationActionStore(connection_manager)
     vector_store = PostgresVectorStore(
         connection_manager,
         event_repository=embedding_integrity_events,
@@ -205,4 +207,5 @@ def build_postgres_runtime_components(
         vector_store=vector_store,
         mutation_history=mutation_history,
         curation=curation,
+        curation_action_store=curation_action_store,
     )

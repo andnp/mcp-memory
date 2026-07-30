@@ -48,15 +48,6 @@ async def run_curator_verified_campaign(
         )
 
     action_store = getattr(ctx, "curation_action_store", None)
-    if action_store is None and ctx.db_manager is not None:
-        if ctx.storage_backend == "postgres":
-            from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
-
-            action_store = PostgresCurationActionStore(ctx.db_manager)
-        else:
-            from mcp_memory.curation_action_store import SQLiteCurationActionStore
-
-            action_store = SQLiteCurationActionStore(ctx.db_manager)
     if action_store is None or ctx.curation is None or ctx.relational_search is None:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
