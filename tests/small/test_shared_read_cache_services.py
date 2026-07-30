@@ -122,13 +122,67 @@ class FailingSearchService:
         raise TimeoutError("authoritative search timed out")
 
 
-class ProjectionAwareSearchService:
-    def __init__(self, *, token_by_memory_id: dict[str, str] | None = None) -> None:
+class FailingProjectionAwareSearchService(FailingSearchService):
+    def __init__(self, token_by_memory_id: dict[str, str] | None = None) -> None:
         self.token_by_memory_id = token_by_memory_id or {}
+        self.validation_calls: list[list[str]] = []
+
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        self.validation_calls.append(list(memory_ids))
+        return {
+            memory_id: token
+            for memory_id, token in self.token_by_memory_id.items()
+            if memory_id in memory_ids
+        }
+
+
+class ProjectionAwareSearchService:
+    def __init__(
+        self,
+        *,
+        token_by_memory_id: dict[str, str] | None = None,
+        status: str = "active",
+    ) -> None:
+        self.token_by_memory_id = token_by_memory_id or {}
+        self.status = status
         self.validation_calls: list[list[str]] = []
 
     def search_memories(self, **kwargs):
         del kwargs
+        return [
+            SimpleNamespace(
+                memory_id="memory-1",
+                title="Warm cache",
+                summary="Fresh authoritative result",
+                memory_type="fact",
+                status=self.status,
+                tags=["cache"],
+                workspace_ids=["workspace-123"],
+                score=0.9,
+                ranking_debug=None,
+            )
+        ]
+
+    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
+        self.validation_calls.append(list(memory_ids))
+        return {
+            memory_id: token
+            for memory_id, token in self.token_by_memory_id.items()
+            if memory_id in memory_ids
+        }
+
+
+class DeletingSearchService:
+    def __init__(self) -> None:
+        self.deleted = False
+        self.calls = 0
+        self.validation_calls: list[list[str]] = []
+
+    def search_memories(self, **kwargs):
+        del kwargs
+        self.calls += 1
+        if self.deleted:
+            return []
         return [
             SimpleNamespace(
                 memory_id="memory-1",
@@ -145,11 +199,9 @@ class ProjectionAwareSearchService:
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         self.validation_calls.append(list(memory_ids))
-        return {
-            memory_id: token
-            for memory_id, token in self.token_by_memory_id.items()
-            if memory_id in memory_ids
-        }
+        if self.deleted:
+            return {}
+        return {"memory-1": "token-1"}
 
 
 class WritebackCapableJournal:
@@ -387,7 +439,10 @@ def test_search_memory_records_service_warms_shared_read_cache(tmp_path: Path) -
     )
 
     assert response["status"] == "ok"
-    assert cached_payload == response
+    assert cached_payload is not None
+    assert cached_payload["results"] == response["results"]
+    assert cached_payload["_cache_validation_tokens"] == {}
+    assert "_cache_validation_tokens" not in response
 
 
 def test_shared_read_cache_invalidation_clears_exact_query_and_affected_entries(tmp_path: Path) -> None:
@@ -876,6 +931,67 @@ def test_search_memory_records_service_short_circuits_on_fresh_cache_hit(
     assert ctx.retrieval_telemetry.search_calls == []
 
 
+def test_search_memory_records_service_refreshes_fresh_cache_when_record_was_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = DeletingSearchService()
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
+    warm_response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    search_service.deleted = True
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
+    refreshed_response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    assert warm_response["results"][0]["memory_id"] == "memory-1"
+    assert refreshed_response["results"] == []
+    assert search_service.calls == 2
+    assert search_service.validation_calls == [["memory-1"], ["memory-1"]]
+
+
+def test_search_memory_records_service_refreshes_fresh_cache_when_record_token_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = ProjectionAwareSearchService(token_by_memory_id={"memory-1": "token-1"})
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
+    warm_response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    search_service.token_by_memory_id["memory-1"] = "token-2"
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
+    refreshed_response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    assert warm_response["results"][0]["summary"] == "Fresh authoritative result"
+    assert refreshed_response["results"][0]["summary"] == "Fresh authoritative result"
+    assert search_service.validation_calls == [["memory-1"], ["memory-1"], ["memory-1"]]
+
+
+def test_search_memory_records_service_invalidates_archive_status_token_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    search_service = ProjectionAwareSearchService(token_by_memory_id={"memory-1": "active-token"})
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
+    search_memory_records_service(ctx, {"query": "warm cache"})
+
+    search_service.status = "archived"
+    search_service.token_by_memory_id["memory-1"] = "archived-token"
+    monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
+    response = search_memory_records_service(ctx, {"query": "warm cache"})
+
+    assert response["status"] == "ok"
+    assert search_service.validation_calls == [["memory-1"], ["memory-1"], ["memory-1"]]
+
+
 def test_search_memory_records_service_refreshes_expired_cache_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1121,6 +1237,87 @@ def test_search_memory_records_service_projection_fallback_activates_when_author
     assert [result["memory_id"] for result in response["results"]] == ["memory-2"]
     assert any("projection-backed degraded search response" in message for message in caplog.messages)
     assert ctx.retrieval_telemetry.search_calls == []
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected_fallback", "expected_cached"),
+    [
+        ({"memory-1": "token-1"}, True, True),
+        ({"memory-1": "changed-token"}, False, False),
+        ({}, False, False),
+    ],
+    ids=["valid-token", "changed-token", "deleted-record"],
+)
+def test_projection_fallback_validates_projection_tokens(
+    tmp_path: Path,
+    tokens: dict[str, str],
+    expected_fallback: bool,
+    expected_cached: bool,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    cache.store_projection_entries(
+        [
+            SharedReadCacheProjectionUpsert(
+                memory_id="memory-1",
+                payload=_projection_payload(
+                    "memory-1",
+                    title="Warm cache projection",
+                    summary="Projection fallback result",
+                ),
+                validation_token="token-1",
+            )
+        ]
+    )
+    search_service = FailingProjectionAwareSearchService(tokens)
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    if expected_fallback:
+        response = search_memory_records_service(ctx, {"query": "warm cache"})
+        assert response["cache_status"] == "projection_fallback"
+        assert [result["memory_id"] for result in response["results"]] == ["memory-1"]
+    else:
+        with pytest.raises(TimeoutError, match="authoritative search timed out"):
+            search_memory_records_service(ctx, {"query": "warm cache"})
+
+    assert search_service.validation_calls == [["memory-1"]]
+    assert (cache.load_projection_entry("memory-1") is not None) is expected_cached
+
+
+def test_projection_fallback_backfills_limit_after_stale_projection(
+    tmp_path: Path,
+) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    cache.store_projection_entries(
+        [
+            SharedReadCacheProjectionUpsert(
+                memory_id="memory-stale",
+                payload=_projection_payload(
+                    "memory-stale",
+                    title="Warm cache projection",
+                    summary="Projection fallback result",
+                ),
+                validation_token="stale-token",
+            ),
+            SharedReadCacheProjectionUpsert(
+                memory_id="memory-valid",
+                payload=_projection_payload(
+                    "memory-valid",
+                    title="Warm cache projection",
+                    summary="Projection fallback result",
+                ),
+                validation_token="valid-token",
+            ),
+        ]
+    )
+    search_service = FailingProjectionAwareSearchService(
+        {"memory-valid": "valid-token"}
+    )
+    ctx = _build_context(read_cache=cache, relational_search=search_service)
+
+    response = search_memory_records_service(ctx, {"query": "warm cache", "limit": 1})
+
+    assert response["cache_status"] == "projection_fallback"
+    assert [result["memory_id"] for result in response["results"]] == ["memory-valid"]
 
 
 def test_search_memory_records_service_projection_fallback_does_not_return_empty_success(
@@ -1579,10 +1776,12 @@ def test_search_memory_records_service_coalesces_concurrent_identical_external_r
 
     assert failures == []
     assert search_service.calls == 1
-    assert search_service.validation_calls == [["memory-1"]]
+    assert search_service.validation_calls
+    assert all(memory_ids == ["memory-1"] for memory_ids in search_service.validation_calls)
     assert responses[0] == responses[1] == responses[2]
     assert responses[0] is not None
     assert responses[0]["status"] == "ok"
+    assert "_cache_validation_tokens" not in responses[0]
     assert len(ctx.retrieval_telemetry.search_calls) >= 2
 
     snapshot = cache.get_metrics_snapshot()

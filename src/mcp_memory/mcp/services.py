@@ -40,6 +40,7 @@ from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 SEARCH_READ_GUIDANCE = "Read promising memory_id values with read_memory_record."
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
+_CACHE_VALIDATION_TOKENS_FIELD = "_cache_validation_tokens"
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ def _annotate_cached_fallback(
 
 def _compact_cached_search_payload(payload: dict[str, object]) -> dict[str, object]:
     compact_payload = dict(payload)
+    compact_payload.pop(_CACHE_VALIDATION_TOKENS_FIELD, None)
     results = compact_payload.get("results")
     if isinstance(results, list):
         compact_payload["results"] = [
@@ -195,9 +197,17 @@ def _load_projection_search_fallback(
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
         return None
-    result_payloads = cache.search_projection_payloads(request)
-    if not result_payloads:
+    entries = cache.search_projection_entries(request, limit=None)
+    if not entries:
         return None
+    resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
+    if callable(resolver):
+        entries = _validate_cached_projection_entries(ctx, entries)
+    else:
+        entries = [entry for entry in entries if entry.validation_token is not None]
+    if not entries:
+        return None
+    entries = entries[: request.limit]
     logger.warning(
         "Serving projection-backed degraded search response after authoritative failure",
         exc_info=error,
@@ -206,7 +216,7 @@ def _load_projection_search_fallback(
         {
             "status": "ok",
             "results": [
-                _compact_cached_search_result(payload) for payload in result_payloads
+                _compact_cached_search_result(entry.payload) for entry in entries
             ],
         },
         cache_status="projection_fallback",
@@ -232,6 +242,8 @@ def _load_fresh_cached_search_hit(
     )
     if payload is None:
         return None
+    if not _cached_search_payload_has_current_records(ctx, payload):
+        return None
     return _compact_cached_search_payload(payload)
 
 
@@ -254,10 +266,15 @@ def _store_cached_search_response(
     ctx: ApplicationContext,
     request: SharedReadCacheSearchRequest,
     payload: dict[str, object],
+    *,
+    validation_tokens: dict[str, str],
 ) -> None:
     cache = getattr(ctx, "read_cache", None)
     if cache is not None:
-        cache.store_search_response(request, payload)
+        cache.store_search_response(
+            request,
+            payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
+        )
 
 
 def _begin_inflight_search_coalescing(
@@ -324,6 +341,48 @@ def _resolve_read_cache_validation_token(
     return _resolve_read_cache_validation_tokens(ctx, [memory_id]).get(memory_id)
 
 
+def _cached_search_payload_has_current_records(
+    ctx: ApplicationContext, payload: dict[str, object]
+) -> bool:
+    resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
+    if not callable(resolver):
+        return True
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return True
+    memory_ids = [
+        result["memory_id"]
+        for result in results
+        if isinstance(result, dict) and isinstance(result.get("memory_id"), str)
+    ]
+    if not memory_ids:
+        return True
+    cached_tokens = payload.get(_CACHE_VALIDATION_TOKENS_FIELD)
+    if not isinstance(cached_tokens, dict):
+        return False
+    try:
+        validation_tokens = _resolve_read_cache_validation_tokens(ctx, memory_ids)
+    except Exception:
+        logger.warning(
+            "Fresh search cache validation failed; falling back to authoritative search",
+            exc_info=True,
+        )
+        return False
+    mismatched_ids = {
+        memory_id
+        for memory_id in memory_ids
+        if not isinstance(cached_tokens.get(memory_id), str)
+        or validation_tokens.get(memory_id) != cached_tokens.get(memory_id)
+    }
+    if mismatched_ids:
+        logger.info(
+            "Discarding fresh search cache response with stale validation tokens",
+            extra={"memory_ids": sorted(mismatched_ids)},
+        )
+        return False
+    return True
+
+
 def _build_search_result_payloads(
     results: Sequence[RelationalSearchResult],
     *,
@@ -376,6 +435,7 @@ def _warm_cached_search_projections(
     *,
     caller_kind: str,
     debug_enabled: bool,
+    validation_tokens: dict[str, str] | None = None,
 ) -> int:
     if not _shared_read_cache_enabled(
         ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
@@ -389,10 +449,10 @@ def _warm_cached_search_projections(
     if not warmed_payloads:
         return 0
     memory_ids = [str(payload["memory_id"]) for payload in warmed_payloads]
-    validation_tokens: dict[str, str] = {}
-    if memory_ids:
+    resolved_tokens = validation_tokens or {}
+    if memory_ids and validation_tokens is None:
         try:
-            validation_tokens = _resolve_read_cache_validation_tokens(ctx, memory_ids)
+            resolved_tokens = _resolve_read_cache_validation_tokens(ctx, memory_ids)
         except Exception:
             logger.warning(
                 "Projection cache validation token refresh failed after authoritative search",
@@ -400,7 +460,7 @@ def _warm_cached_search_projections(
             )
     try:
         _store_cached_projection_entries(
-            ctx, warmed_payloads, validation_tokens=validation_tokens
+            ctx, warmed_payloads, validation_tokens=resolved_tokens
         )
     except Exception:
         logger.warning(
@@ -426,6 +486,16 @@ def _load_validated_cached_projection_entries(
         return []
     entries = cache.load_projection_entries(memory_ids)
     if not entries:
+        return []
+    return _validate_cached_projection_entries(ctx, entries)
+
+
+def _validate_cached_projection_entries(
+    ctx: ApplicationContext,
+    entries: list[SharedReadCacheProjectionEntry],
+) -> list[SharedReadCacheProjectionEntry]:
+    cache = getattr(ctx, "read_cache", None)
+    if cache is None:
         return []
     entries_with_tokens = [
         entry for entry in entries if entry.validation_token is not None
@@ -743,7 +813,7 @@ def search_memory_records_service(
             surfaced_memory_ids=surfaced_memory_ids,
             duration_ms=duration_ms,
         )
-        return coalesced_payload
+        return _compact_cached_search_payload(coalesced_payload)
     diagnostics = None
     try:
         if debug_enabled:
@@ -810,11 +880,25 @@ def search_memory_records_service(
         payload["requested_limit"] = execution_arguments["limit"]
         payload["expanded_result_window"] = len(results) > execution_arguments["limit"]
         payload["returned_result_count"] = len(results)
+    validation_tokens: dict[str, str] = {}
+    if _shared_read_cache_enabled(
+        ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
+    ):
+        try:
+            validation_tokens = _resolve_read_cache_validation_tokens(
+                ctx, surfaced_memory_ids
+            )
+        except Exception:
+            logger.warning(
+                "Search cache validation token capture failed after authoritative search",
+                exc_info=True,
+            )
     warmed_projection_rows = _warm_cached_search_projections(
         ctx,
         result_payloads,
         caller_kind=caller_kind,
         debug_enabled=debug_enabled,
+        validation_tokens=validation_tokens,
     )
     if warmed_projection_rows > 0:
         _increment_shared_read_cache_metric(
@@ -827,8 +911,17 @@ def search_memory_records_service(
     if _shared_read_cache_enabled(
         ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
     ):
-        _store_cached_search_response(ctx, cache_request, payload)
-    _finish_inflight_search_coalescing(ctx, inflight_search, payload=payload)
+        _store_cached_search_response(
+            ctx,
+            cache_request,
+            payload,
+            validation_tokens=validation_tokens,
+        )
+    _finish_inflight_search_coalescing(
+        ctx,
+        inflight_search,
+        payload=payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
+    )
     return payload
 
 

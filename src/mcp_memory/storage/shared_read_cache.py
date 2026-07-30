@@ -406,6 +406,17 @@ class SharedReadCache:
         self,
         request: SharedReadCacheSearchRequest,
     ) -> list[dict[str, Any]]:
+        return [
+            entry.payload
+            for entry in self.search_projection_entries(request, limit=request.limit)
+        ]
+
+    def search_projection_entries(
+        self,
+        request: SharedReadCacheSearchRequest,
+        *,
+        limit: int | None = None,
+    ) -> list[SharedReadCacheProjectionEntry]:
         query_tokens = _projection_query_tokens(request.query)
         if not query_tokens or request.limit <= 0:
             return []
@@ -413,7 +424,7 @@ class SharedReadCache:
             "SELECT memory_id, payload_json, validation_token, cached_at FROM cached_memory_projections",
             (),
         )
-        matches: list[tuple[int, float, str, dict[str, Any]]] = []
+        matches: list[tuple[int, float, str, SharedReadCacheProjectionEntry]] = []
         for row in rows:
             entry = self._projection_entry_from_row(str(row[0]), row[1:])
             if entry is None or entry.validation_token is None:
@@ -423,9 +434,11 @@ class SharedReadCache:
             hit_count = _projection_hit_count(entry.payload, query_tokens)
             if hit_count <= 0:
                 continue
-            matches.append((hit_count, entry.cached_at, entry.memory_id, entry.payload))
+            matches.append((hit_count, entry.cached_at, entry.memory_id, entry))
         matches.sort(key=lambda item: (-item[0], -item[1], item[2]))
-        return [payload for _hit_count, _cached_at, _memory_id, payload in matches[: request.limit]]
+        if limit is not None:
+            matches = matches[:limit]
+        return [entry for _hit_count, _cached_at, _memory_id, entry in matches]
 
     def store_projection_entries(self, entries: list[SharedReadCacheProjectionUpsert]) -> None:
         if not entries:
