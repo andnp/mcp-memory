@@ -176,6 +176,7 @@ _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "task_execution_attempts",
         "work_items",
         "embedding_repair_queue",
+        "internal_tool_call_tracker",
     }
 )
 

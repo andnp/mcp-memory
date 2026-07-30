@@ -33,18 +33,21 @@ def test_management_view_exposes_only_management_capabilities() -> None:
 
 
 def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
+    tracker = object()
     ctx = ApplicationContext(
         task_queue="queue",
         ai_json_provider="json",
         ai_agent_provider="agent",
         provider_policy_events="events",
         journal="journal",
+        internal_tool_call_tracker=tracker,
     )
 
     view = ctx.task_runtime_view()
 
     assert view.task_queue == "queue"
     assert view.ai_json_provider == "json"
+    assert view.internal_tool_call_tracker is tracker
 
     with pytest.raises(AttributeError):
         getattr(view, "read_cache")
