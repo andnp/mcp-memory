@@ -60,19 +60,6 @@ MAINTENANCE_TASK_NAMES = (
 )
 
 AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES = (
-    PROJECT_MANAGER_TASK_NAME,
-    FACT_CHECKER_TASK_NAME,
-    GRAPH_LINKER_TASK_NAME,
-    DEFRAGMENTER_TASK_NAME,
-    *(
-        task_name
-        for task_name in (
-            CONFLICT_DETECTOR_TASK_NAME,
-            DEDUPLICATOR_TASK_NAME,
-            TAXONOMIST_TASK_NAME,
-        )
-        if MAINTENANCE_FAMILY_REGISTRY[task_name].autonomous_recurring
-    ),
     SWEEPER_TASK_NAME,
     CURATOR_TASK_NAME,
 )
@@ -91,8 +78,8 @@ RECURRING_TASK_INTERVAL_SECONDS = {
     CURATOR_TASK_NAME: 300.0,
 }
 
-# Active autonomous recurring entries only; legacy maintenance names remain in
-# AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES for migration-aware idle resume.
+# Active autonomous recurring entries only; legacy cleanup names are drained by
+# startup migration and no longer participate in idle resume.
 AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS = {
     task_name: RECURRING_TASK_INTERVAL_SECONDS[task_name]
     for task_name in (

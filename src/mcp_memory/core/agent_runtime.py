@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from mcp_memory.context import BackgroundTaskBootstrapContext, ProviderSelectionContext, TaskRuntimeContext
-from mcp_memory.core.maintenance_idle import should_preserve_idle_pause
+from mcp_memory.core.maintenance_idle import drain_legacy_cleanup_tasks, should_preserve_idle_pause
 from mcp_memory.core.provider_policy import ProviderSelectionInputs, select_provider_for_inputs
 from mcp_memory.core.task_policy import DEFAULT_AGENTIC_TASK_NAMES
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
@@ -163,6 +163,8 @@ def bootstrap_background_tasks(ctx: BackgroundTaskBootstrapContext) -> None:
         return
 
     journal = getattr(ctx, "journal", None)
+
+    drain_legacy_cleanup_tasks(task_queue)
 
     if journal is not None:
         schedule_system1_ingest(

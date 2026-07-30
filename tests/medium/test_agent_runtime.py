@@ -1899,6 +1899,47 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 300.0
 
 
+def test_bootstrap_background_tasks_drains_legacy_cleanup_task_into_curator_campaign(
+    monkeypatch,
+    db_manager,
+) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.time.time", lambda: 200.0)
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.time.time", lambda: 200.0)
+    monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
+
+    legacy = queue.enqueue(
+        PROJECT_MANAGER_TASK_NAME,
+        available_at=0.0,
+        task_id="legacy-project-manager",
+    )
+    assert queue.claim_next(now=10.0) is not None
+
+    ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
+    bootstrap_background_tasks(ctx)
+
+    drained = queue.get_task(legacy.id)
+    canonical = queue.find_open_task(CURATOR_TASK_NAME, None)
+    runs = queue.list_task_runs(task_name=PROJECT_MANAGER_TASK_NAME)
+
+    assert drained.status == "cancelled"
+    assert drained.last_error == "legacy_cleanup_task_migrated_to_memory_curator"
+    assert canonical is not None
+    assert canonical.data["trigger"] == "legacy_cleanup_migration"
+    assert canonical.data["migration_reason"] == "legacy_cleanup_task_migrated_to_memory_curator"
+    assert canonical.data["migration_sources"] == [
+        {
+            "task_id": legacy.id,
+            "task_name": PROJECT_MANAGER_TASK_NAME,
+            "status": "cancelled",
+            "drained_at": 200.0,
+            "migration_reason": "legacy_cleanup_task_migrated_to_memory_curator",
+        }
+    ]
+    assert [run.status for run in runs] == ["cancelled"]
+
+
 def test_bootstrap_background_tasks_accepts_bootstrap_capability_view(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
 

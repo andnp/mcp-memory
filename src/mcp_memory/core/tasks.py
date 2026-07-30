@@ -903,20 +903,26 @@ class SQLiteTaskQueue:
         self,
         task_name: str,
     ) -> TaskRecord | None:
-        row = self._db.get_connection().execute(
+        rows = self.list_open_tasks_any_workspace(task_name)
+        if not rows:
+            return None
+        return rows[0]
+
+    def list_open_tasks_any_workspace(
+        self,
+        task_name: str,
+    ) -> list[TaskRecord]:
+        rows = self._db.get_connection().execute(
             """
             SELECT *
             FROM tasks
             WHERE task_name = ?
               AND status IN ('pending', 'running')
             ORDER BY created_at ASC
-            LIMIT 1
             """,
             (task_name,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_record(row)
+        ).fetchall()
+        return [self._row_to_record(row) for row in rows]
 
     def find_open_task_with_data(
         self,

@@ -16,6 +16,7 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.core.maintenance_idle import (
     AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS,
+    drain_legacy_cleanup_tasks,
     should_pause_autonomous_recurring_maintenance,
     resume_paused_recurring_maintenance,
 )
@@ -25,6 +26,7 @@ from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
     SYSTEM1_INGEST_TASK_NAME,
@@ -1467,7 +1469,7 @@ def test_resume_paused_recurring_maintenance_ignores_removed_autonomous_tasks(db
     assert queue.find_open_task(REMOVED_CONFLICT_SCREENING_TASK_NAME, None) is None
 
 
-def test_resume_paused_recurring_maintenance_keeps_legacy_campaign_rows_compatible(db_manager, monkeypatch) -> None:
+def test_resume_paused_recurring_maintenance_ignores_legacy_cleanup_rows(db_manager, monkeypatch) -> None:
     queue = SQLiteTaskQueue(db_manager)
 
     paused = queue.enqueue(
@@ -1495,12 +1497,94 @@ def test_resume_paused_recurring_maintenance_keeps_legacy_campaign_rows_compatib
 
     monkeypatch.setattr("mcp_memory.core.maintenance_idle.compute_recurring_jitter_seconds", lambda interval_seconds: 12.0)
 
-    resumed = resume_paused_recurring_maintenance(queue, now=200.0)[0]
+    assert resume_paused_recurring_maintenance(queue, now=200.0) == []
+    assert queue.get_task(paused.id).status == "completed"
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is None
 
-    assert resumed.task_name == PROJECT_MANAGER_TASK_NAME
-    assert resumed.available_at == pytest.approx(212.0)
-    assert resumed.data["trigger"] == "recurring_resume"
-    assert resumed.data["interval_seconds"] == pytest.approx(RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
+
+def test_drain_legacy_cleanup_tasks_migrates_into_memory_curator_campaign(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    source = queue.enqueue(
+        PROJECT_MANAGER_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None, "trigger": "recurring_follow_up"},
+        available_at=0.0,
+        task_id="legacy-project-manager",
+    )
+    assert queue.claim_next(now=10.0) is not None
+
+    drained = drain_legacy_cleanup_tasks(queue, now=200.0)
+
+    canonical = queue.find_open_task(CURATOR_TASK_NAME, None)
+    runs = queue.list_task_runs(task_name=PROJECT_MANAGER_TASK_NAME)
+
+    assert [item.id for item in drained] == [source.id]
+    assert drained[0].status == "cancelled"
+    assert drained[0].last_error == "legacy_cleanup_task_migrated_to_memory_curator"
+    assert canonical is not None
+    assert canonical.status == "pending"
+    assert canonical.data["trigger"] == "legacy_cleanup_migration"
+    assert canonical.data["migration_reason"] == "legacy_cleanup_task_migrated_to_memory_curator"
+    assert canonical.data["migration_sources"] == [
+        {
+            "task_id": source.id,
+            "task_name": PROJECT_MANAGER_TASK_NAME,
+            "status": "cancelled",
+            "drained_at": 200.0,
+            "migration_reason": "legacy_cleanup_task_migrated_to_memory_curator",
+        }
+    ]
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is None
+    assert [run.status for run in runs] == ["cancelled"]
+
+
+def test_drain_legacy_cleanup_tasks_merges_multiple_rows_across_workspaces(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    task_specs = [
+        ("legacy-project-manager-a", PROJECT_MANAGER_TASK_NAME, "workspace-a", "pending"),
+        ("legacy-project-manager-b", PROJECT_MANAGER_TASK_NAME, "workspace-b", "pending"),
+        ("legacy-fact-checker", FACT_CHECKER_TASK_NAME, "workspace-c", "running"),
+    ]
+
+    for task_id, task_name, workspace_id, status in task_specs:
+        task = queue.enqueue(
+            task_name,
+            workspace_id=workspace_id,
+            data={"workspace_id": workspace_id, "trigger": "recurring_follow_up"},
+            available_at=0.0,
+            task_id=task_id,
+        )
+        assert queue.claim_next(now=10.0, workspace_id=workspace_id) is not None
+        if status == "pending":
+            queue.request_cancel(task.id, cancelled_by="system", reason="preexisting", requested_at=11.0)
+
+    drained = drain_legacy_cleanup_tasks(queue, now=200.0)
+    canonical = queue.find_open_task(CURATOR_TASK_NAME, None)
+
+    assert sorted(item.task_name for item in drained) == [
+        FACT_CHECKER_TASK_NAME,
+        PROJECT_MANAGER_TASK_NAME,
+        PROJECT_MANAGER_TASK_NAME,
+    ]
+    assert all(item.status == "cancelled" for item in drained)
+    assert queue.list_open_tasks_any_workspace(PROJECT_MANAGER_TASK_NAME) == []
+    assert queue.list_open_tasks_any_workspace(FACT_CHECKER_TASK_NAME) == []
+    assert canonical is not None
+    assert canonical.data["trigger"] == "legacy_cleanup_migration"
+    assert [source["task_id"] for source in canonical.data["migration_sources"]] == [
+        "legacy-project-manager-a",
+        "legacy-project-manager-b",
+        "legacy-fact-checker",
+    ]
+    assert [run.task_name for run in queue.list_task_runs(task_name=PROJECT_MANAGER_TASK_NAME)] == [
+        PROJECT_MANAGER_TASK_NAME,
+        PROJECT_MANAGER_TASK_NAME,
+    ]
+    assert [run.task_name for run in queue.list_task_runs(task_name=FACT_CHECKER_TASK_NAME)] == [
+        FACT_CHECKER_TASK_NAME,
+    ]
 
 
 def test_removed_frontier_and_screening_tasks_no_longer_pause_as_autonomous_recurring(db_manager) -> None:

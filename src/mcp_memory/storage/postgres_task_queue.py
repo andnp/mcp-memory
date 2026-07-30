@@ -815,16 +815,22 @@ class PostgresTaskQueue:
         return None if row is None else self._row_to_record(row)
 
     def find_open_task_any_workspace(self, task_name: str) -> TaskRecord | None:
-        if self._sessions is None:
+        rows = self.list_open_tasks_any_workspace(task_name)
+        if not rows:
             return None
+        return rows[0]
+
+    def list_open_tasks_any_workspace(self, task_name: str) -> list[TaskRecord]:
+        if self._sessions is None:
+            return []
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_name = %s AND status IN ('pending', 'running') ORDER BY created_at ASC LIMIT 1",
+                    f"SELECT {_TASK_COLUMNS} FROM tasks WHERE task_name = %s AND status IN ('pending', 'running') ORDER BY created_at ASC",
                     (task_name,),
                 )
-                row = cursor.fetchone()
-        return None if row is None else self._row_to_record(row)
+                rows = cursor.fetchall()
+        return [self._row_to_record(row) for row in rows]
 
     def find_open_task_with_data(
         self,

@@ -55,8 +55,8 @@ RECURRING_TASK_INTERVAL_SECONDS = {
 	SWEEPER_TASK_NAME: 21600.0,
 	CURATOR_TASK_NAME: 300.0,
 }
-# Active autonomous recurring entries only; legacy names remain available for
-# idle-pause/resume migration paths.
+# Active autonomous recurring entries only; legacy cleanup rows are drained by
+# startup migration and do not auto-resume.
 AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS = {
 	task_name: RECURRING_TASK_INTERVAL_SECONDS[task_name]
 	for task_name in (

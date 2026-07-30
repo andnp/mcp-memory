@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from typing import cast
 
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.maintenance_schedule import (
+    CONFLICT_DETECTOR_TASK_NAME,
     AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES,
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    CURATOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
     RECURRING_TASK_INTERVAL_SECONDS,
+    TAXONOMIST_TASK_NAME,
 )
+from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
@@ -16,6 +26,17 @@ from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
 
 AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS = 3600.0
 AUTONOMOUS_MAINTENANCE_TRIGGERS = {"recurring_schedule", "recurring_follow_up"}
+LEGACY_CLEANUP_TASK_NAMES = (
+    PROJECT_MANAGER_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
+    CONFLICT_DETECTOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    TAXONOMIST_TASK_NAME,
+)
+LEGACY_CLEANUP_MIGRATION_TRIGGER = "legacy_cleanup_migration"
+LEGACY_CLEANUP_MIGRATION_REASON = "legacy_cleanup_task_migrated_to_memory_curator"
 
 
 def get_global_latest_thought_timestamp(journal: System1Journal) -> float | None:
@@ -145,6 +166,32 @@ def resume_paused_recurring_maintenance(
     return resumed_tasks
 
 
+def drain_legacy_cleanup_tasks(
+    task_queue: SQLiteTaskQueue,
+    *,
+    now: float | None = None,
+) -> list[TaskRecord]:
+    drained_at = time.time() if now is None else now
+    drained_tasks: list[TaskRecord] = []
+    migration_sources: list[dict[str, Any]] = []
+
+    for task_name in LEGACY_CLEANUP_TASK_NAMES:
+        open_tasks = _list_open_legacy_cleanup_tasks(task_queue, task_name)
+        for source_task in open_tasks:
+            cancelled_task = _cancel_legacy_cleanup_task(task_queue, source_task, drained_at=drained_at)
+            drained_tasks.append(cancelled_task)
+            migration_sources.append(_legacy_cleanup_migration_source(cancelled_task, drained_at=drained_at))
+
+    if migration_sources:
+        _ensure_memory_curator_migration_task(
+            task_queue,
+            migration_sources,
+            drained_at=drained_at,
+        )
+
+    return drained_tasks
+
+
 def _build_resumed_task_data(task_name: str, last_result: TaskRunResult, *, jitter_seconds: float) -> dict[str, Any]:
     data: dict[str, Any] = {
         "workspace_id": None,
@@ -157,6 +204,94 @@ def _build_resumed_task_data(task_name: str, last_result: TaskRunResult, *, jitt
     elif task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES:
         data["interval_seconds"] = _interval_seconds_from_result(task_name, last_result)
     return data
+
+
+def _legacy_cleanup_migration_source(task: TaskRecord, *, drained_at: float) -> dict[str, Any]:
+    return {
+        "task_id": task.id,
+        "task_name": task.task_name,
+        "status": task.status,
+        "drained_at": drained_at,
+        "migration_reason": LEGACY_CLEANUP_MIGRATION_REASON,
+    }
+
+
+def _ensure_memory_curator_migration_task(
+    task_queue: SQLiteTaskQueue,
+    migration_sources: list[dict[str, Any]],
+    *,
+    drained_at: float,
+) -> TaskRecord:
+    existing_task = task_queue.find_open_task(CURATOR_TASK_NAME, None)
+    if existing_task is None:
+        task, created = task_queue.enqueue_unique(
+            CURATOR_TASK_NAME,
+            data={
+                "workspace_id": None,
+                "trigger": LEGACY_CLEANUP_MIGRATION_TRIGGER,
+                "migration_reason": LEGACY_CLEANUP_MIGRATION_REASON,
+                "migration_sources": migration_sources,
+            },
+            workspace_id=None,
+            priority=task_priority(CURATOR_TASK_NAME),
+            available_at=drained_at,
+        )
+        if created:
+            return task
+        return _merge_memory_curator_migration_sources(task_queue, task, migration_sources)
+
+    return _merge_memory_curator_migration_sources(task_queue, existing_task, migration_sources)
+
+
+def _merge_memory_curator_migration_sources(
+    task_queue: SQLiteTaskQueue,
+    task: TaskRecord,
+    migration_sources: list[dict[str, Any]],
+) -> TaskRecord:
+    if task.status == "pending":
+        next_data = dict(task.data)
+        existing_sources = list(next_data.get("migration_sources", []))
+        existing_sources.extend(migration_sources)
+        next_data["migration_sources"] = existing_sources
+        next_data.setdefault("workspace_id", None)
+        next_data.setdefault("migration_reason", LEGACY_CLEANUP_MIGRATION_REASON)
+        next_data.setdefault("trigger", LEGACY_CLEANUP_MIGRATION_TRIGGER)
+        return task_queue.update_pending_task(task.id, data=next_data)
+    if task.status != "running":
+        return task
+    return task_queue.extend_running_task_data_object_list(
+        task.id,
+        field_name="migration_sources",
+        values=migration_sources,
+    )
+
+
+def _list_open_legacy_cleanup_tasks(
+    task_queue: SQLiteTaskQueue,
+    task_name: str,
+) -> list[TaskRecord]:
+    list_helper = getattr(task_queue, "list_open_tasks_any_workspace", None)
+    if callable(list_helper):
+        return cast(list[TaskRecord], list_helper(task_name))
+    existing = task_queue.find_open_task_any_workspace(task_name)
+    return [] if existing is None else [existing]
+
+
+def _cancel_legacy_cleanup_task(
+    task_queue: SQLiteTaskQueue,
+    source_task: TaskRecord,
+    *,
+    drained_at: float,
+) -> TaskRecord:
+    cancelled_task = task_queue.request_cancel(
+        source_task.id,
+        cancelled_by="system",
+        reason=LEGACY_CLEANUP_MIGRATION_REASON,
+        requested_at=drained_at,
+    )
+    if cancelled_task.status == "running":
+        cancelled_task = task_queue.finalize_cancellation(cancelled_task.id, cancelled_at=drained_at)
+    return cancelled_task
 
 
 def _is_autonomous_recurring_data(data: dict[str, Any] | None) -> bool:

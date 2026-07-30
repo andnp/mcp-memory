@@ -70,7 +70,7 @@ def test_maintenance_family_registry_captures_the_canonical_trio_contract() -> N
         DEDUPLICATOR_TASK_NAME,
         TAXONOMIST_TASK_NAME,
     ):
-        assert specialist_task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+        assert specialist_task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
         assert specialist_task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
     for legacy_cleanup_task_name in (
@@ -79,7 +79,7 @@ def test_maintenance_family_registry_captures_the_canonical_trio_contract() -> N
         "graph-linker",
         "defragmenter",
     ):
-        assert legacy_cleanup_task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+        assert legacy_cleanup_task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
         assert legacy_cleanup_task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
     assert SWEEPER_TASK_NAME in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
@@ -96,7 +96,7 @@ def test_trio_consumers_derive_schedule_priority_and_task_class_from_registry() 
 
     for task_name, entry in MAINTENANCE_FAMILY_REGISTRY.items():
         assert RECURRING_TASK_INTERVAL_SECONDS[task_name] == entry.recurring_interval_seconds
-        assert task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+        assert task_name not in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
         assert task_name not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
         assert public_priority_constants[task_name] == entry.default_priority
         assert TASK_PRIORITIES[task_name] == entry.default_priority
