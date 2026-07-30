@@ -91,7 +91,12 @@ RECURRING_TASK_INTERVAL_SECONDS = {
     CURATOR_TASK_NAME: 300.0,
 }
 
+# Active autonomous recurring entries only; legacy maintenance names remain in
+# AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES for migration-aware idle resume.
 AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS = {
     task_name: RECURRING_TASK_INTERVAL_SECONDS[task_name]
-    for task_name in AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES
+    for task_name in (
+        SWEEPER_TASK_NAME,
+        CURATOR_TASK_NAME,
+    )
 }

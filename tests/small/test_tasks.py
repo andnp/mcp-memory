@@ -23,11 +23,13 @@ from mcp_memory.core._recovery_actions import RecoveryAction
 from mcp_memory.core.system1_scheduling import schedule_system1_ingest
 from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import (
+    CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
     SYSTEM1_INGEST_TASK_NAME,
     RECURRING_TASK_INTERVAL_SECONDS,
+    PROJECT_MANAGER_TASK_NAME,
 )
 from mcp_memory.core import tasks as tasks_module
 from mcp_memory.core.task_worker import RuntimeTaskWorker
@@ -1465,6 +1467,42 @@ def test_resume_paused_recurring_maintenance_ignores_removed_autonomous_tasks(db
     assert queue.find_open_task(REMOVED_CONFLICT_SCREENING_TASK_NAME, None) is None
 
 
+def test_resume_paused_recurring_maintenance_keeps_legacy_campaign_rows_compatible(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+
+    paused = queue.enqueue(
+        PROJECT_MANAGER_TASK_NAME,
+        workspace_id=None,
+        data={
+            "workspace_id": None,
+            "trigger": "recurring_follow_up",
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME],
+        },
+        available_at=0.0,
+        task_id="paused-project-manager",
+    )
+    assert queue.claim_next(now=10.0) is not None
+    queue.complete(
+        paused.id,
+        completed_at=20.0,
+        run_result={
+            "paused_for_idle": True,
+            "idle_seconds": AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS + 5.0,
+            "last_thought_at": 5.0,
+            "interval_seconds": RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME],
+        },
+    )
+
+    monkeypatch.setattr("mcp_memory.core.maintenance_idle.compute_recurring_jitter_seconds", lambda interval_seconds: 12.0)
+
+    resumed = resume_paused_recurring_maintenance(queue, now=200.0)[0]
+
+    assert resumed.task_name == PROJECT_MANAGER_TASK_NAME
+    assert resumed.available_at == pytest.approx(212.0)
+    assert resumed.data["trigger"] == "recurring_resume"
+    assert resumed.data["interval_seconds"] == pytest.approx(RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
+
+
 def test_removed_frontier_and_screening_tasks_no_longer_pause_as_autonomous_recurring(db_manager) -> None:
     journal = System1Journal(db_manager)
     journal.record("old maintenance anchor", workspace_id="workspace-a")
@@ -1523,6 +1561,32 @@ async def test_runtime_task_worker_recurring_follow_up_applies_jitter(db_manager
     assert follow_up.available_at == pytest.approx(140.0 + RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] + 18.0)
     assert follow_up.data["trigger"] == "recurring_follow_up"
     assert follow_up.data["jitter_seconds"] == pytest.approx(18.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_does_not_reschedule_specialist_cleanup_tasks(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue)
+
+    task = queue.enqueue(
+        CONFLICT_DETECTOR_TASK_NAME,
+        workspace_id=None,
+        data={"workspace_id": None},
+        available_at=0.0,
+        task_id="conflict-detector-no-follow-up",
+    )
+    claimed = queue.claim_next(now=100.0)
+    assert claimed is not None
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={CONFLICT_DETECTOR_TASK_NAME: lambda ctx, task: None},
+        poll_interval_seconds=0.01,
+    )
+    completed_task = queue.complete(task.id, completed_at=140.0, run_result={})
+
+    await worker._schedule_follow_up(claimed, completed_task)  # noqa: SLF001
+
+    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is None
 
 
 @pytest.mark.asyncio

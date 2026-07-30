@@ -60,7 +60,7 @@ from mcp_memory.core.task_handlers.ingest import (
     _normalize_ingest_agentic_result,
 )
 import mcp_memory.core.task_handlers.ingest as _ingest_agentic_support
-from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY, task_priority
+from mcp_memory.core.task_handlers import SYSTEM1_INGEST_PRIORITY
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
@@ -1885,24 +1885,22 @@ def test_bootstrap_background_tasks_is_idempotent(db_manager) -> None:
     bootstrap_background_tasks(ctx)
     bootstrap_background_tasks(ctx)
 
-    assert queue.count_by_status() == {"pending": 9}
-    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
-    assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is not None
+    assert queue.count_by_status() == {"pending": 2}
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is None
+    assert queue.find_open_task(FACT_CHECKER_TASK_NAME, None) is None
     assert queue.find_open_task(REMOVED_GRAPH_LINK_DISCOVERY_TASK_NAME, None) is None
-    assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is not None
-    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is not None
-    assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is not None
-    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is not None
-    assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is not None
+    assert queue.find_open_task(GRAPH_LINKER_TASK_NAME, None) is None
+    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is None
+    assert queue.find_open_task(DEFRAGMENTER_TASK_NAME, None) is None
+    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is None
+    assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is None
     assert queue.find_open_task(SWEEPER_TASK_NAME, None) is not None
     assert queue.find_open_task(CURATOR_TASK_NAME, None) is not None
     project_manager_task = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
     deduplicator_task = queue.find_open_task(DEDUPLICATOR_TASK_NAME, None)
-    assert project_manager_task is not None
-    assert deduplicator_task is not None
+    assert project_manager_task is None
+    assert deduplicator_task is None
     curator_task = queue.find_open_task(CURATOR_TASK_NAME, None)
-    assert project_manager_task.priority == task_priority(PROJECT_MANAGER_TASK_NAME)
-    assert deduplicator_task.priority == task_priority(DEDUPLICATOR_TASK_NAME)
     assert curator_task is not None
     assert curator_task.data["interval_seconds"] == RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME]
     assert RECURRING_TASK_INTERVAL_SECONDS[CURATOR_TASK_NAME] == 300.0
@@ -1913,8 +1911,11 @@ def test_bootstrap_background_tasks_accepts_bootstrap_capability_view(db_manager
 
     bootstrap_background_tasks(_BootstrapContextStub(task_queue=queue))
 
-    assert queue.count_by_status() == {"pending": 9}
-    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is not None
+    assert queue.count_by_status() == {"pending": 2}
+    assert queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None) is None
+    assert queue.find_open_task(CONFLICT_DETECTOR_TASK_NAME, None) is None
+    assert queue.find_open_task(DEDUPLICATOR_TASK_NAME, None) is None
+    assert queue.find_open_task(TAXONOMIST_TASK_NAME, None) is None
 
 
 def test_low_yield_maintenance_tasks_use_the_updated_recurring_cadence() -> None:
@@ -1923,11 +1924,15 @@ def test_low_yield_maintenance_tasks_use_the_updated_recurring_cadence() -> None
     assert RECURRING_TASK_INTERVAL_SECONDS[CONFLICT_DETECTOR_TASK_NAME] == 21600.0
     assert RECURRING_TASK_INTERVAL_SECONDS[DEDUPLICATOR_TASK_NAME] == 21600.0
     assert RECURRING_TASK_INTERVAL_SECONDS[TAXONOMIST_TASK_NAME] == 7200.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME] == 1800.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[FACT_CHECKER_TASK_NAME] == 1800.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[CONFLICT_DETECTOR_TASK_NAME] == 21600.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[DEDUPLICATOR_TASK_NAME] == 21600.0
-    assert AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[TAXONOMIST_TASK_NAME] == 7200.0
+    assert PROJECT_MANAGER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert FACT_CHECKER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert GRAPH_LINKER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert DEFRAGMENTER_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert CONFLICT_DETECTOR_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert DEDUPLICATOR_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert TAXONOMIST_TASK_NAME not in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert SWEEPER_TASK_NAME in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
+    assert CURATOR_TASK_NAME in AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS
 
 
 def test_autonomous_recurring_schedule_excludes_weak_frontier_and_screening_tasks() -> None:
@@ -2138,10 +2143,10 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     monkeypatch.setattr("mcp_memory.core.agent_runtime.compute_recurring_jitter_seconds", lambda interval_seconds: 0.0)
 
     task = queue.enqueue(
-        PROJECT_MANAGER_TASK_NAME,
+        SWEEPER_TASK_NAME,
         workspace_id="workspace-a",
         available_at=0.0,
-        task_id="project-manager-seed",
+        task_id="sweeper-seed",
     )
     claimed = queue.claim_next(now=100.0)
     assert claimed is not None
@@ -2150,9 +2155,9 @@ def test_bootstrap_background_tasks_respects_persistent_task_cadence(monkeypatch
     ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
     bootstrap_background_tasks(ctx)
 
-    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
+    scheduled = queue.find_open_task(SWEEPER_TASK_NAME, None)
     assert scheduled is not None
-    assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[PROJECT_MANAGER_TASK_NAME])
+    assert scheduled.available_at == pytest.approx(120.0 + RECURRING_TASK_INTERVAL_SECONDS[SWEEPER_TASK_NAME])
 
 
 def test_bootstrap_background_tasks_uses_five_minute_curator_cadence(monkeypatch, db_manager) -> None:
@@ -2229,7 +2234,7 @@ def test_bootstrap_background_tasks_applies_jitter_to_new_recurring_tasks(monkey
     ctx = ApplicationContext(workspace_id="workspace-a", db_manager=db_manager, task_queue=queue)
     bootstrap_background_tasks(ctx)
 
-    scheduled = queue.find_open_task(PROJECT_MANAGER_TASK_NAME, None)
+    scheduled = queue.find_open_task(SWEEPER_TASK_NAME, None)
     assert scheduled is not None
     assert scheduled.available_at == pytest.approx(230.0)
     assert scheduled.data["trigger"] == "recurring_schedule"

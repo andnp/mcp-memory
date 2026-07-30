@@ -7,6 +7,7 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.maintenance_schedule import (
     AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES,
     AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS,
+    RECURRING_TASK_INTERVAL_SECONDS,
 )
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.task_results import TaskRunResult
@@ -185,4 +186,7 @@ def _interval_seconds_from_result(task_name: str, last_result: TaskRunResult) ->
     raw_interval_seconds = last_result.get("interval_seconds")
     if isinstance(raw_interval_seconds, (int, float)) and not isinstance(raw_interval_seconds, bool):
         return float(raw_interval_seconds)
-    return AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS[task_name]
+    interval_seconds = AUTONOMOUS_RECURRING_TASK_INTERVAL_SECONDS.get(task_name)
+    if interval_seconds is not None:
+        return interval_seconds
+    return RECURRING_TASK_INTERVAL_SECONDS[task_name]
