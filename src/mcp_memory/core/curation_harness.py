@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -27,7 +26,6 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
     CurationRunOutcome,
     CurationRunResult,
-    MutationReceipt,
     RetentionDecision,
 )
 from mcp_memory.core.curation_executor import CurationExecutor
@@ -35,7 +33,6 @@ from mcp_memory.core.curation_execution_service import CurationExecutionService
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.curation_planner import (
     CurationPlanner,
-    CurationPlannerCancelledError,
     CurationPlannerError,
     CurationPlannerSchemaError,
     PlannerExecutionEnvelope,
@@ -49,6 +46,12 @@ from mcp_memory.core.curation_planning_service import (
     CurationPlanningInput,
     plan_and_validate,
 )
+from mcp_memory.core.curation_run_outcomes import (
+    build_run_result,
+    budget_usage as project_budget_usage,
+    classify_outcome as project_classify_outcome,
+    rejection_codes as project_rejection_codes,
+)
 from mcp_memory.core.curation_work_items import (
     CurationWorkItemDecision,
     CurationWorkItemService,
@@ -57,7 +60,6 @@ from mcp_memory.core.curation_work_items import (
 )
 from mcp_memory.curation_store import (
     CurationActionReceipt,
-    CurationReceiptState,
     CandidateDisposition,
     CurationCandidateState,
     CurationRepository,
@@ -329,7 +331,7 @@ class CurationDryRunHarness:
             outcome = CurationRunOutcome.BUDGET_EXHAUSTED
             reason_code = context_failure.reason_code
             rejection_codes: list[str] = []
-            budget_usage = _budget_usage(context, [], None)
+            budget_usage = project_budget_usage(context, [], None)
             retry_reason = context_failure.reason_code
             latest = None
             plan: CurationPlan | None = None
@@ -353,10 +355,10 @@ class CurationDryRunHarness:
             )
 
             outcome, reason_code = self._classify_outcome(plan, validation, failure)
-            rejection_codes = _rejection_codes(validation)
+            rejection_codes = project_rejection_codes(validation)
             if not rejection_codes and isinstance(failure, CurationPlannerSchemaError):
                 rejection_codes.append("schema_invalid")
-            budget_usage = _budget_usage(context, envelopes, validation)
+            budget_usage = project_budget_usage(context, envelopes, validation)
             latest = envelopes[-1] if envelopes else None
         executing = run.model_copy(
             update={
@@ -412,23 +414,15 @@ class CurationDryRunHarness:
                 context=context,
             )
         self._work_item_service.apply(frontier.work_item_id, work_item)
-        receipt_models = [
-            MutationReceipt.model_validate(
-                receipt.model_dump(mode="json", exclude={"mutation_event_id", "intent_hash"})
-            )
-            for receipt in receipts
-        ]
-        run_result = CurationRunResult(
+        run_result = build_run_result(
             run_id=run_id,
             outcome=outcome,
             plan_id=plan_id,
-            receipts=receipt_models,
+            receipts=receipts,
             rejection_codes=rejection_codes,
             retry_reason=retry_reason,
             budget_usage=budget_usage,
             context_record_counts=context_record_counts,
-            verified_action_count=_count_verified_receipts(receipts),
-            affected_memory_count=_count_affected_memory_ids(receipts),
         )
         return CurationDryRunResult(
             run=terminal,
@@ -506,19 +500,7 @@ class CurationDryRunHarness:
         validation: CurationValidationResult | None,
         failure: CurationPlannerError | BaseException | None,
     ) -> tuple[CurationRunOutcome, str]:
-        if isinstance(failure, CurationPlannerCancelledError) or isinstance(failure, asyncio.CancelledError):
-            return CurationRunOutcome.CANCELLED, "provider_cancelled"
-        if failure is not None:
-            if isinstance(failure, CurationPlannerSchemaError):
-                return CurationRunOutcome.INVALID_PLAN, "invalid_plan"
-            return CurationRunOutcome.PROVIDER_FAILED, getattr(failure, "reason_code", "provider_failed")
-        if validation is None or not validation.valid or plan is None:
-            return CurationRunOutcome.INVALID_PLAN, "invalid_plan"
-        if not plan.actions:
-            return CurationRunOutcome.NO_OP, "valid_no_op"
-        if validation.rejected_actions and not validation.accepted_actions and not validation.specialist_routes:
-            return CurationRunOutcome.DEFERRED, "policy_rejected"
-        return CurationRunOutcome.DEFERRED, "dry_run_requires_executor"
+        return project_classify_outcome(plan, validation, failure)
 
     def _execute_accepted_actions(
         self,
@@ -539,26 +521,8 @@ def _uuid_or_none(value: str | None) -> UUID | None:
     return None if value is None else UUID(str(value))
 
 
-def _count_verified_receipts(receipts: tuple[CurationActionReceipt, ...]) -> int:
-    return sum(1 for receipt in receipts if receipt.status is CurationReceiptState.VERIFIED)
-
-
-def _count_affected_memory_ids(receipts: tuple[CurationActionReceipt, ...]) -> int:
-    affected_ids = {
-        str(memory_id)
-        for receipt in receipts
-        for memory_id in receipt.affected_ids
-    }
-    return len(affected_ids)
-
-
 def _rejection_codes(validation: CurationValidationResult | None) -> list[str]:
-    if validation is None:
-        return []
-    codes = [str(issue.code) for issue in validation.issues]
-    codes.extend(str(code) for item in validation.rejected_actions for code in item.reason_codes)
-    codes.extend(str(route.reason_code) for route in validation.specialist_routes)
-    return list(dict.fromkeys(codes))
+    return project_rejection_codes(validation)
 
 
 def _budget_usage(
@@ -566,21 +530,4 @@ def _budget_usage(
     envelopes: list[PlannerExecutionEnvelope[Any]],
     validation: CurationValidationResult | None,
 ) -> CurationBudgetUsage:
-    token_usage = [envelope.token_usage for envelope in envelopes if envelope.token_usage is not None]
-    token_source = next(
-        (envelope.token_usage_source for envelope in reversed(envelopes) if envelope.token_usage_source is not None),
-        None,
-    )
-    return CurationBudgetUsage(
-        seed_records=context.usage.seed_records,
-        support_records=context.usage.support_records,
-        context_characters=context.usage.context_characters,
-        read_tool_calls=context.usage.read_tool_calls,
-        records_returned=context.usage.records_returned,
-        proposed_actions=0 if validation is None or validation.plan is None else len(validation.plan.actions),
-        accepted_mutations=0 if validation is None else len(validation.accepted_actions),
-        planner_attempts=len(envelopes),
-        premium_requests=sum(1 for envelope in envelopes if envelope.premium_request),
-        token_usage=sum(token_usage) if token_usage else None,
-        token_usage_source=token_source,
-    )
+    return project_budget_usage(context, envelopes, validation)
