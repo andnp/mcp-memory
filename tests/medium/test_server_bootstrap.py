@@ -3,7 +3,7 @@ import json
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from click.testing import CliRunner
@@ -47,7 +47,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
     assert "read_memory_record" in search_tool.description
     read_tool = next(tool for tool in tools if tool.name == "read_memory_record")
     assert read_tool.description is not None
-    assert read_tool.inputSchema == {
+    assert read_tool.input_schema == {
         "type": "object",
         "properties": {
             "memory_id": {"type": "string"},
@@ -397,10 +397,11 @@ async def test_mcp_server_list_tools_times_out_when_sync_request_stalls(monkeypa
     )
     monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
 
-    handler = server.server.request_handlers[types.ListToolsRequest]
+    handler = server.server.get_request_handler("tools/list")
+    assert handler is not None
 
     with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
-        await handler(types.ListToolsRequest())
+        await handler.handler(cast(Any, None), types.PaginatedRequestParams())
 
 
 @pytest.mark.asyncio
@@ -408,12 +409,6 @@ async def test_mcp_server_call_tool_times_out_when_sync_request_stalls(monkeypat
     server = MCPServer(workspace_root="demo-workspace")
     server._daemon = object()
     stall = threading.Event()
-    server.server._tool_cache["record_thought"] = types.Tool(
-        name="record_thought",
-        description="Record a thought.",
-        inputSchema={"type": "object"},
-    )
-
     def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
         stall.wait(0.05)
         return {"contents": []}
@@ -424,16 +419,18 @@ async def test_mcp_server_call_tool_times_out_when_sync_request_stalls(monkeypat
     )
     monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
 
-    handler = server.server.request_handlers[types.CallToolRequest]
-    result = await handler(
-        types.CallToolRequest(
-            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
-        )
+    handler = server.server.get_request_handler("tools/call")
+    assert handler is not None
+    result = cast(
+        types.CallToolResult,
+        await handler.handler(
+            cast(Any, None),
+            types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"}),
+        ),
     )
-    result_root = cast(types.CallToolResult, result.root)
-    result_content = cast(TextContent, result_root.content[0])
+    result_content = cast(TextContent, result.content[0])
 
-    assert result_root.isError is True
+    assert result.is_error is True
     assert result_content.text == "mcp_client_request_timed_out"
 
 
@@ -447,27 +444,23 @@ def test_mcp_server_client_timeout_budget_defaults_to_sixty_seconds() -> None:
 async def test_mcp_server_call_tool_surfaces_daemon_timeout_error_payload(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     server._daemon = object()
-    server.server._tool_cache["record_thought"] = types.Tool(
-        name="record_thought",
-        description="Record a thought.",
-        inputSchema={"type": "object"},
-    )
-
     def _timed_out_request(_path: str, _payload: dict | None) -> dict[str, object]:
         return {"status": "error", "error": "daemon_request_timed_out"}
 
     monkeypatch.setattr(server, "_request_json_with_recovery", _timed_out_request)
 
-    handler = server.server.request_handlers[types.CallToolRequest]
-    result = await handler(
-        types.CallToolRequest(
-            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
-        )
+    handler = server.server.get_request_handler("tools/call")
+    assert handler is not None
+    result = cast(
+        types.CallToolResult,
+        await handler.handler(
+            cast(Any, None),
+            types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"}),
+        ),
     )
-    result_root = cast(types.CallToolResult, result.root)
-    result_content = cast(TextContent, result_root.content[0])
+    result_content = cast(TextContent, result.content[0])
 
-    assert result_root.isError is True
+    assert result.is_error is True
     assert result_content.text == "daemon_request_timed_out"
 
 
@@ -915,23 +908,28 @@ async def test_mcp_server_tool_handlers_succeed_with_client_timeout_wrapper(monk
 
     monkeypatch.setattr(server, "_request_json_with_recovery", fake_request)
 
-    list_tools_handler = server.server.request_handlers[types.ListToolsRequest]
-    list_result = await list_tools_handler(types.ListToolsRequest())
-    list_result_root = cast(types.ListToolsResult, list_result.root)
-
-    assert [tool.name for tool in list_result_root.tools] == ["record_thought"]
-    assert list_result_root.tools[0].description == "Record a durable memory."
-
-    call_tool_handler = server.server.request_handlers[types.CallToolRequest]
-    call_result = await call_tool_handler(
-        types.CallToolRequest(
-            params=types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"})
-        )
+    list_tools_handler = server.server.get_request_handler("tools/list")
+    assert list_tools_handler is not None
+    list_result = cast(
+        types.ListToolsResult,
+        await list_tools_handler.handler(cast(Any, None), types.PaginatedRequestParams()),
     )
-    call_result_root = cast(types.CallToolResult, call_result.root)
-    call_result_content = cast(TextContent, call_result_root.content[0])
 
-    assert call_result_root.isError is False
+    assert [tool.name for tool in list_result.tools] == ["record_thought"]
+    assert list_result.tools[0].description == "Record a durable memory."
+
+    call_tool_handler = server.server.get_request_handler("tools/call")
+    assert call_tool_handler is not None
+    call_result = cast(
+        types.CallToolResult,
+        await call_tool_handler.handler(
+            cast(Any, None),
+            types.CallToolRequestParams(name="record_thought", arguments={"content": "auth"}),
+        ),
+    )
+    call_result_content = cast(TextContent, call_result.content[0])
+
+    assert call_result.is_error is False
     assert call_result_content.text == '{"status": "recorded"}'
 
 

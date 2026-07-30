@@ -10,7 +10,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "Use summaries to choose promising memory_id values, then read only those records. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
@@ -33,7 +33,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "Read one memory record for maintenance. Internal calls include relationships and superseded "
                 "breadcrumbs by default; pass false for compact reads. Metadata remains opt-in."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -47,7 +47,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_peek_record",
             description="Read one authoritative memory record for maintenance without user access updates or shared-cache reads.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -59,7 +59,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_maintenance_search",
             description="Search authoritative memory records for maintenance with a bounded result budget.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
@@ -75,7 +75,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_list_relationships",
             description="List a bounded incoming, outgoing, or combined relationship slice for maintenance.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -88,7 +88,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_bounded_adjacency",
             description="Read a bounded one-hop neighborhood for maintenance without mutation or work-item lifecycle access.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -102,7 +102,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_list_memory_records",
             description="List recent memory records for maintenance work.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "workspace_id": {"type": "string"},
@@ -118,7 +118,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "Record a lightweight completion marker for the current maintenance task without mutating memories. "
                 "Use this instead of creating journal or memory records for routine completion/status traces."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -133,7 +133,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "Record a lightweight completion marker for the current maintenance task without mutating memories. "
                 "Use this instead of creating journal or memory records for routine completion/status traces."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -145,7 +145,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_get_next_dedup_batch",
             description="Return the next scheduler-selected deduplication batch of active candidate memories for agentic maintenance work.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -158,7 +158,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_get_next_curator_batch",
             description="Return the next curator-ranked maintenance batch of active candidate memories, optionally excluding records already reviewed in this run.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -172,7 +172,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_get_next_ingest_batch",
             description="Claim the next pending System 1 journal entries for one task and return grouped ingest batches.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -186,7 +186,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_get_work_batch",
             description="Claim the next durable work-item batch for one family and execution lane. Call it repeatedly within one run to safely process more queued work from that same family.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -202,7 +202,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_get_compatible_work_batch",
             description="Claim the next durable work-item batch from a compatible multi-family group. Use this to widen one run across families that share the same safety model.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -219,7 +219,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_heartbeat_work_item",
             description="Extend the lease for one claimed durable work item owned by the current task.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
@@ -232,7 +232,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_complete_work_item",
             description="Mark one claimed durable work item as completed and clear its lease.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "work_item_id": {"type": "string"},
@@ -243,7 +243,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_defer_work_item",
             description="Defer one claimed durable work item with an error/reason and retry delay.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "work_item_id": {"type": "string"},
@@ -256,7 +256,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_release_work_item",
             description="Release one claimed durable work item back to pending without marking it complete.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "work_item_id": {"type": "string"},
@@ -267,7 +267,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_ingest_append_memory",
             description="Append ingest content into an existing active memory while preserving ingest lineage metadata, workspace_ids, and system1-appended tagging.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -289,7 +289,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "default ingest tags, workspace_ids, and summary-task enqueueing. Do not use this for routine "
                 "status or completion markers."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
@@ -309,7 +309,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_append_memory_content",
             description="Append new content into an existing memory record and optionally update tags, workspace_ids, and metadata.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -326,7 +326,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_archive_memory_record",
             description="Archive a memory record without deleting it.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -338,7 +338,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_merge_memory_into_canonical",
             description="Merge a source memory into a canonical memory, optionally rewriting canonical fields, then archive the source and link lineage.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "canonical_memory_id": {"type": "string"},
@@ -358,7 +358,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_split_memory_record",
             description="Split one oversized memory into multiple focused child memories, link them back to the original, and optionally archive the original once the split succeeds.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -394,7 +394,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
                 "Create a new durable memory record for maintenance and cleanup workflows, optionally enqueueing "
                 "follow-up summarization. Do not use this for routine completion, counters, or status-only traces."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
@@ -414,7 +414,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_update_memory_record",
             description="Rewrite or otherwise update an existing memory record, including title, content, type, status, tags, and metadata.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -434,7 +434,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_delete_memory_record",
             description="Permanently delete an archived memory record and its associated links.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},
@@ -447,7 +447,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_create_memory_link",
             description="Create a typed link between two memory records.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "source_id": {"type": "string"},
@@ -462,7 +462,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
         Tool(
             name="internal_delete_memory_link",
             description="Delete a typed link between two memory records.",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "source_id": {"type": "string"},

@@ -9,9 +9,9 @@ import time as _time_module
 from typing import Any, Callable, cast
 from uuid import uuid4
 
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, TextContent, Tool
 
 from mcp_memory.daemon import ensure_daemon_started, stop_daemon
 from mcp_memory.daemon_transport import request_daemon_json, remaining_suspend_aware_seconds, suspend_aware_deadline, suspend_aware_now
@@ -52,7 +52,11 @@ class MCPServer:
         tool_path_prefix: str = "/internal/tools",
     ):
         self.workspace_root = workspace_root
-        self.server = Server(server_name)
+        self.server = Server(
+            server_name,
+            on_list_tools=self._list_tools,
+            on_call_tool=self._call_tool,
+        )
         self._daemon: object | None = None
         self._daemon_recovery_task: asyncio.Task[None] | None = None
         self._daemon_recovery_force_restart_requested = False
@@ -62,41 +66,55 @@ class MCPServer:
         self._session_started = False
         self._suspend_monitor_task: asyncio.Task[None] | None = None
         self._health_monitor_task: asyncio.Task[None] | None = None
-        self._setup_handlers()
 
-    def _setup_handlers(self) -> None:
-        @self.server.list_tools()
-        async def list_tools() -> list[Tool]:
-            payload = await self._request_daemon_json_with_client_timeout(self._tool_path_prefix, None)
-            _raise_for_daemon_error_payload(payload)
-            tools = payload.get("tools")
-            if not isinstance(tools, list):
-                raise ValueError("daemon_response_missing_tools")
-            return [
+    async def _list_tools(
+        self,
+        _context: ServerRequestContext[Any],
+        _params: PaginatedRequestParams | None,
+    ) -> ListToolsResult:
+        payload = await self._request_daemon_json_with_client_timeout(self._tool_path_prefix, None)
+        _raise_for_daemon_error_payload(payload)
+        tools = payload.get("tools")
+        if not isinstance(tools, list):
+            raise ValueError("daemon_response_missing_tools")
+        return ListToolsResult(
+            tools=[
                 Tool(
                     name=str(tool["name"]),
                     description=cast(str | None, tool.get("description")),
-                    inputSchema=cast(dict[str, object], tool["inputSchema"]),
+                    input_schema=cast(dict[str, object], tool["inputSchema"]),
                 )
                 for tool in tools
                 if isinstance(tool, dict)
             ]
+        )
 
-        @self.server.call_tool()
-        async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    async def _call_tool(
+        self,
+        _context: ServerRequestContext[Any],
+        params: CallToolRequestParams,
+    ) -> CallToolResult:
+        try:
             payload = await self._request_daemon_json_with_client_timeout(
-                f"{self._tool_path_prefix}/{name}",
-                arguments,
+                f"{self._tool_path_prefix}/{params.name}",
+                params.arguments or {},
             )
             _raise_for_daemon_error_payload(payload)
             contents = payload.get("contents")
             if not isinstance(contents, list):
                 raise ValueError("daemon_response_missing_contents")
-            return [
-                TextContent(type="text", text=str(item["text"]))
-                for item in contents
-                if isinstance(item, dict)
-            ]
+            return CallToolResult(
+                content=[
+                    TextContent(type="text", text=str(item["text"]))
+                    for item in contents
+                    if isinstance(item, dict)
+                ]
+            )
+        except (RuntimeError, TimeoutError) as exc:
+            return CallToolResult(
+                content=[TextContent(type="text", text=str(exc))],
+                is_error=True,
+            )
 
     async def _request_daemon_json_with_client_timeout(
         self,

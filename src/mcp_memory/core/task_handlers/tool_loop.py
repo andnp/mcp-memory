@@ -202,7 +202,7 @@ def _build_prompt(
 
 
 def _compact_tool_spec(tool: Any) -> dict[str, Any]:
-    schema = tool.inputSchema if isinstance(tool.inputSchema, dict) else {}
+    schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
     properties = schema.get("properties", {}) if isinstance(schema.get("properties", {}), dict) else {}
     required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
     property_names = [str(name) for name in properties]

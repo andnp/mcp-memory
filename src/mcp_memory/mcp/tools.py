@@ -11,7 +11,7 @@ def get_memory_tools() -> list[Tool]:
                 "evidence, and why it matters. Avoid routine play-by-play or status-only updates with no durable takeaway. "
                 "Returns minimal status confirmation to save tokens."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "content": {"type": "string"},
@@ -27,7 +27,7 @@ def get_memory_tools() -> list[Tool]:
                 "Use summaries to choose promising memory_id values, then read with read_memory_record. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
@@ -50,7 +50,7 @@ def get_memory_tools() -> list[Tool]:
                 "Read one memory record. Returns minimal fields (id, title, content) by default to save tokens. "
                 "Request optional extras (relationships, superseded, metadata) only when needed."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "string"},

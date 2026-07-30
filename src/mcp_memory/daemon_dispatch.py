@@ -238,7 +238,7 @@ def serialize_tool(tool) -> dict[str, object]:
     return {
         "name": tool.name,
         "description": tool.description,
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
     }
 
 
