@@ -46,6 +46,66 @@ class _NormalizeJSONProvider:
         }
 
 
+class _CampaignJSONProvider:
+    provider_trust_class = "local"
+
+    async def ask_json(self, prompt: str) -> dict[str, object]:
+        payload = json.loads(prompt.split("\n", 1)[1])
+        request = payload["request"]
+        context = payload["context"]
+        normalized = context["seeds"][0]
+        source = context["seeds"][1]
+        target = context["seeds"][2]
+        link = {
+            "source_id": source["memory_id"],
+            "target_id": target["memory_id"],
+            "link_type": "SUPPORTS",
+            "context": "The source records the target as supporting evidence.",
+        }
+        return {
+            "run_id": request["run_id"],
+            "plan_id": request["plan_id"],
+            "frontier_key": request["frontier_key"],
+            "context_fingerprint": request["context_fingerprint"],
+            "seed_memory_ids": [normalized["memory_id"], source["memory_id"], target["memory_id"]],
+            "actions": [
+                {
+                    "operation": "normalize_memory",
+                    "action_id": "00000000-0000-0000-0000-000000000003",
+                    "target_id": normalized["memory_id"],
+                    "confidence": 1.0,
+                    "rationale": "make the summary specific",
+                    "summary": "A durable authentication conclusion.",
+                    "preconditions": {
+                        "record_tokens": {
+                            normalized["memory_id"]: context["record_tokens"][normalized["memory_id"]],
+                        },
+                    },
+                },
+                {
+                    "operation": "create_link",
+                    "action_id": "00000000-0000-0000-0000-000000000004",
+                    "source_id": source["memory_id"],
+                    "target_id": target["memory_id"],
+                    "link_type": "SUPPORTS",
+                    "context": link["context"],
+                    "confidence": 1.0,
+                    "rationale": "the source directly supports the target",
+                    "evidence": [{"link": link}],
+                    "preconditions": {
+                        "record_tokens": {
+                            source["memory_id"]: context["record_tokens"][source["memory_id"]],
+                            target["memory_id"]: context["record_tokens"][target["memory_id"]],
+                        },
+                        "absent_links": [link],
+                    },
+                },
+            ],
+            "retained": [],
+            "rationale": "normalize the target and record the supporting edge",
+        }
+
+
 def _task(runtime, task_id: str) -> TaskRecord:
     return TaskRecord(
         id=task_id,
@@ -111,6 +171,75 @@ async def test_enabled_normalize_uses_verified_executor_and_completes_claimed_wo
         assert receipt.status.value == "verified"
         assert receipt.mutation_event_id is not None
         assert runtime.work_items.get_item(item.id).status == "completed"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_default_verified_campaign_reports_authoritative_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
+
+    try:
+        runtime.ai_json_provider = _CampaignJSONProvider()
+        normalized = runtime.repository.create_memory(
+            title="Authentication target",
+            content="JWT coverage is required for client authentication.",
+            summary="Generic summary.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+            tags=["auth"],
+        )
+        source = runtime.repository.create_memory(
+            title="Supporting source",
+            content="The source describes the authentication evidence.",
+            summary="Authentication evidence source.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        target = runtime.repository.create_memory(
+            title="Supported target",
+            content="The target is the durable authentication conclusion.",
+            summary="Authentication conclusion.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert normalized is not None and source is not None and target is not None
+        item, _ = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [normalized.id, source.id, target.id]},
+            idempotency_key="curator-default-campaign",
+        )
+
+        result = await handle_memory_curator_task(runtime, _task(runtime, "curator-default-campaign-task"), object())
+
+        refreshed = runtime.repository.get_memory(normalized.id)
+        campaign = result["curation_campaign_result"]
+        assert result["execution_mode"] == "curation_verified_campaign"
+        assert result["curation_outcome"] == "applied"
+        assert result["mutations"] == 2
+        assert campaign["mutation_count"] == 2
+        assert campaign["verified_action_count"] == 2
+        assert campaign["verification_failure_count"] == 0
+        assert campaign["retention_count"] == 0
+        assert campaign["specialist_family_routing"]["route_count"] == 0
+        assert campaign["specialist_family_routing"]["family_counts"] == {}
+        assert campaign["receipts"][0]["status"] == "verified"
+        assert campaign["receipts"][0]["operation"] == "normalize_memory"
+        assert campaign["receipts"][1]["operation"] == "create_link"
+        assert refreshed is not None and refreshed.summary == "A durable authentication conclusion."
+        assert runtime.work_items.get_item(item.id).status == "completed"
+        assert runtime.work_items.list_items(family_key="graph_link_review") == []
+        assert runtime.repository.get_links(source.id, direction="outgoing")
     finally:
         runtime.close()
 

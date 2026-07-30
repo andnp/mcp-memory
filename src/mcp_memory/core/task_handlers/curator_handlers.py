@@ -7,6 +7,7 @@ from mcp_memory.core.curation_shadow import (
     curator_create_link_execution_enabled,
     curator_normalize_execution_enabled,
     curator_shadow_mode_enabled,
+    run_curator_verified_campaign,
     run_curator_verified_create_link_execution,
     run_curator_shadow_mode,
     run_curator_verified_normalize_execution,
@@ -138,6 +139,17 @@ async def handle_memory_curator_task(
             claimed_work_item=claimed_review_item,
             work_item_metadata=work_item_metadata,
         )
+
+    return await run_curator_verified_campaign(
+        ctx,
+        task,
+        provider=provider,
+        seed_batch=seed_batch,
+        sampled_records=sampled_records,
+        seed_records=seed_records,
+        claimed_work_item=claimed_review_item,
+        work_item_metadata=work_item_metadata,
+    )
 
     curator_guardrails = build_curator_guardrails()
     prompt = _curator_support.build_json_tool_loop_prompt(

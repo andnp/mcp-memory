@@ -1,3 +1,4 @@
+from typing import Any, cast
 from uuid import uuid4
 
 from mcp_memory.core.curation_context import CurationContextPacket, CurationReadCounters
@@ -130,6 +131,188 @@ def test_validation_classifies_actions_without_mutating_or_routing_work() -> Non
     assert [item.family for item in result.accepted_actions] == [MaintenanceFamily.CURATOR]
     assert [item.family for item in result.specialist_routes] == [MaintenanceFamily.GRAPH_LINKER]
     assert not result.rejected_actions
+
+
+def test_verified_actions_are_only_accepted_for_verified_campaigns() -> None:
+    run_id, plan_id = uuid4(), uuid4()
+    seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    request = _request(run_id, plan_id, "frontier", "context")
+    actions = [
+        {"operation": "normalize_memory", "action_id": uuid4(), "target_id": seed, "confidence": 1, "rationale": "normalize", "summary": "specific"},
+        {
+            "operation": "rewrite_memory",
+            "action_id": uuid4(),
+            "target_id": linked,
+            "confidence": 1,
+            "rationale": "rewrite",
+            "content": "rewrite",
+            "summary": "rewrite",
+            "evidence": [{"memory_id": linked}],
+            "claim_manifest": {
+                "preserved_claims": ["keep"],
+                "source_mapping": [{"output": "rewrite", "source_memory_ids": [linked]}],
+            },
+        },
+        {
+            "operation": "create_link",
+            "action_id": uuid4(),
+            "source_id": source,
+            "target_id": target,
+            "link_type": "RELATED",
+            "confidence": 1,
+            "rationale": "link",
+            "evidence": [{"link": {"source_id": source, "target_id": target, "link_type": "RELATED"}}],
+            "preconditions": {
+                "record_tokens": {source: "tok-source", target: "tok-target"},
+                "absent_links": [{"source_id": source, "target_id": target, "link_type": "RELATED"}],
+            },
+        },
+        {
+            "operation": "remove_link",
+            "action_id": uuid4(),
+            "source_id": remove_source,
+            "target_id": remove_target,
+            "link_type": "RELATED",
+            "confidence": 1,
+            "rationale": "remove",
+            "evidence": [{"link": {"source_id": remove_source, "target_id": remove_target, "link_type": "RELATED"}}],
+            "preconditions": {
+                "record_tokens": {remove_source: "tok-remove-source", remove_target: "tok-remove-target"},
+            },
+        },
+        {
+            "operation": "merge_memories",
+            "action_id": uuid4(),
+            "canonical_id": canonical,
+            "source_ids": [merge_source],
+            "confidence": 1,
+            "rationale": "merge",
+            "content": "merged",
+            "evidence": [{"memory_id": canonical}],
+            "claim_manifest": {
+                "preserved_claims": ["keep"],
+                "unresolved_tensions": ["merge reviewed"],
+                "source_mapping": [{"output": "merged", "source_memory_ids": [canonical, merge_source]}],
+            },
+            "preconditions": {
+                "record_tokens": {canonical: "tok-canonical", merge_source: "tok-merge-source"},
+            },
+        },
+        {
+            "operation": "split_memory",
+            "action_id": uuid4(),
+            "target_id": split_target,
+            "confidence": 1,
+            "rationale": "split",
+            "evidence": [{"memory_id": split_target}],
+            "children": [{"output": "child", "source_memory_ids": [split_target]}],
+            "claim_manifest": {
+                "preserved_claims": ["keep"],
+                "source_mapping": [{"output": "child", "source_memory_ids": [split_target]}],
+            },
+            "preconditions": {"record_tokens": {split_target: "tok-split"}},
+        },
+        {
+            "operation": "archive_memory",
+            "action_id": uuid4(),
+            "target_id": archive_target,
+            "confidence": 1,
+            "rationale": "archive",
+            "evidence": [{"memory_id": archive_target}],
+            "claim_manifest": {"preserved_claims": ["keep"]},
+            "preconditions": {"record_tokens": {archive_target: "tok-archive"}},
+        },
+    ]
+    base_context = _context(seed, "context")
+    context = CurationContextPacket(
+        frontier_fingerprint=base_context.frontier_fingerprint,
+        seeds=tuple({"memory_id": str(value)} for value in (seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target)),
+        support=(),
+        record_tokens={
+            str(seed): "tok-seed",
+            str(linked): "tok-linked",
+            str(source): "tok-source",
+            str(target): "tok-target",
+            str(remove_source): "tok-remove-source",
+            str(remove_target): "tok-remove-target",
+            str(canonical): "tok-canonical",
+            str(merge_source): "tok-merge-source",
+            str(split_target): "tok-split",
+            str(archive_target): "tok-archive",
+        },
+        graph_tokens={},
+        disclosure=(),
+        omissions=(),
+        limits={},
+        usage=base_context.usage,
+        context_fingerprint="context",
+    )
+    plan = CurationPlan(
+        run_id=run_id,
+        plan_id=plan_id,
+        frontier_key="frontier",
+        context_fingerprint="context",
+        seed_memory_ids=[
+            seed,
+            linked,
+            source,
+            target,
+            remove_source,
+            remove_target,
+            canonical,
+            merge_source,
+            split_target,
+            archive_target,
+        ],
+        actions=cast(Any, actions),
+        retained=[],
+        rationale="retain",
+    )
+
+    default_result = validate_curation_plan(
+        plan,
+        request=request,
+        context=context,
+        memory_types={value: "observation" for value in (seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target)},
+    )
+    verified_result = validate_curation_plan(
+        plan,
+        request=request,
+        context=context,
+        memory_types={value: "observation" for value in (seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target)},
+        allow_verified_actions=True,
+    )
+
+    assert [item.action.operation for item in default_result.accepted_actions] == ["normalize_memory"]
+    assert {item.action.operation for item in default_result.specialist_routes} == {
+        "rewrite_memory",
+        "create_link",
+        "remove_link",
+        "merge_memories",
+        "split_memory",
+        "archive_memory",
+    }
+    assert [item.action.operation for item in verified_result.accepted_actions] == [
+        "normalize_memory",
+        "rewrite_memory",
+        "create_link",
+        "remove_link",
+        "merge_memories",
+        "split_memory",
+        "archive_memory",
+    ]
+    assert not verified_result.specialist_routes
 
 
 def test_validation_returns_typed_policy_reasons_for_protected_actions() -> None:

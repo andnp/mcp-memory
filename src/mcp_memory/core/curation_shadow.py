@@ -430,6 +430,120 @@ async def run_curator_verified_create_link_execution(
     )
 
 
+async def run_curator_verified_campaign(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    *,
+    provider: Any,
+    seed_batch: Any,
+    sampled_records: list[Any],
+    seed_records: list[Any],
+    claimed_work_item: Any,
+    work_item_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Plan and execute the canonical verified curator campaign path."""
+    planner_provider = _curator_json_provider(ctx, task, provider)
+    if planner_provider is None or not _supports_json_planning(planner_provider):
+        if claimed_work_item is not None:
+            release_work_item(ctx, claimed_work_item.id)
+        return sampling_payload(
+            seed_batch,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
+            extra=work_item_metadata,
+            shadow_mode=False,
+            execution_mode="curation_verified_campaign",
+            claimed_work_item_count=0,
+            tool_calls_executed=0,
+            mutations=0,
+            reason="campaign_json_provider_not_configured",
+        )
+
+    action_store = getattr(ctx, "curation_action_store", None)
+    if action_store is None and ctx.db_manager is not None:
+        if ctx.storage_backend == "postgres":
+            from mcp_memory.storage.postgres_curation_action_store import PostgresCurationActionStore
+
+            action_store = PostgresCurationActionStore(ctx.db_manager)
+        else:
+            from mcp_memory.curation_action_store import SQLiteCurationActionStore
+
+            action_store = SQLiteCurationActionStore(ctx.db_manager)
+    if action_store is None or ctx.curation is None or ctx.relational_search is None:
+        if claimed_work_item is not None:
+            release_work_item(ctx, claimed_work_item.id)
+        raise RuntimeError("verified campaign storage is unavailable")
+
+    planner = InstrumentedCurationPlanner(
+        planner_provider,
+        provider_key=str(getattr(planner_provider, "_provider_key", "curation-executor")),
+        provider_name=str(getattr(planner_provider, "_provider_name", "curation-executor")),
+        model_name=str(getattr(planner_provider, "_model_name", "curation-executor")),
+    )
+    support_records = seed_records[len(sampled_records) :] if len(seed_records) > len(sampled_records) else []
+    frontier_args = {
+        "family": "curator",
+        "strategy": seed_batch.strategy_used,
+        "seed_reads": (_record_read(record) for record in sampled_records),
+        "support_reads": (_record_read(record) for record in support_records),
+        "task_id": _task_uuid(task.id),
+    }
+    frontier = (
+        CurationFrontier.claimed(claimed_work_item.id, **frontier_args)
+        if claimed_work_item is not None
+        else CurationFrontier.direct(**frontier_args)
+    )
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, seed_records)
+    memory_types = {UUID(record.id): record.type for record in seed_records}
+    harness = CurationDryRunHarness(
+        curation_store=ctx.curation,
+        planner=planner,
+        work_items=ctx.work_items,
+        config=CurationHarnessConfig(
+            provider=provider_trust,
+            execute_accepted_actions=True,
+            execute_accepted_normalize_actions=True,
+            execute_accepted_create_link_actions=True,
+            require_authoritative_disclosure_context=require_policy,
+        ),
+        memory_types=memory_types,
+        protections_by_memory=protections,
+        sensitive_fields_by_memory=sensitive_fields,
+        executor=CurationExecutor(action_store),
+        verifier=CurationVerifier(ctx.curation, ctx.relational_search),
+    )
+    try:
+        result = await harness.run(frontier)
+    except Exception:
+        if claimed_work_item is not None:
+            release_work_item(ctx, claimed_work_item.id)
+        raise
+    plan = None if result.validation is None else result.validation.plan
+    decisions = _curator_decisions(result)
+    campaign_result = _curator_campaign_result(result)
+    return sampling_payload(
+        seed_batch,
+        sampled_records=sampled_records,
+        seed_records=seed_records,
+        extra=work_item_metadata,
+        summary=None if plan is None else plan.rationale,
+        shadow_mode=False,
+        execution_mode="curation_verified_campaign",
+        claimed_work_item_count=1 if claimed_work_item is not None else 0,
+        tool_calls_executed=0,
+        mutations=campaign_result["mutation_count"],
+        curation_run_id=str(result.run.run_id),
+        curation_plan_id=str(result.result.plan_id),
+        curation_outcome=str(result.result.outcome),
+        curation_work_item_action=str(result.work_item.action),
+        curation_rejection_codes=result.result.rejection_codes,
+        curation_planner_attempts=result.planner_attempts,
+        curation_plan=None if plan is None else plan.model_dump(mode="json"),
+        curation_decisions=decisions,
+        curation_campaign_result=campaign_result,
+    )
+
+
 def _supports_json_planning(provider: Any) -> bool:
     if not callable(getattr(provider, "ask_json", None)):
         return False
@@ -561,3 +675,73 @@ def _task_uuid(task_id: str) -> UUID | None:
         return UUID(task_id)
     except ValueError:
         return None
+
+
+def _curator_decisions(result: Any) -> list[dict[str, Any]]:
+    validation = getattr(result, "validation", None)
+    if validation is None:
+        return []
+    decisions = [
+        {
+            "action_id": str(item.action.action_id),
+            "operation": item.action.operation,
+            "decision": "accepted",
+        }
+        for item in validation.accepted_actions
+    ]
+    decisions.extend(
+        {
+            "action_id": str(item.action.action_id),
+            "operation": item.action.operation,
+            "decision": "rejected",
+            "reason_codes": [str(code) for code in item.reason_codes],
+        }
+        for item in validation.rejected_actions
+    )
+    decisions.extend(
+        {
+            "action_id": str(item.action.action_id),
+            "operation": item.action.operation,
+            "decision": "specialist_route",
+            "primary_family": str(item.family),
+            "reason_codes": [str(item.reason_code)],
+        }
+        for item in validation.specialist_routes
+    )
+    return decisions
+
+
+def _curator_campaign_result(result: Any) -> dict[str, Any]:
+    validation = getattr(result, "validation", None)
+    plan = None if validation is None else validation.plan
+    receipts = [receipt.model_dump(mode="json") for receipt in getattr(result.result, "receipts", ())]
+    specialist_routes: list[dict[str, Any]] = []
+    family_counts: dict[str, int] = {}
+    if validation is not None:
+        for route in validation.specialist_routes:
+            family = str(route.family)
+            family_counts[family] = family_counts.get(family, 0) + 1
+            specialist_routes.append(
+                {
+                    "action_id": str(route.action.action_id),
+                    "operation": route.action.operation,
+                    "primary_family": family,
+                    "reason_code": str(route.reason_code),
+                }
+            )
+    return {
+        **result.result.model_dump(mode="json"),
+        "receipts": receipts,
+        "mutation_count": int(getattr(result.result, "verified_action_count", 0)),
+        "verification_failure_count": sum(
+            1 for receipt in getattr(result.result, "receipts", ()) if str(receipt.status) == "verification_failed"
+        ),
+        "retention_count": 0 if plan is None else len(plan.retained),
+        "no_op_count": 0 if plan is None or str(result.result.outcome) != "no_op" else len(plan.retained),
+        "specialist_family_routing": {
+            "route_count": len(specialist_routes),
+            "family_counts": family_counts,
+            "routes": specialist_routes,
+            "work_item_ids": [str(item.id) for item in getattr(result, "specialist_work_items", ())],
+        },
+    }
