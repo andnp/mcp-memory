@@ -18,7 +18,7 @@ from mcp_memory.core.curation_verifier import (
     CurationVerifier,
     LowRiskCurationAction,
 )
-from mcp_memory.curation_store import (
+from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CurationReceiptHydrationError,
     CurationReceiptState,
@@ -27,7 +27,7 @@ from mcp_memory.curation_store import (
     CurationRunOutcome,
     CurationRunState,
 )
-from mcp_memory.relational.search import MaintenanceReadRepositoryLike
+from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
 
 
 CURATION_RECONCILIATION_LOCK_RETRY_ATTEMPTS = 3

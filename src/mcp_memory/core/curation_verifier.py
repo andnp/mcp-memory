@@ -19,13 +19,13 @@ from mcp_memory.core.curation_models import (
     RewriteMemoryAction,
     SplitMemoryAction,
 )
-from mcp_memory.curation_store import (
+from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CurationReceiptState,
     CurationRepository,
 )
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryReadContext
-from mcp_memory.relational.search import MaintenanceReadRepositoryLike
+from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
 
 
 class CurationVerificationError(RuntimeError):

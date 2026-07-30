@@ -19,7 +19,7 @@ from mcp_memory.core.curation_models import (
 )
 from mcp_memory.core.curation_validation import CurationValidationResult
 from mcp_memory.core.curation_verifier import CurationVerifier
-from mcp_memory.curation_store import (
+from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CurationRepository,
     CurationRun,

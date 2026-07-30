@@ -58,7 +58,7 @@ from mcp_memory.core.curation_work_items import (
     WorkItemRepository,
     WorkItemAction as _WorkItemAction,
 )
-from mcp_memory.curation_store import (
+from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CandidateDisposition,
     CurationCandidateState,

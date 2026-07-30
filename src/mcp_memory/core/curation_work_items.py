@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from mcp_memory.core.curation_models import CurationRunOutcome
-from mcp_memory.core.curation_planner import PlannerExecutionEnvelope
+from mcp_memory.core.ports.planner import PlannerExecutionEnvelope
 from mcp_memory.work_item_store import WorkItemRecord
 
 

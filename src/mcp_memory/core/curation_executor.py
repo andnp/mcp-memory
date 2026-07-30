@@ -26,13 +26,13 @@ from mcp_memory.core.curation_models import (
     SplitMemoryAction,
 )
 from mcp_memory.core.curation_policy import PolicyDecision, evaluate_curation_action
-from mcp_memory.curation_action_store import (
+from mcp_memory.core.ports.curation import (
     CurationActionFatalError,
+    CurationActionReceipt,
     CurationActionStore,
     CurationTransaction,
     MutationResult,
 )
-from mcp_memory.curation_store import CurationActionReceipt
 from mcp_memory.mutation_history import ProtectionMode
 
 

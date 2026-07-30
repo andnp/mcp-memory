@@ -9,7 +9,7 @@ from uuid import UUID
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_candidates import CuratorCandidateRequest, CuratorSamplingContext
 from mcp_memory.core.curation_identity import candidate_revision_token, graph_token, record_token
-from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState
+from mcp_memory.core.ports.curation import CandidateDisposition, CurationCandidateState
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
