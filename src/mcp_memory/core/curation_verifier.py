@@ -8,7 +8,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from mcp_memory.core.curation_identity import canonical_token, record_snapshot
-from mcp_memory.core.curation_models import CreateLinkAction, NormalizeMemoryAction
+from mcp_memory.core.curation_models import (
+    ArchiveMemoryAction,
+    CreateLinkAction,
+    MergeMemoriesAction,
+    NormalizeMemoryAction,
+    RemoveLinkAction,
+    RewriteMemoryAction,
+    SplitMemoryAction,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -28,11 +36,25 @@ class _PostconditionMismatch(CurationVerificationError):
         super().__init__(error_code)
 
 
+VerifiedCurationAction = (
+    NormalizeMemoryAction
+    | RewriteMemoryAction
+    | CreateLinkAction
+    | RemoveLinkAction
+    | MergeMemoriesAction
+    | SplitMemoryAction
+    | ArchiveMemoryAction
+)
+
 LowRiskCurationAction = NormalizeMemoryAction | CreateLinkAction
+
+_MERGE_LINK_CONTEXT = "Merged into canonical memory by provider-free curation."
+_SPLIT_LINK_TYPE = "DEPENDS_ON"
+_SPLIT_LINK_CONTEXT = "Derived from a provider-free memory split."
 
 
 class CurationVerifier:
-    """Verify committed low-risk actions using fresh, non-instrumenting reads.
+    """Verify committed typed actions using fresh, non-instrumenting reads.
 
     Planner rationale and evidence are intentionally not consulted.  The typed
     action supplies only the exact postcondition shape; the current record and
@@ -50,7 +72,7 @@ class CurationVerifier:
     def verify(
         self,
         receipt: CurationActionReceipt,
-        action: LowRiskCurationAction,
+        action: VerifiedCurationAction,
     ) -> CurationActionReceipt:
         """Advance an applied receipt after checking its authoritative postcondition."""
         current = self._curation_store.get_receipt(receipt.run_id, receipt.action_id)
@@ -63,14 +85,36 @@ class CurationVerifier:
         if current.operation != action.operation:
             raise CurationVerificationError("receipt operation does not match action")
 
-        expected_ids = _expected_ids(action)
-        if _receipt_ids(current) != expected_ids:
-            return self._finish(
-                current,
-                CurationReceiptState.VERIFICATION_FAILED,
-                "affected_ids_mismatch",
+        if isinstance(action, NormalizeMemoryAction):
+            return self._verify_record_action(current, [str(action.target_id)])
+        if isinstance(action, RewriteMemoryAction):
+            return self._verify_record_action(current, [str(action.target_id)])
+        if isinstance(action, ArchiveMemoryAction):
+            return self._verify_record_action(current, [str(action.target_id)])
+        if isinstance(action, CreateLinkAction):
+            expected_ids = sorted(
+                {str(action.source_id), str(action.target_id)},
+                key=lambda value: value.encode("utf-8"),
             )
+            return self._verify_create_link(current, action, expected_ids)
+        if isinstance(action, RemoveLinkAction):
+            expected_ids = sorted(
+                {str(action.source_id), str(action.target_id)},
+                key=lambda value: value.encode("utf-8"),
+            )
+            return self._verify_remove_link(current, action, expected_ids)
+        if isinstance(action, MergeMemoriesAction):
+            expected_ids = _merge_ids(action.canonical_id, action.source_ids)
+            return self._verify_merge(current, action, expected_ids)
+        if isinstance(action, SplitMemoryAction):
+            return self._verify_split(current, action)
+        raise CurationVerificationError("unsupported curation action")
 
+    def _verify_record_action(
+        self,
+        current: CurationActionReceipt,
+        expected_ids: Sequence[str],
+    ) -> CurationActionReceipt:
         try:
             contexts = self._fresh_contexts(expected_ids)
         except _PostconditionMismatch as mismatch:
@@ -79,36 +123,172 @@ class CurationVerifier:
                 CurationReceiptState.VERIFICATION_FAILED,
                 mismatch.error_code,
             )
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
         actual_after_token = _state_token(
             {memory_id: context.record for memory_id, context in contexts.items()},
             expected_ids,
         )
         if actual_after_token != current.after_token:
-            return self._finish(
-                current,
-                CurationReceiptState.VERIFICATION_FAILED,
-                "after_token_mismatch",
-            )
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+        return self._finish(current, CurationReceiptState.VERIFIED, None)
 
-        if isinstance(action, CreateLinkAction) and not _has_exact_edge(
+    def _verify_create_link(
+        self,
+        current: CurationActionReceipt,
+        action: CreateLinkAction,
+        expected_ids: Sequence[str],
+    ) -> CurationActionReceipt:
+        try:
+            contexts = self._fresh_contexts(expected_ids)
+        except _PostconditionMismatch as mismatch:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+        actual_after_token = _state_token(
+            {memory_id: context.record for memory_id, context in contexts.items()},
+            expected_ids,
+        )
+        if actual_after_token != current.after_token:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+        if not _has_exact_edge(
             contexts[str(action.source_id)],
             source_id=str(action.source_id),
             target_id=str(action.target_id),
             link_type=action.link_type,
             edge_context=action.context or "",
         ):
-            return self._finish(
-                current,
-                CurationReceiptState.VERIFICATION_FAILED,
-                "edge_missing",
-            )
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "edge_missing")
+        return self._finish(current, CurationReceiptState.VERIFIED, None)
 
+    def _verify_remove_link(
+        self,
+        current: CurationActionReceipt,
+        action: RemoveLinkAction,
+        expected_ids: Sequence[str],
+    ) -> CurationActionReceipt:
+        try:
+            contexts = self._fresh_contexts(expected_ids)
+        except _PostconditionMismatch as mismatch:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+        actual_after_token = _state_token(
+            {memory_id: context.record for memory_id, context in contexts.items()},
+            expected_ids,
+        )
+        if actual_after_token != current.after_token:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+        if _has_any_edge(
+            contexts[str(action.source_id)],
+            source_id=str(action.source_id),
+            target_id=str(action.target_id),
+            link_type=action.link_type,
+        ):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "edge_still_present")
+        return self._finish(current, CurationReceiptState.VERIFIED, None)
+
+    def _verify_merge(
+        self,
+        current: CurationActionReceipt,
+        action: MergeMemoriesAction,
+        expected_ids: Sequence[str],
+    ) -> CurationActionReceipt:
+        try:
+            contexts = self._fresh_contexts(expected_ids)
+        except _PostconditionMismatch as mismatch:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+        actual_after_token = _state_token(
+            {memory_id: context.record for memory_id, context in contexts.items()},
+            expected_ids,
+        )
+        if actual_after_token != current.after_token:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+
+        canonical_context = contexts[str(action.canonical_id)]
+        merged_source_ids = sorted(
+            {str(source_id) for source_id in action.source_ids if str(source_id) != str(action.canonical_id)},
+            key=lambda value: value.encode("utf-8"),
+        )
+        merged_metadata = canonical_context.record.metadata.get("merged_source_ids")
+        if not isinstance(merged_metadata, list):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "merge_lineage_missing")
+        merged_metadata_ids = {str(value) for value in merged_metadata}
+        if not set(merged_source_ids).issubset(merged_metadata_ids):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "merge_lineage_missing")
+        for source_id in merged_source_ids:
+            source_context = contexts[str(source_id)]
+            if source_context.record.status != "archived":
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "source_not_archived")
+            if not _has_exact_edge(
+                canonical_context,
+                source_id=str(action.canonical_id),
+                target_id=str(source_id),
+                link_type="SUPERSEDES",
+                edge_context=_MERGE_LINK_CONTEXT,
+            ):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "merge_edge_missing")
+        return self._finish(current, CurationReceiptState.VERIFIED, None)
+
+    def _verify_split(
+        self,
+        current: CurationActionReceipt,
+        action: SplitMemoryAction,
+    ) -> CurationActionReceipt:
+        original = self._maintenance_reads.peek_memory(str(action.target_id))
+        if original is None or original.record.id != str(action.target_id):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "record_missing")
+        child_ids = _split_child_ids(original)
+        expected_ids = sorted(
+            [str(action.target_id), *child_ids],
+            key=lambda value: value.encode("utf-8"),
+        )
+        try:
+            contexts = self._fresh_contexts(expected_ids)
+        except _PostconditionMismatch as mismatch:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+        actual_after_token = _state_token(
+            {memory_id: context.record for memory_id, context in contexts.items()},
+            expected_ids,
+        )
+        if actual_after_token != current.after_token:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+
+        original_context = contexts[str(action.target_id)]
+        if original_context.record.metadata.get("split_child_memory_ids") != child_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_children_missing")
+        if original_context.record.metadata.get("split_child_count") != len(child_ids):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_child_count_missing")
+        for index, child_id in enumerate(child_ids, start=1):
+            child_context = contexts[child_id]
+            metadata = child_context.record.metadata
+            if metadata.get("split_from_memory_id") != str(action.target_id):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_lineage_missing")
+            if metadata.get("split_group_id") != str(action.action_id):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_group_missing")
+            if metadata.get("split_part_index") != index or metadata.get("split_part_count") != len(child_ids):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_part_metadata_missing")
+            sibling_ids = [candidate for candidate in child_ids if candidate != child_id]
+            if metadata.get("split_child_memory_ids") != child_ids or metadata.get("split_sibling_memory_ids") != sibling_ids:
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_child_metadata_missing")
+            if not _has_exact_edge(
+                child_context,
+                source_id=child_id,
+                target_id=str(action.target_id),
+                link_type=_SPLIT_LINK_TYPE,
+                edge_context=_SPLIT_LINK_CONTEXT,
+            ):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_edge_missing")
         return self._finish(current, CurationReceiptState.VERIFIED, None)
 
     def verify_receipt(
         self,
         receipt: CurationActionReceipt,
-        action: LowRiskCurationAction,
+        action: VerifiedCurationAction,
     ) -> CurationActionReceipt:
         """Descriptive alias for :meth:`verify`."""
         return self.verify(receipt, action)
@@ -153,19 +333,15 @@ def verify_curation_receipt(
     curation_store: CurationRepository,
     maintenance_reads: MaintenanceReadRepositoryLike,
     receipt: CurationActionReceipt,
-    action: LowRiskCurationAction,
+    action: VerifiedCurationAction,
 ) -> CurationActionReceipt:
-    """Functional entry point for authoritative low-risk receipt verification."""
+    """Functional entry point for authoritative typed receipt verification."""
     return CurationVerifier(curation_store, maintenance_reads).verify(receipt, action)
 
 
-def _expected_ids(action: LowRiskCurationAction) -> list[str]:
-    if isinstance(action, NormalizeMemoryAction):
-        return [str(action.target_id)]
-    return sorted(
-        {str(action.source_id), str(action.target_id)},
-        key=lambda value: value.encode("utf-8"),
-    )
+def _merge_ids(canonical_id: Any, source_ids: Sequence[Any]) -> list[str]:
+    values = [str(canonical_id), *[str(source_id) for source_id in source_ids if str(source_id) != str(canonical_id)]]
+    return sorted(dict.fromkeys(values), key=lambda value: value.encode("utf-8"))
 
 
 def _receipt_ids(receipt: CurationActionReceipt) -> list[str]:
@@ -208,6 +384,20 @@ def _has_exact_edge(
     )
 
 
+def _has_any_edge(
+    read_context: RelationalMemoryReadContext,
+    *,
+    source_id: str,
+    target_id: str,
+    link_type: str,
+) -> bool:
+    normalized_type = _normalize_link_type(link_type)
+    return any(
+        edge.source_id == source_id and edge.target_id == target_id and edge.link_type == normalized_type
+        for edge in read_context.relationships.get("outgoing", [])
+    )
+
+
 def _edge_matches(
     edge: MemoryLink,
     *,
@@ -229,6 +419,16 @@ def _normalize_link_type(link_type: str) -> str:
     if not normalized:
         raise CurationVerificationError("link_type must be non-empty")
     return normalized
+
+
+def _split_child_ids(read_context: RelationalMemoryReadContext) -> list[str]:
+    raw_ids = read_context.record.metadata.get("split_child_memory_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise _PostconditionMismatch("split_children_missing")
+    child_ids = [str(value) for value in raw_ids]
+    if len(child_ids) != len({*child_ids}):
+        raise _PostconditionMismatch("split_children_missing")
+    return child_ids
 
 
 __all__ = [

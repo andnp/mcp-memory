@@ -5,17 +5,23 @@ from pydantic import TypeAdapter, ValidationError
 
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
+    ClaimMapping,
+    ClaimManifest,
     CurationAction,
     CurationBudgetUsage,
     CurationPlan,
     CurationRunOutcome,
     CurationRunResult,
-    ClaimManifest,
     CreateLinkAction,
+    EvidenceRef,
+    LinkAssertion,
+    MergeMemoriesAction,
     MutationReceipt,
     NormalizeMemoryAction,
     RemoveLinkAction,
     ReceiptStatus,
+    SplitMemoryAction,
+    RewriteMemoryAction,
     RetentionDecision,
     RetentionReason,
 )
@@ -102,3 +108,97 @@ def test_link_actions_allow_project_defined_canonical_link_type() -> None:
         rationale="link memories",
     )
     assert action.link_type == "PROJECT_CAUSES_V2"
+
+
+def test_action_union_accepts_all_current_operations() -> None:
+    target_id = uuid4()
+    source_id = uuid4()
+    canonical_id = uuid4()
+    child_id = uuid4()
+    adapter = TypeAdapter(CurationAction)
+    samples = [
+        NormalizeMemoryAction(action_id=uuid4(), target_id=target_id, confidence=1, rationale="normalize", title="Title"),
+        RewriteMemoryAction(
+            action_id=uuid4(),
+            target_id=target_id,
+            confidence=1,
+            rationale="rewrite",
+            content="Rewritten content.",
+            claim_manifest=ClaimManifest(
+                preserved_claims=["claim"],
+                transformed_claims=["claim"],
+                source_mapping=[ClaimMapping(output="claim", source_memory_ids=[target_id])],
+            ),
+            evidence=[EvidenceRef(memory_id=target_id)],
+        ),
+        CreateLinkAction(
+            action_id=uuid4(),
+            source_id=source_id,
+            target_id=target_id,
+            link_type="DEPENDS_ON",
+            confidence=1,
+            rationale="link",
+            evidence=[EvidenceRef(link=LinkAssertion(source_id=source_id, target_id=target_id, link_type="DEPENDS_ON"))],
+        ),
+        RemoveLinkAction(
+            action_id=uuid4(),
+            source_id=source_id,
+            target_id=target_id,
+            link_type="DEPENDS_ON",
+            confidence=1,
+            rationale="unlink",
+            evidence=[EvidenceRef(link=LinkAssertion(source_id=source_id, target_id=target_id, link_type="DEPENDS_ON"))],
+        ),
+        MergeMemoriesAction(
+            action_id=uuid4(),
+            canonical_id=canonical_id,
+            source_ids=[source_id],
+            confidence=1,
+            rationale="merge",
+            content="Merged content.",
+            claim_manifest=ClaimManifest(
+                preserved_claims=["claim"],
+                transformed_claims=["claim"],
+                source_mapping=[ClaimMapping(output="claim", source_memory_ids=[canonical_id, source_id])],
+            ),
+            evidence=[EvidenceRef(memory_id=canonical_id)],
+        ),
+        SplitMemoryAction(
+            action_id=uuid4(),
+            target_id=target_id,
+            confidence=1,
+            rationale="split",
+            claim_manifest=ClaimManifest(
+                preserved_claims=["claim"],
+                transformed_claims=["claim"],
+                source_mapping=[
+                    ClaimMapping(output="child one", source_memory_ids=[target_id]),
+                    ClaimMapping(output="child two", source_memory_ids=[target_id]),
+                ],
+            ),
+            children=[
+                ClaimMapping(output="child one", source_memory_ids=[target_id]),
+                ClaimMapping(output="child two", source_memory_ids=[target_id]),
+            ],
+            evidence=[EvidenceRef(memory_id=target_id)],
+        ),
+        ArchiveMemoryAction(
+            action_id=uuid4(),
+            target_id=child_id,
+            confidence=1,
+            rationale="archive",
+            claim_manifest=ClaimManifest(preserved_claims=["claim"]),
+            evidence=[EvidenceRef(memory_id=child_id)],
+        ),
+    ]
+
+    operations = {adapter.validate_python(sample.model_dump(mode="json")).operation for sample in samples}
+    assert operations == {
+        "archive_memory",
+        "create_link",
+        "merge_memories",
+        "normalize_memory",
+        "remove_link",
+        "rewrite_memory",
+        "split_memory",
+    }

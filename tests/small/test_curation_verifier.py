@@ -6,7 +6,20 @@ import pytest
 
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
-from mcp_memory.core.curation_models import ActionPreconditions, CreateLinkAction, EvidenceRef, LinkAssertion, NormalizeMemoryAction
+from mcp_memory.core.curation_models import (
+    ActionPreconditions,
+    ArchiveMemoryAction,
+    ClaimMapping,
+    ClaimManifest,
+    CreateLinkAction,
+    EvidenceRef,
+    LinkAssertion,
+    MergeMemoriesAction,
+    NormalizeMemoryAction,
+    RemoveLinkAction,
+    RewriteMemoryAction,
+    SplitMemoryAction,
+)
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
@@ -79,12 +92,20 @@ def _normalize_action(memory_id: UUID, token: str) -> NormalizeMemoryAction:
     )
 
 
-def _link_action(source_id: UUID, target_id: UUID, source_token: str, target_token: str) -> CreateLinkAction:
+def _link_action(
+    source_id: UUID,
+    target_id: UUID,
+    source_token: str,
+    target_token: str,
+    *,
+    link_type: str = "SUPPORTS",
+    context: str = "exact typed edge",
+) -> CreateLinkAction:
     edge = LinkAssertion(
         source_id=source_id,
         target_id=target_id,
-        link_type="SUPPORTS",
-        context="exact typed edge",
+        link_type=link_type,
+        context=context,
     )
     return CreateLinkAction(
         action_id=uuid4(),
@@ -97,8 +118,86 @@ def _link_action(source_id: UUID, target_id: UUID, source_token: str, target_tok
             record_tokens={source_id: source_token, target_id: target_token},
             absent_links=[edge],
         ),
-        link_type="SUPPORTS",
-        context="exact typed edge",
+        link_type=link_type,
+        context=context,
+    )
+
+
+def _claim_manifest(*outputs: tuple[str, list[UUID]]) -> ClaimManifest:
+    return ClaimManifest(
+        preserved_claims=["claim"],
+        transformed_claims=[output for output, _ in outputs],
+        source_mapping=[ClaimMapping(output=output, source_memory_ids=source_ids) for output, source_ids in outputs],
+    )
+
+
+def _rewrite_action(memory_id: UUID, token: str) -> RewriteMemoryAction:
+    return RewriteMemoryAction(
+        action_id=uuid4(),
+        target_id=memory_id,
+        confidence=1,
+        rationale="rewrite the record",
+        content="Rewritten content.",
+        claim_manifest=_claim_manifest(("rewritten claim", [memory_id])),
+        evidence=[EvidenceRef(memory_id=memory_id)],
+        preconditions=ActionPreconditions(record_tokens={memory_id: token}),
+    )
+
+
+def _remove_link_action(source_id: UUID, target_id: UUID, source_token: str, target_token: str) -> RemoveLinkAction:
+    edge = LinkAssertion(source_id=source_id, target_id=target_id, link_type="DEPENDS_ON")
+    return RemoveLinkAction(
+        action_id=uuid4(),
+        source_id=source_id,
+        target_id=target_id,
+        confidence=1,
+        rationale="remove the link",
+        evidence=[EvidenceRef(link=edge)],
+        preconditions=ActionPreconditions(
+            record_tokens={source_id: source_token, target_id: target_token},
+            required_links=[edge],
+        ),
+        link_type="DEPENDS_ON",
+    )
+
+
+def _merge_action(canonical_id: UUID, source_id: UUID, canonical_token: str, source_token: str) -> MergeMemoriesAction:
+    return MergeMemoriesAction(
+        action_id=uuid4(),
+        canonical_id=canonical_id,
+        source_ids=[source_id],
+        confidence=1,
+        rationale="merge the records",
+        content="Merged content.",
+        claim_manifest=_claim_manifest(("merged claim", [canonical_id, source_id])),
+        evidence=[EvidenceRef(memory_id=canonical_id), EvidenceRef(memory_id=source_id)],
+        preconditions=ActionPreconditions(record_tokens={canonical_id: canonical_token, source_id: source_token}),
+    )
+
+
+def _split_action(memory_id: UUID, token: str) -> SplitMemoryAction:
+    outputs = [("child one", [memory_id]), ("child two", [memory_id])]
+    return SplitMemoryAction(
+        action_id=uuid4(),
+        target_id=memory_id,
+        confidence=1,
+        rationale="split the record",
+        children=[ClaimMapping(output=output, source_memory_ids=source_ids) for output, source_ids in outputs],
+        claim_manifest=_claim_manifest(*outputs),
+        evidence=[EvidenceRef(memory_id=memory_id)],
+        preconditions=ActionPreconditions(record_tokens={memory_id: token}),
+    )
+
+
+def _archive_action(memory_id: UUID, token: str) -> ArchiveMemoryAction:
+    return ArchiveMemoryAction(
+        action_id=uuid4(),
+        target_id=memory_id,
+        confidence=1,
+        rationale="archive the record",
+        claim_manifest=ClaimManifest(preserved_claims=["claim"]),
+        evidence=[EvidenceRef(memory_id=memory_id)],
+        preconditions=ActionPreconditions(record_tokens={memory_id: token}),
     )
 
 
@@ -194,3 +293,123 @@ def test_create_link_missing_edge_fails_without_using_rationale(db_manager: Data
 
     assert failed.status is CurationReceiptState.VERIFICATION_FAILED
     assert failed.error_code == "edge_missing"
+
+
+def test_rewrite_verifies_exact_after_token_from_fresh_read(db_manager: DatabaseManager) -> None:
+    repository, run, memory_id = _seed(db_manager)
+    before = repository.get_memory(str(memory_id))
+    assert before is not None
+    action = _rewrite_action(memory_id, record_token(before))
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_rewrite(
+        action,
+        run_id=run.run_id,
+        memory_type=before.type,
+    )
+
+    verifier, reader = _verifier(db_manager, repository)
+    verified = verifier.verify(receipt, action)
+
+    assert verified.status is CurationReceiptState.VERIFIED
+    assert reader.peek_calls == [str(memory_id)]
+
+
+def test_remove_link_verifies_edge_absence_from_fresh_reads(db_manager: DatabaseManager) -> None:
+    repository, run, source_id = _seed(db_manager)
+    target_id = uuid4()
+    repository.create_memory("Target", "Target content.", ["workspace"], memory_id=str(target_id), memory_type="fact")
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+    executor = CurationExecutor(SQLiteCurationActionStore(db_manager))
+    create_action = _link_action(
+        source_id,
+        target_id,
+        record_token(source),
+        record_token(target),
+        link_type="DEPENDS_ON",
+        context="link to remove",
+    )
+    executor.execute_create_link(
+        create_action,
+        run_id=run.run_id,
+        source_type=source.type,
+        target_type=target.type,
+    )
+    action = _remove_link_action(source_id, target_id, record_token(source), record_token(target))
+    receipt = executor.execute_remove_link(
+        action,
+        run_id=run.run_id,
+        source_type=source.type,
+        target_type=target.type,
+    )
+
+    verifier, reader = _verifier(db_manager, repository)
+    verified = verifier.verify(receipt, action)
+
+    assert verified.status is CurationReceiptState.VERIFIED
+    assert set(reader.peek_calls) == {str(source_id), str(target_id)}
+
+
+def test_merge_verifies_canonical_archival_and_supercedes_lineage(db_manager: DatabaseManager) -> None:
+    repository, run, canonical_id = _seed(db_manager)
+    source_id = uuid4()
+    repository.create_memory(
+        "Source title",
+        "Source content.",
+        ["workspace"],
+        memory_id=str(source_id),
+        summary="Source summary",
+        tags=["source"],
+        memory_type="fact",
+    )
+    canonical = repository.get_memory(str(canonical_id))
+    source = repository.get_memory(str(source_id))
+    assert canonical is not None and source is not None
+    action = _merge_action(canonical_id, source_id, record_token(canonical), record_token(source))
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_merge(
+        action,
+        run_id=run.run_id,
+        memory_types={canonical_id: canonical.type, source_id: source.type},
+    )
+
+    verifier, reader = _verifier(db_manager, repository)
+    verified = verifier.verify(receipt, action)
+
+    assert verified.status is CurationReceiptState.VERIFIED
+    assert set(reader.peek_calls) == {str(canonical_id), str(source_id)}
+
+
+def test_split_verifies_children_and_split_lineage(db_manager: DatabaseManager) -> None:
+    repository, run, memory_id = _seed(db_manager)
+    before = repository.get_memory(str(memory_id))
+    assert before is not None
+    action = _split_action(memory_id, record_token(before))
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_split(
+        action,
+        run_id=run.run_id,
+        memory_type=before.type,
+    )
+
+    verifier, reader = _verifier(db_manager, repository)
+    verified = verifier.verify(receipt, action)
+
+    assert verified.status is CurationReceiptState.VERIFIED
+    assert set(reader.peek_calls) == set(str(value) for value in receipt.affected_ids)
+
+
+def test_archive_verifies_archived_status_from_fresh_read(db_manager: DatabaseManager) -> None:
+    repository, run, memory_id = _seed(db_manager)
+    before = repository.get_memory(str(memory_id))
+    assert before is not None
+    action = _archive_action(memory_id, record_token(before))
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_archive(
+        action,
+        run_id=run.run_id,
+        memory_type=before.type,
+    )
+
+    verifier, reader = _verifier(db_manager, repository)
+    verified = verifier.verify(receipt, action)
+
+    assert verified.status is CurationReceiptState.VERIFIED
+    assert reader.peek_calls == [str(memory_id)]
