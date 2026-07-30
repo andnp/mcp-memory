@@ -6627,11 +6627,6 @@ async def test_memory_curator_consumes_compatible_structural_review_work(
     assert runtime.repository is not None
     assert runtime.work_items is not None
 
-    class _AgenticProvider:
-        async def run_agent(self, prompt: str) -> AgenticRunResult:
-            assert "Structural review families" in prompt
-            return AgenticRunResult(status="success", summary="Reviewed the structural cleanup batch.")
-
     try:
         record = runtime.repository.create_memory(
             title="Structural review target",
@@ -6653,8 +6648,18 @@ async def test_memory_curator_consumes_compatible_structural_review_work(
         )
         assert created is True
 
+        class _AgenticProvider:
+            async def run_agent(self, prompt: str) -> AgenticRunResult:
+                assert "Structural review families" in prompt
+                await call_internal_memory_tool(
+                    runtime,
+                    "internal_update_memory_record",
+                    {"memory_id": record.id, "tags": ["auth", "curated"]},
+                )
+                return AgenticRunResult(status="success", summary="Reviewed the structural cleanup batch.")
+
         result = await handle_memory_curator_task(
-            runtime,
+            runtime.task_runtime_view(),
             TaskRecord(
                 id=f"memory-curator-{family_key}-task",
                 task_name=CURATOR_TASK_NAME,
@@ -6679,6 +6684,8 @@ async def test_memory_curator_consumes_compatible_structural_review_work(
         assert result["work_item_family"] == family_key
         assert result["campaign_origin_family"] == family_key
         assert result["seed_record_count"] == 1
+        assert result["tool_calls_executed"] == 1
+        assert result["mutations"] == 1
         assert runtime.work_items.get_item(item.id).status == "completed"
     finally:
         runtime.close()
