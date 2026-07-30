@@ -614,21 +614,32 @@ def test_split_creates_children_and_preserves_original_lineage(db_manager: Datab
     after = repository.get_memory(str(memory_id))
     assert after is not None
     child_ids = sorted((str(value) for value in receipt.affected_ids if value != memory_id), key=lambda value: value.encode("utf-8"))
+
     def _part_index(child_id: str) -> int:
         child = repository.get_memory(child_id)
         assert child is not None
-        return int(child.metadata["split_part_index"])
+        part_index = child.metadata.get("split_part_index")
+        assert isinstance(part_index, int)
+        return part_index
+
+    def _metadata_string_list(record: object, key: str) -> list[str]:
+        metadata = getattr(record, "metadata")
+        value = metadata.get(key)
+        assert isinstance(value, list)
+        assert all(isinstance(item, str) for item in value)
+        return value
 
     ordered_child_ids = sorted(child_ids, key=_part_index)
-    assert after.metadata["split_child_count"] == 2
-    assert sorted(after.metadata["split_child_memory_ids"], key=lambda value: value.encode("utf-8")) == child_ids
+    split_child_count = after.metadata.get("split_child_count")
+    assert split_child_count == 2
+    assert sorted(_metadata_string_list(after, "split_child_memory_ids"), key=lambda value: value.encode("utf-8")) == child_ids
     for child_id in child_ids:
         child = repository.get_memory(child_id)
         assert child is not None
-        assert child.metadata["split_from_memory_id"] == str(memory_id)
-        assert child.metadata["split_group_id"] == str(receipt.action_id)
-        assert child.metadata["split_child_memory_ids"] == ordered_child_ids
-        assert sorted(child.metadata["split_sibling_memory_ids"], key=lambda value: value.encode("utf-8")) == [
+        assert child.metadata.get("split_from_memory_id") == str(memory_id)
+        assert child.metadata.get("split_group_id") == str(receipt.action_id)
+        assert _metadata_string_list(child, "split_child_memory_ids") == ordered_child_ids
+        assert sorted(_metadata_string_list(child, "split_sibling_memory_ids"), key=lambda value: value.encode("utf-8")) == [
             other_id for other_id in ordered_child_ids if other_id != child_id
         ]
         assert repository.get_links(child_id)[0].target_id == str(memory_id)
