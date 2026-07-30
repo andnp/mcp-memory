@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, cast
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import ApplicationContext, TaskRuntimeContext
 from mcp_memory.core.curation_shadow import (
     curator_create_link_execution_enabled,
     curator_normalize_execution_enabled,
@@ -40,10 +40,11 @@ CURATOR_JSON_TOOL_LOOP_MAX_TOOL_CALLS_PER_ROUND = 8
 
 
 async def handle_memory_curator_task(
-    ctx: ApplicationContext,
+    ctx: ApplicationContext | TaskRuntimeContext,
     task: TaskRecord,
     provider: Any = None,
 ) -> dict[str, Any]:
+    ctx = cast(ApplicationContext, ctx)
     if ctx.repository is None:
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0}
     if provider is None:

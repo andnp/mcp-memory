@@ -82,6 +82,7 @@ class ManagementContext(MemoryPipelineContext, Protocol):
 
 
 class TaskRuntimeContext(MemoryPipelineContext, Protocol):
+    session_id: str | None
     curation: Any
     ai_json_provider: Any
     ai_agent_provider: Any
@@ -91,6 +92,7 @@ class TaskRuntimeContext(MemoryPipelineContext, Protocol):
     task_execution_attempts: Any
     work_items: Any
     embedding_repair_queue: Any
+    internal_tool_call_tracker: Any
 
 
 class ProviderSelectionContext(Protocol):
