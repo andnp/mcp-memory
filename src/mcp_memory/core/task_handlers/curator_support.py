@@ -105,6 +105,15 @@ class CuratorSizePolicy:
     split_threshold_chars: int
 
 
+@dataclass(frozen=True)
+class CuratorCandidateRequest:
+    task_id: str
+    workspace_id: str | None = None
+    requested_strategy: str | None = None
+    limit: int | None = None
+    exclude_memory_ids: frozenset[str] = frozenset()
+
+
 CURATOR_SIZE_POLICY = CuratorSizePolicy(
     target_max_chars=1600,
     acceptable_max_chars=CURATOR_MAX_MEMORY_CHARS,
@@ -131,6 +140,35 @@ def curator_summary_claims_mutating_actions(summary: str | None) -> bool:
 
 def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> list:
     return select_curator_seed_batch(ctx, task).records
+
+
+def acquire_curator_candidates(
+    ctx: ApplicationContext,
+    request: CuratorCandidateRequest,
+) -> SamplingBatch:
+    task = TaskRecord(
+        id=request.task_id,
+        task_name=CURATOR_TASK_NAME,
+        data={"strategy": request.requested_strategy} if request.requested_strategy else {},
+        workspace_id=request.workspace_id,
+        status="running",
+        priority=100,
+        retries_count=0,
+        max_retries=3,
+        created_at=0.0,
+        updated_at=0.0,
+        available_at=0.0,
+        claimed_at=0.0,
+        started_at=0.0,
+        completed_at=None,
+        last_error=None,
+    )
+    return select_curator_seed_batch(
+        ctx,
+        task,
+        seed_limit=request.limit,
+        exclude_memory_ids=set(request.exclude_memory_ids),
+    )
 
 
 def select_curator_seed_batch(

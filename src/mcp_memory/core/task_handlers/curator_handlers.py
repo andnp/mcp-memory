@@ -13,6 +13,10 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     complete_work_item,
     work_item_result_metadata,
 )
+from mcp_memory.core.task_handlers.curator_support import (
+    CuratorCandidateRequest,
+    acquire_curator_candidates,
+)
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.work_item_store import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
@@ -41,10 +45,24 @@ async def handle_memory_curator_task(
         else:
             complete_work_item(ctx, claimed_review_item.id)
             claimed_review_item = None
-            seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
+            seed_batch = acquire_curator_candidates(
+                ctx,
+                CuratorCandidateRequest(
+                    task_id=task.id,
+                    workspace_id=task.workspace_id,
+                    requested_strategy=task.data.get("strategy"),
+                ),
+            )
             seed_records = seed_batch.records
     else:
-        seed_batch = _curator_support.select_curator_seed_batch(ctx, task)
+        seed_batch = acquire_curator_candidates(
+            ctx,
+            CuratorCandidateRequest(
+                task_id=task.id,
+                workspace_id=task.workspace_id,
+                requested_strategy=task.data.get("strategy"),
+            ),
+        )
         seed_records = seed_batch.records
 
     sampled_records = seed_records

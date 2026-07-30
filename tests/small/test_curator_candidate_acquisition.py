@@ -7,6 +7,8 @@ import pytest
 
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
+    CuratorCandidateRequest,
+    acquire_curator_candidates,
     select_curator_seed_batch,
     select_curator_support_records,
 )
@@ -176,3 +178,45 @@ def test_semantic_candidates_use_global_search_seam() -> None:
     assert search_calls
     assert all(call["workspace_id"] is None for call in search_calls)
     assert all(call["status"] == "active" for call in search_calls)
+
+
+def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions() -> None:
+    first = _record("first", updated_at="2020-01-01T00:00:00+00:00")
+    second = _record("second", updated_at="2020-01-02T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [first, second],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [],
+    })
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+    task = _task("cold-storage")
+
+    direct = acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id=task.id,
+            workspace_id=task.workspace_id,
+            requested_strategy="cold-storage",
+            limit=1,
+            exclude_memory_ids=frozenset({first.id}),
+        ),
+    )
+    compatibility = select_curator_seed_batch(
+        ctx,
+        task,
+        seed_limit=1,
+        exclude_memory_ids={first.id},
+    )
+
+    assert [record.id for record in direct.records] == [record.id for record in compatibility.records]
+    assert direct.candidate_count == compatibility.candidate_count
+    assert direct.strategy_used == compatibility.strategy_used
+    assert direct.strategy_fallback_reason == compatibility.strategy_fallback_reason
+    assert direct.records[0].id == second.id
