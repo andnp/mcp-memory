@@ -11,6 +11,7 @@ import pytest
 from mcp_memory.config import resolve_workspace_id
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
+from mcp_memory.daemon_dispatch import dispatch_management_request
 from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, _workspace_id_for_request_scope, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
@@ -21,6 +22,33 @@ def _daemon_transport_module():
     from mcp_memory import daemon_transport
 
     return daemon_transport
+
+
+def test_dispatch_management_request_deprecates_manual_link_mutation_routes() -> None:
+    routes = SimpleNamespace(service=SimpleNamespace())
+    metadata = SimpleNamespace(pid=1, status="running", daemon_scope="global", binary_path="mcp-memory", version="1.0", transport="stdio")
+
+    created = dispatch_management_request(
+        routes,
+        metadata,
+        "/api/admin/links",
+        {"source_id": "a", "target_id": "b", "link_type": "REFERENCES", "context": "ctx"},
+    )
+    deleted = dispatch_management_request(
+        routes,
+        metadata,
+        "/api/admin/links/delete",
+        {"source_id": "a", "target_id": "b", "link_type": "REFERENCES"},
+    )
+
+    assert created == {
+        "status": "error",
+        "error": "deprecated_manual_cleanup_endpoint:/api/admin/links use /api/admin/agents/run task_name=memory-curator",
+    }
+    assert deleted == {
+        "status": "error",
+        "error": "deprecated_manual_cleanup_endpoint:/api/admin/links/delete use /api/admin/agents/run task_name=memory-curator",
+    }
 
 
 def test_resolve_daemon_request_timeout_seconds_uses_extended_budget_for_memory_and_tool_paths() -> None:
