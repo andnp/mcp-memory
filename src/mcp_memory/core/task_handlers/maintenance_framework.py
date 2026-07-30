@@ -4,7 +4,6 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import RouletteProvider, SamplingBatch
-from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors
 
 
@@ -12,11 +11,12 @@ SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
 UTILITY_PRIOR_TASK_NAMES = frozenset({"memory-curator", "deduplicator", "taxonomist"})
 
 
-def requested_sampling_strategy(task: TaskRecord) -> str | None:
-    raw_value = task.data.get("strategy")
-    if isinstance(raw_value, str) and raw_value.strip():
-        return raw_value.strip()
-    return None
+def requested_sampling_strategy(task: Any) -> str | None:
+    raw_value = getattr(task, "requested_strategy", None)
+    if raw_value is None:
+        data = getattr(task, "data", {})
+        raw_value = data.get("strategy")
+    return raw_value.strip() if isinstance(raw_value, str) and raw_value.strip() else None
 
 
 def support_counts_for_candidates(ctx: ApplicationContext, candidates: list) -> dict[str, int]:
@@ -26,7 +26,7 @@ def support_counts_for_candidates(ctx: ApplicationContext, candidates: list) -> 
 
 def sample_maintenance_candidates(
     ctx: ApplicationContext,
-    task: TaskRecord,
+    task: Any,
     candidates: list,
     *,
     allowed_strategies: tuple[str, ...],
@@ -46,7 +46,7 @@ def sample_maintenance_candidates(
 
     return RouletteProvider(
         task_name=task.task_name,
-        task_id=task.id,
+        task_id=task.task_id if hasattr(task, "task_id") else task.id,
         candidates=candidates,
         support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
         strategy_prior_scores=_selection_strategy_prior_scores(
