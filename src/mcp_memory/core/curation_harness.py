@@ -48,9 +48,12 @@ from mcp_memory.core.curation_planner import (
 )
 from mcp_memory.core.curation_validation import (
     CurationMutationBudget,
-    CurationRetryFeedback,
     CurationValidationResult,
-    validate_curation_plan,
+)
+from mcp_memory.core.curation_planning_service import (
+    CurationPlannerTools,  # noqa: F401 - compatibility export
+    CurationPlanningInput,
+    plan_and_validate,
 )
 from mcp_memory.core.curation_work_items import (
     CurationWorkItemDecision,
@@ -127,14 +130,6 @@ class CurationFrontier:
             task_id=task_id,
             frontier_key=frontier_key,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class CurationPlannerTools:
-    """Read-only planner input, including immutable context and retry feedback."""
-
-    context: ImmutableCurationContextPacket
-    retry_feedback: CurationRetryFeedback | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,46 +450,9 @@ class CurationDryRunHarness:
         str | None,
         CurationPlannerError | BaseException | None,
     ]:
-        envelopes: list[PlannerExecutionEnvelope[Any]] = []
-        feedback: CurationRetryFeedback | None = None
-        retry_reason: str | None = None
-        validation: CurationValidationResult | None = None
-        failure: CurationPlannerError | BaseException | None = None
-        for attempt in range(2):
-            try:
-                envelope = await self._planner.create_plan(
-                    request,
-                    cast(Any, CurationPlannerTools(context=context, retry_feedback=feedback)),
-                )
-                envelopes.append(cast(PlannerExecutionEnvelope[Any], envelope))
-            except CurationPlannerSchemaError as error:
-                failure = error
-                if error.envelope is not None:
-                    envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
-                if attempt == 0:
-                    retry_reason = "schema_invalid"
-                    feedback = CurationRetryFeedback(
-                        reason_code="formatting_only",
-                        message=str(error),
-                    )
-                    continue
-                return None, None, envelopes, retry_reason, failure
-            except CurationPlannerCancelledError as error:
-                failure = error
-                if error.envelope is not None:
-                    envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
-                return None, None, envelopes, retry_reason, failure
-            except asyncio.CancelledError as error:
-                failure = error
-                return None, None, envelopes, retry_reason, failure
-            except CurationPlannerError as error:
-                failure = error
-                if error.envelope is not None:
-                    envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
-                return None, None, envelopes, retry_reason, failure
-
-            validation = validate_curation_plan(
-                cast(Any, envelope.plan),
+        result = await plan_and_validate(
+            self._planner,
+            CurationPlanningInput(
                 request=request,
                 context=context,
                 mutation_budget=self._config.mutation_budget,
@@ -502,15 +460,9 @@ class CurationDryRunHarness:
                 contradictory_memory_ids=self._contradictory_memory_ids,
                 protections_by_memory=self._protections_by_memory,
                 allow_verified_actions=self._config.execute_accepted_actions,
-            )
-            if validation.valid:
-                return cast(CurationPlan, validation.plan), validation, envelopes, retry_reason, None
-            if validation.retry_feedback is not None and attempt == 0:
-                retry_reason = validation.retry_feedback.reason_code
-                feedback = validation.retry_feedback
-                continue
-            return None, validation, envelopes, retry_reason, None
-        return None, validation, envelopes, retry_reason, failure
+            ),
+        )
+        return result.plan, result.validation, result.envelopes, result.retry_reason, result.failure
 
     def _persist_no_op_dispositions(
         self,
