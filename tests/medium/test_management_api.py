@@ -480,13 +480,21 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "next_available_at" in fact_checker
         assert "last_result_summary" in fact_checker
         assert run_agent["status"] == "enqueued"
-        assert len(run_all["results"]) >= 1
+        assert run_agent["task"]["task_name"] == "memory-curator"
+        assert run_agent["redirected_from_task_name"] == "graph-linker"
+        assert any(result["task"]["task_name"] == "memory-curator" for result in run_all["results"])
         assert cancel_task["status"] in {"cancellation_requested", "cancelled"}
         assert cancel_task["task"]["cancellation_reason"] == "operator_cancelled"
         assert conversations["conversations"][0]["request_id"] == "req-api-1"
         assert conversations["conversations"][0]["subprocess_pid"] == 6543
-        assert created_link["status"] == "created"
-        assert deleted_link["status"] == "deleted"
+        assert created_link == {
+            "status": "error",
+            "error": "deprecated_manual_cleanup_endpoint:/api/admin/links use /api/admin/agents/run task_name=memory-curator",
+        }
+        assert deleted_link == {
+            "status": "error",
+            "error": "deprecated_manual_cleanup_endpoint:/api/admin/links/delete use /api/admin/agents/run task_name=memory-curator",
+        }
         assert "MCP Memory Dashboard" in dashboard or "MCP Memory Command Center" in dashboard
         assert "Command Bar" in dashboard or '<div id="root"></div>' in dashboard
         if "MCP Memory Dashboard" in dashboard:

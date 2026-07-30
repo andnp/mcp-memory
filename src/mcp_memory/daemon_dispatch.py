@@ -171,20 +171,15 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
     if path == "/api/admin/search/repair":
         return serialize_payload(routes.service.repair_search_index())
     if path == "/api/admin/links":
-        return serialize_payload(
-            routes.service.create_memory_link(
-                source_id=required_str(payload, "source_id"),
-                target_id=required_str(payload, "target_id"),
-                link_type=required_str(payload, "link_type"),
-                context=required_str(payload, "context"),
+        return error_payload(
+            ValueError(
+                "deprecated_manual_cleanup_endpoint:/api/admin/links use /api/admin/agents/run task_name=memory-curator"
             )
         )
     if path == "/api/admin/links/delete":
-        return serialize_payload(
-            routes.service.delete_memory_link(
-                source_id=required_str(payload, "source_id"),
-                target_id=required_str(payload, "target_id"),
-                link_type=required_str(payload, "link_type"),
+        return error_payload(
+            ValueError(
+                "deprecated_manual_cleanup_endpoint:/api/admin/links/delete use /api/admin/agents/run task_name=memory-curator"
             )
         )
 

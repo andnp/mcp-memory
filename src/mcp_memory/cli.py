@@ -515,20 +515,44 @@ def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> 
         workspace_root,
         lambda service: service.enqueue_background_task(agent_name, force=force),
     )
-    console.print(f"[green]{payload['status']}[/]: {agent_name}")
+    console.print(f"[green]{payload['status']}[/]: {_format_agent_run_label(payload)}")
     console.print(f"task_id={payload['task']['id']} status={payload['task']['status']}")
+    if "redirected_from_task_name" in payload:
+        console.print(
+            f"[yellow]Deprecated manual trigger:[/] {payload['redirected_from_task_name']} -> {payload['task']['task_name']}"
+        )
 
 
 def _enqueue_all_agents(workspace_root: str | None, force: bool) -> None:
     ensure_daemon_started(workspace_root, None)
     results = _with_management_service(
         workspace_root,
-        lambda service: [service.enqueue_background_task(task_name, force=force) for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES],
+        lambda service: service.enqueue_all_background_tasks(force=force),
     )
     created_count = sum(1 for result in results if result["created"])
     console.print(f"[green]Agents queued:[/] {created_count}/{len(results)} newly created")
     for result in results:
-        console.print(f"- {result['task']['task_name']}: {result['status']}")
+        console.print(f"- {_format_agent_run_label(result)}: {result['status']}")
+        if "redirected_from_task_names" in result:
+            console.print(
+                f"  [yellow]Deprecated manual triggers:[/] {', '.join(result['redirected_from_task_names'])}"
+            )
+
+
+def _format_agent_run_label(payload: dict[str, object]) -> str:
+    task = payload.get("task")
+    task_name = "-"
+    if isinstance(task, dict):
+        task_name = str(task.get("task_name") or "-")
+    redirected_from = payload.get("redirected_from_task_name")
+    if isinstance(redirected_from, str) and redirected_from:
+        return f"{redirected_from} -> {task_name}"
+    redirected_from_names = payload.get("redirected_from_task_names")
+    if isinstance(redirected_from_names, list) and redirected_from_names:
+        aliases = ", ".join(str(name) for name in redirected_from_names if str(name))
+        if aliases:
+            return f"{task_name} (redirected from {aliases})"
+    return task_name
 
 
 def _show_stats_command(workspace_root: str | None, watch: bool, interval: float, verbose: bool) -> None:

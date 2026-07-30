@@ -24,8 +24,18 @@ from mcp_memory.core.mutation_restore import (
     RestoreExecutor,
     build_inverse,
 )
-from mcp_memory.core.task_handlers import TRIGGERABLE_BACKGROUND_TASK_NAMES
-from mcp_memory.core.task_handlers import task_priority
+from mcp_memory.core.task_handlers import (
+    CONFLICT_DETECTOR_TASK_NAME,
+    CURATOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
+    TAXONOMIST_TASK_NAME,
+    TRIGGERABLE_BACKGROUND_TASK_NAMES,
+    task_priority,
+)
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.context_resources import (
@@ -111,6 +121,15 @@ _USE_SERVICE_WORKSPACE = object()
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 _LOW_CONVERSION_DEFAULT_MIN_SEARCH_COUNT = 3
 _LOW_CONVERSION_DEFAULT_MAX_RATE = 0.25
+_CURATOR_CAMPAIGN_ALIAS_TASK_NAMES = frozenset({
+    CONFLICT_DETECTOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    DEFRAGMENTER_TASK_NAME,
+    FACT_CHECKER_TASK_NAME,
+    GRAPH_LINKER_TASK_NAME,
+    PROJECT_MANAGER_TASK_NAME,
+    TAXONOMIST_TASK_NAME,
+})
 _QUALITY_CLEANUP_CRITERIA: dict[str, tuple[str, str, int]] = {
     "trace_like_memory_count": (
         "Trace-like memory",
@@ -293,6 +312,12 @@ def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnost
     if isinstance(snapshot, dict):
         return TransportDiagnosticsPayload(**snapshot)
     return TransportDiagnosticsPayload()
+
+
+def _resolve_manual_maintenance_task_name(task_name: str) -> tuple[str, str | None]:
+    if task_name in _CURATOR_CAMPAIGN_ALIAS_TASK_NAMES:
+        return CURATOR_TASK_NAME, task_name
+    return task_name, None
 
 
 class ManagementService:
@@ -561,36 +586,51 @@ class ManagementService:
         *,
         force: bool = False,
     ) -> dict:
-        if task_name not in TRIGGERABLE_BACKGROUND_TASK_NAMES:
+        canonical_task_name, redirected_from_task_name = _resolve_manual_maintenance_task_name(task_name)
+        if canonical_task_name not in TRIGGERABLE_BACKGROUND_TASK_NAMES:
             raise ValueError(f"unknown_background_task:{task_name}")
 
         payload = {"workspace_id": None}
         if force:
             task = self._task_queue.enqueue(
-                task_name=task_name,
+                task_name=canonical_task_name,
                 workspace_id=None,
                 data=payload,
-                priority=task_priority(task_name),
+                priority=task_priority(canonical_task_name),
             )
-            return {"status": "enqueued", "created": True, "task": task_payload(task)}
+            result = {"status": "enqueued", "created": True, "task": task_payload(task)}
+        else:
+            task, created = self._task_queue.enqueue_unique(
+                task_name=canonical_task_name,
+                workspace_id=None,
+                data=payload,
+                priority=task_priority(canonical_task_name),
+            )
+            result = {
+                "status": "enqueued" if created else "already_pending",
+                "created": created,
+                "task": task_payload(task),
+            }
 
-        task, created = self._task_queue.enqueue_unique(
-            task_name=task_name,
-            workspace_id=None,
-            data=payload,
-            priority=task_priority(task_name),
-        )
-        return {
-            "status": "enqueued" if created else "already_pending",
-            "created": created,
-            "task": task_payload(task),
-        }
+        if redirected_from_task_name is not None:
+            result["redirected_from_task_name"] = redirected_from_task_name
+        return result
 
     def enqueue_all_background_tasks(self, *, force: bool = False) -> list[dict]:
-        return [
-            self.enqueue_background_task(task_name, force=force)
-            for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES
-        ]
+        grouped_task_names: dict[str, list[str]] = {}
+        for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES:
+            canonical_task_name, redirected_from_task_name = _resolve_manual_maintenance_task_name(task_name)
+            grouped_task_names.setdefault(canonical_task_name, [])
+            if redirected_from_task_name is not None:
+                grouped_task_names[canonical_task_name].append(redirected_from_task_name)
+
+        results: list[dict] = []
+        for canonical_task_name, redirected_from_task_names in grouped_task_names.items():
+            result = self.enqueue_background_task(canonical_task_name, force=force)
+            if redirected_from_task_names:
+                result["redirected_from_task_names"] = redirected_from_task_names
+            results.append(result)
+        return results
 
     def cancel_task(
         self,

@@ -1815,6 +1815,65 @@ def test_management_service_lists_prioritized_quality_cleanup_candidates(db_mana
     assert [criterion.key for criterion in oversized_candidate.criteria] == ["oversized_memory_count"]
 
 
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "project-manager",
+        "fact-checker",
+        "graph-linker",
+        "conflict-detector",
+        "defragmenter",
+        "deduplicator",
+        "taxonomist",
+    ],
+)
+def test_management_service_redirects_manual_cleanup_aliases_to_memory_curator(db_manager, task_name: str) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    payload = service.enqueue_background_task(task_name, force=False)
+
+    assert payload["status"] == "enqueued"
+    assert payload["task"]["task_name"] == "memory-curator"
+    assert payload["redirected_from_task_name"] == task_name
+
+
+def test_management_service_groups_manual_cleanup_aliases_in_run_all(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    results = service.enqueue_all_background_tasks(force=False)
+
+    task_names = {result["task"]["task_name"] for result in results}
+    assert task_names == {
+        "ingest-system1",
+        "memory-curator",
+        "sweeper",
+    }
+    curator_result = next(result for result in results if result["task"]["task_name"] == "memory-curator")
+    assert curator_result["redirected_from_task_names"] == [
+        "project-manager",
+        "fact-checker",
+        "graph-linker",
+        "conflict-detector",
+        "defragmenter",
+        "deduplicator",
+        "taxonomist",
+    ]
+
+
 def test_management_service_merges_quality_and_low_conversion_criteria_per_memory(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

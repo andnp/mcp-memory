@@ -779,6 +779,37 @@ def test_admin_agent_run_forwards_to_existing_single_agent_helper(monkeypatch) -
     }
 
 
+def test_admin_agent_run_shows_redirected_manual_maintenance_alias(monkeypatch) -> None:
+    runner = CliRunner()
+
+    payload = {
+        "status": "enqueued",
+        "created": True,
+        "task": {
+            "id": "task-1",
+            "task_name": "memory-curator",
+            "status": "pending",
+        },
+        "redirected_from_task_name": "graph-linker",
+    }
+
+    class FakeService:
+        def enqueue_background_task(self, agent_name: str, force: bool = False) -> dict[str, object]:
+            return payload
+
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: object())
+    monkeypatch.setattr(
+        "mcp_memory.cli._with_management_service",
+        lambda workspace_root, action, workspace_id=None: action(FakeService()),
+    )
+
+    result = runner.invoke(main, ["admin", "agent", "run", "graph-linker", "--workspace-root", "/tmp/demo"])
+
+    assert result.exit_code == 0, result.output
+    assert "graph-linker -> memory-curator" in result.output
+    assert "Deprecated manual trigger:" in result.output
+
+
 def test_admin_agent_run_all_forwards_to_existing_all_agents_helper(monkeypatch) -> None:
     runner = CliRunner()
     captured: dict[str, object] = {}
