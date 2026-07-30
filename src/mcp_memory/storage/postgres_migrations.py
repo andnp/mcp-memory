@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 16
+POSTGRES_SCHEMA_VERSION = 17
 
 
 @dataclass(frozen=True)
@@ -625,6 +625,7 @@ POSTGRES_MIGRATIONS = (
                 after_token TEXT,
                 mutation_event_id TEXT,
                 intent_hash TEXT NOT NULL,
+                verification_descriptor_json JSONB,
                 error_code TEXT,
                 applied_at TEXT,
                 verified_at TEXT,
@@ -678,6 +679,13 @@ POSTGRES_MIGRATIONS = (
         name="add_memories_updated_at_index",
         statements=(
             "CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at)",
+        ),
+    ),
+    PostgresMigration(
+        version=17,
+        name="add_curation_verification_descriptor",
+        statements=(
+            "ALTER TABLE curation_action_receipts ADD COLUMN IF NOT EXISTS verification_descriptor_json JSONB",
         ),
     ),
 )

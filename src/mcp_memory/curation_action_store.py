@@ -27,6 +27,7 @@ from mcp_memory.core.curation_identity import (
     record_snapshot,
     record_token,
 )
+from mcp_memory.core.curation_models import CurationVerificationDescriptor
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -73,10 +74,17 @@ class MutationResult:
 
     operation: str
     affected_ids: tuple[str, ...] = ()
+    verification_descriptor: CurationVerificationDescriptor | None = None
 
-    def __init__(self, operation: str, affected_ids: Sequence[str | UUID] = ()) -> None:
+    def __init__(
+        self,
+        operation: str,
+        affected_ids: Sequence[str | UUID] = (),
+        verification_descriptor: CurationVerificationDescriptor | None = None,
+    ) -> None:
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "affected_ids", tuple(str(value) for value in affected_ids))
+        object.__setattr__(self, "verification_descriptor", verification_descriptor)
 
 
 class CurationTransaction(Protocol):
@@ -132,6 +140,7 @@ class CurationActionStore(Protocol):
 class _MutationResultData:
     operation: str
     affected_ids: list[str] = field(default_factory=list)
+    verification_descriptor: CurationVerificationDescriptor | None = None
 
 
 _SUMMARY_UNSET = object()
@@ -177,6 +186,7 @@ class SQLiteCurationActionStore:
         preconditions: Any | None = None,
         operation: str | None = None,
         payload: Any | None = None,
+        verification_descriptor: CurationVerificationDescriptor | None = None,
         actor_kind: MutationActorKind | str = MutationActorKind.MAINTENANCE,
         restores_event_id: UUID | None = None,
         idempotency_key: str | None = None,
@@ -206,6 +216,7 @@ class SQLiteCurationActionStore:
                 expected_tokens=normalized_tokens,
                 preconditions=preconditions,
                 payload=payload,
+                verification_descriptor=verification_descriptor,
             )
             return existing
 
@@ -223,6 +234,7 @@ class SQLiteCurationActionStore:
                     expected_tokens=normalized_tokens,
                     preconditions=preconditions,
                     payload=payload,
+                    verification_descriptor=verification_descriptor,
                 )
                 connection.rollback()
                 return existing
@@ -322,6 +334,7 @@ class SQLiteCurationActionStore:
                     preconditions=preconditions,
                     payload=payload,
                 ),
+                verification_descriptor=result.verification_descriptor or verification_descriptor,
                 applied_at=datetime.now(UTC),
             )
             self._insert_receipt(connection, receipt)
@@ -593,9 +606,9 @@ class SQLiteCurationActionStore:
             """
             INSERT INTO curation_action_receipts (
                 run_id, action_id, operation, affected_ids_json, status,
-                before_token, after_token, mutation_event_id, intent_hash, error_code,
-                applied_at, verified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                before_token, after_token, mutation_event_id, intent_hash,
+                verification_descriptor_json, error_code, applied_at, verified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(receipt.run_id),
@@ -607,6 +620,14 @@ class SQLiteCurationActionStore:
                 receipt.after_token,
                 str(receipt.mutation_event_id) if receipt.mutation_event_id is not None else None,
                 receipt.intent_hash,
+                None
+                if receipt.verification_descriptor is None
+                else json.dumps(
+                    receipt.verification_descriptor.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 receipt.error_code,
                 receipt.applied_at.isoformat() if receipt.applied_at is not None else None,
                 receipt.verified_at.isoformat() if receipt.verified_at is not None else None,
@@ -878,12 +899,15 @@ class _SQLiteCurationTransaction:
 
 def _normalize_result(result: MutationResult | Mapping[str, object] | object) -> _MutationResultData:
     if isinstance(result, MutationResult):
-        return _MutationResultData(result.operation, list(result.affected_ids))
+        return _MutationResultData(result.operation, list(result.affected_ids), result.verification_descriptor)
     operation = _field(result, "operation", None)
     affected_ids = _field(result, "affected_ids", [])
     if not isinstance(operation, str) or not isinstance(affected_ids, Sequence) or isinstance(affected_ids, (str, bytes)):
         raise CurationActionFatalError("callback must return MutationResult")
-    return _MutationResultData(operation, [str(value) for value in affected_ids])
+    descriptor = _field(result, "verification_descriptor", None)
+    if descriptor is not None and not isinstance(descriptor, CurationVerificationDescriptor):
+        raise CurationActionFatalError("mutation result verification descriptor is invalid")
+    return _MutationResultData(operation, [str(value) for value in affected_ids], descriptor)
 
 
 def _canonical_target_ids(values: Sequence[str | UUID]) -> list[str]:
@@ -1002,6 +1026,7 @@ def _check_replay_identity(
     expected_tokens: Mapping[str, str],
     preconditions: Any | None,
     payload: Any | None,
+    verification_descriptor: CurationVerificationDescriptor | None,
 ) -> None:
     if receipt.intent_hash is None:
         raise CurationActionFatalError(
@@ -1019,6 +1044,12 @@ def _check_replay_identity(
         payload=payload,
     )
     if candidate != receipt.intent_hash:
+        raise CurationActionFatalError(f"curation action identity collision for {run_id}/{action_id}")
+    if (
+        receipt.verification_descriptor is not None
+        and verification_descriptor is not None
+        and receipt.verification_descriptor != verification_descriptor
+    ):
         raise CurationActionFatalError(f"curation action identity collision for {run_id}/{action_id}")
 
 

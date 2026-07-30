@@ -17,6 +17,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from mcp_memory.core.curation_identity import graph_token, link_token, record_token
+from mcp_memory.core.curation_models import CurationVerificationDescriptor
 from mcp_memory.curation_action_store import (
     CurationActionError,
     CurationActionFatalError,
@@ -100,6 +101,7 @@ class PostgresCurationActionStore:
         preconditions: Any | None = None,
         operation: str | None = None,
         payload: Any | None = None,
+        verification_descriptor: CurationVerificationDescriptor | None = None,
         actor_kind: MutationActorKind | str = MutationActorKind.MAINTENANCE,
         restores_event_id: UUID | None = None,
         idempotency_key: str | None = None,
@@ -129,6 +131,7 @@ class PostgresCurationActionStore:
                 expected_tokens=normalized_tokens,
                 preconditions=preconditions,
                 payload=payload,
+                verification_descriptor=verification_descriptor,
             )
             return existing
 
@@ -146,6 +149,7 @@ class PostgresCurationActionStore:
                             expected_tokens=normalized_tokens,
                             preconditions=preconditions,
                             payload=payload,
+                            verification_descriptor=verification_descriptor,
                         )
                         connection.rollback()
                         return existing
@@ -196,6 +200,7 @@ class PostgresCurationActionStore:
                             expected_tokens=normalized_tokens,
                             preconditions=preconditions,
                             payload=payload,
+                            verification_descriptor=verification_descriptor,
                         )
                         connection.rollback()
                         return existing
@@ -267,6 +272,7 @@ class PostgresCurationActionStore:
                             preconditions=preconditions,
                             payload=payload,
                         ),
+                        verification_descriptor=result.verification_descriptor or verification_descriptor,
                         applied_at=datetime.now(UTC),
                     )
                     self._insert_receipt(cursor, receipt)
@@ -303,7 +309,7 @@ class PostgresCurationActionStore:
     def _receipt_on(self, cursor: CursorLike, run_id: UUID, action_id: UUID) -> CurationActionReceipt | None:
         cursor.execute(
             "SELECT run_id, action_id, operation, affected_ids_json, status, before_token, after_token, "
-            "mutation_event_id, intent_hash, error_code, applied_at, verified_at "
+            "mutation_event_id, intent_hash, verification_descriptor_json, error_code, applied_at, verified_at "
             "FROM curation_action_receipts WHERE run_id = %s AND action_id = %s",
             (str(run_id), str(action_id)),
         )
@@ -549,8 +555,9 @@ class PostgresCurationActionStore:
             """
             INSERT INTO curation_action_receipts (
                 run_id, action_id, operation, affected_ids_json, status,
-                before_token, after_token, mutation_event_id, intent_hash, error_code, applied_at, verified_at
-            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
+                before_token, after_token, mutation_event_id, intent_hash,
+                verification_descriptor_json, error_code, applied_at, verified_at
+            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
             """,
             (
                 str(receipt.run_id),
@@ -562,6 +569,14 @@ class PostgresCurationActionStore:
                 receipt.after_token,
                 None if receipt.mutation_event_id is None else str(receipt.mutation_event_id),
                 receipt.intent_hash,
+                None
+                if receipt.verification_descriptor is None
+                else json.dumps(
+                    receipt.verification_descriptor.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 receipt.error_code,
                 None if receipt.applied_at is None else receipt.applied_at.isoformat(),
                 None if receipt.verified_at is None else receipt.verified_at.isoformat(),

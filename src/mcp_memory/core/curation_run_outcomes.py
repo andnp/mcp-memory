@@ -93,7 +93,10 @@ def budget_usage(
 def project_receipts(receipts: tuple[CurationReceipt, ...]) -> list[MutationReceipt]:
     return [
         MutationReceipt.model_validate(
-            receipt.model_dump(mode="json", exclude={"mutation_event_id", "intent_hash"})
+            receipt.model_dump(
+                mode="json",
+                exclude={"mutation_event_id", "intent_hash", "verification_descriptor"},
+            )
         )
         for receipt in receipts
     ]

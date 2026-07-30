@@ -59,7 +59,7 @@ class FakeConnection:
                 run_id TEXT NOT NULL, action_id TEXT NOT NULL, operation TEXT NOT NULL,
                 affected_ids_json TEXT NOT NULL, status TEXT NOT NULL, before_token TEXT,
                 after_token TEXT, mutation_event_id TEXT, intent_hash TEXT, error_code TEXT, applied_at TEXT,
-                verified_at TEXT, PRIMARY KEY (run_id, action_id),
+                verified_at TEXT, verification_descriptor_json TEXT, PRIMARY KEY (run_id, action_id),
                 FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE,
                 FOREIGN KEY (mutation_event_id) REFERENCES memory_mutation_events(id)
             );
@@ -106,7 +106,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 16
+    assert POSTGRES_SCHEMA_VERSION == 17
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"
@@ -119,3 +119,57 @@ def test_postgres_curation_repository_contract() -> None:
     assert_curation_repository_contract(
         lambda: PostgresCurationStore(cast(Any, session_manager))
     )
+
+
+def test_postgres_json_hydration_accepts_native_jsonb_values() -> None:
+    from uuid import uuid4
+
+    from mcp_memory.storage.postgres_curation_store import _json_value, _receipt_from_row
+    from mcp_memory.curation_store import CurationReceiptState
+
+    run_id, action_id, memory_id = uuid4(), uuid4(), uuid4()
+    descriptor = {
+        "schema_version": 1,
+        "operation": "archive_memory",
+        "target_ids": [str(memory_id)],
+        "target_status": "archived",
+    }
+    receipt = _receipt_from_row(
+        (
+            run_id,
+            action_id,
+            "archive_memory",
+            [str(memory_id)],
+            CurationReceiptState.APPLIED_UNVERIFIED,
+            None,
+            None,
+            None,
+            "intent",
+            descriptor,
+            None,
+            None,
+            None,
+        )
+    )
+    assert receipt.verification_descriptor is not None
+    assert receipt.verification_descriptor.operation == "archive_memory"
+    assert _json_value({"key": ["value"]}, default={}) == {"key": ["value"]}
+
+
+def test_postgres_receipt_identity_includes_intent_hash_with_legacy_null_wildcard() -> None:
+    from uuid import uuid4
+
+    from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState
+    from mcp_memory.storage.postgres_curation_store import _receipt_identity_matches
+
+    common = {
+        "run_id": uuid4(),
+        "action_id": uuid4(),
+        "operation": "archive_memory",
+        "affected_ids": [uuid4()],
+        "status": CurationReceiptState.APPLIED_UNVERIFIED,
+    }
+    left = CurationActionReceipt(**common, intent_hash="left")
+    right = left.model_copy(update={"intent_hash": "right"})
+    assert not _receipt_identity_matches(left, right)
+    assert _receipt_identity_matches(left, right.model_copy(update={"intent_hash": None}))

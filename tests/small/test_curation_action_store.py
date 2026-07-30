@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from mcp_memory.core.curation_identity import record_token
+from mcp_memory.core.curation_models import CurationVerificationDescriptor
 from mcp_memory.curation_action_store import (
     CurationActionFatalError,
     CurationActionInjectedFailure,
@@ -28,6 +29,66 @@ from mcp_memory.utils.db import DatabaseManager
 
 
 pytestmark = pytest.mark.small
+
+
+def test_sqlite_receipt_round_trips_verification_descriptor(db_manager: DatabaseManager) -> None:
+    repository, run, first_id, _ = _seed(db_manager)
+    record = repository.get_memory(str(first_id))
+    assert record is not None
+    descriptor = CurationVerificationDescriptor(
+        operation="archive_memory",
+        target_ids=[first_id],
+        target_status="archived",
+    )
+    receipt = SQLiteCurationActionStore(db_manager).execute_action(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        target_ids=[str(first_id)],
+        expected_tokens={str(first_id): record_token(record)},
+        operation="archive_memory",
+        verification_descriptor=descriptor,
+        apply=lambda transaction: (
+            transaction.update_memory(str(first_id), status="archived"),
+            MutationResult("archive_memory", [first_id]),
+        )[1],
+    )
+    stored = SQLiteCurationStore(db_manager).get_receipt(run.run_id, receipt.action_id)
+    assert stored is not None
+    assert stored.verification_descriptor == descriptor
+
+
+def test_sqlite_descriptor_is_part_of_receipt_identity(db_manager: DatabaseManager) -> None:
+    repository, run, first_id, _ = _seed(db_manager)
+    record = repository.get_memory(str(first_id))
+    assert record is not None
+    action_id = uuid4()
+    base = CurationVerificationDescriptor(
+        operation="archive_memory",
+        target_ids=[first_id],
+        target_status="archived",
+    )
+    changed = CurationVerificationDescriptor(
+        operation="rewrite_memory",
+        target_ids=[first_id],
+        target_status="active",
+    )
+    arguments = {
+        "run_id": run.run_id,
+        "action_id": action_id,
+        "target_ids": [str(first_id)],
+        "expected_tokens": {str(first_id): record_token(record)},
+        "operation": "archive_memory",
+        "verification_descriptor": base,
+        "apply": lambda transaction: (
+            transaction.update_memory(str(first_id), status="archived"),
+            MutationResult("archive_memory", [first_id]),
+        )[1],
+    }
+    SQLiteCurationActionStore(db_manager).execute_action(**arguments)
+    with pytest.raises(CurationActionFatalError, match="identity collision"):
+        SQLiteCurationActionStore(db_manager).execute_action(
+            **{**arguments, "verification_descriptor": changed}
+        )
 
 
 def _run() -> CurationRun:

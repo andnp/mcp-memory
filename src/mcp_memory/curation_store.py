@@ -11,7 +11,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mcp_memory.core.curation_models import CurationBudgetUsage, CurationRunOutcome
+from mcp_memory.core.curation_models import (
+    CurationBudgetUsage,
+    CurationRunOutcome,
+    CurationVerificationDescriptor,
+)
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -79,6 +83,7 @@ class CurationActionReceipt(CurationStoreModel):
     after_token: str | None = None
     mutation_event_id: UUID | None = None
     intent_hash: str | None = None
+    verification_descriptor: CurationVerificationDescriptor | None = None
     error_code: str | None = None
     applied_at: datetime | None = None
     verified_at: datetime | None = None
@@ -349,9 +354,9 @@ class SQLiteCurationStore:
                     """
                     INSERT INTO curation_action_receipts (
                         run_id, action_id, operation, affected_ids_json, status,
-                        before_token, after_token, mutation_event_id, intent_hash, error_code,
-                        applied_at, verified_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        before_token, after_token, mutation_event_id, intent_hash,
+                        verification_descriptor_json, error_code, applied_at, verified_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _receipt_values(normalized),
                 )
@@ -409,7 +414,8 @@ class SQLiteCurationStore:
                 """
                 UPDATE curation_action_receipts
                 SET operation = ?, affected_ids_json = ?, status = ?, before_token = ?,
-                    after_token = ?, mutation_event_id = ?, intent_hash = ?, error_code = ?,
+                    after_token = ?, mutation_event_id = ?, intent_hash = ?,
+                    verification_descriptor_json = ?, error_code = ?,
                     applied_at = ?, verified_at = ?
                 WHERE run_id = ? AND action_id = ? AND status = ?
                 """,
@@ -558,6 +564,9 @@ def _receipt_values(receipt: CurationActionReceipt) -> tuple[object, ...]:
         receipt.after_token,
         _uuid_text(receipt.mutation_event_id),
         receipt.intent_hash,
+        None
+        if receipt.verification_descriptor is None
+        else _json_text(receipt.verification_descriptor.model_dump(mode="json")),
         receipt.error_code,
         _datetime_text(receipt.applied_at),
         _datetime_text(receipt.verified_at),
@@ -565,6 +574,11 @@ def _receipt_values(receipt: CurationActionReceipt) -> tuple[object, ...]:
 
 
 def _receipt_from_row(row: sqlite3.Row) -> CurationActionReceipt:
+    descriptor_json = (
+        row["verification_descriptor_json"]
+        if "verification_descriptor_json" in row.keys()
+        else None
+    )
     return CurationActionReceipt(
         run_id=UUID(str(row["run_id"])),
         action_id=UUID(str(row["action_id"])),
@@ -575,6 +589,9 @@ def _receipt_from_row(row: sqlite3.Row) -> CurationActionReceipt:
         after_token=row["after_token"],
         mutation_event_id=None if row["mutation_event_id"] is None else UUID(str(row["mutation_event_id"])),
         intent_hash=row["intent_hash"],
+        verification_descriptor=None
+        if descriptor_json is None
+        else CurationVerificationDescriptor.model_validate(_json_value(descriptor_json, default={})),
         error_code=row["error_code"],
         applied_at=_datetime_value(row["applied_at"]),
         verified_at=_datetime_value(row["verified_at"]),
@@ -587,6 +604,11 @@ def _receipt_identity_matches(left: CurationActionReceipt, right: CurationAction
         and left.affected_ids == right.affected_ids
         and left.before_token == right.before_token
         and (left.intent_hash is None or right.intent_hash is None or left.intent_hash == right.intent_hash)
+        and (
+            left.verification_descriptor is None
+            or right.verification_descriptor is None
+            or left.verification_descriptor == right.verification_descriptor
+        )
     )
 
 

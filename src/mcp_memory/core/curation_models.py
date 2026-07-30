@@ -167,6 +167,118 @@ class ArchiveMemoryAction(ActionEnvelope):
     claim_manifest: ClaimManifest
 
 
+VerificationOperation = Literal[
+    "normalize_memory",
+    "rewrite_memory",
+    "create_link",
+    "remove_link",
+    "merge_memories",
+    "split_memory",
+    "archive_memory",
+]
+VerificationStatus = Literal["active", "stale", "degraded", "archived"]
+
+_MAX_VERIFICATION_TARGET_IDS = 64
+_MAX_VERIFICATION_SOURCE_IDS = 64
+_MAX_VERIFICATION_CHILD_IDS = 64
+_MAX_VERIFICATION_CONTEXT_LENGTH = 512
+_MAX_VERIFICATION_SPLIT_GROUP_LENGTH = 128
+
+
+class CurationVerificationDescriptor(CurationModel):
+    """Bounded, content-free postcondition data for crash recovery."""
+
+    schema_version: Literal[1] = 1
+    operation: VerificationOperation
+    target_ids: list[UUID] = Field(default_factory=list, max_length=_MAX_VERIFICATION_TARGET_IDS)
+    target_status: VerificationStatus | None = None
+    source_id: UUID | None = None
+    target_id: UUID | None = None
+    link_type: CanonicalLinkType | None = None
+    context: str | None = Field(default=None, max_length=_MAX_VERIFICATION_CONTEXT_LENGTH)
+    exists: bool | None = None
+    canonical_id: UUID | None = None
+    source_ids: list[UUID] = Field(default_factory=list, max_length=_MAX_VERIFICATION_SOURCE_IDS)
+    child_ids: list[UUID] = Field(default_factory=list, max_length=_MAX_VERIFICATION_CHILD_IDS)
+    split_group_id: str | None = Field(default=None, max_length=_MAX_VERIFICATION_SPLIT_GROUP_LENGTH)
+    child_count: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> CurationVerificationDescriptor:
+        allowed: set[str]
+        if self.operation in {"normalize_memory", "rewrite_memory"}:
+            allowed = {"target_ids", "target_status"}
+        elif self.operation in {"create_link", "remove_link"}:
+            allowed = {"target_ids", "source_id", "target_id", "link_type", "context", "exists"}
+        elif self.operation == "merge_memories":
+            allowed = {"target_ids", "canonical_id", "source_ids"}
+        else:
+            allowed = {"target_ids", "target_id", "child_ids", "split_group_id", "child_count"}
+            if self.operation == "archive_memory":
+                allowed = {"target_ids", "target_status"}
+        values = {
+            "target_ids": self.target_ids,
+            "target_status": self.target_status,
+            "source_id": self.source_id,
+            "target_id": self.target_id,
+            "link_type": self.link_type,
+            "context": self.context,
+            "exists": self.exists,
+            "canonical_id": self.canonical_id,
+            "source_ids": self.source_ids,
+            "child_ids": self.child_ids,
+            "split_group_id": self.split_group_id,
+            "child_count": self.child_count,
+        }
+        if any(
+            name not in allowed and value not in (None, [])
+            for name, value in values.items()
+        ):
+            raise ValueError(f"verification fields do not match operation {self.operation!r}")
+        for name, ids in (
+            ("target_ids", self.target_ids),
+            ("source_ids", self.source_ids),
+            ("child_ids", self.child_ids),
+        ):
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{name} must not contain duplicate IDs")
+        if self.operation in {"normalize_memory", "rewrite_memory", "archive_memory"}:
+            if len(self.target_ids) != 1 or self.target_status is None:
+                raise ValueError("record verification requires one target ID and status")
+            if self.operation == "archive_memory" and self.target_status != "archived":
+                raise ValueError("archive verification requires archived target status")
+        elif self.operation in {"create_link", "remove_link"}:
+            if (
+                len(self.target_ids) != 2
+                or self.source_id is None
+                or self.target_id is None
+                or self.link_type is None
+                or self.context is None
+                or self.exists is None
+                or set(self.target_ids) != {self.source_id, self.target_id}
+            ):
+                raise ValueError("link verification requires an exact endpoint assertion")
+        elif self.operation == "merge_memories":
+            if (
+                self.canonical_id is None
+                or not self.source_ids
+                or self.canonical_id in self.source_ids
+                or set(self.target_ids) != {self.canonical_id, *self.source_ids}
+            ):
+                raise ValueError("merge verification requires canonical and source IDs")
+        elif self.operation == "split_memory":
+            if (
+                len(self.target_ids) != 1
+                or self.target_id is None
+                or self.target_ids[0] != self.target_id
+                or not self.child_ids
+                or self.split_group_id is None
+                or self.child_count != len(self.child_ids)
+            ):
+                raise ValueError("split verification requires child/group IDs and count")
+        return self
+
+
 CurationAction = Annotated[
     NormalizeMemoryAction
     | RewriteMemoryAction

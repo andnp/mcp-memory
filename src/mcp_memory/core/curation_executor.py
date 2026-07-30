@@ -9,11 +9,13 @@ idempotency.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import NoReturn
+from typing import NoReturn, cast
 from uuid import UUID
 
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
+    CurationVerificationDescriptor,
+    VerificationStatus,
     ClaimMapping,
     CreateLinkAction,
     LinkAssertion,
@@ -91,7 +93,7 @@ class CurationExecutor:
         def apply(transaction: CurationTransaction) -> MutationResult:
             # Do not add content here: normalize is intentionally metadata-only.
             transaction.update_memory(str(action.target_id), **changes)
-            return MutationResult(action.operation, [action.target_id])
+            return MutationResult(action.operation, [action.target_id], _record_verification_descriptor(action))
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -160,7 +162,19 @@ class CurationExecutor:
                 link_type,
                 context,
             )
-            return MutationResult(action.operation, endpoint_ids)
+            return MutationResult(
+                action.operation,
+                endpoint_ids,
+                CurationVerificationDescriptor(
+                    operation=action.operation,
+                    target_ids=list(endpoint_ids),
+                    source_id=action.source_id,
+                    target_id=action.target_id,
+                    link_type=link_type,
+                    context=context,
+                    exists=True,
+                ),
+            )
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -203,7 +217,7 @@ class CurationExecutor:
 
         def apply(transaction: CurationTransaction) -> MutationResult:
             transaction.update_memory(str(action.target_id), **changes)
-            return MutationResult(action.operation, [action.target_id])
+            return MutationResult(action.operation, [action.target_id], _record_verification_descriptor(action))
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -254,7 +268,19 @@ class CurationExecutor:
 
         def apply(transaction: CurationTransaction) -> MutationResult:
             transaction.remove_link(str(action.source_id), str(action.target_id), link_type)
-            return MutationResult(action.operation, [action.source_id, action.target_id])
+            return MutationResult(
+                action.operation,
+                [action.source_id, action.target_id],
+                CurationVerificationDescriptor(
+                    operation=action.operation,
+                    target_ids=[action.source_id, action.target_id],
+                    source_id=action.source_id,
+                    target_id=action.target_id,
+                    link_type=link_type,
+                    context=context,
+                    exists=False,
+                ),
+            )
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -334,7 +360,16 @@ class CurationExecutor:
             for source in sources:
                 transaction.add_link(str(action.canonical_id), str(source.id), "SUPERSEDES", _MERGE_LINK_CONTEXT)
                 transaction.update_memory(str(source.id), status="archived")
-            return MutationResult(action.operation, [action.canonical_id, *[source.id for source in sources]])
+            return MutationResult(
+                action.operation,
+                [action.canonical_id, *[source.id for source in sources]],
+                CurationVerificationDescriptor(
+                    operation=action.operation,
+                    target_ids=list(merge_ids),
+                    canonical_id=action.canonical_id,
+                    source_ids=list(action.source_ids),
+                ),
+            )
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -423,7 +458,18 @@ class CurationExecutor:
                     "split_child_count": len(child_ids),
                 },
             )
-            return MutationResult(action.operation, [action.target_id, *child_ids])
+            return MutationResult(
+                action.operation,
+                [action.target_id, *child_ids],
+                CurationVerificationDescriptor(
+                    operation=action.operation,
+                    target_ids=[action.target_id],
+                    target_id=action.target_id,
+                    child_ids=[UUID(child_id) for child_id in child_ids],
+                    split_group_id=split_group_id,
+                    child_count=len(child_ids),
+                ),
+            )
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -460,7 +506,15 @@ class CurationExecutor:
 
         def apply(transaction: CurationTransaction) -> MutationResult:
             transaction.update_memory(str(action.target_id), status="archived")
-            return MutationResult(action.operation, [action.target_id])
+            return MutationResult(
+                action.operation,
+                [action.target_id],
+                CurationVerificationDescriptor(
+                    operation=action.operation,
+                    target_ids=[action.target_id],
+                    target_status="archived",
+                ),
+            )
 
         return self._action_store.execute_action(
             run_id=run_id,
@@ -612,6 +666,17 @@ def _normalize_protections(protections: Iterable[ProtectionMode | str]) -> froze
         )
     except ValueError as exc:
         raise CurationActionFatalError("unknown memory protection mode") from exc
+
+
+def _record_verification_descriptor(action: NormalizeMemoryAction | RewriteMemoryAction) -> CurationVerificationDescriptor | None:
+    status = action.preconditions.required_statuses.get(action.target_id)
+    if status is None:
+        return None
+    return CurationVerificationDescriptor(
+        operation=action.operation,
+        target_ids=[action.target_id],
+        target_status=cast(VerificationStatus, str(status)),
+    )
 
 
 def _reject_missing_or_conflicting_token(message: str) -> NoReturn:
