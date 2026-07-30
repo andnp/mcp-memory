@@ -166,6 +166,7 @@ _MANAGEMENT_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
 
 _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
     {
+        "session_id",
         "curation",
         "mutation_history",
         "ai_json_provider",
