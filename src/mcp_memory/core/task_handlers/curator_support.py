@@ -7,6 +7,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_candidates import CuratorCandidateRequest, CuratorSamplingContext
 from mcp_memory.core.curation_identity import candidate_revision_token, graph_token, record_token
 from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState
 from mcp_memory.core.sampling import (
@@ -18,13 +19,18 @@ from mcp_memory.core.sampling import (
     SEMANTIC_STRATEGY,
     SamplingBatch,
 )
-from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME, DEFAULT_AGENT_SCAN_LIMIT
+
+from mcp_memory.core.task_handlers.constants import DEFAULT_AGENT_SCAN_LIMIT
 from mcp_memory.core.task_handlers.maintenance_framework import (
     requested_sampling_strategy,
     sample_maintenance_candidates,
     support_counts_for_candidates,
 )
 from mcp_memory.core.tasks import TaskRecord
+
+
+def _sampling_task_id(task: Any) -> str:
+    return task.task_id if hasattr(task, "task_id") else task.id
 
 CURATOR_MAX_SEED_RECORDS = 16
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
@@ -105,15 +111,6 @@ class CuratorSizePolicy:
     split_threshold_chars: int
 
 
-@dataclass(frozen=True)
-class CuratorCandidateRequest:
-    task_id: str
-    workspace_id: str | None = None
-    requested_strategy: str | None = None
-    limit: int | None = None
-    exclude_memory_ids: frozenset[str] = frozenset()
-
-
 CURATOR_SIZE_POLICY = CuratorSizePolicy(
     target_max_chars=1600,
     acceptable_max_chars=CURATOR_MAX_MEMORY_CHARS,
@@ -142,86 +139,78 @@ def select_curator_seed_records(ctx: ApplicationContext, task: TaskRecord) -> li
     return select_curator_seed_batch(ctx, task).records
 
 
+def _acquire_curator_candidates(
+    ctx: ApplicationContext,
+    request: CuratorCandidateRequest,
+) -> SamplingBatch:
+    return _select_curator_seed_batch(
+        ctx,
+        CuratorSamplingContext(request.task_id, request.requested_strategy, request.workspace_id),
+        seed_limit=request.limit,
+        exclude_memory_ids=set(request.exclude_memory_ids),
+        backend_query_limit=request.limit,
+    )
+
+
 def acquire_curator_candidates(
     ctx: ApplicationContext,
     request: CuratorCandidateRequest,
 ) -> SamplingBatch:
-    task = TaskRecord(
-        id=request.task_id,
-        task_name=CURATOR_TASK_NAME,
-        data={"strategy": request.requested_strategy} if request.requested_strategy else {},
-        workspace_id=request.workspace_id,
-        status="running",
-        priority=100,
-        retries_count=0,
-        max_retries=3,
-        created_at=0.0,
-        updated_at=0.0,
-        available_at=0.0,
-        claimed_at=0.0,
-        started_at=0.0,
-        completed_at=None,
-        last_error=None,
-    )
-    return select_curator_seed_batch(
-        ctx,
-        task,
-        seed_limit=request.limit,
-        exclude_memory_ids=set(request.exclude_memory_ids),
-    )
+    """Compatibility import for the application candidate boundary."""
+    return _acquire_curator_candidates(ctx, request)
 
 
 def select_curator_seed_batch(
     ctx: ApplicationContext,
-    task: TaskRecord,
+    task: Any,
     *,
     seed_limit: int | None = None,
     exclude_memory_ids: set[str] | None = None,
 ) -> SamplingBatch:
+    return _select_curator_seed_batch(
+        ctx,
+        CuratorSamplingContext(task.id, _requested_sampling_strategy(task), task.workspace_id),
+        seed_limit=seed_limit,
+        exclude_memory_ids=exclude_memory_ids,
+        backend_query_limit=int(task.data["limit"]) if "limit" in task.data else None,
+    )
+
+
+def _select_curator_seed_batch(
+    ctx: ApplicationContext,
+    task: Any,
+    *,
+    seed_limit: int | None = None,
+    exclude_memory_ids: set[str] | None = None,
+    backend_query_limit: int | None = None,
+) -> SamplingBatch:
     assert ctx.repository is not None
     limit = _normalize_curator_seed_limit(seed_limit)
     excluded_ids = exclude_memory_ids or set()
+    excluded_ids = exclude_memory_ids or set()
     candidates = [
         record
-        for record in _query_curator_backend_candidates(ctx, task, frontier_limit=limit)
+        for record in _query_curator_backend_candidates(
+            ctx,
+            task,
+            frontier_limit=limit + len(excluded_ids),
+            configured_limit=backend_query_limit,
+            expand_for_exclusions=backend_query_limit is not None and not hasattr(task, "data"),
+        )
         if record.id not in excluded_ids
     ]
     if not candidates:
         return SamplingBatch(
-            requested_strategy=_requested_sampling_strategy(task),
-            strategy_used=_requested_sampling_strategy(task) or "none",
+            requested_strategy=requested_sampling_strategy(task),
+            strategy_used=requested_sampling_strategy(task) or "none",
             strategy_fallback_reason=None,
             candidate_count=0,
             records=[],
         )
 
-    sampling_task = TaskRecord(
-        id=task.id,
-        task_name=CURATOR_TASK_NAME,
-        data=dict(task.data),
-        workspace_id=task.workspace_id,
-        status=task.status,
-        priority=task.priority,
-        retries_count=task.retries_count,
-        max_retries=task.max_retries,
-        created_at=task.created_at,
-        updated_at=task.updated_at,
-        available_at=task.available_at,
-        claimed_at=task.claimed_at,
-        started_at=task.started_at,
-        completed_at=task.completed_at,
-        last_error=task.last_error,
-        execution_epoch=task.execution_epoch,
-        subprocess_pid=task.subprocess_pid,
-        active_request_id=task.active_request_id,
-        cancellation_requested_at=task.cancellation_requested_at,
-        cancelled_at=task.cancelled_at,
-        cancellation_reason=task.cancellation_reason,
-        cancelled_by=task.cancelled_by,
-    )
     sampled_batch = sample_maintenance_candidates(
         ctx,
-        sampling_task,
+        task,
         candidates,
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,
@@ -263,7 +252,11 @@ def select_curator_seed_batch(
     seed_records: list[Any] = []
     oversized_candidates = [record for record in largest_candidates if is_oversized_curator_memory(record)]
     anomaly_candidates = oversized_candidates
-    if not anomaly_candidates and len(candidates) > CURATOR_MAX_SEED_RECORDS and should_run_curator_largest_memory_pass(task):
+    if (
+        not anomaly_candidates
+        and len(candidates) > CURATOR_MAX_SEED_RECORDS
+        and sum(_sampling_task_id(task).encode("utf-8")) % CURATOR_LARGEST_MEMORY_PASS_INTERVAL == 0
+    ):
         anomaly_candidates = largest_candidates
 
     extend_unique_seed_records(seed_records, anomaly_candidates, CURATOR_SIZE_ANOMALY_SEED_RECORDS)
@@ -575,9 +568,11 @@ def _has_recent_stabilizing_edit(ctx: ApplicationContext, memory_id: UUID, now: 
 
 def _query_curator_backend_candidates(
     ctx: ApplicationContext,
-    task: TaskRecord,
+    task: Any,
     *,
     frontier_limit: int,
+    configured_limit: int | None = None,
+    expand_for_exclusions: bool = False,
 ) -> list[Any]:
     """Build a bounded global candidate pool from the accepted backend seams."""
     if ctx.repository is None:
@@ -587,7 +582,12 @@ def _query_curator_backend_candidates(
     if not callable(query_candidates):
         return []
 
-    query_limit = _curator_backend_query_limit(task, frontier_limit)
+    query_limit = _curator_backend_query_limit(
+        task,
+        frontier_limit,
+        configured_limit=configured_limit,
+        expand_for_exclusions=expand_for_exclusions,
+    )
     candidates_by_id: dict[str, Any] = {}
     seeded_candidates: list[Any] = []
     for strategy in _CURATOR_BACKEND_STRATEGIES:
@@ -598,7 +598,7 @@ def _query_curator_backend_candidates(
                 limit=query_limit,
                 status="active",
                 include_superseded=False,
-                seed=task.id,
+                seed=_sampling_task_id(task),
             ),
         )
         if strategy == "seeded-random":
@@ -647,13 +647,21 @@ def _query_curator_backend_candidates(
     return filter_curator_candidates(ctx, list(candidates_by_id.values()))
 
 
-def _curator_backend_query_limit(task: TaskRecord, frontier_limit: int) -> int:
-    configured_limit = int(task.data.get("limit", DEFAULT_AGENT_SCAN_LIMIT))
+def _curator_backend_query_limit(
+    task: Any,
+    frontier_limit: int,
+    *,
+    configured_limit: int | None = None,
+    expand_for_exclusions: bool = False,
+) -> int:
+    if configured_limit is None:
+        configured_limit = DEFAULT_AGENT_SCAN_LIMIT
+    requested_limit = max(configured_limit, frontier_limit) if expand_for_exclusions else configured_limit
     return max(
         1,
         min(
-            configured_limit,
-            max(frontier_limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER,
+            requested_limit,
+            CURATOR_MAX_BATCH_RECORDS * CURATOR_CANDIDATE_POOL_MULTIPLIER,
         ),
     )
 

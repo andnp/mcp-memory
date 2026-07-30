@@ -70,7 +70,9 @@ class _BackendRepository:
 
     def query_maintenance_candidates(self, strategy: str, **kwargs: object) -> list[RelationalMemoryRecord]:
         self.calls.append({"strategy": strategy, **kwargs})
-        return self.records_by_strategy.get(strategy, [])
+        records = self.records_by_strategy.get(strategy, [])
+        limit = kwargs.get("limit")
+        return records[: int(limit)] if isinstance(limit, int) else records
 
     def get_memory(self, memory_id: str) -> RelationalMemoryRecord | None:
         return self.by_id.get(memory_id)
@@ -220,3 +222,67 @@ def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions()
     assert direct.strategy_used == compatibility.strategy_used
     assert direct.strategy_fallback_reason == compatibility.strategy_fallback_reason
     assert direct.records[0].id == second.id
+    assert direct.candidate_count == 1
+    assert direct.candidate_count == len(direct.records)
+    assert {call["limit"] for call in repository.calls[:5]} == {2}
+    assert {call["limit"] for call in repository.calls[5:]} == {50}
+
+
+def test_legacy_task_record_handles_large_candidate_pool_without_oversized_records() -> None:
+    records = [
+        _record(f"candidate-{index:02d}", updated_at=f"2020-01-{index + 1:02d}T00:00:00+00:00")
+        for index in range(17)
+    ]
+    repository = _BackendRepository({
+        "cold-storage": records,
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [],
+    })
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+
+    batch = select_curator_seed_batch(ctx, _task("cold-storage"), seed_limit=1)
+
+    assert len(batch.records) == 1
+
+
+def test_legacy_task_limit_sizes_backend_queries_without_overriding_typed_limit() -> None:
+    record = _record("candidate", updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [record],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "seeded-random": [],
+    })
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+    legacy_task = _task("cold-storage")
+    legacy_task.data["limit"] = 7
+
+    select_curator_seed_batch(ctx, legacy_task, seed_limit=1)
+    legacy_limits = {call["limit"] for call in repository.calls}
+    repository.calls.clear()
+
+    acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id=legacy_task.id,
+            requested_strategy="cold-storage",
+            limit=1,
+        ),
+    )
+    typed_limits = {call["limit"] for call in repository.calls}
+
+    assert legacy_limits == {7}
+    assert typed_limits == {1}
