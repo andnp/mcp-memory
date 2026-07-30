@@ -21,23 +21,17 @@ from mcp_memory.core.curation_context import (
 from mcp_memory.core.curation_identity import candidate_revision_token
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_models import (
-    ArchiveMemoryAction,
-    CreateLinkAction,
     CurationBudgetUsage,
     CurationContextPacket,
     CurationPlan,
     CurationPlanningRequest,
     CurationRunOutcome,
     CurationRunResult,
-    MergeMemoriesAction,
-    NormalizeMemoryAction,
-    RemoveLinkAction,
-    RewriteMemoryAction,
     MutationReceipt,
     RetentionDecision,
-    SplitMemoryAction,
 )
 from mcp_memory.core.curation_executor import CurationExecutor
+from mcp_memory.core.curation_execution_service import CurationExecutionService
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.curation_planner import (
     CurationPlanner,
@@ -254,6 +248,14 @@ class CurationDryRunHarness:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._executor = executor
         self._verifier = verifier
+        self._execution_service = CurationExecutionService(
+            curation_store=curation_store,
+            executor=executor,
+            verifier=verifier,
+            memory_types=memory_types,
+            contradictory_memory_ids=set(contradictory_memory_ids),
+            protections_by_memory=protections_by_memory,
+        )
         self._work_item_service = work_item_service or CurationWorkItemService(
             work_items,
             no_op_cooldown_seconds=self._config.no_op_cooldown_seconds,
@@ -379,7 +381,7 @@ class CurationDryRunHarness:
             and validation.plan is not None
             and validation.plan.actions
         ):
-            outcome, reason_code, terminal_state, receipts = self._execute_accepted_actions(
+            outcome, reason_code, terminal_state, receipts = self._execution_service.execute(
                 run_id=run_id,
                 executing=executing,
                 validation=validation,
@@ -526,141 +528,12 @@ class CurationDryRunHarness:
         validation: CurationValidationResult,
         context: ImmutableCurationContextPacket,
     ) -> tuple[CurationRunOutcome, str, CurationRunState, tuple[CurationActionReceipt, ...]]:
-        """Execute and verify accepted actions through the deterministic pipeline."""
-        executor = self._executor
-        verifier = self._verifier
-        if executor is None or verifier is None:
-            raise RuntimeError("curation execution requires an executor and verifier")
-
-        actions = [
-            item.action
-            for item in validation.accepted_actions
-        ]
-        if not actions:
-            return CurationRunOutcome.DEFERRED, "unsupported_execution_action", CurationRunState.EXECUTING, ()
-
-        memory_types = dict(self._memory_types or {})
-        for record in (*context.seeds, *context.support):
-            memory_id = record.get("memory_id")
-            memory_type = record.get("type")
-            if memory_id is not None and isinstance(memory_type, str):
-                memory_types[UUID(str(memory_id))] = memory_type
-
-        receipts: list[tuple[CurationActionReceipt, Any]] = []
-        for action in actions:
-            receipt = self._execute_action(
-                action,
-                executor=executor,
-                run_id=run_id,
-                memory_types=memory_types,
-                context=context,
-            )
-            receipts.append((receipt, action))
-
-        verifying = executing.model_copy(update={"state": CurationRunState.VERIFYING})
-        stored = self._curation_store.transition_run(run_id, CurationRunState.EXECUTING, verifying)
-        if stored is None:
-            raise RuntimeError(f"curation run {run_id} could not enter verification")
-
-        verified_receipts: list[CurationActionReceipt] = []
-        for receipt, action in receipts:
-            verified = verifier.verify(receipt, action)
-            verified_receipts.append(verified)
-            if verified.status.value != "verified":
-                return (
-                    CurationRunOutcome.VERIFICATION_FAILED,
-                    "verification_failed",
-                    CurationRunState.VERIFYING,
-                    tuple(verified_receipts),
-                )
-
-        remaining_specialist_routes = tuple(
-            route for route in validation.specialist_routes if route.action.action_id not in {item.action_id for item in actions}
+        return self._execution_service.execute(
+            run_id=run_id,
+            executing=executing,
+            validation=validation,
+            context=context,
         )
-        partial = bool(validation.rejected_actions or remaining_specialist_routes)
-        return (
-            CurationRunOutcome.PARTIALLY_APPLIED if partial else CurationRunOutcome.APPLIED,
-            "partially_applied" if partial else "verified_receipts",
-            CurationRunState.VERIFYING,
-            tuple(verified_receipts),
-        )
-
-    def _execute_action(
-        self,
-        action: Any,
-        *,
-        executor: CurationExecutor,
-        run_id: UUID,
-        memory_types: dict[UUID, str],
-        context: ImmutableCurationContextPacket,
-    ) -> CurationActionReceipt:
-        if isinstance(action, NormalizeMemoryAction):
-            target_id = action.target_id
-            token = context.record_tokens.get(str(target_id))
-            return executor.execute_normalize(
-                action,
-                run_id=run_id,
-                memory_type=memory_types.get(target_id, ""),
-                protections=(self._protections_by_memory or {}).get(target_id, ()),
-                expected_token=token,
-            )
-        if isinstance(action, CreateLinkAction):
-            protections = set()
-            for endpoint_id in (action.source_id, action.target_id):
-                protections.update((self._protections_by_memory or {}).get(endpoint_id, ()))
-            return executor.execute_create_link(
-                action,
-                run_id=run_id,
-                memory_types=memory_types,
-                protections=protections,
-            )
-        if isinstance(action, RewriteMemoryAction):
-            target_id = action.target_id
-            return executor.execute_rewrite(
-                action,
-                run_id=run_id,
-                memory_type=memory_types.get(target_id, ""),
-                protections=(self._protections_by_memory or {}).get(target_id, ()),
-            )
-        if isinstance(action, RemoveLinkAction):
-            protections = set()
-            for endpoint_id in (action.source_id, action.target_id):
-                protections.update((self._protections_by_memory or {}).get(endpoint_id, ()))
-            return executor.execute_remove_link(
-                action,
-                run_id=run_id,
-                memory_types=memory_types,
-                protections=protections,
-            )
-        if isinstance(action, MergeMemoriesAction):
-            protections = set()
-            for endpoint_id in (action.canonical_id, *action.source_ids):
-                protections.update((self._protections_by_memory or {}).get(endpoint_id, ()))
-            return executor.execute_merge(
-                action,
-                run_id=run_id,
-                memory_types=memory_types,
-                contradictory_memory_ids=self._contradictory_memory_ids,
-                protections=protections,
-            )
-        if isinstance(action, SplitMemoryAction):
-            target_id = action.target_id
-            return executor.execute_split(
-                action,
-                run_id=run_id,
-                memory_type=memory_types.get(target_id, ""),
-                protections=(self._protections_by_memory or {}).get(target_id, ()),
-            )
-        if isinstance(action, ArchiveMemoryAction):
-            target_id = action.target_id
-            return executor.execute_archive(
-                action,
-                run_id=run_id,
-                memory_type=memory_types.get(target_id, ""),
-                protections=(self._protections_by_memory or {}).get(target_id, ()),
-            )
-        raise RuntimeError(f"unsupported curation action: {type(action).__name__}")
-
 
 def _uuid_or_none(value: str | None) -> UUID | None:
     return None if value is None else UUID(str(value))
