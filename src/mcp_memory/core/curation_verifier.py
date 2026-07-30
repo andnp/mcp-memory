@@ -10,6 +10,8 @@ from typing import Any
 from mcp_memory.core.curation_identity import canonical_token, record_snapshot
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
+    ClaimManifest,
+    CurationVerificationDescriptor,
     CreateLinkAction,
     MergeMemoriesAction,
     NormalizeMemoryAction,
@@ -110,10 +112,136 @@ class CurationVerifier:
             return self._verify_split(current, action)
         raise CurationVerificationError("unsupported curation action")
 
+    def verify_descriptor(
+        self,
+        receipt: CurationActionReceipt,
+        descriptor: CurationVerificationDescriptor,
+    ) -> CurationActionReceipt:
+        """Verify a persisted, content-free recovery postcondition."""
+        current = self._curation_store.get_receipt(receipt.run_id, receipt.action_id)
+        if current is None:
+            raise CurationVerificationError("curation receipt was not found")
+        if current.status is not CurationReceiptState.APPLIED_UNVERIFIED:
+            return current
+        if current.run_id != receipt.run_id or current.action_id != receipt.action_id:
+            raise CurationVerificationError("receipt identity does not match descriptor")
+        if current.verification_descriptor != descriptor:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "descriptor_mismatch")
+        if descriptor.schema_version != 1 or descriptor.operation != current.operation:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "descriptor_mismatch")
+
+        expected_ids = [str(value) for value in descriptor.target_ids]
+        if descriptor.operation == "split_memory":
+            expected_ids = sorted(
+                {str(descriptor.target_id), *(str(value) for value in descriptor.child_ids)},
+                key=lambda value: value.encode("utf-8"),
+            )
+        else:
+            expected_ids = sorted(set(expected_ids), key=lambda value: value.encode("utf-8"))
+        if _receipt_ids(current) != expected_ids:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+
+        if descriptor.operation in {"normalize_memory", "rewrite_memory", "archive_memory"}:
+            return self._verify_record_action(current, expected_ids, descriptor.target_status)
+        if descriptor.operation in {"create_link", "remove_link"}:
+            assert descriptor.source_id is not None
+            assert descriptor.target_id is not None
+            assert descriptor.link_type is not None
+            try:
+                contexts = self._fresh_contexts(expected_ids)
+            except _PostconditionMismatch as mismatch:
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+            if _state_token({key: value.record for key, value in contexts.items()}, expected_ids) != current.after_token:
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+            edge_present = (
+                _has_exact_edge(
+                    contexts[str(descriptor.source_id)],
+                    source_id=str(descriptor.source_id),
+                    target_id=str(descriptor.target_id),
+                    link_type=descriptor.link_type,
+                    edge_context=descriptor.context or "",
+                )
+                if descriptor.exists
+                else _has_any_edge(
+                    contexts[str(descriptor.source_id)],
+                    source_id=str(descriptor.source_id),
+                    target_id=str(descriptor.target_id),
+                    link_type=descriptor.link_type,
+                )
+            )
+            if edge_present is not descriptor.exists:
+                return self._finish(
+                    current,
+                    CurationReceiptState.VERIFICATION_FAILED,
+                    "edge_missing" if descriptor.exists else "edge_still_present",
+                )
+            return self._finish(current, CurationReceiptState.VERIFIED, None)
+        if descriptor.operation == "merge_memories":
+            assert descriptor.canonical_id is not None
+            action = MergeMemoriesAction(
+                action_id=current.action_id,
+                canonical_id=descriptor.canonical_id,
+                source_ids=descriptor.source_ids,
+                confidence=1.0,
+                rationale="descriptor recovery",
+                content="",
+                claim_manifest=ClaimManifest(),
+            )
+            return self._verify_merge(current, action, expected_ids)
+        if descriptor.operation == "split_memory":
+            return self._verify_split_descriptor(current, descriptor, expected_ids)
+        return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "unsupported_descriptor")
+
+    def _verify_split_descriptor(
+        self,
+        current: CurationActionReceipt,
+        descriptor: CurationVerificationDescriptor,
+        expected_ids: Sequence[str],
+    ) -> CurationActionReceipt:
+        original = self._maintenance_reads.peek_memory(str(descriptor.target_id))
+        if original is None or original.record.id != str(descriptor.target_id):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "record_missing")
+        try:
+            contexts = self._fresh_contexts(expected_ids)
+        except _PostconditionMismatch as mismatch:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, mismatch.error_code)
+        if _state_token({key: value.record for key, value in contexts.items()}, expected_ids) != current.after_token:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "after_token_mismatch")
+        if original.record.metadata.get("split_child_memory_ids") != list(descriptor.child_ids):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_children_missing")
+        if original.record.metadata.get("split_child_count") != descriptor.child_count:
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_child_count_missing")
+        for index, child_id in enumerate((str(value) for value in descriptor.child_ids), start=1):
+            metadata = contexts[child_id].record.metadata
+            if metadata.get("split_from_memory_id") != str(descriptor.target_id):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_lineage_missing")
+            if metadata.get("split_group_id") != descriptor.split_group_id:
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_group_missing")
+            if metadata.get("split_part_index") != index or metadata.get("split_part_count") != descriptor.child_count:
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_part_metadata_missing")
+            sibling_ids = [
+                candidate for candidate in (str(value) for value in descriptor.child_ids) if candidate != child_id
+            ]
+            if (
+                metadata.get("split_child_memory_ids") != [str(value) for value in descriptor.child_ids]
+                or metadata.get("split_sibling_memory_ids") != sibling_ids
+            ):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_child_metadata_missing")
+            if not _has_exact_edge(
+                contexts[child_id],
+                source_id=child_id,
+                target_id=str(descriptor.target_id),
+                link_type=_SPLIT_LINK_TYPE,
+                edge_context=_SPLIT_LINK_CONTEXT,
+            ):
+                return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "split_edge_missing")
+        return self._finish(current, CurationReceiptState.VERIFIED, None)
+
     def _verify_record_action(
         self,
         current: CurationActionReceipt,
         expected_ids: Sequence[str],
+        target_status: str | None = None,
     ) -> CurationActionReceipt:
         try:
             contexts = self._fresh_contexts(expected_ids)
@@ -125,6 +253,10 @@ class CurationVerifier:
             )
         if _receipt_ids(current) != expected_ids:
             return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "affected_ids_mismatch")
+        if target_status is not None and any(
+            context.record.status != target_status for context in contexts.values()
+        ):
+            return self._finish(current, CurationReceiptState.VERIFICATION_FAILED, "status_mismatch")
         actual_after_token = _state_token(
             {memory_id: context.record for memory_id, context in contexts.items()},
             expected_ids,

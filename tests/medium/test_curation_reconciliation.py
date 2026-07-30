@@ -10,7 +10,14 @@ import pytest
 
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
-from mcp_memory.core.curation_models import ActionPreconditions, NormalizeMemoryAction
+from mcp_memory.core.curation_models import (
+    ActionPreconditions,
+    ArchiveMemoryAction,
+    ClaimManifest,
+    CurationVerificationDescriptor,
+    EvidenceRef,
+    NormalizeMemoryAction,
+)
 from mcp_memory.core.curation_reconciliation import (
     CurationReconciliationDisposition,
     CurationReconciler,
@@ -135,6 +142,159 @@ def test_failed_reconciliation_blocks_and_late_terminal_writes_are_ignored(
         assert late.outcome is CurationRunOutcome.VERIFICATION_FAILED
         assert stored_receipt is not None
         assert stored_receipt.status is CurationReceiptState.VERIFICATION_FAILED
+    finally:
+        runtime.close()
+
+
+def test_recovery_prefers_persisted_descriptor_over_action_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        run, action, receipt = _applied_unverified_run(runtime)
+        descriptor = CurationVerificationDescriptor(
+            operation="normalize_memory",
+            target_ids=[action.target_id],
+            target_status="active",
+        )
+        updated = receipt.model_copy(update={"verification_descriptor": descriptor})
+        assert runtime.curation.transition_receipt(
+            run.run_id,
+            receipt.action_id,
+            CurationReceiptState.APPLIED_UNVERIFIED,
+            updated,
+        ) is not None
+
+        reconciler = CurationReconciler(
+            runtime.curation,
+            runtime.relational_search,
+            action_resolver=lambda _run, _receipt: None,
+            sleep=lambda _delay: None,
+        )
+        outcome = reconciler.reconcile()[0]
+        assert outcome.reason_code == "run_finalized"
+        stored = runtime.curation.get_receipt(run.run_id, receipt.action_id)
+        assert stored is not None
+        assert stored.status is CurationReceiptState.VERIFIED
+    finally:
+        runtime.close()
+
+
+def test_recovery_rejects_descriptor_target_status_before_verifying(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        run, action, receipt = _applied_unverified_run(runtime)
+        descriptor = CurationVerificationDescriptor(
+            operation="normalize_memory",
+            target_ids=[action.target_id],
+            target_status="archived",
+        )
+        updated = receipt.model_copy(update={"verification_descriptor": descriptor})
+        assert runtime.curation.transition_receipt(
+            run.run_id,
+            receipt.action_id,
+            CurationReceiptState.APPLIED_UNVERIFIED,
+            updated,
+        ) is not None
+
+        outcome = CurationReconciler(runtime.curation, runtime.relational_search, sleep=lambda _delay: None).reconcile()[0]
+        assert outcome.disposition is CurationReconciliationDisposition.BLOCK
+        assert outcome.reason_code == "verification_failed"
+        stored = runtime.curation.get_receipt(run.run_id, receipt.action_id)
+        assert stored is not None
+        assert stored.status is CurationReceiptState.VERIFICATION_FAILED
+        assert stored.error_code == "status_mismatch"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize(
+    "descriptor_json",
+    ["not-json", '{"schema_version":999,"operation":"unsupported"}'],
+)
+def test_recovery_terminalizes_run_when_descriptor_hydration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    descriptor_json: str,
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        run, _action, receipt = _applied_unverified_run(runtime)
+        connection = runtime.db_manager.get_connection()
+        with connection:
+            connection.execute(
+                """
+                UPDATE curation_action_receipts
+                SET verification_descriptor_json = ?
+                WHERE run_id = ? AND action_id = ?
+                """,
+                (descriptor_json, str(run.run_id), str(receipt.action_id)),
+            )
+
+        outcome = CurationReconciler(runtime.curation, runtime.relational_search, sleep=lambda _delay: None).reconcile()[0]
+        assert outcome.disposition is CurationReconciliationDisposition.BLOCK
+        assert outcome.reason_code == "descriptor_hydration_failed"
+        stored_run = runtime.curation.get_run(run.run_id)
+        assert stored_run is not None
+        assert stored_run.state is CurationRunState.TERMINAL
+        assert stored_run.outcome is CurationRunOutcome.VERIFICATION_FAILED
+    finally:
+        runtime.close()
+
+
+def test_legacy_non_normalize_receipt_is_action_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runtime = _make_runtime(monkeypatch, tmp_path)
+    try:
+        assert runtime.repository is not None
+        record = runtime.repository.create_memory(
+            title="Archive target",
+            content="Archive this record.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert record is not None
+        run = CurationRun(
+            run_id=uuid4(),
+            frontier_key="legacy-frontier",
+            context_fingerprint="legacy-context",
+            state=CurationRunState.EXECUTING,
+        )
+        runtime.curation.create_run(run)
+        action = ArchiveMemoryAction(
+            action_id=uuid4(),
+            target_id=UUID(record.id),
+            confidence=1.0,
+            rationale="archive",
+            evidence=[EvidenceRef(memory_id=UUID(record.id))],
+            preconditions=ActionPreconditions(
+                record_tokens={UUID(record.id): record_token(record)}
+            ),
+            claim_manifest=ClaimManifest(preserved_claims=["Archive this record."]),
+        )
+        receipt = CurationExecutor(SQLiteCurationActionStore(runtime.db_manager)).execute_archive(
+            action,
+            run_id=run.run_id,
+            memory_type=record.type,
+        )
+        legacy = receipt.model_copy(update={"verification_descriptor": None})
+        assert runtime.curation.transition_receipt(
+            run.run_id,
+            receipt.action_id,
+            CurationReceiptState.APPLIED_UNVERIFIED,
+            legacy,
+        ) is not None
+
+        outcome = CurationReconciler(
+            runtime.curation,
+            runtime.relational_search,
+            sleep=lambda _delay: None,
+        ).reconcile()[0]
+        assert outcome.disposition is CurationReconciliationDisposition.BLOCK
+        assert outcome.reason_code == "action_unavailable"
     finally:
         runtime.close()
 

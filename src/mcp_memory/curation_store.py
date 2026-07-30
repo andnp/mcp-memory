@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Protocol, Sequence
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mcp_memory.core.curation_models import (
     CurationBudgetUsage,
@@ -228,6 +228,10 @@ MAX_CURATION_READ_LIMIT = 1000
 
 class CurationReceiptIdentityConflictError(ValueError):
     """Raised when an action ID is reused for a different receipt identity."""
+
+
+class CurationReceiptHydrationError(ValueError):
+    """Raised when persisted receipt data cannot be hydrated safely."""
 
 
 class SQLiteCurationStore:
@@ -579,6 +583,14 @@ def _receipt_from_row(row: sqlite3.Row) -> CurationActionReceipt:
         if "verification_descriptor_json" in row.keys()
         else None
     )
+    try:
+        descriptor = (
+            None
+            if descriptor_json is None
+            else CurationVerificationDescriptor.model_validate(_json_value(descriptor_json, default={}))
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise CurationReceiptHydrationError("descriptor_hydration_failed") from exc
     return CurationActionReceipt(
         run_id=UUID(str(row["run_id"])),
         action_id=UUID(str(row["action_id"])),
@@ -589,9 +601,7 @@ def _receipt_from_row(row: sqlite3.Row) -> CurationActionReceipt:
         after_token=row["after_token"],
         mutation_event_id=None if row["mutation_event_id"] is None else UUID(str(row["mutation_event_id"])),
         intent_hash=row["intent_hash"],
-        verification_descriptor=None
-        if descriptor_json is None
-        else CurationVerificationDescriptor.model_validate(_json_value(descriptor_json, default={})),
+        verification_descriptor=descriptor,
         error_code=row["error_code"],
         applied_at=_datetime_value(row["applied_at"]),
         verified_at=_datetime_value(row["verified_at"]),

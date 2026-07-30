@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any, Iterator, cast
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from mcp_memory.core.curation_models import (
     CurationBudgetUsage,
     CurationRunOutcome,
@@ -18,6 +20,7 @@ from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationCandidateState,
     CurationReceiptIdentityConflictError,
+    CurationReceiptHydrationError,
     CurationReceiptState,
     CurationRun,
     CurationRunState,
@@ -437,6 +440,14 @@ def _run_from_row(row: tuple[object, ...]) -> CurationRun:
 
 
 def _receipt_from_row(row: tuple[object, ...]) -> CurationActionReceipt:
+    try:
+        descriptor = (
+            None
+            if row[9] is None
+            else CurationVerificationDescriptor.model_validate(_json_value(row[9], default={}))
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise CurationReceiptHydrationError("descriptor_hydration_failed") from exc
     return CurationActionReceipt(
         run_id=UUID(str(row[0])),
         action_id=UUID(str(row[1])),
@@ -447,9 +458,7 @@ def _receipt_from_row(row: tuple[object, ...]) -> CurationActionReceipt:
         after_token=None if row[6] is None else str(row[6]),
         mutation_event_id=None if row[7] is None else UUID(str(row[7])),
         intent_hash=None if row[8] is None else str(row[8]),
-        verification_descriptor=None
-        if row[9] is None
-        else CurationVerificationDescriptor.model_validate(_json_value(row[9], default={})),
+        verification_descriptor=descriptor,
         error_code=None if row[10] is None else str(row[10]),
         applied_at=_datetime_value(row[11]),
         verified_at=_datetime_value(row[12]),

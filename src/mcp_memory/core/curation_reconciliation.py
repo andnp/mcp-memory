@@ -20,6 +20,7 @@ from mcp_memory.core.curation_verifier import (
 )
 from mcp_memory.curation_store import (
     CurationActionReceipt,
+    CurationReceiptHydrationError,
     CurationReceiptState,
     CurationRepository,
     CurationRun,
@@ -103,6 +104,8 @@ class CurationReconciler:
     def reconcile_run(self, run: CurationRun) -> CurationReconciliationOutcome | None:
         try:
             receipts = self._with_lock_retries(lambda: self._curation_store.list_receipts(run.run_id))
+        except CurationReceiptHydrationError:
+            return self._finish_failed_run(run, "descriptor_hydration_failed", 0)
         except sqlite3.OperationalError as exc:
             if _is_locked(exc):
                 return _defer(run, "sqlite_locked")
@@ -119,15 +122,20 @@ class CurationReconciler:
         verified_count = 0
         for receipt in pending:
             try:
-                action = self._action_resolver(run, receipt)
-            except Exception:
-                return self._finish_failed_run(run, "action_resolution_failed", verified_count)
-            if action is None:
-                return self._finish_failed_run(run, "action_unavailable", verified_count)
-            resolved_action = action
-
-            try:
-                result = self._with_lock_retries(lambda: self._verifier.verify(receipt, resolved_action))
+                if receipt.verification_descriptor is not None:
+                    descriptor = receipt.verification_descriptor
+                    result = self._with_lock_retries(
+                        lambda: self._verifier.verify_descriptor(receipt, descriptor)
+                    )
+                else:
+                    try:
+                        action = self._action_resolver(run, receipt)
+                    except Exception:
+                        return self._finish_failed_run(run, "action_resolution_failed", verified_count)
+                    if action is None:
+                        return self._finish_failed_run(run, "action_unavailable", verified_count)
+                    resolved_action = action
+                    result = self._with_lock_retries(lambda: self._verifier.verify(receipt, resolved_action))
             except sqlite3.OperationalError as exc:
                 if _is_locked(exc):
                     return _defer(run, "sqlite_locked")
@@ -141,6 +149,8 @@ class CurationReconciler:
 
         try:
             final_receipts = self._with_lock_retries(lambda: self._curation_store.list_receipts(run.run_id))
+        except CurationReceiptHydrationError:
+            return self._finish_failed_run(run, "descriptor_hydration_failed", verified_count)
         except sqlite3.OperationalError as exc:
             if _is_locked(exc):
                 return _defer(run, "sqlite_locked")

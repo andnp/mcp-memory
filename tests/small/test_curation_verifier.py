@@ -12,6 +12,7 @@ from mcp_memory.core.curation_models import (
     ClaimMapping,
     ClaimManifest,
     CreateLinkAction,
+    CurationVerificationDescriptor,
     EvidenceRef,
     LinkAssertion,
     MergeMemoriesAction,
@@ -20,7 +21,7 @@ from mcp_memory.core.curation_models import (
     RewriteMemoryAction,
     SplitMemoryAction,
 )
-from mcp_memory.core.curation_verifier import CurationVerifier
+from mcp_memory.core.curation_verifier import CurationVerifier, _state_token
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
 from mcp_memory.relational.repository import RelationalMemoryReadContext, RelationalMemoryRepository
@@ -226,6 +227,88 @@ def test_normalize_verifies_exact_after_token_from_fresh_maintenance_read(db_man
     assert verified.status is CurationReceiptState.VERIFIED
     assert verified.error_code is None
     assert reader.peek_calls == [str(memory_id)]
+
+
+def test_descriptor_remove_link_rejects_remaining_endpoint_edge_with_other_context(
+    db_manager: DatabaseManager,
+) -> None:
+    repository, run, source_id = _seed(db_manager)
+    target_id = uuid4()
+    repository.create_memory(
+        "Target",
+        "Target content.",
+        ["workspace"],
+        memory_id=str(target_id),
+        memory_type="fact",
+    )
+    repository.add_link(str(source_id), str(target_id), "DEPENDS_ON", "remaining context")
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+    action = RemoveLinkAction(
+        action_id=uuid4(),
+        source_id=source_id,
+        target_id=target_id,
+        link_type="DEPENDS_ON",
+        context="removed context",
+        confidence=1,
+        rationale="remove the link",
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=source_id,
+                    target_id=target_id,
+                    link_type="DEPENDS_ON",
+                    context="removed context",
+                )
+            )
+        ],
+        preconditions=ActionPreconditions(
+            record_tokens={source_id: record_token(source), target_id: record_token(target)},
+            required_links=[
+                LinkAssertion(source_id=source_id, target_id=target_id, link_type="DEPENDS_ON")
+            ],
+        ),
+    )
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_remove_link(
+        action,
+        run_id=run.run_id,
+        source_type=source.type,
+        target_type=target.type,
+    )
+    repository.add_link(str(source_id), str(target_id), "DEPENDS_ON", "remaining context")
+    current_source = repository.peek_memory(str(source_id))
+    current_target = repository.peek_memory(str(target_id))
+    assert current_source is not None and current_target is not None
+    descriptor = CurationVerificationDescriptor(
+        operation="remove_link",
+        target_ids=[source_id, target_id],
+        source_id=source_id,
+        target_id=target_id,
+        link_type="DEPENDS_ON",
+        context="removed context",
+        exists=False,
+    )
+    updated = receipt.model_copy(
+        update={
+            "after_token": _state_token(
+                {str(source_id): current_source.record, str(target_id): current_target.record},
+                sorted([str(source_id), str(target_id)]),
+            ),
+            "verification_descriptor": descriptor,
+        }
+    )
+    store = SQLiteCurationStore(db_manager)
+    assert store.transition_receipt(
+        run.run_id,
+        receipt.action_id,
+        CurationReceiptState.APPLIED_UNVERIFIED,
+        updated,
+    ) is not None
+    verifier, _reader = _verifier(db_manager, repository)
+    verified = verifier.verify_descriptor(updated, descriptor)
+    assert verified.status is CurationReceiptState.VERIFICATION_FAILED
+    assert verified.error_code == "edge_still_present"
 
 
 def test_normalize_mismatch_is_verification_failed_and_terminal(db_manager: DatabaseManager) -> None:

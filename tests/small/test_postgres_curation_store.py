@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from mcp_memory.storage.postgres_curation_store import PostgresCurationStore
+from mcp_memory.curation_store import CurationReceiptHydrationError
 from mcp_memory.storage.postgres_migrations import POSTGRES_MIGRATIONS, POSTGRES_SCHEMA_VERSION
 from tests.small.curation_repository_contract import assert_curation_repository_contract
 
@@ -154,6 +155,32 @@ def test_postgres_json_hydration_accepts_native_jsonb_values() -> None:
     assert receipt.verification_descriptor is not None
     assert receipt.verification_descriptor.operation == "archive_memory"
     assert _json_value({"key": ["value"]}, default={}) == {"key": ["value"]}
+
+
+def test_postgres_descriptor_hydration_wraps_malformed_values() -> None:
+    from uuid import uuid4
+
+    from mcp_memory.curation_store import CurationReceiptState
+    from mcp_memory.storage.postgres_curation_store import _receipt_from_row
+
+    with pytest.raises(CurationReceiptHydrationError, match="descriptor_hydration_failed"):
+        _receipt_from_row(
+            (
+                uuid4(),
+                uuid4(),
+                "archive_memory",
+                [str(uuid4())],
+                CurationReceiptState.APPLIED_UNVERIFIED,
+                None,
+                None,
+                None,
+                "intent",
+                {"operation": "archive_memory", "target_ids": ["not-a-uuid"]},
+                None,
+                None,
+                None,
+            )
+        )
 
 
 def test_postgres_receipt_identity_includes_intent_hash_with_legacy_null_wildcard() -> None:
