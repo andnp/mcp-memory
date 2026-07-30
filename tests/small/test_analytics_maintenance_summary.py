@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.management.analytics_reporting import build_maintenance_summary
 from mcp_memory.management.reporting_rows import MaintenanceTaskRunRow
 from mcp_memory.management.reporting_rows import coerce_task_result_view
@@ -74,3 +75,38 @@ def test_build_maintenance_summary_rolls_up_family_agent_and_delta_series() -> N
     assert [bucket.bucket_start for bucket in compaction_series.buckets] == [60.0, 120.0, 180.0, 240.0, 300.0]
     assert sum(bucket.merged_count for bucket in compaction_series.buckets) == 4
     assert sum(bucket.archived_count for bucket in compaction_series.buckets) == 1
+
+
+def test_build_maintenance_summary_uses_generic_mutation_counts_for_curator_runs() -> None:
+    payload = build_maintenance_summary(
+        maintenance_rows=[
+            MaintenanceTaskRunRow(
+                task_id="task-curator",
+                task_name=CURATOR_TASK_NAME,
+                status="completed",
+                completed_at=180.0,
+                duration_seconds=0.0,
+                result=coerce_task_result_view({"mutations": 4, "tool_calls_executed": 7}),
+            ),
+        ],
+        cutoff=100.0,
+        generated_at=240.0,
+        bucket_seconds=60,
+    )
+
+    compaction = next(row for row in payload.by_family if row.key == "compaction")
+    curator = next(row for row in payload.by_agent if row.key == CURATOR_TASK_NAME)
+    compaction_series = next(row for row in payload.family_delta_series if row.key == "compaction")
+
+    assert compaction.task_names == [CURATOR_TASK_NAME]
+    assert compaction.meaningful_actions == 0
+    assert compaction.mutation_count == 4
+    assert compaction.delta_total == 4
+
+    assert curator.mutation_count == 4
+    assert curator.delta_total == 4
+    assert curator.actions_per_completed_run == 4.0
+    assert curator.delta_per_completed_run == 4.0
+
+    assert sum(bucket.mutation_count for bucket in compaction_series.buckets) == 4
+    assert sum(bucket.created_count for bucket in compaction_series.buckets) == 0

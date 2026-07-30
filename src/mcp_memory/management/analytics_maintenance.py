@@ -32,6 +32,7 @@ _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
     ("degraded", "degraded_count"),
     ("restored", "restored_count"),
     ("meaningful_actions", "meaningful_actions"),
+    ("mutation_count", "mutation_count"),
     ("lines_compressed", "lines_compressed"),
 )
 
@@ -79,10 +80,11 @@ class _MaintenanceSummaryAccumulator:
     degraded_count: int = 0
     restored_count: int = 0
     meaningful_actions: int = 0
+    mutation_count: int = 0
     lines_compressed: int = 0
 
     @property
-    def delta_total(self) -> int:
+    def structured_delta_total(self) -> int:
         return (
             self.created_count
             + self.merged_count
@@ -91,6 +93,26 @@ class _MaintenanceSummaryAccumulator:
             + self.degraded_count
             + self.restored_count
         )
+
+    @property
+    def delta_total(self) -> int:
+        if self.structured_delta_total > 0:
+            return self.structured_delta_total
+        if self.mutation_count > 0:
+            return self.mutation_count
+        if self.meaningful_actions > 0:
+            return self.meaningful_actions
+        return 0
+
+    @property
+    def action_total(self) -> int:
+        if self.meaningful_actions > 0:
+            return self.meaningful_actions
+        if self.mutation_count > 0:
+            return self.mutation_count
+        if self.structured_delta_total > 0:
+            return self.structured_delta_total
+        return 0
 
 
 def build_maintenance_summary(
@@ -147,6 +169,7 @@ def build_maintenance_summary(
             degraded_count=accumulator.degraded_count,
             restored_count=accumulator.restored_count,
             meaningful_actions=accumulator.meaningful_actions,
+            mutation_count=accumulator.mutation_count,
             lines_compressed=accumulator.lines_compressed,
             delta_total=accumulator.delta_total,
         )
@@ -211,6 +234,7 @@ def _run_reported_delta_counts(result: TaskResultView) -> dict[str, int]:
         "degraded": mutation_outcome.degraded,
         "restored": mutation_outcome.restored,
         "meaningful_actions": result.meaningful_actions,
+        "mutation_count": result.mutation_count,
         "lines_compressed": result.lines_compressed,
     }
     return {
@@ -264,9 +288,10 @@ def _build_agent_yield_payload(
         degraded_count=accumulator.degraded_count,
         restored_count=accumulator.restored_count,
         meaningful_actions=accumulator.meaningful_actions,
+        mutation_count=accumulator.mutation_count,
         lines_compressed=accumulator.lines_compressed,
         delta_total=accumulator.delta_total,
-        actions_per_completed_run=0.0 if denominator == 0 else round(accumulator.meaningful_actions / denominator, 4),
+        actions_per_completed_run=0.0 if denominator == 0 else round(accumulator.action_total / denominator, 4),
         lines_per_completed_run=0.0 if denominator == 0 else round(accumulator.lines_compressed / denominator, 4),
         delta_per_completed_run=0.0 if denominator == 0 else round(accumulator.delta_total / denominator, 4),
     )

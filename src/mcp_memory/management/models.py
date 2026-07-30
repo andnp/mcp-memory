@@ -904,6 +904,7 @@ class NerdMaintenanceSummaryRowPayload(BaseModel):
     degraded_count: int = 0
     restored_count: int = 0
     meaningful_actions: int = 0
+    mutation_count: int = 0
     lines_compressed: int = 0
     delta_total: int = 0
 
@@ -925,6 +926,7 @@ class NerdMaintenanceDeltaBucketPayload(BaseModel):
     degraded_count: int = 0
     restored_count: int = 0
     meaningful_actions: int = 0
+    mutation_count: int = 0
     lines_compressed: int = 0
 
 

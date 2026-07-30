@@ -43,6 +43,8 @@ class TaskResultView(BaseModel):
     metadata: RunResultMetadataPayload = Field(default_factory=RunResultMetadataPayload)
     ingest_audit: IngestAuditPayload = Field(default_factory=IngestAuditPayload)
     meaningful_actions: int | None = None
+    mutation_count: int | None = None
+    tool_calls_executed: int | None = None
     lines_compressed: int | None = None
     stale: int | None = None
 
@@ -126,6 +128,8 @@ def build_task_result_view(raw_result: object) -> TaskResultView:
     meaningful_actions = (
         raw_result.meaningful_actions if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("meaningful_actions"))
     )
+    mutation_count = _coerce_int(raw_payload.get("mutations"))
+    tool_calls_executed = _coerce_int(raw_payload.get("tool_calls_executed"))
     lines_compressed = (
         raw_result.lines_compressed if isinstance(raw_result, TaskRunResult) else _coerce_int(raw_payload.get("lines_compressed"))
     )
@@ -136,6 +140,8 @@ def build_task_result_view(raw_result: object) -> TaskResultView:
         metadata=metadata,
         ingest_audit=_build_ingest_audit(raw_payload, include_entries=True),
         meaningful_actions=meaningful_actions,
+        mutation_count=mutation_count,
+        tool_calls_executed=tool_calls_executed,
         lines_compressed=lines_compressed,
         stale=stale,
     )

@@ -8,6 +8,7 @@ from mcp_memory.management.reporting_rows import (
     adapt_memory_count_row,
     adapt_scoped_memory_row,
     adapt_task_run_row,
+    coerce_task_result_view,
 )
 from mcp_memory.management.reporting_rows import TaskResultView
 
@@ -82,3 +83,18 @@ def test_adapt_task_run_row_coerces_invalid_result_json_to_empty_mapping() -> No
     assert isinstance(row.result, TaskResultView)
     assert row.result == {}
     assert row.result.raw_payload == {}
+
+
+def test_coerce_task_result_view_exposes_generic_mutation_and_tool_call_counts() -> None:
+    result = coerce_task_result_view(
+        {
+            "mutations": 4,
+            "tool_calls_executed": 7,
+            "meaningful_actions": 2,
+        }
+    )
+
+    assert result.mutation_count == 4
+    assert result.tool_calls_executed == 7
+    assert result.meaningful_actions == 2
+    assert result.metadata.mutations == 4
