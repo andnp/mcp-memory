@@ -61,6 +61,7 @@ def _run_searchkernel_shadow(
                 ctx.repository,
                 vector_store=ctx.vector_store,
                 embedder=ctx.embedder,
+                config=config,
             )
         else:
             # Keep compatibility for partial test contexts that predate the

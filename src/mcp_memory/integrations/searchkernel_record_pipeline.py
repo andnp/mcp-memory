@@ -14,7 +14,9 @@ from searchkernel.search.record_pipeline import (
     RecordSearchResult,
 )
 
+from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord, MemoryRepositoryPort
+from mcp_memory.relational.search import RankingEngine, RankingSignals
 from mcp_memory.integrations.searchkernel_adapters import (
     MemoryGraphStore,
     MemoryHydrator,
@@ -97,15 +99,24 @@ def build_memory_record_pipeline(
     vector_store: MemoryVectorBackend | None = None,
     embedder: EmbeddingBatchProvider | None = None,
     embedding_dim: int | None = None,
+    config: Config | None = None,
 ) -> MemoryRecordSearchPipeline:
-    """Compose a read-only memory pipeline without copying native ranking.
+    """Compose a read-only memory pipeline with memory-owned ranking hooks.
 
     The generic kernel can express lifecycle, workspace, type, and supersession
-    filtering through policy hooks. It cannot express memory's authority and
-    access-score ranking stages, so native relational results remain authoritative
-    during shadow mode.
+    filtering through policy hooks. Memory's RankingEngine supplies the
+    recency, workspace, access, authority, degradation, and signal adjustments
+    without moving policy into searchkernel. Keyword coverage and query-wide
+    semantic-abstention context are unavailable from per-candidate provenance,
+    so those native signal decisions remain a parity gap.
     """
+    resolved_config = config or Config()
+    ranking_engine = RankingEngine(repository, resolved_config)
     diagnostics: list[str] = []
+    diagnostics.append(
+        "ranking signal gap: keyword coverage and query-wide semantic abstention "
+        "remain native-only"
+    )
     embedding_provider: MemoryQueryEmbeddingProvider | None = None
     adapted_vector_store: MemoryVectorStore | None = None
     if vector_store is None:
@@ -122,7 +133,13 @@ def build_memory_record_pipeline(
 
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
+        score_adjuster=lambda candidate: _adjust_score(
+            ranking_engine,
+            repository,
+            candidate,
+        ),
         result_filter=lambda result: _result_allowed(repository, result),
+        post_process=_sort_results,
     )
     hydrator = MemoryHydrator(repository)
     pipeline = RecordSearchPipeline(
@@ -168,6 +185,43 @@ def _result_allowed(
 ) -> bool:
     record = repository.get_memory(result.record_id)
     return record is not None and _memory_allowed(repository, record)
+
+
+def _adjust_score(
+    ranking_engine: RankingEngine,
+    repository: MemoryRepositoryPort,
+    candidate: RecordSearchCandidate,
+) -> float:
+    record = repository.get_memory(candidate.record_id)
+    if record is None:
+        return 0.0
+
+    workspace_id = _ACTIVE_FILTERS.get().get("workspace_id")
+    workspace = workspace_id if isinstance(workspace_id, str) else None
+    provenance = candidate.provenance
+    keyword = provenance.strategy_details.get("keyword")
+    semantic = provenance.strategy_details.get("vector")
+    signals = RankingSignals(
+        matched_by_keyword=keyword is not None,
+        matched_by_semantic=semantic is not None,
+        semantic_score=0.0 if semantic is None else semantic.raw_score,
+        keyword_token_coverage=1.0 if keyword is not None else 0.0,
+        expanded_by_graph="graph" in provenance.strategies,
+    )
+    ranked = ranking_engine.rank_records(
+        [record],
+        {record.id: candidate.score},
+        workspace,
+        ranking_signals={record.id: signals},
+        keyword_candidates_present=keyword is not None,
+    )
+    return ranked[0][1] if ranked else 0.0
+
+
+def _sort_results(
+    results: list[RecordSearchResult],
+) -> list[RecordSearchResult]:
+    return sorted(results, key=lambda result: (-result.score, result.record_id))
 
 
 def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> bool:

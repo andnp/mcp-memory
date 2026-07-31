@@ -5,13 +5,14 @@ from typing import cast
 import pytest
 
 from mcp_memory.application import memory_use_cases
-from mcp_memory.config import Config, SearchKernelShadowConfig
+from mcp_memory.config import Config, SearchKernelShadowConfig, SearchRankingConfig
 from mcp_memory.core.ports.memory import (
     MemoryLink,
     MemoryReadContext,
     MemoryRecord,
     MemoryRepositoryPort,
 )
+from mcp_memory.relational.search import RankingEngine
 from mcp_memory.context import ApplicationContext
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -85,6 +86,23 @@ class FakeRepository:
         if record is None:
             return None
         return MemoryReadContext(record, {"outgoing": self.get_links(memory_id)}, [])
+
+
+class RankingRepository(FakeRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        accessed = _memory("accessed")
+        accessed.access_score = 25.0
+        accessed.last_accessed_at = "2026-07-30T12:00:00+00:00"
+        self.records = {
+            "plain": _memory("plain"),
+            "accessed": accessed,
+            "authority": _memory("authority"),
+            "stale": _memory("stale", status="stale"),
+        }
+        self.links = [
+            MemoryLink("supporter", "authority", "DEPENDS_ON", ""),
+        ]
 
 
 class FakeVectorStore:
@@ -179,6 +197,69 @@ def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None:
     assert without_embedder.search("query", limit=1).results
 
 
+def test_score_adjustment_matches_relational_ranking_engine() -> None:
+    repository = RankingRepository()
+    config = Config(
+        search_ranking=SearchRankingConfig(
+            workspace_multiplier=1.4,
+            degradation_multiplier=0.25,
+        )
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        config=config,
+    )
+
+    results = pipeline.search(
+        "query",
+        limit=10,
+        filters={"workspace_id": "workspace-1"},
+    ).results
+    engine = RankingEngine(cast("MemoryRepositoryPort", repository), config)
+    expected = {
+        memory_id: engine.score_from_rrf(
+            repository.records[memory_id],
+            1.0 / (config.search_ranking.rrf_k + rank + 1),
+            "workspace-1",
+        )
+        for rank, memory_id in enumerate(
+            ["plain", "accessed", "authority", "stale"]
+        )
+    }
+
+    assert {result.record_id: result.score for result in results} == pytest.approx(expected)
+    scores = {result.record_id: result.score for result in results}
+    assert scores["accessed"] > scores["plain"]
+    assert scores["authority"] > scores["plain"]
+    assert scores["stale"] < scores["plain"]
+
+
+def test_pipeline_ranking_is_read_only() -> None:
+    repository = RankingRepository()
+    before = {
+        memory_id: (
+            record.access_score,
+            record.last_accessed_at,
+            record.last_surfaced_at,
+        )
+        for memory_id, record in repository.records.items()
+    }
+
+    build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+    ).search("query", limit=10)
+
+    after = {
+        memory_id: (
+            record.access_score,
+            record.last_accessed_at,
+            record.last_surfaced_at,
+        )
+        for memory_id, record in repository.records.items()
+    }
+    assert after == before
+
+
 @pytest.mark.asyncio
 async def test_shadow_compares_pipeline_without_replacing_native_results() -> None:
     repository = FakeRepository()
@@ -211,10 +292,12 @@ def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
     )
     pipeline = object()
     called = False
+    captured_config = None
 
     def build_pipeline(*args: object, **kwargs: object) -> object:
-        nonlocal called
+        nonlocal called, captured_config
         called = True
+        captured_config = kwargs["config"]
         return pipeline
 
     async def run_shadow(kernel: object, **kwargs: object):
@@ -255,6 +338,7 @@ def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
     )
 
     assert called
+    assert captured_config is context.config
     payload = runtime_logs[0]["data"]
     assert isinstance(payload, dict)
     assert payload["native_ids"] == ["native"]
