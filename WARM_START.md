@@ -6,6 +6,9 @@
 - one shared global memory store under XDG data home
 - workspace identity derived from git root when available
 - global daemon owns runtime state and background workers
+- `mcp_memory.mcp.runtime` is the runtime composition root for storage, providers, and typed capabilities
+- `mcp_memory.daemon_runtime` is the daemon composition/lifecycle root; `daemon_app` only adapts FastAPI routes and request scope
+- `mcp_memory.daemon_background` owns embedding warmup, dashboard build, backup, and writeback coordination
 - workspace context is metadata for ranking and analytics, not an execution boundary
 - `mcp-memory run` is a thin MCP stdio proxy that auto-starts the daemon
 - `mcp-memory admin dashboard open` ensures the daemon is running and opens the dashboard URL

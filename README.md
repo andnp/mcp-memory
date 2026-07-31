@@ -48,6 +48,7 @@ That product goal shapes the maintenance architecture:
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Shared-Mode Local Cache**: In Postgres shared mode, an optional local SQLite sidecar can serve fresh exact search hits, validated read hits, and degraded cached search/read fallbacks without becoming a second source of truth.
 - **Global Daemon**: One global daemon per user environment owns runtime state, background workers, and transport coordination.
+- **Explicit Composition Roots**: `mcp/runtime.py` assembles storage, providers, and typed capability bundles; `daemon_runtime.py` owns daemon startup, transport, workers, and graceful shutdown while `daemon_app.py` remains the FastAPI adapter.
 - **Stable IPC Transport**: The thin MCP proxy talks to the daemon over a stable ZeroMQ ROUTER/DEALER transport on a Unix socket.
 - **Agentic Maintenance Agents**: The canonical `memory-curator` campaign and ingest can run through a trusted internal MCP maintenance surface when an agentic provider is configured. Historical cleanup task names are compatibility aliases, not independent campaigns.
 - **Crash-Safe Ingest Finalization**: Agentic ingest preserves durable journal claim/delete/release semantics while still allowing direct MCP create/append mutations.
@@ -77,7 +78,10 @@ mcp-memory/
 │       ├── mcp/            # MCP tool handlers and runtime wiring
 │       ├── utils/          # Shared utilities (Config, DB, IO)
 │       ├── cli.py          # Command-line interface
-│       ├── daemon.py       # Workspace daemon and autostart logic
+│       ├── daemon.py       # Daemon autostart, stop, and recovery logic
+│       ├── daemon_runtime.py # Global daemon composition and lifecycle
+│       ├── daemon_background.py # Backup, writeback, warmup, and build loops
+│       ├── daemon_app.py   # FastAPI management adapter
 │       └── server.py       # MCP stdio thin proxy
 ├── tests/                  # Comprehensive test suite
 ├── pyproject.toml          # Dependency management (uv/hatch)

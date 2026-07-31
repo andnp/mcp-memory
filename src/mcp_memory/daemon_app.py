@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import importlib.metadata
 import logging
 import os
 import signal
-import sys
 import time
-from contextlib import suppress
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -17,20 +15,23 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-from mcp_memory.config import GLOBAL_DAEMON_IDENTITY, resolve_backup_dir, resolve_daemon_metadata_path, resolve_daemon_socket_path, resolve_workspace_id, resolve_workspace_root
-from mcp_memory.core.agent_runtime import bootstrap_background_tasks, build_runtime_task_worker
-from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
+from mcp_memory.config import resolve_workspace_id, resolve_workspace_root
 from mcp_memory.daemon_dispatch import dispatch_management_request, error_payload
-from mcp_memory.daemon_lifecycle import DaemonLockTimeoutError, FilesystemLock
-from mcp_memory.daemon_models import DaemonControllerView, DaemonMetadata, DaemonRoutes
-from mcp_memory.daemon_process import find_free_port, remove_metadata, write_metadata
-from mcp_memory.daemon_transport import DaemonZmqServer
+from mcp_memory.daemon_background import (
+    RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
+    flush_record_thought_writeback_once as _background_flush_record_thought_writeback_once,
+)
+from mcp_memory.daemon_process import find_free_port
+from mcp_memory.daemon_runtime import DaemonRuntimeSession
+from mcp_memory.core.journal_operations import flush_record_thought_writeback_outbox
+from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup
+from mcp_memory.daemon_background import (
+    consume_embedding_warmup_result as _background_consume_embedding_warmup_result,
+    ensure_dashboard_frontend_ready as _background_ensure_dashboard_frontend_ready,
+    warm_embedding_model as _background_warm_embedding_model,
+)
 from mcp_memory.hook_reminders import HookReminderService
-from mcp_memory.management.frontend_build import ensure_dashboard_frontend_built
-from mcp_memory.management.service import ManagementService
 from mcp_memory.mcp.runtime import create_runtime_from_spec, resolve_global_daemon_bootstrap_spec
-from mcp_memory.sqlite_backup import create_and_prune_sqlite_backup, log_shared_storage_risks
-from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 # embedding-model init) for every reconnect that raced the shutdown.
 _IDLE_SHUTDOWN_DELAY_SECONDS = 15.0
 _HTTP_ACTIVITY_GRACE_SECONDS = 60.0
-_RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = 5.0
+_RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS = RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
 
@@ -55,42 +56,16 @@ class _RequestScope:
     workspace_root: Path | None = None
 
 
-@dataclass(frozen=True)
-class _RecordThoughtWritebackFlushContext:
-    journal: Any
-    task_queue: Any
-    writeback_cache: Any
-    suppression_config: Any = None
-
-
 def _ensure_dashboard_frontend_ready(static_root: Path) -> None:
-    result = ensure_dashboard_frontend_built(static_root=static_root)
-    if result.status == "up_to_date":
-        logger.debug("Dashboard frontend bundle is up to date")
-        return
-    if result.status == "built":
-        logger.info("Dashboard frontend rebuilt at startup from %s", result.frontend_root)
-        return
-    logger.warning(
-        "Dashboard frontend build step did not complete cleanly: status=%s returncode=%s message=%s",
-        result.status,
-        result.returncode,
-        result.message,
-    )
+    _background_ensure_dashboard_frontend_ready(static_root)
 
 
 async def _warm_embedding_model(embedder: Any) -> bool:
-    if embedder is None:
-        return False
-    cache_model = getattr(embedder, "cache_model", None)
-    if not callable(cache_model):
-        return False
-    return bool(await asyncio.to_thread(cache_model))
+    return await _background_warm_embedding_model(embedder)
 
 
 def _consume_embedding_warmup_result(task: asyncio.Task[bool]) -> None:
-    with suppress(asyncio.CancelledError):
-        task.result()
+    _background_consume_embedding_warmup_result(task)
 
 
 async def _cancel_idle_shutdown_task(app: FastAPI) -> None:
@@ -186,86 +161,16 @@ async def _cancel_background_task(app: FastAPI, task_name: str) -> None:
 
 
 async def _run_periodic_backup_loop(runtime) -> None:
-    config = getattr(runtime, "config", None)
-    db_manager = getattr(runtime, "db_manager", None)
-    memory_path = getattr(runtime, "memory_path", None)
-    storage_backend = getattr(runtime, "storage_backend", None) or "sqlite"
-    if config is None or db_manager is None or memory_path is None:
-        return
+    from mcp_memory.daemon_background import run_periodic_backup_loop
 
-    backup_config = config.backups
-    app_data_dir = Path(memory_path).parent
-    if backup_config.warn_on_shared_storage:
-        log_shared_storage_risks(app_data_dir)
-
-    if storage_backend != "sqlite":
-        logger.info("Skipping periodic SQLite backup loop for storage backend %s", storage_backend)
-        return
-
-    if not backup_config.enabled:
-        return
-
-    backup_dir = resolve_backup_dir()
-    should_run_immediately = backup_config.create_startup_snapshot
-    while True:
-        if not should_run_immediately:
-            await asyncio.sleep(backup_config.interval_seconds)
-        should_run_immediately = False
-        try:
-            result = await asyncio.to_thread(
-                create_and_prune_sqlite_backup,
-                Path(db_manager.db_path),
-                backup_dir,
-                max_snapshots=backup_config.max_snapshots,
-            )
-            logger.info(
-                "SQLite backup snapshot created: %s pruned=%s",
-                result.backup_path,
-                len(result.pruned_paths),
-            )
-        except Exception as exc:
-            logger.warning("SQLite backup snapshot failed: %s", exc)
-
-
-def _resolve_record_thought_writeback_flush_context(runtime) -> _RecordThoughtWritebackFlushContext | None:
-    cache_state = resolve_shared_mode_cache_state(
-        getattr(runtime, "config", None),
-        storage_backend=getattr(runtime, "storage_backend", None),
-        read_cache=getattr(runtime, "read_cache", None),
-    )
-    if not cache_state.writeback_active:
-        return None
-
-    journal = getattr(runtime, "journal", None)
-    if journal is None or cache_state.writeback_cache is None:
-        return None
-
-    return _RecordThoughtWritebackFlushContext(
-        journal=journal,
-        task_queue=getattr(runtime, "task_queue", None),
-        writeback_cache=cache_state.writeback_cache,
-        suppression_config=None if getattr(runtime, "config", None) is None else runtime.config.ingest_suppression,
-    )
+    await run_periodic_backup_loop(runtime, backup_fn=create_and_prune_sqlite_backup)
 
 
 def _flush_record_thought_writeback_once(runtime) -> int:
-    flush_context = _resolve_record_thought_writeback_flush_context(runtime)
-    if flush_context is None:
-        return 0
-
-    result = flush_record_thought_writeback_outbox(
-        flush_context.journal,
-        task_queue=flush_context.task_queue,
-        suppression_config=flush_context.suppression_config,
-        writeback_cache=flush_context.writeback_cache,
+    return _background_flush_record_thought_writeback_once(
+        runtime,
+        flush_fn=flush_record_thought_writeback_outbox,
     )
-    if result.flushed_count > 0:
-        logger.info(
-            "Flushed %s queued record_thought writeback entr%s",
-            result.flushed_count,
-            "y" if result.flushed_count == 1 else "ies",
-        )
-    return result.flushed_count
 
 
 async def _run_record_thought_writeback_flush_loop(
@@ -301,92 +206,54 @@ def create_daemon_app(
         daemon_port = find_free_port()
     else:
         daemon_port = int(port)
-    metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
-    socket_path = resolve_daemon_socket_path()
-    runtime_lock = FilesystemLock(spec.lock_path.with_suffix(".runtime.lock"))
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        try:
-            runtime_lock.acquire(timeout_seconds=0.1)
-        except DaemonLockTimeoutError as exc:
-            raise RuntimeError("daemon_runtime_lock_unavailable:global") from exc
+        session: DaemonRuntimeSession | None = None
 
-        runtime = create_runtime_from_spec(spec)
-        assert runtime.db_manager is not None
-        bootstrap_background_tasks(runtime.background_task_capabilities())
-        worker = build_runtime_task_worker(runtime.task_runtime_capabilities())
-        warmup_task = asyncio.create_task(_warm_embedding_model(runtime.embedder))
-        warmup_task.add_done_callback(_consume_embedding_warmup_result)
-        backup_task = asyncio.create_task(_run_periodic_backup_loop(runtime))
-        if worker is not None:
-            await worker.start()
+        def runtime():
+            assert session is not None
+            return session.runtime
 
-        hook_service = HookReminderService(runtime.db_manager, None)
+        def hook_service():
+            assert session is not None
+            assert session.hook_service is not None
+            return session.hook_service
 
-        zmq_server = DaemonZmqServer(
-            context_factory=lambda arguments: _apply_request_scope_to_context(
-                runtime,
-                _request_scope_for_arguments(arguments),
-            ),
-            hook_handlers={
-                "/api/hooks/session-start": lambda arguments: _handle_session_start(app, runtime, hook_service, arguments),
-                "/api/hooks/post-tool-use": lambda arguments: _handle_post_tool_use(runtime, arguments),
-                "/api/hooks/session-end": lambda arguments: _handle_session_end(app, runtime, hook_service, arguments),
-            },
-            routes_provider=lambda: app.state.routes,
-            socket_path=socket_path,
-            metadata_provider=lambda: app.state.metadata,
-        )
-        await zmq_server.start()
-
-        service = ManagementService(
-            runtime.management_capabilities(),
-            controller=DaemonControllerView(hook_service=hook_service, transport_server=zmq_server),
-        )
-        routes = DaemonRoutes(
-            ctx=runtime,
-            service=service,
-            management=service.capabilities,
-            hook_service=hook_service,
-            metadata_path=metadata_path,
-        )
-        app.state.routes = routes
-        app.state.metadata = DaemonMetadata(
+        session = DaemonRuntimeSession(
+            app=app,
+            spec=spec,
             host=daemon_host,
             port=daemon_port,
-            pid=os.getpid(),
-            started_at=time.time(),
-            status="ready",
-            daemon_scope=GLOBAL_DAEMON_IDENTITY,
-            binary_path=sys.executable,
-            version=_resolve_runtime_version(),
-            transport="zmq",
-            socket_path=str(socket_path),
+            enable_idle_shutdown=enable_idle_shutdown,
+            request_scope_context_factory=lambda arguments: _apply_request_scope_to_context(
+                runtime(),
+                _request_scope_for_arguments(arguments),
+            ),
+            session_start_handler=lambda arguments: _handle_session_start(
+                app,
+                runtime(),
+                hook_service(),
+                arguments,
+            ),
+            post_tool_use_handler=lambda arguments: _handle_post_tool_use(runtime(), arguments),
+            session_end_handler=lambda arguments: _handle_session_end(
+                app,
+                runtime(),
+                hook_service(),
+                arguments,
+            ),
+            runtime_version=_resolve_runtime_version(),
+            runtime_factory=lambda runtime_spec: create_runtime_from_spec(runtime_spec),
+            embedding_warmup=_warm_embedding_model,
+            embedding_warmup_done=_consume_embedding_warmup_result,
+            dashboard_builder=_ensure_dashboard_frontend_ready,
         )
-        # The MCP transport is ready at this point. Publish readiness before
-        # checking the optional dashboard bundle so a slow or failed frontend
-        # build cannot delay MCP startup.
-        write_metadata(metadata_path, app.state.metadata)
-        await asyncio.to_thread(_ensure_dashboard_frontend_ready, routes.service.dashboard_static_root)
-        record_thought_writeback_flush_executor: ThreadPoolExecutor | None = None
-        record_thought_writeback_flush_task: asyncio.Task[None] | None = None
-        if _resolve_record_thought_writeback_flush_context(runtime) is not None:
-            record_thought_writeback_flush_executor = ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="record-thought-writeback-flush",
-            )
-            record_thought_writeback_flush_task = asyncio.create_task(
-                _run_record_thought_writeback_flush_loop(
-                    runtime,
-                    executor=record_thought_writeback_flush_executor,
-                )
-            )
+        await session.start()
         app.state.idle_shutdown_task = None
         app.state.idle_shutdown_scheduler_task = None
-        app.state.backup_task = backup_task
-        app.state.record_thought_writeback_flush_task = record_thought_writeback_flush_task
-        app.state.record_thought_writeback_flush_executor = record_thought_writeback_flush_executor
+        app.state.backup_task = session.backup_task
+        app.state.record_thought_writeback_flush_task = session.writeback_task
+        app.state.record_thought_writeback_flush_executor = session.writeback_executor
         app.state.enable_idle_shutdown = enable_idle_shutdown
         app.state.last_http_activity_at = time.monotonic()
         if enable_idle_shutdown:
@@ -399,22 +266,10 @@ def create_daemon_app(
         finally:
             await _cancel_background_task(app, "idle_shutdown_scheduler_task")
             await _cancel_idle_shutdown_task(app)
-            await _cancel_background_task(app, "backup_task")
-            await _cancel_background_task(app, "record_thought_writeback_flush_task")
-            record_thought_writeback_flush_executor = getattr(app.state, "record_thought_writeback_flush_executor", None)
-            if record_thought_writeback_flush_executor is not None:
-                await asyncio.to_thread(record_thought_writeback_flush_executor.shutdown, True)
-                app.state.record_thought_writeback_flush_executor = None
-            await zmq_server.stop()
-            if not warmup_task.done():
-                warmup_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await warmup_task
-            if worker is not None:
-                await worker.stop(spec.config.daemon.shutdown_grace_seconds)
-            runtime.close()
-            remove_metadata(metadata_path, expected_pid=os.getpid())
-            runtime_lock.release()
+            await session.stop()
+            app.state.backup_task = None
+            app.state.record_thought_writeback_flush_task = None
+            app.state.record_thought_writeback_flush_executor = None
 
     app = FastAPI(title="mcp-memory daemon", lifespan=lifespan)
 

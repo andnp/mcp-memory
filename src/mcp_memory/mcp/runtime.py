@@ -16,7 +16,15 @@ from mcp_memory.config import (
     resolve_workspace_id,
     resolve_workspace_root,
 )
-from mcp_memory.context import ApplicationContext
+from mcp_memory.context import (
+    ApplicationContext,
+    BackgroundTaskCapabilities,
+    ManagementRuntimeCapabilities,
+    MemoryReadCapabilities,
+    MutationCapabilities,
+    ProviderCapabilities,
+    TaskRuntimeCapabilities,
+)
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.embeddings import build_embedder
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
@@ -48,6 +56,24 @@ class GlobalDaemonBootstrapSpec:
 
 
 RuntimeBootstrapSpec: TypeAlias = WorkspaceRuntimeSpec | GlobalDaemonBootstrapSpec
+
+
+@dataclass(frozen=True)
+class RuntimeCapabilityBundles:
+    """Typed application capabilities assembled at the runtime boundary."""
+
+    memory: MemoryReadCapabilities
+    mutation: MutationCapabilities
+    provider: ProviderCapabilities
+    background: BackgroundTaskCapabilities
+    task: TaskRuntimeCapabilities
+    management: ManagementRuntimeCapabilities
+
+
+@dataclass(frozen=True)
+class RuntimeComposition:
+    context: ApplicationContext
+    capabilities: RuntimeCapabilityBundles
 
 
 def resolve_workspace_runtime_spec(
@@ -108,6 +134,17 @@ def create_runtime_from_spec(
     *,
     enable_background_repair_queue: bool = False,
 ) -> ApplicationContext:
+    return create_runtime_composition(
+        spec,
+        enable_background_repair_queue=enable_background_repair_queue,
+    ).context
+
+
+def create_runtime_composition(
+    spec: RuntimeBootstrapSpec,
+    *,
+    enable_background_repair_queue: bool = False,
+) -> RuntimeComposition:
     workspace_id = _workspace_id_for_runtime(spec)
     embedder = build_embedder(spec.config.embeddings)
     internal_tool_call_tracker = InternalToolCallTracker()
@@ -133,7 +170,7 @@ def create_runtime_from_spec(
     default_bundle = {} if default_profile_key is None else provider_registry.get(default_profile_key, {})
     ai_json_provider = default_bundle.get("json")
     ai_agent_provider = default_bundle.get("agentic")
-    return ApplicationContext(
+    context = ApplicationContext(
         config=spec.config,
         workspace_id=workspace_id,
         workspace_root=spec.workspace_root,
@@ -162,6 +199,17 @@ def create_runtime_from_spec(
         vector_store=storage.vector_store,
         search_health=storage.relational_search.get_health(),
         internal_tool_call_tracker=internal_tool_call_tracker,
+    )
+    return RuntimeComposition(
+        context=context,
+        capabilities=RuntimeCapabilityBundles(
+            memory=context.memory_capabilities(),
+            mutation=context.mutation_capabilities(),
+            provider=context.provider_capabilities(),
+            background=context.background_task_capabilities(),
+            task=context.task_runtime_capabilities(),
+            management=context.management_capabilities(),
+        ),
     )
 
 
