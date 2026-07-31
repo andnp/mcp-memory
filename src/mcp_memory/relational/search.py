@@ -58,6 +58,7 @@ class _SemanticScoreKwargs(TypedDict, total=False):
     semantic_timing_ms: dict[str, float] | None
     vector_search_diagnostics: dict[str, object] | None
     limit: int
+    side_effect_free: bool
 
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,7 @@ class RelationalMemorySearchService:
         status: str | None = None,
         include_superseded: bool = False,
         debug: bool = False,
+        side_effect_free: bool = False,
     ):
         return self.search_memories_with_diagnostics(
             query,
@@ -341,6 +343,7 @@ class RelationalMemorySearchService:
             status=status,
             include_superseded=include_superseded,
             debug=debug,
+            side_effect_free=side_effect_free,
         )[0]
 
     def search_memories_with_diagnostics(
@@ -354,6 +357,7 @@ class RelationalMemorySearchService:
         status: str | None = None,
         include_superseded: bool = False,
         debug: bool = False,
+        side_effect_free: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
         diagnostics = SearchExecutionDiagnostics()
         started_at = time.perf_counter()
@@ -387,6 +391,7 @@ class RelationalMemorySearchService:
             requested_limit=candidate_limit,
             limit=max(50, candidate_limit),
             diagnostics=diagnostics if debug else None,
+            side_effect_free=side_effect_free,
         )
         diagnostics.timing_ms["semantic_selection"] = round((time.perf_counter() - semantic_started) * 1000.0, 3)
         diagnostics.semantic_candidate_count = len(semantic_ids)
@@ -503,7 +508,7 @@ class RelationalMemorySearchService:
                 return [], diagnostics
 
         surfaced_ids = [result.memory_id for result in ranked]
-        if surfaced_ids:
+        if surfaced_ids and not side_effect_free:
             surfaced_writeback_started = time.perf_counter()
             self._repository.touch_last_surfaced(surfaced_ids, _utc_now(), best_effort=True)
             diagnostics.timing_ms["surfaced_writeback"] = round((time.perf_counter() - surfaced_writeback_started) * 1000.0, 3)
@@ -632,6 +637,7 @@ class RelationalMemorySearchService:
         semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
+        side_effect_free: bool = False,
     ) -> dict[str, float]:
         if self._embedder is None or self._vector_store is None or not candidates:
             return {}
@@ -646,6 +652,12 @@ class RelationalMemorySearchService:
                 limit=limit,
             )
         except (OSError, sqlite3.Error, ValueError) as exc:
+            if side_effect_free:
+                logger.debug(
+                    "Side-effect-free semantic comparison unavailable; using keyword-only ranking: %s",
+                    exc,
+                )
+                return {}
             recovered_matches = self._retry_after_reopen(
                 "semantic search",
                 lambda: self._compute_semantic_matches(
@@ -686,6 +698,7 @@ class RelationalMemorySearchService:
         semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
+        side_effect_free: bool = False,
     ) -> dict[str, float]:
         signature = inspect.signature(self._semantic_scores)
         accepts_var_kwargs = any(
@@ -697,6 +710,7 @@ class RelationalMemorySearchService:
             "semantic_timing_ms": semantic_timing_ms,
             "vector_search_diagnostics": vector_search_diagnostics,
             "limit": limit,
+            "side_effect_free": side_effect_free,
         }
         filtered_kwargs = (
             optional_kwargs
@@ -727,10 +741,14 @@ class RelationalMemorySearchService:
         semantic_timing_ms: dict[str, float] | None = None,
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
+        side_effect_free: bool = False,
     ) -> list[tuple[str, float]]:
         _ = workspace_id
         adapter = self._get_semantic_adapter()
-        self._ensure_searchable_memory_embeddings(candidates, semantic_timing_ms=semantic_timing_ms)
+        if not side_effect_free:
+            self._ensure_searchable_memory_embeddings(
+                candidates, semantic_timing_ms=semantic_timing_ms
+            )
         return adapter.search(
             query,
             candidates,
@@ -795,6 +813,7 @@ class RelationalMemorySearchService:
         requested_limit: int,
         diagnostics: SearchExecutionDiagnostics | None,
         limit: int,
+        side_effect_free: bool = False,
     ) -> tuple[list[str], dict[str, float]]:
         if diagnostics is not None:
             diagnostics.timing_ms.setdefault("semantic_candidate_pool", 0.0)
@@ -829,6 +848,7 @@ class RelationalMemorySearchService:
                 semantic_timing_ms=semantic_timing_ms,
                 vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
+                side_effect_free=side_effect_free,
             )
             if diagnostics is not None:
                 diagnostics.vector_search = vector_search_diagnostics
@@ -857,6 +877,7 @@ class RelationalMemorySearchService:
                     semantic_timing_ms=semantic_timing_ms,
                     vector_search_diagnostics=vector_search_diagnostics,
                     limit=limit,
+                    side_effect_free=side_effect_free,
                 )
                 if diagnostics is not None:
                     diagnostics.semantic_candidate_strategy = "global-fallback"
@@ -871,6 +892,7 @@ class RelationalMemorySearchService:
                 semantic_timing_ms=semantic_timing_ms,
                 vector_search_diagnostics=vector_search_diagnostics,
                 limit=limit,
+                side_effect_free=side_effect_free,
             )
             if diagnostics is not None:
                 diagnostics.vector_search = vector_search_diagnostics

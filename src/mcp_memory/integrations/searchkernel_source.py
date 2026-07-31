@@ -25,9 +25,13 @@ def build_memory_search_kernel(
     *,
     extra_sources: Iterable[SearchableSource] = (),
     per_source_timeout_s: float = 5.0,
+    side_effect_free: bool = False,
 ) -> SearchKernel:
     """Build a federated kernel with memory plus optional source adapters."""
-    sources = [MemorySearchableSource(search_service), *extra_sources]
+    sources = [
+        MemorySearchableSource(search_service, side_effect_free=side_effect_free),
+        *extra_sources,
+    ]
     return SearchKernel.build(
         sources=sources,
         per_source_timeout_s=per_source_timeout_s,
@@ -51,7 +55,12 @@ class MemorySearchableSource:
 
     source_kind = "memory"
 
-    def __init__(self, search_service: RelationalMemorySearchService):
+    def __init__(
+        self,
+        search_service: RelationalMemorySearchService,
+        *,
+        side_effect_free: bool = False,
+    ):
         """Initialize the adapter with a RelationalMemorySearchService.
 
         Args:
@@ -59,6 +68,7 @@ class MemorySearchableSource:
                            the actual ranking and retrieval.
         """
         self._search_service = search_service
+        self._side_effect_free = side_effect_free
 
     async def search(
         self, query: str, k: int, filters: dict[str, Any] | None = None
@@ -86,6 +96,8 @@ class MemorySearchableSource:
         filters = filters or {}
         workspace_id = filters.get("workspace_id") if isinstance(filters.get("workspace_id"), str) else None
         memory_type = filters.get("memory_type") if isinstance(filters.get("memory_type"), str) else None
+        status = filters.get("status") if isinstance(filters.get("status"), str) else None
+        include_superseded = bool(filters.get("include_superseded", False))
 
         def run_search() -> list[RelationalSearchResult]:
             # search_memories honors include_superseded=False by default in the
@@ -97,8 +109,9 @@ class MemorySearchableSource:
                 workspace_id=workspace_id,
                 limit=k,
                 memory_type=memory_type,
-                status=None,  # None means "skip archived"; stale/degraded are downranked
-                include_superseded=False,
+                status=status,  # None means "skip archived"; stale/degraded are downranked
+                include_superseded=include_superseded,
+                side_effect_free=self._side_effect_free,
             )
             return results
 

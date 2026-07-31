@@ -8,6 +8,7 @@ from mcp_memory.config import (
     DaemonConfig,
     MemoryConfig,
     SearchRankingConfig,
+    SearchKernelShadowConfig,
     ensure_default_config_exists,
     load_config,
     resolve_default_config_path,
@@ -28,6 +29,12 @@ def test_ai_config_rejects_unknown_provider() -> None:
 def test_memory_config_rejects_invalid_checkpoint_interval() -> None:
     with pytest.raises(ValueError, match="checkpoint_interval_ops"):
         MemoryConfig(checkpoint_interval_ops=0)
+
+
+def test_searchkernel_shadow_is_disabled_by_default() -> None:
+    config = SearchKernelShadowConfig()
+
+    assert config.enabled is False
 
 
 def test_default_config_is_created_once(tmp_path: Path) -> None:
@@ -69,6 +76,8 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.search_ranking.adaptive_result_score_ratio_floor == 0.7
     assert loaded.search_ranking.adaptive_result_min_score == 0.35
     assert loaded.search_ranking.adaptive_result_max_score_gap == 0.08
+    assert loaded.searchkernel_shadow.enabled is False
+    assert loaded.searchkernel_shadow.max_diagnostic_results == 20
     assert loaded.memory.recency_plan.max_boost_amount == 0.15
     assert loaded.memory.recency_plan.boost_decay_rate == 0.97
     assert loaded.memory.recency_fact.max_boost_amount == 0.05

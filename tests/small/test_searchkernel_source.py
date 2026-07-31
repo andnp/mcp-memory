@@ -206,6 +206,20 @@ class TestMemorySearchableSource:
         assert call_args.kwargs["status"] is None
 
     @pytest.mark.asyncio
+    async def test_side_effect_free_search_is_forwarded(
+        self, mock_search_service: MagicMock
+    ) -> None:
+        mock_search_service.search_memories.return_value = []
+        adapter = MemorySearchableSource(
+            mock_search_service,
+            side_effect_free=True,
+        )
+
+        await adapter.search("query", k=10)
+
+        assert mock_search_service.search_memories.call_args.kwargs["side_effect_free"] is True
+
+    @pytest.mark.asyncio
     async def test_search_passes_workspace_filter(
         self, adapter: MemorySearchableSource, mock_search_service: MagicMock
     ) -> None:

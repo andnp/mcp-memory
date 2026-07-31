@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from time import perf_counter
+import asyncio
+from time import perf_counter, time
 import logging
+from typing import Any, Sequence
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal_operations import RecordThoughtOperation
@@ -27,10 +29,75 @@ from mcp_memory.mcp.cache_policy import (
 )
 from mcp_memory.mcp.payloads import build_read_payload, build_search_result_payloads
 from mcp_memory.application.ports import RetrievalTelemetryPort
+from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
+from mcp_memory.integrations.searchkernel_source import build_memory_search_kernel
 from mcp_memory.relational.operations import ReadMemoryRecordOperation, SearchMemoryRecordsOperation
 
 
 logger = logging.getLogger(__name__)
+
+
+def _run_searchkernel_shadow(
+    ctx: ApplicationContext,
+    *,
+    query: str,
+    limit: int,
+    native_results: Sequence[Any],
+    workspace_id: str | None,
+    memory_type: str | None,
+    status: str | None,
+    include_superseded: bool,
+) -> None:
+    config = ctx.config
+    shadow_config = None if config is None else getattr(config, "searchkernel_shadow", None)
+    if shadow_config is None or not shadow_config.enabled:
+        return
+    try:
+        kernel = build_memory_search_kernel(
+            ctx.relational_search,
+            per_source_timeout_s=shadow_config.per_source_timeout_seconds,
+            side_effect_free=True,
+        )
+        diagnostics = asyncio.run(
+            run_searchkernel_shadow(
+                kernel,
+                query=query,
+                requested_limit=limit,
+                native_results=native_results,
+                filters={
+                    "workspace_id": workspace_id,
+                    "memory_type": memory_type,
+                    "status": status,
+                    "include_superseded": include_superseded,
+                },
+                max_results=shadow_config.max_diagnostic_results,
+            )
+        )
+        payload = diagnostics.to_payload()
+        runtime_logs = getattr(ctx, "runtime_logs", None)
+        if runtime_logs is not None:
+            try:
+                runtime_logs.write_log(
+                    source="searchkernel-shadow",
+                    logger_name=__name__,
+                    level="WARNING" if diagnostics.error else "INFO",
+                    message="Searchkernel shadow comparison",
+                    created_at=time(),
+                    data=payload,
+                )
+            except Exception:
+                logger.debug(
+                    "Searchkernel shadow diagnostic write failed",
+                    exc_info=True,
+                )
+        if diagnostics.error:
+            logger.debug("Searchkernel shadow comparison failed: %s", diagnostics.error)
+    except Exception:
+        logger.debug(
+            "Searchkernel shadow comparison was isolated from the search response",
+            exc_info=True,
+        )
+
 
 def _record_thought(
     ctx: ApplicationContext,
@@ -194,6 +261,16 @@ def _search_memory_records(
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
         duration_ms=duration_ms,
+    )
+    _run_searchkernel_shadow(
+        ctx,
+        query=query,
+        limit=execution_arguments["limit"],
+        native_results=results,
+        workspace_id=execution_arguments["workspace_id"],
+        memory_type=execution_arguments["memory_type"],
+        status=execution_arguments["status"],
+        include_superseded=execution_arguments["include_superseded"],
     )
     result_payloads = build_search_result_payloads(
         results, debug_enabled=debug_enabled
