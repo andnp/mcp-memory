@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.management.models import CompactMemoryRecord
-from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
+
 from mcp_memory.relational.search import RelationalSearchResult
 
 
-def memory_record_payload(record: RelationalMemoryRecord) -> dict:
+def memory_record_payload(record: MemoryRecord) -> dict:
     return {
         "id": record.id,
         "title": record.title,
@@ -29,7 +30,7 @@ def memory_record_payload(record: RelationalMemoryRecord) -> dict:
 _AUTO_LINK_PREFIX = "Auto-linked from shared tags"
 
 
-def agent_memory_record_payload(record: RelationalMemoryRecord) -> dict:
+def agent_memory_record_payload(record: MemoryRecord) -> dict:
     """Minimal record payload for agent consumption.
 
     Contains only the fields a model needs to understand the memory:
@@ -45,7 +46,7 @@ def agent_memory_record_payload(record: RelationalMemoryRecord) -> dict:
     }
 
 
-def agent_memory_record_payload_with_metadata(record: RelationalMemoryRecord) -> dict:
+def agent_memory_record_payload_with_metadata(record: MemoryRecord) -> dict:
     """Agent-facing record payload with explicit audit metadata included.
 
     This is intentionally opt-in for MCP tools: metadata can be useful for
@@ -76,7 +77,7 @@ def agent_link_payload(link: MemoryLink) -> dict:
 
 
 def compact_memory_record_payload(
-    record: RelationalMemoryRecord,
+    record: MemoryRecord,
 ) -> CompactMemoryRecord:
     return CompactMemoryRecord(
         id=record.id,

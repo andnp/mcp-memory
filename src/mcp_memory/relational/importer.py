@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.core.ports.memory import MemoryMutationPort
 
 
 FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
@@ -64,7 +64,7 @@ def parse_markdown_memory(file_path: Path):
 
 
 def import_markdown_memory(
-    repository: RelationalMemoryRepository,
+    repository: MemoryMutationPort,
     file_path: Path,
     workspace_ids: list[str] | None = None,
 ):
@@ -84,7 +84,7 @@ def import_markdown_memory(
 
 
 def import_markdown_memories(
-    repository: RelationalMemoryRepository,
+    repository: MemoryMutationPort,
     memory_path: Path,
     workspace_ids: list[str] | None = None,
 ):
@@ -125,7 +125,7 @@ def resolve_markdown_import_paths(paths_or_globs: list[str | Path]) -> list[Path
 
 
 def import_markdown_memory_paths(
-    repository: RelationalMemoryRepository,
+    repository: MemoryMutationPort,
     paths_or_globs: list[str | Path],
     workspace_ids: list[str] | None = None,
 ):

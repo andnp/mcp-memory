@@ -9,7 +9,7 @@ from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
-from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.curation_store import SQLiteCurationStore
@@ -29,7 +29,7 @@ def build_sqlite_runtime_components(
 ) -> StorageBackendResources:
     db_manager = DatabaseManager(spec.memory_path / "indices" / "memory.db")
     journal = System1Journal(db_manager)
-    repository = RelationalMemoryRepository(db_manager)
+    repository = SQLiteRelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
     provider_usage = ProviderUsageRepository(db_manager, workspace_id=spec.workspace_id)

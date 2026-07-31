@@ -8,16 +8,18 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 from mcp_memory.config import Config
 from mcp_memory.embeddings import is_fallback_embedding_model
-from mcp_memory.relational.repository import (
+from mcp_memory.core.ports.memory import (
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
+    MemoryMaintenanceReadPort,
+    MemoryReadContext,
+    MemoryReadPort,
     RankedMemoryCandidate,
-    RelationalMemoryReadContext,
-    RelationalMemoryRecord,
+    MemoryRecord,
 )
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
@@ -55,87 +57,10 @@ class _SemanticScoreKwargs(TypedDict, total=False):
 logger = logging.getLogger(__name__)
 
 
-class SearchRepositoryLike(Protocol):
-    def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]: ...
-
-    def search_keyword_memory_ids(
-        self,
-        query: str,
-        *,
-        workspace_id: str | None = None,
-        memory_type: str | None = None,
-        status: str | None = None,
-        include_superseded: bool = False,
-        limit: int = 50,
-    ) -> list[str]: ...
-
-    def get_ranking_candidates(
-        self,
-        memory_ids: list[str],
-        *,
-        status: str | None = None,
-        include_superseded: bool = False,
-    ) -> list[RankedMemoryCandidate]: ...
-
-    def get_searchable_memories(
-        self,
-        memory_ids: list[str],
-        *,
-        status: str | None = None,
-        include_superseded: bool = False,
-    ) -> list[RelationalMemoryRecord]: ...
-
-    def get_links(
-        self,
-        memory_id: str,
-        direction: str = "outgoing",
-        link_type: str | None = None,
-    ) -> list[MemoryLink]: ...
-
-    def count_incoming_links(self, memory_id: str) -> int: ...
-
-    def touch_last_surfaced(self, memory_ids: list[str], surfaced_at: str, *, best_effort: bool = False) -> int: ...
-
-    def record_access(
-        self,
-        memory_id: str,
-        access_score: float,
-        accessed_at: str,
-        increment_read_count: bool = False,
-    ) -> RelationalMemoryRecord | None: ...
-
-    def get_memory(self, memory_id: str) -> RelationalMemoryRecord | None: ...
-
-    def list_memories(
-        self,
-        workspace_id: str | None = None,
-        memory_type: str | None = None,
-        status: str | None = None,
-        limit: int = 100,
-    ) -> list[RelationalMemoryRecord]: ...
-
-    def list_memory_ids(
-        self,
-        workspace_id: str | None = None,
-        memory_type: str | None = None,
-        status: str | None = None,
-        limit: int = 100,
-    ) -> list[str]: ...
-
-
-class MaintenanceReadRepositoryLike(Protocol):
-    def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None: ...
-
-    def search_memories_for_maintenance(
-        self,
-        query: str,
-        *,
-        workspace_id: str | None = None,
-        memory_type: str | None = None,
-        status: str | None = None,
-        include_superseded: bool = False,
-        limit: int = 50,
-    ) -> list[RelationalMemoryReadContext]: ...
+SearchRepositoryLike = MemoryReadPort
+MaintenanceReadRepositoryLike = MemoryMaintenanceReadPort
+RelationalMemoryRecord = MemoryRecord
+RelationalMemoryReadContext = MemoryReadContext
 
 
 @dataclass(slots=True)

@@ -1,3 +1,7 @@
 """Application-owned maintenance read port."""
-from mcp_memory.relational.search import MaintenanceReadRepositoryLike
+
+from mcp_memory.core.ports.memory import MemoryMaintenanceReadPort
+
+MaintenanceReadRepositoryLike = MemoryMaintenanceReadPort
+
 __all__ = ["MaintenanceReadRepositoryLike"]

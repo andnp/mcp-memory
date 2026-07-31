@@ -41,7 +41,8 @@ from mcp_memory.mutation_history import (
     RevisionRole,
     is_protection_active,
 )
-from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
+
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -90,7 +91,7 @@ class MutationResult:
 class CurationTransaction(Protocol):
     """The callback-only, transaction-scoped domain mutation surface."""
 
-    def get_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord | None: ...
+    def get_memory(self, memory_id: str | UUID) -> MemoryRecord | None: ...
 
     def get_links(
         self,
@@ -102,11 +103,11 @@ class CurationTransaction(Protocol):
 
     def get_protections(self, memory_id: str | UUID) -> list[object]: ...
 
-    def update_memory(self, memory_id: str | UUID, **changes: object) -> RelationalMemoryRecord: ...
+    def update_memory(self, memory_id: str | UUID, **changes: object) -> MemoryRecord: ...
 
-    def create_memory(self, **values: object) -> RelationalMemoryRecord: ...
+    def create_memory(self, **values: object) -> MemoryRecord: ...
 
-    def delete_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord: ...
+    def delete_memory(self, memory_id: str | UUID) -> MemoryRecord: ...
 
     def add_link(
         self,
@@ -118,7 +119,7 @@ class CurationTransaction(Protocol):
 
     def remove_link(self, source_id: str | UUID, target_id: str | UUID, link_type: str) -> bool: ...
 
-    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> RelationalMemoryRecord: ...
+    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> MemoryRecord: ...
 
 
 class CurationActionStore(Protocol):
@@ -378,8 +379,8 @@ class SQLiteCurationActionStore:
             if row is None:
                 raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
 
-    def _read_records(self, connection: sqlite3.Connection, memory_ids: Sequence[str]) -> dict[str, RelationalMemoryRecord]:
-        records: dict[str, RelationalMemoryRecord] = {}
+    def _read_records(self, connection: sqlite3.Connection, memory_ids: Sequence[str]) -> dict[str, MemoryRecord]:
+        records: dict[str, MemoryRecord] = {}
         for memory_id in memory_ids:
             row = connection.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
             if row is not None:
@@ -389,7 +390,7 @@ class SQLiteCurationActionStore:
     def _check_tokens(
         self,
         connection: sqlite3.Connection,
-        records: Mapping[str, RelationalMemoryRecord],
+        records: Mapping[str, MemoryRecord],
         target_ids: Sequence[str],
         expected_tokens: Mapping[str, str],
     ) -> None:
@@ -480,8 +481,8 @@ class SQLiteCurationActionStore:
     def _write_repair_intents(
         self,
         connection: sqlite3.Connection,
-        before_records: Mapping[str, RelationalMemoryRecord],
-        after_records: Mapping[str, RelationalMemoryRecord],
+        before_records: Mapping[str, MemoryRecord],
+        after_records: Mapping[str, MemoryRecord],
     ) -> None:
         now = time.time()
         for memory_id, after in after_records.items():
@@ -521,8 +522,8 @@ class SQLiteCurationActionStore:
         actor_kind: MutationActorKind | str,
         restores_event_id: UUID | None,
         idempotency_key: str | None,
-        before_records: Mapping[str, RelationalMemoryRecord],
-        after_records: Mapping[str, RelationalMemoryRecord],
+        before_records: Mapping[str, MemoryRecord],
+        after_records: Mapping[str, MemoryRecord],
         before_links: Mapping[tuple[str, str, str], MemoryLink],
         after_links: Mapping[tuple[str, str, str], MemoryLink],
     ) -> None:
@@ -702,7 +703,7 @@ class _SQLiteCurationTransaction:
         self.touched_ids: list[str] = []
         self._new_ids: set[str] = set()
 
-    def get_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord | None:
+    def get_memory(self, memory_id: str | UUID) -> MemoryRecord | None:
         normalized_id = self._require_access(memory_id)
         row = self._connection.execute("SELECT * FROM memories WHERE id = ?", (normalized_id,)).fetchone()
         return None if row is None else _hydrate_record(self._connection, row)
@@ -736,7 +737,7 @@ class _SQLiteCurationTransaction:
             ).fetchall()
         )
 
-    def update_memory(self, memory_id: str | UUID, **changes: object) -> RelationalMemoryRecord:
+    def update_memory(self, memory_id: str | UUID, **changes: object) -> MemoryRecord:
         normalized_id = self._require_access(memory_id)
         existing = self.get_memory(normalized_id)
         if existing is None:
@@ -783,7 +784,7 @@ class _SQLiteCurationTransaction:
         self._stage_hook("projection_update")
         return self.get_memory(normalized_id)  # type: ignore[return-value]
 
-    def create_memory(self, **values: object) -> RelationalMemoryRecord:
+    def create_memory(self, **values: object) -> MemoryRecord:
         memory_id = _canonical_id(values.get("memory_id", uuid4()))
         if self._connection.execute("SELECT 1 FROM memories WHERE id = ?", (memory_id,)).fetchone() is not None:
             raise CurationActionFatalError(f"memory {memory_id!r} already exists")
@@ -816,7 +817,7 @@ class _SQLiteCurationTransaction:
         assert record is not None
         return record
 
-    def delete_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord:
+    def delete_memory(self, memory_id: str | UUID) -> MemoryRecord:
         normalized_id = self._require_access(memory_id)
         existing = self.get_memory(normalized_id)
         if existing is None:
@@ -851,7 +852,7 @@ class _SQLiteCurationTransaction:
         self._stage_hook("domain_mutation")
         return cursor.rowcount > 0
 
-    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> RelationalMemoryRecord:
+    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> MemoryRecord:
         record = self.get_memory(memory_id)
         if record is None:
             raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
@@ -967,7 +968,7 @@ def _build_summary(title: str, content: str, memory_type: str) -> str:
     return build_deterministic_summary(title=title, content=content, memory_type=memory_type)
 
 
-def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> RelationalMemoryRecord:
+def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> MemoryRecord:
     workspace_rows = connection.execute(
         "SELECT workspace_id FROM memory_workspaces WHERE memory_id = ? ORDER BY workspace_id ASC", (row["id"],)
     ).fetchall()
@@ -975,7 +976,7 @@ def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> Relatio
         "SELECT tags.name FROM tags JOIN memory_tags ON memory_tags.tag_id = tags.id WHERE memory_tags.memory_id = ? ORDER BY tags.name ASC",
         (row["id"],),
     ).fetchall()
-    return RelationalMemoryRecord(
+    return MemoryRecord(
         id=str(row["id"]), title=str(row["title"]), content=str(row["content"]), summary=row["summary"],
         type=str(row["type"]), status=str(row["status"]), created_at=str(row["created_at"]), updated_at=str(row["updated_at"]),
         read_count=int(row["read_count"] or 0), access_score=float(row["access_score"] or 0),
@@ -997,15 +998,15 @@ def _link_mapping(link: MemoryLink) -> dict[str, str | None]:
     return {"source_id": link.source_id, "target_id": link.target_id, "type": link.link_type, "context": link.context}
 
 
-def _snapshot(record: RelationalMemoryRecord) -> dict[str, Any]:
+def _snapshot(record: MemoryRecord) -> dict[str, Any]:
     return record_snapshot(record)
 
 
-def _semantic_token(record: RelationalMemoryRecord) -> str:
+def _semantic_token(record: MemoryRecord) -> str:
     return record_token(record)
 
 
-def _state_token(records: Mapping[str, RelationalMemoryRecord], ids: Sequence[str]) -> str | None:
+def _state_token(records: Mapping[str, MemoryRecord], ids: Sequence[str]) -> str | None:
     if not records:
         return None
     return canonical_token({"targets": list(ids), "records": {key: _snapshot(records[key]) for key in sorted(records, key=lambda value: value.encode("utf-8"))}})

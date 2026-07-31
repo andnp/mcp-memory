@@ -5,12 +5,27 @@ from uuid import UUID
 
 import pytest
 
+from mcp_memory.core.ports.memory import (
+    MemoryLinkPort,
+    MemoryMaintenanceReadPort,
+    MemoryMutationPort,
+    MemoryReadPort,
+)
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
 from mcp_memory.utils.db_schema import create_current_schema, finalize_schema_setup
 
 
 pytestmark = pytest.mark.small
+
+
+def test_sqlite_repository_implements_memory_ports(db_manager):
+    repository = RelationalMemoryRepository(db_manager)
+
+    assert isinstance(repository, MemoryReadPort)
+    assert isinstance(repository, MemoryMutationPort)
+    assert isinstance(repository, MemoryLinkPort)
+    assert isinstance(repository, MemoryMaintenanceReadPort)
 
 
 def test_database_manager_initializes_relational_memory_schema(db_manager):

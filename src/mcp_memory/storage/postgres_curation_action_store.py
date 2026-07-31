@@ -53,7 +53,8 @@ from mcp_memory.mutation_history import (
     RevisionRole,
     is_protection_active,
 )
-from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
+
 from mcp_memory.storage.postgres_curation_store import _receipt_from_row
 from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionManager
 
@@ -322,7 +323,7 @@ class PostgresCurationActionStore:
             if cursor.fetchone() is None:
                 raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
 
-    def _read_records(self, cursor: CursorLike, memory_ids: Sequence[str]) -> dict[str, RelationalMemoryRecord]:
+    def _read_records(self, cursor: CursorLike, memory_ids: Sequence[str]) -> dict[str, MemoryRecord]:
         if not memory_ids:
             return {}
         cursor.execute(
@@ -335,7 +336,7 @@ class PostgresCurationActionStore:
     def _check_tokens(
         self,
         cursor: CursorLike,
-        records: Mapping[str, RelationalMemoryRecord],
+        records: Mapping[str, MemoryRecord],
         target_ids: Sequence[str],
         expected_tokens: Mapping[str, str],
     ) -> None:
@@ -429,8 +430,8 @@ class PostgresCurationActionStore:
     def _write_repair_intents(
         self,
         cursor: CursorLike,
-        before_records: Mapping[str, RelationalMemoryRecord],
-        after_records: Mapping[str, RelationalMemoryRecord],
+        before_records: Mapping[str, MemoryRecord],
+        after_records: Mapping[str, MemoryRecord],
     ) -> None:
         now = time.time()
         for memory_id, after in after_records.items():
@@ -471,8 +472,8 @@ class PostgresCurationActionStore:
         actor_kind: MutationActorKind | str,
         restores_event_id: UUID | None,
         idempotency_key: str | None,
-        before_records: Mapping[str, RelationalMemoryRecord],
-        after_records: Mapping[str, RelationalMemoryRecord],
+        before_records: Mapping[str, MemoryRecord],
+        after_records: Mapping[str, MemoryRecord],
         before_links: Mapping[tuple[str, str, str], MemoryLink],
         after_links: Mapping[tuple[str, str, str], MemoryLink],
     ) -> None:
@@ -624,7 +625,7 @@ class _PostgresCurationTransaction:
         self.touched_ids: list[str] = []
         self._new_ids: set[str] = set()
 
-    def get_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord | None:
+    def get_memory(self, memory_id: str | UUID) -> MemoryRecord | None:
         normalized_id = self._require_access(memory_id)
         row = _select_memory_row(self._cursor, normalized_id)
         return None if row is None else _hydrate_record(self._cursor, row)
@@ -655,7 +656,7 @@ class _PostgresCurationTransaction:
         )
         return list(self._cursor.fetchall())
 
-    def update_memory(self, memory_id: str | UUID, **changes: object) -> RelationalMemoryRecord:
+    def update_memory(self, memory_id: str | UUID, **changes: object) -> MemoryRecord:
         normalized_id = self._require_access(memory_id)
         existing = self.get_memory(normalized_id)
         if existing is None:
@@ -725,7 +726,7 @@ class _PostgresCurationTransaction:
         assert updated is not None
         return updated
 
-    def create_memory(self, **values: object) -> RelationalMemoryRecord:
+    def create_memory(self, **values: object) -> MemoryRecord:
         memory_id = _canonical_id(values.get("memory_id", uuid4()))
         title = str(values.get("title", "")).strip()
         content = str(values.get("content", "")).strip()
@@ -765,7 +766,7 @@ class _PostgresCurationTransaction:
         assert record is not None
         return record
 
-    def delete_memory(self, memory_id: str | UUID) -> RelationalMemoryRecord:
+    def delete_memory(self, memory_id: str | UUID) -> MemoryRecord:
         normalized_id = self._require_access(memory_id)
         existing = self.get_memory(normalized_id)
         if existing is None:
@@ -806,7 +807,7 @@ class _PostgresCurationTransaction:
         self._stage_hook("domain_mutation")
         return int(getattr(self._cursor, "rowcount", 0) or 0) > 0
 
-    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> RelationalMemoryRecord:
+    def set_lineage(self, memory_id: str | UUID, lineage: Mapping[str, object]) -> MemoryRecord:
         record = self.get_memory(memory_id)
         if record is None:
             raise CurationActionStaleError(f"target memory {memory_id!r} is missing")
@@ -892,7 +893,7 @@ def _select_memory_row(cursor: CursorLike, memory_id: str) -> tuple[object, ...]
     return cursor.fetchone()
 
 
-def _hydrate_record(cursor: CursorLike, row: tuple[object, ...]) -> RelationalMemoryRecord:
+def _hydrate_record(cursor: CursorLike, row: tuple[object, ...]) -> MemoryRecord:
     memory_id = str(row[0])
     cursor.execute("SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC", (memory_id,))
     workspace_rows = cursor.fetchall()
@@ -908,7 +909,7 @@ def _hydrate_record(cursor: CursorLike, row: tuple[object, ...]) -> RelationalMe
         metadata = loaded if isinstance(loaded, dict) else {}
     elif not isinstance(metadata, Mapping):
         metadata = {}
-    return RelationalMemoryRecord(
+    return MemoryRecord(
         id=memory_id,
         title=str(row[1]),
         content=str(row[2]),

@@ -5,75 +5,37 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from mcp_memory.core.summaries import build_deterministic_summary
+from mcp_memory.core.ports.memory import (
+    FTS_QUERY_TOKEN_PATTERN,
+    MemoryLink,
+    MemoryReadContext,
+    MemoryRecord,
+    RankedMemoryCandidate,
+    VALID_MEMORY_STATUSES,
+    VALID_MEMORY_TYPES,
+    _DEFAULT_CANDIDATE_LIMIT,
+    _DEFAULT_LOW_SUPPORT_MAX,
+    _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
+    _DEFAULT_QUALITY_OVERSIZED_MIN_CHARS,
+    _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
+    _QUALITY_SIGNAL_ALIASES,
+    build_memory_summary,
+    build_read_cache_validation_token,
+)
 from mcp_memory.utils.db import DatabaseManager
 
-VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
-VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
-FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 _SUMMARY_UNSET = object()
 _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
-_DEFAULT_CANDIDATE_LIMIT = 50
-_DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS = 3_000
-_DEFAULT_THIN_CANDIDATE_MAX_CHARS = 800
-_DEFAULT_LOW_SUPPORT_MAX = 1
-_DEFAULT_QUALITY_OVERSIZED_MIN_CHARS = 4_000
-
-_QUALITY_SIGNAL_ALIASES = {
-    "trace_like": "trace_like_memory_count",
-    "generic_summary": "generic_summary_count",
-    "untagged_observation": "untagged_observation_count",
-    "oversized": "oversized_memory_count",
-}
 
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RelationalMemoryRecord:
-    id: str
-    title: str
-    content: str
-    summary: str | None
-    type: str
-    status: str
-    created_at: str
-    updated_at: str
-    read_count: int
-    access_score: float
-    last_accessed_at: str | None
-    last_surfaced_at: str | None
-    metadata: dict[str, object] = field(default_factory=dict)
-    workspace_ids: list[str] = field(default_factory=list)
-    tags: list[str] = field(default_factory=list)
-
-
-@dataclass
-class MemoryLink:
-    source_id: str
-    target_id: str
-    link_type: str
-    context: str
-
-
-@dataclass
-class RelationalMemoryReadContext:
-    record: RelationalMemoryRecord
-    relationships: dict[str, list[MemoryLink]]
-    superseded: list[RelationalMemoryRecord]
-
-
-@dataclass
-class RankedMemoryCandidate:
-    record: RelationalMemoryRecord
-    incoming_links_count: int
-    has_incoming_supersedes: bool = False
-    incoming_link_type_counts: dict[str, int] = field(default_factory=dict)
+RelationalMemoryRecord = MemoryRecord
+RelationalMemoryReadContext = MemoryReadContext
 
 
 class RelationalMemoryRepository:
@@ -1235,11 +1197,10 @@ class RelationalMemoryRepository:
         return datetime.now(UTC).isoformat()
 
     def _build_summary(self, *, title: str, content: str, memory_type: str | None = None):
-        return build_deterministic_summary(
-            title=title,
-            content=content,
-            memory_type=memory_type,
-        )
+        return build_memory_summary(title=title, content=content, memory_type=memory_type)
+
+
+SQLiteRelationalMemoryRepository = RelationalMemoryRepository
 
 
 def _split_csv_values(value: str | None) -> list[str]:
@@ -1286,43 +1247,3 @@ def _quality_signal_clause(quality_signal: str | None) -> tuple[str, list[object
 def _stable_seeded_random_key(seed: object, memory_id: object) -> str:
     payload = f"{seed}\x00{memory_id}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def build_read_cache_validation_token(
-    *,
-    record: RelationalMemoryRecord,
-    outgoing_links: list[MemoryLink],
-    incoming_links: list[MemoryLink],
-    superseded_records: list[RelationalMemoryRecord],
-) -> str:
-    payload = {
-        "memory_id": record.id,
-        "record": {
-            "status": record.status,
-            "updated_at": record.updated_at,
-        },
-        "relationships": {
-            "incoming": _serialized_link_tuples(incoming_links),
-            "outgoing": _serialized_link_tuples(outgoing_links),
-        },
-        "superseded": [
-            {
-                "memory_id": superseded_record.id,
-                "status": superseded_record.status,
-                "updated_at": superseded_record.updated_at,
-            }
-            for superseded_record in sorted(
-                superseded_records,
-                key=lambda item: (item.id, item.updated_at, item.status),
-            )
-        ],
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return f"v1:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _serialized_link_tuples(links: list[MemoryLink]) -> list[tuple[str, str, str, str]]:
-    return sorted(
-        (link.source_id, link.target_id, link.link_type, link.context)
-        for link in links
-    )

@@ -9,7 +9,7 @@ from typing import cast
 from uuid import uuid4
 
 from mcp_memory.core.summaries import build_deterministic_summary
-from mcp_memory.relational.repository import (
+from mcp_memory.core.ports.memory import (
     _DEFAULT_CANDIDATE_LIMIT,
     _DEFAULT_LOW_SUPPORT_MAX,
     _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS,
@@ -18,9 +18,9 @@ from mcp_memory.relational.repository import (
     _QUALITY_SIGNAL_ALIASES,
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
+    MemoryReadContext,
+    MemoryRecord,
     RankedMemoryCandidate,
-    RelationalMemoryReadContext,
-    RelationalMemoryRecord,
     build_read_cache_validation_token,
     VALID_MEMORY_STATUSES,
     VALID_MEMORY_TYPES,
@@ -30,6 +30,8 @@ from mcp_memory.storage.session import CursorLike, DbConnectionLike, SessionMana
 
 
 _SUMMARY_UNSET = object()
+RelationalMemoryReadContext = MemoryReadContext
+RelationalMemoryRecord = MemoryRecord
 
 
 class PostgresRelationalMemoryRepository:

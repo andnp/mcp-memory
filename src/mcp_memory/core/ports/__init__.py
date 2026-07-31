@@ -10,6 +10,16 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .curation import CurationActionStore, CurationRepository, CurationTransaction, MutationResult
     from .maintenance import MaintenanceReadRepositoryLike
+    from .memory import (
+        MemoryLink,
+        MemoryMaintenanceReadPort,
+        MemoryMutationPort,
+        MemoryReadContext,
+        MemoryReadPort,
+        MemoryRecord,
+        MemoryRepositoryPort,
+        RankedMemoryCandidate,
+    )
     from .planner import CurationPlanner, CurationReadTools, PlannerExecutionEnvelope, PlannerExecutionStatus
     from .providers import (
         NullProviderUsagePort,
@@ -28,6 +38,14 @@ _EXPORTS = {
     "CurationTransaction": ("curation", "CurationTransaction"),
     "MutationResult": ("curation", "MutationResult"),
     "MaintenanceReadRepositoryLike": ("maintenance", "MaintenanceReadRepositoryLike"),
+    "MemoryLink": ("memory", "MemoryLink"),
+    "MemoryMaintenanceReadPort": ("memory", "MemoryMaintenanceReadPort"),
+    "MemoryMutationPort": ("memory", "MemoryMutationPort"),
+    "MemoryReadContext": ("memory", "MemoryReadContext"),
+    "MemoryReadPort": ("memory", "MemoryReadPort"),
+    "MemoryRecord": ("memory", "MemoryRecord"),
+    "MemoryRepositoryPort": ("memory", "MemoryRepositoryPort"),
+    "RankedMemoryCandidate": ("memory", "RankedMemoryCandidate"),
     "CurationPlanner": ("planner", "CurationPlanner"),
     "CurationReadTools": ("planner", "CurationReadTools"),
     "PlannerExecutionEnvelope": ("planner", "PlannerExecutionEnvelope"),
@@ -53,6 +71,14 @@ __all__ = (
     "CurationTransaction",
     "MutationResult",
     "MaintenanceReadRepositoryLike",
+    "MemoryLink",
+    "MemoryMaintenanceReadPort",
+    "MemoryMutationPort",
+    "MemoryReadContext",
+    "MemoryReadPort",
+    "MemoryRecord",
+    "MemoryRepositoryPort",
+    "RankedMemoryCandidate",
     "CurationPlanner",
     "CurationReadTools",
     "PlannerExecutionEnvelope",

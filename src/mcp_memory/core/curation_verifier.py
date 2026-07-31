@@ -24,8 +24,10 @@ from mcp_memory.core.ports.curation import (
     CurationReceiptState,
     CurationRepository,
 )
-from mcp_memory.relational.repository import MemoryLink, RelationalMemoryReadContext
+from mcp_memory.core.ports.memory import MemoryLink, MemoryReadContext
 from mcp_memory.core.ports.maintenance import MaintenanceReadRepositoryLike
+
+RelationalMemoryReadContext = MemoryReadContext
 
 
 class CurationVerificationError(RuntimeError):

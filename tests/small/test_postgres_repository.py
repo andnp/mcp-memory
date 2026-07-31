@@ -13,6 +13,12 @@ from uuid import UUID
 import pytest
 
 from mcp_memory.config import Config
+from mcp_memory.core.ports.memory import (
+    MemoryLinkPort,
+    MemoryMaintenanceReadPort,
+    MemoryMutationPort,
+    MemoryReadPort,
+)
 from mcp_memory.embeddings import EmbeddingRecord
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.storage.postgres_repository import PostgresRelationalMemoryRepository
@@ -715,6 +721,17 @@ def postgres_repository() -> Iterator[tuple[PostgresRelationalMemoryRepository, 
         yield repository, session_manager
     finally:
         repository.close()
+
+
+def test_postgres_repository_implements_memory_ports(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _ = postgres_repository
+
+    assert isinstance(repository, MemoryReadPort)
+    assert isinstance(repository, MemoryMutationPort)
+    assert isinstance(repository, MemoryLinkPort)
+    assert isinstance(repository, MemoryMaintenanceReadPort)
 
 
 def test_postgres_repository_create_read_update_and_list_memory(
