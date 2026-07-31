@@ -23,7 +23,7 @@ dependencies = [
     "pyzmq>=27.0.0",
     "textual>=0.44.0",
     "github-copilot-sdk>=1.0.1",
-    "andnp-searchkernel",
+    "andnp-searchkernel>=0.2.0",
 ]
 
 [project.scripts]
@@ -42,9 +42,6 @@ dev = [
 
 [tool.uv]
 package = true
-
-[tool.uv.sources]
-andnp-searchkernel = { path = "../andnp-searchkernel", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
