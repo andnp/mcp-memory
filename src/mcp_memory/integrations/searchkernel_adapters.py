@@ -114,6 +114,9 @@ class MemoryKeywordStore(KeywordStore):
             include_superseded=bool(filters.get("include_superseded", False)),
             limit=k,
         )
+        signal_context = filters.get("_mcp_memory_signal_context")
+        if hasattr(signal_context, "keyword_candidates_present"):
+            setattr(signal_context, "keyword_candidates_present", bool(memory_ids))
         return [
             (memory_id, 1.0 / rank)
             for rank, memory_id in enumerate(memory_ids, start=1)

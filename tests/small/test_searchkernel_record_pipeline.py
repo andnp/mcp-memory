@@ -12,7 +12,7 @@ from mcp_memory.core.ports.memory import (
     MemoryRecord,
     MemoryRepositoryPort,
 )
-from mcp_memory.relational.search import RankingEngine
+from mcp_memory.relational.search import RankingEngine, RankingSignals
 from mcp_memory.context import ApplicationContext
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -29,12 +29,16 @@ def _memory(
     *,
     status: str = "active",
     workspace_ids: list[str] | None = None,
+    title: str | None = None,
+    content: str | None = None,
+    summary: str | None = "summary",
+    tags: list[str] | None = None,
 ) -> MemoryRecord:
     return MemoryRecord(
         id=memory_id,
-        title=memory_id,
-        content=f"body {memory_id}",
-        summary="summary",
+        title=title or memory_id,
+        content=content or f"body {memory_id}",
+        summary=summary,
         type="fact",
         status=status,
         created_at="2026-07-30T12:00:00+00:00",
@@ -44,24 +48,29 @@ def _memory(
         last_accessed_at=None,
         last_surfaced_at=None,
         workspace_ids=workspace_ids or ["workspace-1"],
-        tags=[],
+        tags=tags or [],
     )
 
 
 class FakeRepository:
-    def __init__(self) -> None:
-        self.records = {
+    def __init__(
+        self,
+        records: dict[str, MemoryRecord] | None = None,
+        keyword_ids: list[str] | None = None,
+    ) -> None:
+        self.records = records or {
             "active": _memory("active"),
             "other-workspace": _memory("other-workspace", workspace_ids=["workspace-2"]),
             "archived": _memory("archived", status="archived"),
             "superseded": _memory("superseded"),
         }
+        self.keyword_ids = keyword_ids
         self.links = [
             MemoryLink("active", "superseded", "SUPERSEDES", ""),
         ]
 
     def search_keyword_memory_ids(self, query: str, **kwargs: object) -> list[str]:
-        return list(self.records)
+        return list(self.records) if self.keyword_ids is None else list(self.keyword_ids)
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
         return self.records.get(memory_id)
@@ -108,9 +117,10 @@ class RankingRepository(FakeRepository):
 class FakeVectorStore:
     supports_candidate_filtering = True
 
-    def __init__(self) -> None:
+    def __init__(self, results: list[tuple[str, float]] | None = None) -> None:
         self.search_count = 0
         self.write_count = 0
+        self.results = results
 
     def upsert(self, **kwargs: object) -> bool:
         self.write_count += 1
@@ -118,7 +128,7 @@ class FakeVectorStore:
 
     def search(self, **kwargs: object) -> list[tuple[str, float]]:
         self.search_count += 1
-        return [
+        return self.results or [
             ("active", 1.0),
             ("other-workspace", 0.9),
             ("archived", 0.8),
@@ -217,13 +227,24 @@ def test_score_adjustment_matches_relational_ranking_engine() -> None:
     ).results
     engine = RankingEngine(cast("MemoryRepositoryPort", repository), config)
     expected = {
-        memory_id: engine.score_from_rrf(
-            repository.records[memory_id],
-            1.0 / (config.search_ranking.rrf_k + rank + 1),
+        record.id: score
+        for record, score in engine.rank_records(
+            list(repository.records.values()),
+            {
+                memory_id: 1.0 / (config.search_ranking.rrf_k + rank + 1)
+                for rank, memory_id in enumerate(
+                    ["plain", "accessed", "authority", "stale"]
+                )
+            },
             "workspace-1",
-        )
-        for rank, memory_id in enumerate(
-            ["plain", "accessed", "authority", "stale"]
+            ranking_signals={
+                memory_id: RankingSignals(
+                    matched_by_keyword=True,
+                    keyword_token_coverage=0.0,
+                )
+                for memory_id in repository.records
+            },
+            keyword_candidates_present=True,
         )
     }
 
@@ -258,6 +279,100 @@ def test_pipeline_ranking_is_read_only() -> None:
         for memory_id, record in repository.records.items()
     }
     assert after == before
+
+
+def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
+    partial = _memory(
+        "partial",
+        title="alpha",
+        summary="alpha",
+        content="alpha",
+    )
+    full = _memory(
+        "full",
+        title="alpha beta",
+        summary="alpha beta",
+        content="alpha beta",
+        tags=["alpha", "beta"],
+    )
+    repository = FakeRepository(
+        records={"partial": partial, "full": full},
+        keyword_ids=["partial", "full"],
+    )
+    results = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        config=Config(
+            search_ranking=SearchRankingConfig(
+                keyword_coverage_floor=0.6,
+                keyword_low_coverage_penalty=0.4,
+            )
+        ),
+    ).search("alpha beta", limit=2).results
+
+    scores = {result.record_id: result.score for result in results}
+    assert scores["full"] > scores["partial"]
+
+
+@pytest.mark.parametrize(
+    ("semantic_score", "expected_ids"),
+    [
+        (0.72, []),
+        (0.96, ["semantic"]),
+    ],
+)
+def test_semantic_only_abstention_uses_vector_raw_score(
+    semantic_score: float,
+    expected_ids: list[str],
+) -> None:
+    repository = FakeRepository(
+        records={"semantic": _memory("semantic")},
+        keyword_ids=[],
+    )
+    vector_store = FakeVectorStore([("semantic", semantic_score)])
+    outcome = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+        config=Config(
+            search_ranking=SearchRankingConfig(
+                semantic_only_abstain_threshold=0.8,
+            )
+        ),
+    ).search("unmatched query", limit=2)
+
+    assert [result.record_id for result in outcome.results] == expected_ids
+    assert vector_store.write_count == 0
+
+
+def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
+    exact = _memory(
+        "exact",
+        title="ripgrep ban",
+        summary="ripgrep ban",
+        content="Avoid broad ripgrep scans.",
+        tags=["ripgrep", "ban"],
+    )
+    distractor = _memory("distractor")
+    repository = FakeRepository(
+        records={"exact": exact, "distractor": distractor},
+        keyword_ids=["exact"],
+    )
+    results = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast(
+            "MemoryVectorBackend",
+            FakeVectorStore([("distractor", 0.99), ("exact", 0.55)]),
+        ),
+        embedder=FakeEmbedder(),
+        config=Config(
+            search_ranking=SearchRankingConfig(
+                semantic_only_keyword_penalty=0.4,
+            )
+        ),
+    ).search("ripgrep ban", limit=2).results
+
+    assert {result.record_id for result in results} == {"exact", "distractor"}
+    assert results[0].record_id == "exact"
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,12 @@ from searchkernel.search.record_pipeline import (
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord, MemoryRepositoryPort
-from mcp_memory.relational.search import RankingEngine, RankingSignals
+from mcp_memory.relational.search import (
+    RankingEngine,
+    RankingSignals,
+    _keyword_token_coverage,
+    _query_tokens,
+)
 from mcp_memory.integrations.searchkernel_adapters import (
     MemoryGraphStore,
     MemoryHydrator,
@@ -61,6 +66,16 @@ class MemoryRecordPipelineDiagnostics:
     reasons: tuple[str, ...] = ()
 
 
+@dataclass
+class _MemorySearchSignalContext:
+    query_tokens: tuple[str, ...]
+    semantic_only_abstain_threshold: float
+    keyword_candidates_present: bool = False
+    top_semantic_score: float = 0.0
+    top_score: float = float("-inf")
+    top_record_id: str = ""
+
+
 _ACTIVE_FILTERS: ContextVar[dict[str, object]] = ContextVar(
     "mcp_memory_searchkernel_filters",
     default={},
@@ -74,9 +89,11 @@ class MemoryRecordSearchPipeline:
         self,
         pipeline: RecordSearchPipeline,
         *,
+        semantic_only_abstain_threshold: float = 0.8,
         diagnostics: MemoryRecordPipelineDiagnostics = MemoryRecordPipelineDiagnostics(),
     ) -> None:
         self._pipeline = pipeline
+        self._semantic_only_abstain_threshold = semantic_only_abstain_threshold
         self.diagnostics = diagnostics
 
     def search(
@@ -86,9 +103,15 @@ class MemoryRecordSearchPipeline:
         limit: int = 10,
         filters: dict[str, object] | None = None,
     ) -> RecordSearchOutcome:
-        token = _ACTIVE_FILTERS.set(dict(filters or {}))
+        signal_context = _MemorySearchSignalContext(
+            query_tokens=tuple(_query_tokens(query)),
+            semantic_only_abstain_threshold=self._semantic_only_abstain_threshold,
+        )
+        active_filters = dict(filters or {})
+        active_filters["_mcp_memory_signal_context"] = signal_context
+        token = _ACTIVE_FILTERS.set(active_filters)
         try:
-            return self._pipeline.search(query, limit=limit, filters=filters)
+            return self._pipeline.search(query, limit=limit, filters=active_filters)
         finally:
             _ACTIVE_FILTERS.reset(token)
 
@@ -106,17 +129,12 @@ def build_memory_record_pipeline(
     The generic kernel can express lifecycle, workspace, type, and supersession
     filtering through policy hooks. Memory's RankingEngine supplies the
     recency, workspace, access, authority, degradation, and signal adjustments
-    without moving policy into searchkernel. Keyword coverage and query-wide
-    semantic-abstention context are unavailable from per-candidate provenance,
-    so those native signal decisions remain a parity gap.
+    without moving policy into searchkernel. The memory-owned signal context
+    carries query-wide keyword presence and semantic abstention state.
     """
     resolved_config = config or Config()
     ranking_engine = RankingEngine(repository, resolved_config)
     diagnostics: list[str] = []
-    diagnostics.append(
-        "ranking signal gap: keyword coverage and query-wide semantic abstention "
-        "remain native-only"
-    )
     embedding_provider: MemoryQueryEmbeddingProvider | None = None
     adapted_vector_store: MemoryVectorStore | None = None
     if vector_store is None:
@@ -153,6 +171,7 @@ def build_memory_record_pipeline(
     )
     return MemoryRecordSearchPipeline(
         pipeline,
+        semantic_only_abstain_threshold=resolved_config.search_ranking.semantic_only_abstain_threshold,
         diagnostics=MemoryRecordPipelineDiagnostics(tuple(diagnostics)),
     )
 
@@ -184,7 +203,16 @@ def _result_allowed(
     result: RecordSearchResult,
 ) -> bool:
     record = repository.get_memory(result.record_id)
-    return record is not None and _memory_allowed(repository, record)
+    if record is None or not _memory_allowed(repository, record):
+        return False
+    signal_context = _signal_context()
+    if signal_context is None:
+        return True
+    return (
+        signal_context.keyword_candidates_present
+        or signal_context.top_semantic_score
+        >= signal_context.semantic_only_abstain_threshold
+    )
 
 
 def _adjust_score(
@@ -201,11 +229,23 @@ def _adjust_score(
     provenance = candidate.provenance
     keyword = provenance.strategy_details.get("keyword")
     semantic = provenance.strategy_details.get("vector")
+    signal_context = _signal_context()
+    keyword_candidates_present = (
+        signal_context.keyword_candidates_present
+        if signal_context is not None
+        else keyword is not None
+    )
+    keyword_token_coverage = (
+        _keyword_token_coverage(signal_context.query_tokens, record)
+        if signal_context is not None and keyword is not None
+        else 0.0
+    )
+    semantic_score = 0.0 if semantic is None else semantic.raw_score
     signals = RankingSignals(
         matched_by_keyword=keyword is not None,
         matched_by_semantic=semantic is not None,
-        semantic_score=0.0 if semantic is None else semantic.raw_score,
-        keyword_token_coverage=1.0 if keyword is not None else 0.0,
+        semantic_score=semantic_score,
+        keyword_token_coverage=keyword_token_coverage,
         expanded_by_graph="graph" in provenance.strategies,
     )
     ranked = ranking_engine.rank_records(
@@ -213,9 +253,25 @@ def _adjust_score(
         {record.id: candidate.score},
         workspace,
         ranking_signals={record.id: signals},
-        keyword_candidates_present=keyword is not None,
+        keyword_candidates_present=keyword_candidates_present,
     )
-    return ranked[0][1] if ranked else 0.0
+    adjusted_score = ranked[0][1] if ranked else 0.0
+    if signal_context is not None and (
+        adjusted_score > signal_context.top_score
+        or (
+            adjusted_score == signal_context.top_score
+            and record.id < signal_context.top_record_id
+        )
+    ):
+        signal_context.top_score = adjusted_score
+        signal_context.top_record_id = record.id
+        signal_context.top_semantic_score = semantic_score
+    return adjusted_score
+
+
+def _signal_context() -> _MemorySearchSignalContext | None:
+    context = _ACTIVE_FILTERS.get().get("_mcp_memory_signal_context")
+    return context if isinstance(context, _MemorySearchSignalContext) else None
 
 
 def _sort_results(
