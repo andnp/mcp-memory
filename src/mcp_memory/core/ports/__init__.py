@@ -11,7 +11,14 @@ if TYPE_CHECKING:
     from .curation import CurationActionStore, CurationRepository, CurationTransaction, MutationResult
     from .maintenance import MaintenanceReadRepositoryLike
     from .planner import CurationPlanner, CurationReadTools, PlannerExecutionEnvelope, PlannerExecutionStatus
-    from .providers import ProviderUsagePort, TaskExecutionAttemptPort, TaskExecutionAttemptRecordLike
+    from .providers import (
+        NullProviderUsagePort,
+        ProviderConversationLike,
+        ProviderPolicyEventPort,
+        ProviderUsagePort,
+        TaskExecutionAttemptPort,
+        TaskExecutionAttemptRecordLike,
+    )
     from .work_items import WorkItemRecordLike, WorkItemRepository
 
 _EXPORTS = {
@@ -25,6 +32,9 @@ _EXPORTS = {
     "PlannerExecutionEnvelope": ("planner", "PlannerExecutionEnvelope"),
     "PlannerExecutionStatus": ("planner", "PlannerExecutionStatus"),
     "ProviderUsagePort": ("providers", "ProviderUsagePort"),
+    "NullProviderUsagePort": ("providers", "NullProviderUsagePort"),
+    "ProviderConversationLike": ("providers", "ProviderConversationLike"),
+    "ProviderPolicyEventPort": ("providers", "ProviderPolicyEventPort"),
     "TaskExecutionAttemptPort": ("providers", "TaskExecutionAttemptPort"),
     "TaskExecutionAttemptRecordLike": ("providers", "TaskExecutionAttemptRecordLike"),
     "WorkItemRecordLike": ("work_items", "WorkItemRecordLike"),
@@ -42,6 +52,9 @@ __all__ = (
     "PlannerExecutionEnvelope",
     "PlannerExecutionStatus",
     "ProviderUsagePort",
+    "NullProviderUsagePort",
+    "ProviderConversationLike",
+    "ProviderPolicyEventPort",
     "TaskExecutionAttemptPort",
     "TaskExecutionAttemptRecordLike",
     "WorkItemRecordLike",

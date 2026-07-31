@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 import logging
 import time
@@ -10,6 +11,8 @@ from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_policy import is_deterministic_task
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.config import Config
+from mcp_memory.core.ports.providers import ProviderPolicyEventPort
 
 
 logger = logging.getLogger(__name__)
@@ -19,9 +22,9 @@ _provider_warning_state: dict[tuple[str, str | None, tuple[str, ...], str | None
 
 @dataclass(frozen=True)
 class ProviderSelectionInputs:
-    config: Any = None
-    ai_provider_registry: dict[str, Any] | None = None
-    provider_policy_events: Any = None
+    config: Config | None = None
+    ai_provider_registry: Mapping[str, Mapping[str, object]] | None = None
+    provider_policy_events: ProviderPolicyEventPort | None = None
 
 
 @dataclass(frozen=True)
@@ -253,7 +256,7 @@ def _record_admission_skip(provider: Any, admission: ProviderAdmissionDecision) 
         recorder(admission)
 
 
-def select_provider_from_bundle(bundle: dict[str, Any], *, prefer_agentic: bool):
+def select_provider_from_bundle(bundle: Mapping[str, object], *, prefer_agentic: bool):
     if prefer_agentic and bundle.get("agentic") is not None:
         return bundle.get("agentic")
     if bundle.get("json") is not None:
@@ -286,7 +289,13 @@ def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionR
     )
 
 
-def _candidate_route_keys_for_task(*, routing, registry: dict[str, Any], task_name: str, prefer_agentic: bool) -> list[str]:
+def _candidate_route_keys_for_task(
+    *,
+    routing,
+    registry: Mapping[str, Mapping[str, object]],
+    task_name: str,
+    prefer_agentic: bool,
+) -> list[str]:
     if routing is None:
         return []
     if task_name in routing.task_routes:

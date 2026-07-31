@@ -39,3 +39,24 @@ def test_runtime_module_imports_without_core_package_cycle() -> None:
     runtime_module = importlib.import_module("mcp_memory.mcp.runtime")
 
     assert hasattr(runtime_module, "create_runtime")
+
+
+def test_core_provider_code_does_not_import_persistence_adapters() -> None:
+    root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
+    checked_files = [
+        root / "provider_admission.py",
+        root / "provider_policy.py",
+        root / "task_worker.py",
+        root / "providers" / "interfaces.py",
+        root / "providers" / "instrumented.py",
+    ]
+    forbidden_imports = (
+        "mcp_memory.provider_usage_store",
+        "mcp_memory.task_execution_store",
+        "mcp_memory.storage.postgres_provider_usage_store",
+        "mcp_memory.storage.postgres_task_execution_store",
+    )
+
+    for file_path in checked_files:
+        source = file_path.read_text(encoding="utf-8")
+        assert not any(import_path in source for import_path in forbidden_imports), file_path

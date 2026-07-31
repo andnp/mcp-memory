@@ -30,8 +30,12 @@ from mcp_memory.core.task_handlers import (
     task_priority,
 )
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.provider_usage_store import ProviderUsageRepository
-from mcp_memory.core.ports.providers import TaskExecutionAttemptPort, TaskExecutionAttemptRecordLike
+from mcp_memory.core.ports.providers import (
+    NullProviderUsagePort,
+    ProviderUsagePort,
+    TaskExecutionAttemptPort,
+    TaskExecutionAttemptRecordLike,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -145,12 +149,11 @@ class RuntimeTaskWorker:
         self._runner: asyncio.Task[None] | None = None
         self._reconciliation_runner: asyncio.Task[None] | None = None
         injected_provider_usage = getattr(ctx, "provider_usage", None)
-        if injected_provider_usage is not None:
-            self._provider_usage = injected_provider_usage
-        elif hasattr(ctx.db_manager, "get_connection"):
-            self._provider_usage = ProviderUsageRepository(ctx.db_manager, workspace_id=None)
-        else:
-            self._provider_usage = ProviderUsageRepository(None, workspace_id=None)
+        self._provider_usage: ProviderUsagePort = (
+            injected_provider_usage
+            if injected_provider_usage is not None
+            else NullProviderUsagePort()
+        )
         self._next_abandoned_recovery_at = 0.0
         self._reconciliation_lock = asyncio.Lock()
         # Deliberately process-local so restart recovery still sees stale attempts.

@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
+
+class ProviderConversationLike(Protocol):
+    @property
+    def request_id(self) -> str: ...
+
+    @property
+    def task_id(self) -> str | None: ...
+
+    @property
+    def completed_at(self) -> float: ...
 
 
 class ProviderAdmissionStateLike(Protocol):
@@ -130,9 +141,12 @@ class ProviderUsagePort(Protocol):
     def list_conversations(
         self,
         *,
+        workspace_id: str | None | object = ...,
+        request_id: str | None = None,
+        task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
-    ) -> list[Any]: ...
+    ) -> Sequence[ProviderConversationLike]: ...
 
     def reconcile_running_task_conversations(
         self,
@@ -145,6 +159,27 @@ class ProviderUsagePort(Protocol):
         retry_delay_seconds: float | None = None,
         completed_at: float | None = None,
     ) -> int: ...
+
+
+class ProviderPolicyEventPort(Protocol):
+    def record_event(
+        self,
+        *,
+        task_name: str,
+        task_id: str | None,
+        event_kind: str,
+        warning_kind: str | None = None,
+        provider_key: str | None = None,
+        provider_name: str | None = None,
+        model_name: str | None = None,
+        route_key: str | None = None,
+        candidate_routes: list[str] | None = None,
+        reason_category: str | None = None,
+        reason_code: str | None = None,
+        retry_delay_seconds: float | None = None,
+        warning_suppressed: bool = False,
+        created_at: float | None = None,
+    ) -> None: ...
 
 
 class TaskExecutionAttemptRecordLike(Protocol):
@@ -200,9 +235,82 @@ class TaskExecutionAttemptPort(Protocol):
     def get_attempt(self, *, task_id: str, execution_epoch: int) -> TaskExecutionAttemptRecordLike: ...
 
 
+class NullProviderUsagePort:
+    """Provider-neutral no-op used when runtime persistence is not configured."""
+
+    def get_active_admission_state(
+        self,
+        *,
+        provider_key: str,
+        model_name: str,
+        now: float | None = None,
+    ) -> None:
+        del provider_key, model_name, now
+        return None
+
+    def count_recent_calls(
+        self,
+        *,
+        provider_keys: list[str],
+        now: float | None = None,
+        window_seconds: float = 86400.0,
+    ) -> int:
+        del provider_keys, now, window_seconds
+        return 0
+
+    def count_recent_model_calls(
+        self,
+        *,
+        model_names: list[str],
+        now: float | None = None,
+        window_seconds: float = 600.0,
+    ) -> int:
+        del model_names, now, window_seconds
+        return 0
+
+    def record_call(self, **kwargs: object) -> None:
+        del kwargs
+
+    def record_conversation(self, **kwargs: object) -> None:
+        del kwargs
+
+    def touch_running_conversation(self, **kwargs: object) -> int:
+        del kwargs
+        return 0
+
+    def finalize_running_conversation(self, **kwargs: object) -> int:
+        del kwargs
+        return 0
+
+    def upsert_admission_state(self, **kwargs: object) -> None:
+        del kwargs
+
+    def clear_admission_state(self, **kwargs: object) -> None:
+        del kwargs
+
+    def list_conversations(
+        self,
+        *,
+        workspace_id: str | None | object = ...,
+        request_id: str | None = None,
+        task_name: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[ProviderConversationLike]:
+        del workspace_id, request_id, task_name, status, limit
+        return []
+
+    def reconcile_running_task_conversations(self, **kwargs: object) -> int:
+        del kwargs
+        return 0
+
+
 __all__ = [
     "ProviderAdmissionStateLike",
+    "ProviderConversationLike",
+    "ProviderPolicyEventPort",
     "ProviderUsagePort",
+    "NullProviderUsagePort",
     "TaskExecutionAttemptPort",
     "TaskExecutionAttemptRecordLike",
 ]

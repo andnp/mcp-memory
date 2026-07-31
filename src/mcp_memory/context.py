@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from mcp_memory.config import Config
-from mcp_memory.core.ports.providers import ProviderUsagePort, TaskExecutionAttemptPort
+from mcp_memory.core.ports.providers import (
+    ProviderPolicyEventPort,
+    ProviderUsagePort,
+    TaskExecutionAttemptPort,
+)
 from mcp_memory.core.ports.work_items import WorkItemRepository
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
@@ -171,7 +175,7 @@ class ProviderCapabilities:
     ai_agent_provider: AgenticTaskProvider | None = None
     ai_provider_registry: dict[str, dict[str, object]] | None = None
     provider_usage: ProviderUsagePort | None = None
-    provider_policy_events: object | None = None
+    provider_policy_events: ProviderPolicyEventPort | None = None
     task_execution_attempts: TaskExecutionAttemptPort | None = None
 
     @classmethod
@@ -299,7 +303,7 @@ class _TaskRuntimeContextAdapter:
     ai_agent_provider: AgenticTaskProvider | None
     ai_provider_registry: dict[str, dict[str, object]] | None
     provider_usage: ProviderUsagePort | None
-    provider_policy_events: object | None
+    provider_policy_events: ProviderPolicyEventPort | None
     task_execution_attempts: TaskExecutionAttemptPort | None
     work_items: WorkItemRepository | None
     embedding_repair_queue: object | None
@@ -431,6 +435,18 @@ class ApplicationContext:
     curation_action_store: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
+
+    def __post_init__(self) -> None:
+        if self.provider_usage is not None:
+            return
+        if not hasattr(self.db_manager, "get_connection"):
+            return
+        from mcp_memory.provider_usage_store import ProviderUsageRepository
+
+        self.provider_usage = ProviderUsageRepository(
+            self.db_manager,
+            workspace_id=self.workspace_id,
+        )
 
     def memory_pipeline_view(self) -> MemoryPipelineContext:
         return cast(MemoryPipelineContext, _ApplicationContextView(self, _MEMORY_PIPELINE_FIELDS))
