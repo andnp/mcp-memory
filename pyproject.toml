@@ -23,7 +23,7 @@ dependencies = [
     "pyzmq>=27.0.0",
     "textual>=0.44.0",
     "github-copilot-sdk>=1.0.1",
-    "mcp-markdown-ragdocs",
+    "andnp-searchkernel",
 ]
 
 [project.scripts]
@@ -44,7 +44,7 @@ dev = [
 package = true
 
 [tool.uv.sources]
-mcp-markdown-ragdocs = { git = "https://github.com/andnp/ragdocs-mcp.git", rev = "baa403b65addfa78a95c7413942de55355be0d45" }
+andnp-searchkernel = { path = "../andnp-searchkernel", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
