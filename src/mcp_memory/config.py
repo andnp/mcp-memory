@@ -393,6 +393,16 @@ class SearchKernelShadowConfig:
 
 
 @dataclass
+class SearchKernelCutoverConfig:
+    enabled: bool = False
+    failure_mode: str = "lenient"
+
+    def __post_init__(self) -> None:
+        if self.failure_mode not in {"strict", "lenient"}:
+            raise ValueError("searchkernel_cutover.failure_mode must be strict or lenient")
+
+
+@dataclass
 class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -402,6 +412,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
     searchkernel_shadow: SearchKernelShadowConfig = field(default_factory=SearchKernelShadowConfig)
+    searchkernel_cutover: SearchKernelCutoverConfig = field(default_factory=SearchKernelCutoverConfig)
     provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
     ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
     ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
@@ -717,6 +728,10 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "per_source_timeout_seconds": 5.0,
         "max_diagnostic_results": 20,
     }
+    document["searchkernel_cutover"] = {
+        "enabled": False,
+        "failure_mode": "lenient",
+    }
     document["provider_routing"] = _default_provider_routing_data()
     document["ingest_suppression"] = {
         "enabled": False,
@@ -779,6 +794,9 @@ def load_config(config_path: Path | None = None) -> Config:
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
         searchkernel_shadow=_load_dataclass_from_dict(
             SearchKernelShadowConfig, raw.get("searchkernel_shadow", {})
+        ),
+        searchkernel_cutover=_load_dataclass_from_dict(
+            SearchKernelCutoverConfig, raw.get("searchkernel_cutover", {})
         ),
         provider_routing=_load_provider_routing_config(_provider_routing_data_for_config(raw)),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),

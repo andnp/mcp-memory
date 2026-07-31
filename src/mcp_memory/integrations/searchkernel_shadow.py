@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import asyncio
+import inspect
 from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
@@ -154,15 +154,14 @@ async def run_searchkernel_shadow(
         getattr(kernel, "search_anything", None)
     ):
         try:
-            outcome = cast(
-                RecordSearchOutcome,
-                await asyncio.to_thread(
-                    pipeline_search,
-                    query,
-                    limit=requested_limit,
-                    filters=filters,
-                ),
+            outcome = pipeline_search(
+                query,
+                limit=requested_limit,
+                filters=filters,
             )
+            if inspect.isawaitable(outcome):
+                outcome = await outcome
+            outcome = cast(RecordSearchOutcome, outcome)
             kernel_results = outcome.results
             errors: list[str] = []
             composition_diagnostics = getattr(kernel, "diagnostics", None)

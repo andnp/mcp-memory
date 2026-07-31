@@ -7,6 +7,8 @@ them directly.
 
 from __future__ import annotations
 
+import asyncio
+
 from mcp_memory.application.memory_use_cases import (
     ReadMemoryRecordUseCase,
     RecordThoughtUseCase,
@@ -57,6 +59,26 @@ def search_memory_records_service(
     ).execute(parsed, caller_kind=caller_kind)
 
 
+async def search_memory_records_async_service(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    caller_kind: str = "external",
+) -> dict:
+    parsed = parse_search_arguments(arguments)
+    if ctx.repository is not None:
+        return await SearchMemoryRecordsUseCase(
+            ctx,
+            McpRetrievalTelemetryAdapter(),
+        ).execute_async(parsed, caller_kind=caller_kind)
+    return await asyncio.to_thread(
+        search_memory_records_service,
+        ctx,
+        arguments,
+        caller_kind=caller_kind,
+    )
+
+
 def read_memory_record_service(
     ctx: ApplicationContext,
     arguments: dict,
@@ -72,6 +94,7 @@ def read_memory_record_service(
 __all__ = [
     "record_thought_service",
     "search_memory_records_service",
+    "search_memory_records_async_service",
     "read_memory_record_service",
     "_record_read_invocation",
     "_record_search_invocation",

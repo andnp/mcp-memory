@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Iterable
 
-from searchkernel.domain import ScoredRef
+from searchkernel.domain import ScoredRef, canonical_storage_key
 from searchkernel.kernel import SearchKernel
 from searchkernel.ports.content_source import SearchableSource
 
@@ -145,6 +145,9 @@ class MemorySearchableSource:
             source_id=result.memory_id,
             score=result.score,
             source_kind="memory",
+            workspace_id=(
+                result.workspace_ids[0] if result.workspace_ids else None
+            ),
             metadata={
                 "text": candidate_text,
                 "title": result.title,
@@ -153,5 +156,10 @@ class MemorySearchableSource:
                 "status": result.status,
                 "tags": result.tags,
                 "workspace_ids": result.workspace_ids,
+                "canonical_id": canonical_storage_key(
+                    result.workspace_ids[0] if result.workspace_ids else None,
+                    "memory",
+                    result.memory_id,
+                ),
             },
         )

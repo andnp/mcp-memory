@@ -1145,7 +1145,13 @@ class RelationalMemorySearchService:
                 EmbeddingInput(
                     source_kind="memory",
                     source_id=candidate.id,
+                    workspace_id=(
+                        candidate.workspace_ids[0]
+                        if candidate.workspace_ids
+                        else None
+                    ),
                     text=_memory_embedding_text(candidate),
+                    source_updated_at=candidate.updated_at,
                 )
                 for candidate in stale_or_missing
             ],

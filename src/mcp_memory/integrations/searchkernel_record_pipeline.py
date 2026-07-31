@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 from searchkernel.domain import Vector
 from searchkernel.ports import EmbeddingBatchProvider
@@ -21,7 +21,7 @@ from searchkernel.search.record_pipeline import (
 )
 
 from mcp_memory.config import Config
-from mcp_memory.core.ports.memory import MemoryRecord, MemoryRepositoryPort
+from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord, MemoryRepositoryPort
 from mcp_memory.relational.search import (
     RankingEngine,
     RankingSignals,
@@ -94,6 +94,60 @@ _ACTIVE_FILTERS: ContextVar[dict[str, object]] = ContextVar(
     "mcp_memory_searchkernel_filters",
     default={},
 )
+_ACTIVE_POLICY_CONTEXT: ContextVar["_MemorySearchPolicyContext | None"] = ContextVar(
+    "mcp_memory_searchkernel_policy_context",
+    default=None,
+)
+
+
+@dataclass(slots=True)
+class _MemorySearchPolicyContext:
+    repository: MemoryRepositoryPort
+    records: dict[str, MemoryRecord | None] = field(default_factory=dict)
+    links: dict[tuple[str, str], tuple[MemoryLink, ...]] = field(default_factory=dict)
+
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+        if memory_id not in self.records:
+            self.records[memory_id] = self.repository.get_memory(memory_id)
+        return self.records[memory_id]
+
+    def get_links(
+        self,
+        memory_id: str,
+        *,
+        direction: str,
+        link_type: str | None = None,
+    ) -> list[MemoryLink]:
+        key = (memory_id, direction)
+        if key not in self.links:
+            self.links[key] = tuple(
+                self.repository.get_links(memory_id, direction=direction)
+            )
+        links = self.links[key]
+        if link_type is not None:
+            return [link for link in links if link.link_type == link_type]
+        return list(links)
+
+
+class _PolicyRepositoryView:
+    def __init__(self, repository: MemoryRepositoryPort) -> None:
+        self._repository = repository
+
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+        return _cached_memory(self._repository, memory_id)
+
+    def get_links(
+        self,
+        memory_id: str,
+        direction: str = "outgoing",
+        link_type: str | None = None,
+    ) -> list[MemoryLink]:
+        return _cached_links(
+            self._repository,
+            memory_id,
+            direction=direction,
+            link_type=link_type,
+        )
 
 
 class MemoryRecordSearchPipeline:
@@ -103,14 +157,16 @@ class MemoryRecordSearchPipeline:
         self,
         pipeline: RecordSearchPipeline,
         *,
+        repository: MemoryRepositoryPort,
         semantic_only_abstain_threshold: float = 0.8,
         diagnostics: MemoryRecordPipelineDiagnostics = MemoryRecordPipelineDiagnostics(),
     ) -> None:
         self._pipeline = pipeline
+        self._repository = repository
         self._semantic_only_abstain_threshold = semantic_only_abstain_threshold
         self.diagnostics = diagnostics
 
-    def search(
+    async def search(
         self,
         query: str,
         *,
@@ -122,9 +178,13 @@ class MemoryRecordSearchPipeline:
             semantic_only_abstain_threshold=self._semantic_only_abstain_threshold,
         )
         active_filters = dict(filters or {})
+        active_filters.setdefault("source_kind", "memory")
         active_filters["_mcp_memory_signal_context"] = signal_context
         active_filters["_mcp_memory_requested_limit"] = limit
         token = _ACTIVE_FILTERS.set(active_filters)
+        policy_token = _ACTIVE_POLICY_CONTEXT.set(
+            _MemorySearchPolicyContext(self._repository)
+        )
         try:
             outcome = self._pipeline.search(
                 query,
@@ -132,13 +192,10 @@ class MemoryRecordSearchPipeline:
                 filters=active_filters,
             )
             if inspect.isawaitable(outcome):
-                return asyncio.run(
-                    _resolve_async_outcome(
-                        cast(Awaitable[RecordSearchOutcome], outcome)
-                    )
-                )
+                return await outcome
             return outcome
         finally:
+            _ACTIVE_POLICY_CONTEXT.reset(policy_token)
             _ACTIVE_FILTERS.reset(token)
 
 
@@ -148,6 +205,7 @@ def build_memory_record_pipeline(
     vector_store: MemoryVectorBackend | None = None,
     embedder: EmbeddingBatchProvider | None = None,
     embedding_dim: int | None = None,
+    adaptive_enabled: bool = False,
     config: Config | None = None,
 ) -> MemoryRecordSearchPipeline:
     """Compose a read-only memory pipeline with memory-owned ranking hooks.
@@ -159,7 +217,12 @@ def build_memory_record_pipeline(
     carries query-wide keyword presence and semantic abstention state.
     """
     resolved_config = config or Config()
-    ranking_engine = RankingEngine(repository, resolved_config)
+    cutover_config = resolved_config.searchkernel_cutover
+    policy_repository = _PolicyRepositoryView(repository)
+    ranking_engine = RankingEngine(
+        cast(MemoryRepositoryPort, policy_repository),
+        resolved_config,
+    )
     diagnostics: list[str] = []
     embedding_provider: MemoryQueryEmbeddingProvider | None = None
     adapted_vector_store: MemoryVectorStore | None = None
@@ -199,20 +262,31 @@ def build_memory_record_pipeline(
     )
     hydrator = MemoryHydrator(repository)
     pipeline = RecordSearchPipeline(
-        hydrator=lambda record_id: hydrator.hydrate_record(record_id),
+        hydrator=hydrator,
         keyword_store=MemoryKeywordStore(repository),
         vector_store=adapted_vector_store,
-        graph_store=MemoryGraphStore(repository),
+        graph_store=MemoryGraphStore(cast(MemoryRepositoryPort, policy_repository)),
         embedding_provider=embedding_provider,
         config=RecordSearchConfig(
             minimum_candidate_limit=50,
             graph_fusion="max",
+            adaptive_enabled=adaptive_enabled,
+            maximum_limit=resolved_config.search_ranking.adaptive_result_max,
+            score_ratio_floor=resolved_config.search_ranking.adaptive_result_score_ratio_floor,
+            minimum_score=resolved_config.search_ranking.adaptive_result_min_score,
+            maximum_score_gap=resolved_config.search_ranking.adaptive_result_max_score_gap,
+            failure_mode=(
+                "strict"
+                if cutover_config.failure_mode == "strict"
+                else "lenient"
+            ),
         ),
         policy=policy,
-        continue_on_error=True,
+        continue_on_error=None,
     )
     return MemoryRecordSearchPipeline(
         pipeline,
+        repository=repository,
         semantic_only_abstain_threshold=resolved_config.search_ranking.semantic_only_abstain_threshold,
         diagnostics=MemoryRecordPipelineDiagnostics(tuple(diagnostics)),
     )
@@ -232,17 +306,42 @@ def _embedding_dimension(embedder: EmbeddingBatchProvider) -> int | None:
     return len(embeddings[0])
 
 
-async def _resolve_async_outcome(
-    outcome: Awaitable[RecordSearchOutcome],
-) -> RecordSearchOutcome:
-    return await outcome
+def _cached_memory(
+    repository: MemoryRepositoryPort,
+    memory_id: str,
+) -> MemoryRecord | None:
+    context = _ACTIVE_POLICY_CONTEXT.get()
+    if context is not None and context.repository is repository:
+        return context.get_memory(memory_id)
+    return repository.get_memory(memory_id)
+
+
+def _cached_links(
+    repository: MemoryRepositoryPort,
+    memory_id: str,
+    *,
+    direction: str,
+    link_type: str | None = None,
+) -> list[MemoryLink]:
+    context = _ACTIVE_POLICY_CONTEXT.get()
+    if context is not None and context.repository is repository:
+        return context.get_links(
+            memory_id,
+            direction=direction,
+            link_type=link_type,
+        )
+    return repository.get_links(
+        memory_id,
+        direction=direction,
+        link_type=link_type,
+    )
 
 
 def _candidate_allowed(
     repository: MemoryRepositoryPort,
     candidate: RecordSearchCandidate,
 ) -> bool:
-    record = repository.get_memory(candidate.record_id)
+    record = _cached_memory(repository, candidate.record_id)
     if record is None or not _memory_allowed(repository, record):
         return False
     signal_context = _signal_context()
@@ -265,7 +364,7 @@ def _vector_candidate_ids(
     keyword_records = [
         record
         for record_id, _ in keyword_ranking
-        if (record := repository.get_memory(record_id)) is not None
+        if (record := _cached_memory(repository, record_id)) is not None
     ]
     strongest_coverage = max(
         (
@@ -293,7 +392,7 @@ def _order_vector_ranking(
 
     def rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
         record_id, score = item
-        record = repository.get_memory(record_id)
+        record = _cached_memory(repository, record_id)
         semantic_score = max(min((score + 1.0) / 2.0, 1.0), 0.0)
         workspace_boost = (
             config.search_ranking.workspace_multiplier
@@ -317,7 +416,7 @@ def _result_allowed(
     repository: MemoryRepositoryPort,
     result: RecordSearchResult,
 ) -> bool:
-    record = repository.get_memory(result.record_id)
+    record = _cached_memory(repository, result.record_id)
     if record is None or not _memory_allowed(repository, record):
         return False
     signal_context = _signal_context()
@@ -335,7 +434,7 @@ def _adjust_score(
     repository: MemoryRepositoryPort,
     candidate: RecordSearchCandidate,
 ) -> float:
-    record = repository.get_memory(candidate.record_id)
+    record = _cached_memory(repository, candidate.record_id)
     if record is None:
         return 0.0
 
@@ -397,6 +496,9 @@ def _sort_results(
 
 def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> bool:
     filters = _ACTIVE_FILTERS.get()
+    workspace_id = filters.get("workspace_id")
+    if isinstance(workspace_id, str) and workspace_id not in memory.workspace_ids:
+        return False
     requested_status = filters.get("status")
     if isinstance(requested_status, str):
         if memory.status != requested_status:
@@ -409,7 +511,8 @@ def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> b
         return False
 
     if not bool(filters.get("include_superseded", False)):
-        incoming = repository.get_links(
+        incoming = _cached_links(
+            repository,
             memory.id,
             direction="incoming",
             link_type="SUPERSEDES",

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from typing import Any, cast
+import inspect
 
 from mcp.types import TextContent
 
@@ -10,7 +12,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 
-ToolService = Callable[..., dict]
+ToolService = Callable[..., Any]
 ToolServiceResolver = Callable[[], dict[str, ToolService]]
 ToolSuccessRecorder = Callable[[ApplicationContext, str, dict], None]
 
@@ -19,7 +21,11 @@ def text_response(payload: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, sort_keys=True))]
 
 
-def _call_service_sync(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
+def _call_service_sync(
+    service: Callable[..., dict],
+    ctx: ApplicationContext,
+    arguments: dict,
+) -> list[TextContent]:
     try:
         return text_response(service(ctx, arguments))
     except FileNotFoundError as exc:
@@ -33,7 +39,23 @@ def _call_service_sync(service: ToolService, ctx: ApplicationContext, arguments:
 
 
 async def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
-    return await asyncio.to_thread(_call_service_sync, service, ctx, arguments)
+    if inspect.iscoroutinefunction(service):
+        try:
+            return text_response(await service(ctx, arguments))
+        except FileNotFoundError as exc:
+            return text_response(
+                {"status": "error", "error": "file_not_found", "detail": str(exc)}
+            )
+        except (TypeError, ValueError) as exc:
+            return text_response(
+                {"status": "error", "error": "invalid_arguments", "detail": str(exc)}
+            )
+    return await asyncio.to_thread(
+        _call_service_sync,
+        cast(Callable[..., dict], service),
+        ctx,
+        arguments,
+    )
 
 
 def _runtime_not_initialized_response(name: str) -> list[TextContent]:
@@ -82,12 +104,12 @@ def tool_services() -> dict[str, ToolService]:
     from mcp_memory.mcp.services import (
         read_memory_record_service,
         record_thought_service,
-        search_memory_records_service,
+        search_memory_records_async_service,
     )
 
     return {
         "record_thought": record_thought_service,
-        "search_memory_records": search_memory_records_service,
+        "search_memory_records": search_memory_records_async_service,
         "read_memory_record": read_memory_record_service,
     }
 
@@ -104,7 +126,7 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_maintenance_search_service,
         internal_peek_record_service,
         internal_read_memory_record_service,
-        internal_search_memory_records_service,
+        internal_search_memory_records_async_service,
     )
     from mcp_memory.mcp.internal_mutation_services import (
         internal_append_memory_content_service,
@@ -135,7 +157,7 @@ def internal_tool_services() -> dict[str, ToolService]:
     )
 
     return {
-        "internal_search_memory_records": internal_search_memory_records_service,
+        "internal_search_memory_records": internal_search_memory_records_async_service,
         "internal_read_memory_record": internal_read_memory_record_service,
         "internal_peek_record": internal_peek_record_service,
         "internal_maintenance_search": internal_maintenance_search_service,

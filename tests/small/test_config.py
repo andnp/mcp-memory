@@ -8,6 +8,7 @@ from mcp_memory.config import (
     DaemonConfig,
     MemoryConfig,
     SearchRankingConfig,
+    SearchKernelCutoverConfig,
     SearchKernelShadowConfig,
     ensure_default_config_exists,
     load_config,
@@ -35,6 +36,12 @@ def test_searchkernel_shadow_is_disabled_by_default() -> None:
     config = SearchKernelShadowConfig()
 
     assert config.enabled is False
+
+
+def test_searchkernel_cutover_is_disabled_by_default() -> None:
+    config = SearchKernelCutoverConfig()
+    assert config.enabled is False
+    assert config.failure_mode == "lenient"
 
 
 def test_default_config_is_created_once(tmp_path: Path) -> None:
@@ -78,6 +85,7 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.search_ranking.adaptive_result_max_score_gap == 0.08
     assert loaded.searchkernel_shadow.enabled is False
     assert loaded.searchkernel_shadow.max_diagnostic_results == 20
+    assert loaded.searchkernel_cutover.enabled is False
     assert loaded.memory.recency_plan.max_boost_amount == 0.15
     assert loaded.memory.recency_plan.boost_decay_rate == 0.97
     assert loaded.memory.recency_fact.max_boost_amount == 0.05

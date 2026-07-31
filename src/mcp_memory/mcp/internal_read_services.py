@@ -9,6 +9,7 @@ from mcp_memory.mcp.services import (
     _record_search_invocation,
     read_memory_record_service,
     search_memory_records_service,
+    search_memory_records_async_service,
 )
 from mcp_memory.mcp.validation import optional_bool, optional_positive_int, optional_string, require_string
 from mcp_memory.serialization import (
@@ -59,6 +60,16 @@ def _not_initialized() -> dict[str, str]:
 
 def internal_search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
     return search_memory_records_service(ctx, arguments, caller_kind="internal")
+
+
+async def internal_search_memory_records_async_service(
+    ctx: ApplicationContext, arguments: dict
+) -> dict:
+    return await search_memory_records_async_service(
+        ctx,
+        arguments,
+        caller_kind="internal",
+    )
 
 
 def internal_read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:

@@ -40,7 +40,8 @@ def _context(enabled: bool, runtime_logs: _RuntimeLogs | None = None) -> Applica
     )
 
 
-def test_shadow_comparison_is_disabled_without_feature_flag(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_shadow_comparison_is_disabled_without_feature_flag(monkeypatch) -> None:
     called = False
 
     def build_kernel(*args, **kwargs):
@@ -48,9 +49,7 @@ def test_shadow_comparison_is_disabled_without_feature_flag(monkeypatch) -> None
         called = True
         raise AssertionError("disabled shadow comparison built a kernel")
 
-    monkeypatch.setattr(memory_use_cases, "build_memory_search_kernel", build_kernel)
-
-    memory_use_cases._run_searchkernel_shadow(
+    await memory_use_cases._run_searchkernel_shadow(
         _context(False),
         query="query",
         limit=3,
@@ -64,7 +63,8 @@ def test_shadow_comparison_is_disabled_without_feature_flag(monkeypatch) -> None
     assert called is False
 
 
-def test_enabled_shadow_comparison_logs_parity_diagnostics(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_enabled_shadow_comparison_logs_parity_diagnostics(monkeypatch) -> None:
     runtime_logs = _RuntimeLogs()
     diagnostics = compare_ranked_results(
         query="query",
@@ -76,11 +76,13 @@ def test_enabled_shadow_comparison_logs_parity_diagnostics(monkeypatch) -> None:
     async def run_shadow(*args, **kwargs):
         return diagnostics
 
-    monkeypatch.setattr(memory_use_cases, "build_memory_search_kernel", lambda *args, **kwargs: object())
+    monkeypatch.setattr(memory_use_cases, "build_memory_record_pipeline", lambda *args, **kwargs: object())
     monkeypatch.setattr(memory_use_cases, "run_searchkernel_shadow", run_shadow)
 
-    memory_use_cases._run_searchkernel_shadow(
-        _context(True, runtime_logs),
+    context = _context(True, runtime_logs)
+    context.repository = object()
+    await memory_use_cases._run_searchkernel_shadow(
+        context,
         query="query",
         limit=3,
         native_results=[_Result("a", 0.9), _Result("b", 0.8)],
@@ -98,13 +100,14 @@ def test_enabled_shadow_comparison_logs_parity_diagnostics(monkeypatch) -> None:
     assert payload["rank_deltas"] == {"a": 1, "b": -1}
 
 
-def test_shadow_failure_is_isolated_from_search_response(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_shadow_failure_is_isolated_from_search_response(monkeypatch) -> None:
     def build_kernel(*args, **kwargs):
         raise RuntimeError("kernel unavailable")
 
-    monkeypatch.setattr(memory_use_cases, "build_memory_search_kernel", build_kernel)
+    monkeypatch.setattr(memory_use_cases, "build_memory_record_pipeline", build_kernel)
 
-    memory_use_cases._run_searchkernel_shadow(
+    await memory_use_cases._run_searchkernel_shadow(
         _context(True),
         query="query",
         limit=3,

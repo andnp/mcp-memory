@@ -215,7 +215,7 @@ async def test_search_can_wait_for_queue_backed_embedding_repairs(db_manager) ->
     )
     health = service.get_health()
     assert stored is not None
-    assert stored.workspace_id is None
+    assert stored.workspace_id == "workspace-alpha"
     assert embedding_repair_queue.list_items(status="running") == []
     assert embedding_repair_queue.list_items(status="completed") == []
     assert health.background_repair_enabled is True

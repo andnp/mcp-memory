@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-from searchkernel.domain import Record, RecordStatus, Vector
+from searchkernel.domain import (
+    Record,
+    RecordHit,
+    RecordIdentity,
+    RecordStatus,
+    Vector,
+    canonical_storage_key,
+)
 from searchkernel.ports import (
+    AsyncGraphStore,
+    AsyncKeywordStore,
+    AsyncVectorStore,
     CandidateFilterSupport,
     EmbeddingSink,
-    GraphStore,
-    KeywordStore,
-    VectorStore,
 )
 
 from mcp_memory.core.ports.memory import (
@@ -71,6 +79,7 @@ class MemoryRecordAdapter:
     @classmethod
     def to_record(cls, memory: MemoryRecord) -> Record:
         metadata = dict(memory.metadata)
+        workspace_id = _first_workspace_id(memory.workspace_ids)
         metadata.update(
             {
                 "memory_type": memory.type,
@@ -80,6 +89,9 @@ class MemoryRecordAdapter:
                 "tags": list(memory.tags),
                 "read_count": memory.read_count,
                 "access_score": memory.access_score,
+                "canonical_id": canonical_storage_key(
+                    workspace_id, cls.source_kind, memory.id
+                ),
             }
         )
         return Record(
@@ -91,10 +103,11 @@ class MemoryRecordAdapter:
             updated_at=_parse_timestamp(memory.updated_at),
             metadata=metadata,
             status=_kernel_status(memory.status),
+            workspace_id=workspace_id,
         )
 
 
-class MemoryKeywordStore(KeywordStore):
+class MemoryKeywordStore(AsyncKeywordStore):
     """Read-only keyword store over the memory-owned relational index."""
 
     def __init__(self, repository: MemoryReadPort) -> None:
@@ -105,15 +118,17 @@ class MemoryKeywordStore(KeywordStore):
         if any(record.source_kind != MemoryRecordAdapter.source_kind for record in records):
             raise ValueError("MemoryKeywordStore only accepts memory records")
 
-    def search(
+    async def search(
         self,
         query: str,
         k: int,
         filters: dict[str, Any] | None = None,
-    ) -> list[tuple[str, float]]:
+    ) -> list[RecordHit | tuple[str, float]]:
         filters = filters or {}
-        memory_ids = self._repository.search_keyword_memory_ids(
+        memory_ids = await asyncio.to_thread(
+            self._repository.search_keyword_memory_ids,
             query,
+            workspace_id=_string_filter(filters, "workspace_id"),
             memory_type=_string_filter(filters, "memory_type"),
             status=_memory_status_filter(filters.get("status")),
             include_superseded=bool(filters.get("include_superseded", False)),
@@ -128,7 +143,7 @@ class MemoryKeywordStore(KeywordStore):
         ]
 
 
-class MemoryVectorStore(VectorStore):
+class MemoryVectorStore(AsyncVectorStore):
     """Adapt the memory vector stores to searchkernel's VectorStore port."""
 
     def __init__(self, vector_store: MemoryVectorBackend) -> None:
@@ -159,7 +174,7 @@ class MemoryVectorStore(VectorStore):
                 continue
         self._epoch += 1
 
-    def search(
+    async def search(
         self,
         query_vector: Vector,
         k: int,
@@ -167,7 +182,7 @@ class MemoryVectorStore(VectorStore):
         model_name: str,
         dim: int,
         filters: dict[str, Any] | None = None,
-    ) -> list[tuple[str, float]]:
+    ) -> list[RecordHit | tuple[str, float]]:
         if len(query_vector) != dim:
             raise ValueError(
                 f"Query vector has dimension {len(query_vector)}, expected {dim}"
@@ -185,7 +200,13 @@ class MemoryVectorStore(VectorStore):
         candidate_ids = _string_sequence_filter(filters.get("candidate_ids"))
         if candidate_ids and self.supports_candidate_filtering:
             kwargs["candidate_ids"] = candidate_ids
-        return self._vector_store.search(**kwargs)
+        workspace_id = _string_filter(filters, "workspace_id")
+        if workspace_id is not None:
+            kwargs["workspace_id"] = workspace_id
+        return cast(
+            list[RecordHit | tuple[str, float]],
+            await asyncio.to_thread(self._vector_store.search, **kwargs),
+        )
 
     def delete(self, record_ids: list[str]) -> None:
         for record_id in record_ids:
@@ -200,7 +221,7 @@ class MemoryVectorStore(VectorStore):
         return self._epoch
 
 
-class MemoryGraphStore(GraphStore):
+class MemoryGraphStore(AsyncGraphStore):
     """Read-only graph view over authoritative memory links."""
 
     def __init__(self, repository: MemoryReadPort) -> None:
@@ -211,11 +232,30 @@ class MemoryGraphStore(GraphStore):
             "Memory links must be written through the memory mutation port"
         )
 
-    def neighbors(
+    def set(self, key: str, value: Any, epoch: int) -> None:
+        raise NotImplementedError("MemoryGraphStore does not own cache state")
+
+    def invalidate_epoch(self, epoch: int) -> None:
+        raise NotImplementedError("MemoryGraphStore does not own cache state")
+
+    async def neighbors(
         self,
-        record_id: str,
+        record_id: str | RecordIdentity,
         edge_types: list[str] | None = None,
         depth: int = 1,
+    ) -> list[tuple[str, str, float]]:
+        return await asyncio.to_thread(
+            self._neighbors_sync,
+            record_id.source_id if isinstance(record_id, RecordIdentity) else record_id,
+            edge_types,
+            depth,
+        )
+
+    def _neighbors_sync(
+        self,
+        record_id: str,
+        edge_types: list[str] | None,
+        depth: int,
     ) -> list[tuple[str, str, float]]:
         if depth < 1:
             return []
@@ -256,14 +296,24 @@ class MemoryHydrator:
     def __init__(self, repository: MemoryMaintenanceReadPort) -> None:
         self._repository = repository
 
-    def hydrate_context(self, memory_id: str):
-        return self._repository.peek_memory(memory_id)
+    async def hydrate_context(self, memory_id: str):
+        return await asyncio.to_thread(self._repository.peek_memory, memory_id)
 
-    def hydrate_record(self, memory_id: str) -> Record | None:
-        context = self.hydrate_context(memory_id)
+    async def hydrate_record(
+        self,
+        identity: RecordIdentity | str,
+    ) -> Record | None:
+        workspace_id = getattr(identity, "workspace_id", None)
+        source_id = getattr(identity, "source_id", identity)
+        if not isinstance(source_id, str):
+            return None
+        context = await self.hydrate_context(source_id)
         if context is None:
             return None
-        return MemoryRecordAdapter.to_record(context.record)
+        record = MemoryRecordAdapter.to_record(context.record)
+        if isinstance(workspace_id, str):
+            record.workspace_id = workspace_id
+        return record
 
 
 class MemoryEmbeddingSink(EmbeddingSink):
@@ -353,6 +403,8 @@ def _string_sequence_filter(value: object) -> list[str]:
 
 
 def _workspace_id(record: Record) -> str | None:
+    if isinstance(record.workspace_id, str):
+        return record.workspace_id
     value = record.metadata.get("workspace_id")
     if isinstance(value, str):
         return value
@@ -362,6 +414,10 @@ def _workspace_id(record: Record) -> str | None:
             if isinstance(workspace_id, str):
                 return workspace_id
     return None
+
+
+def _first_workspace_id(workspace_ids: Sequence[str]) -> str | None:
+    return next((workspace_id for workspace_id in workspace_ids if workspace_id), None)
 
 
 __all__ = [

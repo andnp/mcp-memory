@@ -164,7 +164,8 @@ class FakeEmbedder:
         return [[1.0, 0.0] for _ in texts]
 
 
-def test_composition_applies_memory_policy_without_writes() -> None:
+@pytest.mark.asyncio
+async def test_composition_applies_memory_policy_without_writes() -> None:
     repository = FakeRepository()
     vector_store = FakeVectorStore()
     embedder = FakeEmbedder()
@@ -174,7 +175,7 @@ def test_composition_applies_memory_policy_without_writes() -> None:
         embedder=embedder,
     )
 
-    outcome = pipeline.search(
+    outcome = await pipeline.search(
         "query",
         limit=10,
         filters={
@@ -184,17 +185,15 @@ def test_composition_applies_memory_policy_without_writes() -> None:
         },
     )
 
-    assert [result.record_id for result in outcome.results] == [
-        "active",
-        "other-workspace",
-    ]
+    assert [result.record_id for result in outcome.results] == ["active"]
     assert vector_store.search_count == 1
     assert vector_store.search_limits == [50]
     assert vector_store.write_count == 0
     assert embedder.queries == ["query"]
 
 
-def test_strong_keyword_matches_bound_vector_candidates() -> None:
+@pytest.mark.asyncio
+async def test_strong_keyword_matches_bound_vector_candidates() -> None:
     repository = FakeRepository(keyword_ids=["active"])
     vector_store = FakeVectorStore()
     pipeline = build_memory_record_pipeline(
@@ -203,7 +202,7 @@ def test_strong_keyword_matches_bound_vector_candidates() -> None:
         embedder=FakeEmbedder(),
     )
 
-    pipeline.search(
+    await pipeline.search(
         "active",
         limit=3,
         filters={"workspace_id": "workspace-1"},
@@ -212,12 +211,13 @@ def test_strong_keyword_matches_bound_vector_candidates() -> None:
     assert vector_store.search_candidate_ids == [["active"]]
 
 
-def test_superseded_policy_is_expressible() -> None:
+@pytest.mark.asyncio
+async def test_superseded_policy_is_expressible() -> None:
     repository = FakeRepository()
     pipeline = build_memory_record_pipeline(cast("MemoryRepositoryPort", repository))
 
-    excluded = pipeline.search("query", limit=10)
-    included = pipeline.search(
+    excluded = await pipeline.search("query", limit=10)
+    included = await pipeline.search(
         "query",
         limit=10,
         filters={"include_superseded": True},
@@ -227,7 +227,8 @@ def test_superseded_policy_is_expressible() -> None:
     assert "superseded" in {result.record_id for result in included.results}
 
 
-def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None:
+@pytest.mark.asyncio
+async def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None:
     repository = FakeRepository()
     without_vector = build_memory_record_pipeline(cast("MemoryRepositoryPort", repository))
     without_embedder = build_memory_record_pipeline(
@@ -237,11 +238,12 @@ def test_missing_vector_or_embedder_degrades_to_keyword_pipeline() -> None:
 
     assert without_vector.diagnostics.reasons
     assert without_embedder.diagnostics.reasons
-    assert without_vector.search("query", limit=1).results
-    assert without_embedder.search("query", limit=1).results
+    assert (await without_vector.search("query", limit=1)).results
+    assert (await without_embedder.search("query", limit=1)).results
 
 
-def test_score_adjustment_matches_relational_ranking_engine() -> None:
+@pytest.mark.asyncio
+async def test_score_adjustment_matches_relational_ranking_engine() -> None:
     repository = RankingRepository()
     config = Config(
         search_ranking=SearchRankingConfig(
@@ -254,11 +256,11 @@ def test_score_adjustment_matches_relational_ranking_engine() -> None:
         config=config,
     )
 
-    results = pipeline.search(
+    results = (await pipeline.search(
         "query",
         limit=10,
         filters={"workspace_id": "workspace-1"},
-    ).results
+    )).results
     engine = RankingEngine(cast("MemoryRepositoryPort", repository), config)
     expected = {
         record.id: score
@@ -289,7 +291,8 @@ def test_score_adjustment_matches_relational_ranking_engine() -> None:
     assert scores["stale"] < scores["plain"]
 
 
-def test_pipeline_ranking_is_read_only() -> None:
+@pytest.mark.asyncio
+async def test_pipeline_ranking_is_read_only() -> None:
     repository = RankingRepository()
     before = {
         memory_id: (
@@ -300,9 +303,10 @@ def test_pipeline_ranking_is_read_only() -> None:
         for memory_id, record in repository.records.items()
     }
 
-    build_memory_record_pipeline(
+    pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
-    ).search("query", limit=10)
+    )
+    await pipeline.search("query", limit=10)
 
     after = {
         memory_id: (
@@ -315,7 +319,8 @@ def test_pipeline_ranking_is_read_only() -> None:
     assert after == before
 
 
-def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
+@pytest.mark.asyncio
+async def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
     partial = _memory(
         "partial",
         title="alpha",
@@ -333,7 +338,7 @@ def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
         records={"partial": partial, "full": full},
         keyword_ids=["partial", "full"],
     )
-    results = build_memory_record_pipeline(
+    pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
         config=Config(
             search_ranking=SearchRankingConfig(
@@ -341,12 +346,14 @@ def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
                 keyword_low_coverage_penalty=0.4,
             )
         ),
-    ).search("alpha beta", limit=2).results
+    )
+    results = await pipeline.search("alpha beta", limit=2)
 
-    scores = {result.record_id: result.score for result in results}
+    scores = {result.record_id: result.score for result in results.results}
     assert scores["full"] > scores["partial"]
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("semantic_score", "expected_ids"),
     [
@@ -354,7 +361,7 @@ def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
         (0.96, ["semantic"]),
     ],
 )
-def test_semantic_only_abstention_uses_vector_raw_score(
+async def test_semantic_only_abstention_uses_vector_raw_score(
     semantic_score: float,
     expected_ids: list[str],
 ) -> None:
@@ -363,7 +370,7 @@ def test_semantic_only_abstention_uses_vector_raw_score(
         keyword_ids=[],
     )
     vector_store = FakeVectorStore([("semantic", semantic_score)])
-    outcome = build_memory_record_pipeline(
+    pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
         vector_store=cast("MemoryVectorBackend", vector_store),
         embedder=FakeEmbedder(),
@@ -372,13 +379,15 @@ def test_semantic_only_abstention_uses_vector_raw_score(
                 semantic_only_abstain_threshold=0.8,
             )
         ),
-    ).search("unmatched query", limit=2)
+    )
+    outcome = await pipeline.search("unmatched query", limit=2)
 
     assert [result.record_id for result in outcome.results] == expected_ids
     assert vector_store.write_count == 0
 
 
-def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
+@pytest.mark.asyncio
+async def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
     exact = _memory(
         "exact",
         title="ripgrep ban",
@@ -391,7 +400,7 @@ def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
         records={"exact": exact, "distractor": distractor},
         keyword_ids=["exact"],
     )
-    results = build_memory_record_pipeline(
+    pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
         vector_store=cast(
             "MemoryVectorBackend",
@@ -403,13 +412,15 @@ def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
                 semantic_only_keyword_penalty=0.4,
             )
         ),
-    ).search("ripgrep ban", limit=2).results
+    )
+    results = await pipeline.search("ripgrep ban", limit=2)
 
-    assert {result.record_id for result in results} == {"exact", "distractor"}
-    assert results[0].record_id == "exact"
+    assert {result.record_id for result in results.results} == {"exact", "distractor"}
+    assert results.results[0].record_id == "exact"
 
 
-def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
+@pytest.mark.asyncio
+async def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
     exact = _memory(
         "exact",
         title="ripgrep ban",
@@ -421,7 +432,7 @@ def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
         records={"exact": exact},
         keyword_ids=["exact"],
     )
-    outcome = build_memory_record_pipeline(
+    pipeline = build_memory_record_pipeline(
         cast("MemoryRepositoryPort", repository),
         vector_store=cast(
             "MemoryVectorBackend",
@@ -433,7 +444,8 @@ def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
                 semantic_only_abstain_threshold=0.8,
             )
         ),
-    ).search("ripgrep ban", limit=1)
+    )
+    outcome = await pipeline.search("ripgrep ban", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["exact"]
 
@@ -452,11 +464,12 @@ async def test_shadow_compares_pipeline_without_replacing_native_results() -> No
     )
 
     assert diagnostics.native_ids == ("native",)
-    assert diagnostics.kernel_ids == ("active", "other-workspace")
+    assert diagnostics.kernel_ids == ("active",)
     assert diagnostics.error is not None
 
 
-def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
     runtime_logs: list[dict[str, object]] = []
     context = ApplicationContext(
         config=Config(searchkernel_shadow=SearchKernelShadowConfig(enabled=True)),
@@ -498,13 +511,7 @@ def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
         build_pipeline,
     )
     monkeypatch.setattr(memory_use_cases, "run_searchkernel_shadow", run_shadow)
-    monkeypatch.setattr(
-        memory_use_cases,
-        "build_memory_search_kernel",
-        lambda *args, **kwargs: pytest.fail("legacy source wrapper was used"),
-    )
-
-    memory_use_cases._run_searchkernel_shadow(
+    await memory_use_cases._run_searchkernel_shadow(
         context,
         query="query",
         limit=2,

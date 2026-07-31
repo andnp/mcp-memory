@@ -1791,7 +1791,7 @@ def test_search_memories_refreshes_stale_embeddings_for_current_model(db_manager
     assert results[0].memory_id == record.id
     assert updated_record is not None
     assert updated_record.updated_at > stale_record.updated_at
-    assert updated_record.workspace_id is None
+    assert updated_record.workspace_id == "workspace-alpha"
     assert updated_record.embedding == [1.0, 0.0]
 
 

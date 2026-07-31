@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from time import perf_counter, time
 import logging
 from typing import Any, Sequence
@@ -33,14 +32,14 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
 from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
-from mcp_memory.integrations.searchkernel_source import build_memory_search_kernel
 from mcp_memory.relational.operations import ReadMemoryRecordOperation, SearchMemoryRecordsOperation
+from mcp_memory.relational.search import RelationalSearchResult
 
 
 logger = logging.getLogger(__name__)
 
 
-def _run_searchkernel_shadow(
+async def _run_searchkernel_shadow(
     ctx: ApplicationContext,
     *,
     query: str,
@@ -56,35 +55,26 @@ def _run_searchkernel_shadow(
     if shadow_config is None or not shadow_config.enabled:
         return
     try:
-        if ctx.repository is not None:
-            kernel = build_memory_record_pipeline(
-                ctx.repository,
-                vector_store=ctx.vector_store,
-                embedder=ctx.embedder,
-                config=config,
-            )
-        else:
-            # Keep compatibility for partial test contexts that predate the
-            # repository-owned record pipeline composition.
-            kernel = build_memory_search_kernel(
-                ctx.relational_search,
-                per_source_timeout_s=shadow_config.per_source_timeout_seconds,
-                side_effect_free=True,
-            )
-        diagnostics = asyncio.run(
-            run_searchkernel_shadow(
-                kernel,
-                query=query,
-                requested_limit=limit,
-                native_results=native_results,
-                filters={
-                    "workspace_id": workspace_id,
-                    "memory_type": memory_type,
-                    "status": status,
-                    "include_superseded": include_superseded,
-                },
-                max_results=shadow_config.max_diagnostic_results,
-            )
+        if ctx.repository is None:
+            return
+        kernel = build_memory_record_pipeline(
+            ctx.repository,
+            vector_store=ctx.vector_store,
+            embedder=ctx.embedder,
+            config=config,
+        )
+        diagnostics = await run_searchkernel_shadow(
+            kernel,
+            query=query,
+            requested_limit=limit,
+            native_results=native_results,
+            filters={
+                "workspace_id": workspace_id,
+                "memory_type": memory_type,
+                "status": status,
+                "include_superseded": include_superseded,
+            },
+            max_results=shadow_config.max_diagnostic_results,
         )
         payload = diagnostics.to_payload()
         runtime_logs = getattr(ctx, "runtime_logs", None)
@@ -275,16 +265,6 @@ def _search_memory_records(
         surfaced_memory_ids=surfaced_memory_ids,
         duration_ms=duration_ms,
     )
-    _run_searchkernel_shadow(
-        ctx,
-        query=query,
-        limit=execution_arguments["limit"],
-        native_results=results,
-        workspace_id=execution_arguments["workspace_id"],
-        memory_type=execution_arguments["memory_type"],
-        status=execution_arguments["status"],
-        include_superseded=execution_arguments["include_superseded"],
-    )
     result_payloads = build_search_result_payloads(
         results, debug_enabled=debug_enabled
     )
@@ -349,6 +329,111 @@ def _search_memory_records(
         payload=payload | {_CACHE_VALIDATION_TOKENS_FIELD: validation_tokens},
     )
     return payload
+
+
+async def _search_memory_records_async(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    caller_kind: str = "external",
+    telemetry: RetrievalTelemetryPort,
+) -> dict:
+    """Execute the record pipeline without nesting an event loop."""
+    if ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+
+    query = arguments["query"]
+    limit = arguments["limit"]
+    started_at = perf_counter()
+    pipeline = build_memory_record_pipeline(
+        ctx.repository,
+        vector_store=ctx.vector_store,
+        embedder=ctx.embedder,
+        adaptive_enabled=arguments.get("adaptive_limit", "limit" not in arguments),
+        config=ctx.config,
+    )
+    outcome = await pipeline.search(
+        query,
+        limit=limit,
+        filters={
+            "workspace_id": ctx.workspace_id,
+            "memory_type": arguments["memory_type"],
+            "status": arguments["status"],
+            "include_superseded": arguments["include_superseded"],
+        },
+    )
+    results = [
+        _record_search_result_to_relational(result)
+        for result in outcome.results
+    ]
+    surfaced_memory_ids = [result.memory_id for result in results]
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    telemetry.record_search(
+        ctx,
+        caller_kind=caller_kind,
+        query=query,
+        surfaced_memory_ids=surfaced_memory_ids,
+        duration_ms=duration_ms,
+    )
+    await _run_searchkernel_shadow(
+        ctx,
+        query=query,
+        limit=limit,
+        native_results=results,
+        workspace_id=ctx.workspace_id,
+        memory_type=arguments["memory_type"],
+        status=arguments["status"],
+        include_superseded=arguments["include_superseded"],
+    )
+    payload: dict[str, object] = {
+        "status": "ok",
+        "results": build_search_result_payloads(
+            results,
+            debug_enabled=arguments["debug"],
+        ),
+    }
+    if arguments["debug"]:
+        payload["search_diagnostics"] = {
+            "kernel_failures": [
+                {
+                    "stage": failure.stage,
+                    "message": failure.message,
+                    "exception_type": failure.exception_type,
+                }
+                for failure in outcome.failures
+            ],
+            "missing_record_ids": list(outcome.missing_record_ids),
+            "degraded": outcome.degraded,
+            "pipeline_diagnostics": list(pipeline.diagnostics.reasons),
+            "timing_ms": {"total": round(duration_ms, 3)},
+        }
+    return payload
+
+
+def _record_search_result_to_relational(result) -> RelationalSearchResult:
+    record = result.record
+    return RelationalSearchResult(
+        memory_id=record.source_id,
+        title=record.title,
+        summary=str(record.metadata.get("summary", "")),
+        memory_type=str(record.metadata.get("memory_type", "")),
+        status=str(record.metadata.get("memory_status", record.status.value)),
+        tags=[
+            str(tag)
+            for tag in record.metadata.get("tags", [])
+            if isinstance(tag, str)
+        ],
+        workspace_ids=[
+            str(workspace_id)
+            for workspace_id in record.metadata.get("workspace_ids", [])
+            if isinstance(workspace_id, str)
+        ],
+        score=round(result.score, 6),
+        ranking_debug={
+            "provenance": result.provenance.to_dict(),
+            "canonical_id": record.storage_key,
+        },
+    )
 
 
 def _read_memory_record(
@@ -481,6 +566,19 @@ class SearchMemoryRecordsUseCase:
 
     def execute(self, arguments: dict, *, caller_kind: str = "external") -> dict:
         return _search_memory_records(
+            self._ctx,
+            arguments,
+            caller_kind=caller_kind,
+            telemetry=self._telemetry,
+        )
+
+    async def execute_async(
+        self,
+        arguments: dict,
+        *,
+        caller_kind: str = "external",
+    ) -> dict:
+        return await _search_memory_records_async(
             self._ctx,
             arguments,
             caller_kind=caller_kind,

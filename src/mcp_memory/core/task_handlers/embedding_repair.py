@@ -115,6 +115,14 @@ def _run_integrity_scan(
         if isinstance(row, dict)
     ] if isinstance(scan_summary.get("active_model_rows", []), list) else []
     active_memory_rows = {
+        (
+            None if row.get("workspace_id") is None else str(row["workspace_id"]),
+            str(row["source_id"]),
+        ): row
+        for row in active_model_rows
+        if row.get("source_kind") == "memory"
+    }
+    active_memory_rows_by_source_id = {
         str(row["source_id"]): row
         for row in active_model_rows
         if row.get("source_kind") == "memory"
@@ -140,7 +148,13 @@ def _run_integrity_scan(
     already_queued_memory_repairs = 0
 
     for record in active_memories:
-        row = active_memory_rows.get(record.id)
+        workspace_id = next(
+            (item for item in record.workspace_ids if item),
+            None,
+        )
+        row = active_memory_rows.get((workspace_id, record.id))
+        if row is None:
+            row = active_memory_rows_by_source_id.get(record.id)
         should_enqueue = False
         if row is None:
             missing_memory_count += 1
@@ -172,7 +186,7 @@ def _run_integrity_scan(
             work_items=work_items,
             embedding_repair_queue=embedding_repair_queue,
             memory_id=record.id,
-            workspace_id=None,
+            workspace_id=workspace_id,
             model_name=embedder.model_name,
             memory_updated_at=record.updated_at or "",
         )
@@ -246,11 +260,12 @@ async def handle_embedding_repair_task(
     batches_processed = 0
 
     while batches_processed < max_batches_per_run:
+        claim_workspace_id = task.workspace_id if task.workspace_id is not None else "*"
         if embedding_repair_queue is not None:
             claimed_items = embedding_repair_queue.claim_batch(
                 lease_owner=task.id,
                 limit=batch_size,
-                workspace_id=task.workspace_id,
+                workspace_id=claim_workspace_id,
             )
         else:
             assert work_items is not None
@@ -259,7 +274,7 @@ async def handle_embedding_repair_task(
                 execution_lane=EXECUTION_LANE_DETERMINISTIC,
                 lease_owner=task.id,
                 limit=batch_size,
-                workspace_id=task.workspace_id,
+                workspace_id=claim_workspace_id,
             )
         if not claimed_items:
             break
@@ -318,6 +333,10 @@ async def handle_embedding_repair_task(
                 EmbeddingInput(
                     source_kind="memory",
                     source_id=record.id,
+                    workspace_id=next(
+                        (item for item in record.workspace_ids if item),
+                        None,
+                    ),
                     text=_memory_embedding_text(record),
                     source_updated_at=record.updated_at,
                 )
