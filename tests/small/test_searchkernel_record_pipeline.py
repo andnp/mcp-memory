@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from typing import cast
 
 import pytest
@@ -95,6 +96,26 @@ class FakeRepository:
         if record is None:
             return None
         return MemoryReadContext(record, {"outgoing": self.get_links(memory_id)}, [])
+
+
+class CountingRepository(FakeRepository):
+    def __init__(self) -> None:
+        super().__init__(keyword_ids=["active"])
+        self.memory_calls: Counter[str] = Counter()
+        self.link_calls: Counter[tuple[str, str, str | None]] = Counter()
+
+    def get_memory(self, memory_id: str) -> MemoryRecord | None:
+        self.memory_calls[memory_id] += 1
+        return super().get_memory(memory_id)
+
+    def get_links(
+        self,
+        memory_id: str,
+        direction: str = "outgoing",
+        link_type: str | None = None,
+    ) -> list[MemoryLink]:
+        self.link_calls[(memory_id, direction, link_type)] += 1
+        return super().get_links(memory_id, direction, link_type)
 
 
 class RankingRepository(FakeRepository):
@@ -328,6 +349,21 @@ def test_pipeline_matches_native_graph_expansion_bounds() -> None:
 
     assert kernel_config.max_graph_seeds == 3
     assert kernel_config.max_neighbors_per_seed == 10
+
+
+@pytest.mark.asyncio
+async def test_policy_lookups_are_cached_for_one_search() -> None:
+    repository = CountingRepository()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+    )
+
+    outcome = await pipeline.search("query", limit=1)
+
+    assert [result.record_id for result in outcome.results] == ["active"]
+    assert repository.memory_calls["active"] == 2
+    assert repository.link_calls[("active", "incoming", None)] == 1
+    assert repository.link_calls[("active", "outgoing", None)] == 2
 
 
 @pytest.mark.asyncio
