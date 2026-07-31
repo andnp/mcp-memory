@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import inspect
+from collections.abc import Awaitable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import cast
 from searchkernel.domain import Vector
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.search.record_pipeline import (
@@ -48,7 +51,7 @@ class MemoryQueryEmbeddingProvider:
     def dim(self) -> int:
         return self._dim
 
-    def embed_query(self, query: str) -> Vector:
+    async def embed_query(self, query: str) -> Vector:
         embeddings = self._embedder.embed([query])
         if len(embeddings) != 1:
             raise ValueError("memory embedder must return one query vector")
@@ -114,7 +117,18 @@ class MemoryRecordSearchPipeline:
         active_filters["_mcp_memory_requested_limit"] = limit
         token = _ACTIVE_FILTERS.set(active_filters)
         try:
-            return self._pipeline.search(query, limit=limit, filters=active_filters)
+            outcome = self._pipeline.search(
+                query,
+                limit=limit,
+                filters=active_filters,
+            )
+            if inspect.isawaitable(outcome):
+                return asyncio.run(
+                    _resolve_async_outcome(
+                        cast(Awaitable[RecordSearchOutcome], outcome)
+                    )
+                )
+            return outcome
         finally:
             _ACTIVE_FILTERS.reset(token)
 
@@ -207,6 +221,12 @@ def _embedding_dimension(embedder: EmbeddingBatchProvider) -> int | None:
     if len(embeddings) != 1 or not embeddings[0]:
         return None
     return len(embeddings[0])
+
+
+async def _resolve_async_outcome(
+    outcome: Awaitable[RecordSearchOutcome],
+) -> RecordSearchOutcome:
+    return await outcome
 
 
 def _candidate_allowed(
