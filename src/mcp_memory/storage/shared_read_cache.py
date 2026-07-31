@@ -12,6 +12,11 @@ from time import time
 from collections.abc import Sequence
 from typing import Any
 
+from mcp_memory.utils.db import (
+    SQLITE_BUSY_TIMEOUT_MILLISECONDS,
+    SQLITE_BUSY_TIMEOUT_SECONDS,
+)
+
 
 logger = logging.getLogger(__name__)
 _CACHE_SCHEMA_VERSION = 1
@@ -737,7 +742,13 @@ class SharedReadCache:
         return [tuple(row) for row in rows]
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._db_path)
+        connection = sqlite3.connect(
+            str(self._db_path),
+            timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        )
+        connection.execute("PRAGMA journal_mode=WAL;")
+        connection.execute("PRAGMA synchronous=NORMAL;")
+        connection.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS};")
         connection.row_factory = sqlite3.Row
         return connection
 

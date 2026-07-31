@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from threading import Event, Thread
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from mcp_memory.storage.shared_read_cache import (
     SharedReadCacheProjectionUpsert,
     SharedReadCacheSearchRequest,
 )
+from mcp_memory.utils.db import SQLITE_BUSY_TIMEOUT_MILLISECONDS
 
 
 pytestmark = pytest.mark.small
@@ -1979,3 +1981,36 @@ def test_read_memory_record_service_records_cache_metrics_for_validation_paths(t
     assert snapshot.validated_read_hit_rate == pytest.approx(0.3333)
     assert snapshot.read_validation_mismatch_rate == pytest.approx(0.3333)
     assert snapshot.read_validation_failure_rate == pytest.approx(0.3333)
+
+
+def test_shared_read_cache_configures_wal_and_busy_timeout(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+
+    with cache._connect() as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == SQLITE_BUSY_TIMEOUT_MILLISECONDS
+
+
+def test_shared_read_cache_reads_during_concurrent_write_lock(tmp_path: Path) -> None:
+    cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
+    cache.store_read_response("memory-1", {"record": {"id": "memory-1"}})
+
+    blocker = sqlite3.connect(cache._db_path, timeout=0.1)
+    blocker.execute("BEGIN EXCLUSIVE")
+    completed = Event()
+    responses: list[dict[str, object] | None] = []
+
+    def read_cached_record() -> None:
+        try:
+            responses.append(cache.load_read_response("memory-1"))
+        finally:
+            completed.set()
+
+    reader = Thread(target=read_cached_record)
+    reader.start()
+    assert completed.wait(timeout=1.0)
+    reader.join(timeout=1.0)
+    blocker.rollback()
+    blocker.close()
+
+    assert responses == [{"record": {"id": "memory-1"}}]
