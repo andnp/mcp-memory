@@ -195,7 +195,12 @@ def _candidate_allowed(
     candidate: RecordSearchCandidate,
 ) -> bool:
     record = repository.get_memory(candidate.record_id)
-    return record is not None and _memory_allowed(repository, record)
+    if record is None or not _memory_allowed(repository, record):
+        return False
+    signal_context = _signal_context()
+    if signal_context is not None and "keyword" in candidate.provenance.strategies:
+        signal_context.keyword_candidates_present = True
+    return True
 
 
 def _result_allowed(

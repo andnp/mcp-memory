@@ -375,6 +375,35 @@ def test_mixed_keyword_and_semantic_results_keep_keyword_match() -> None:
     assert results[0].record_id == "exact"
 
 
+def test_keyword_match_survives_semantic_only_abstention_threshold() -> None:
+    exact = _memory(
+        "exact",
+        title="ripgrep ban",
+        summary="ripgrep ban",
+        content="Avoid broad ripgrep scans.",
+        tags=["ripgrep", "ban"],
+    )
+    repository = FakeRepository(
+        records={"exact": exact},
+        keyword_ids=["exact"],
+    )
+    outcome = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast(
+            "MemoryVectorBackend",
+            FakeVectorStore([("exact", 0.72)]),
+        ),
+        embedder=FakeEmbedder(),
+        config=Config(
+            search_ranking=SearchRankingConfig(
+                semantic_only_abstain_threshold=0.8,
+            )
+        ),
+    ).search("ripgrep ban", limit=1)
+
+    assert [result.record_id for result in outcome.results] == ["exact"]
+
+
 @pytest.mark.asyncio
 async def test_shadow_compares_pipeline_without_replacing_native_results() -> None:
     repository = FakeRepository()
