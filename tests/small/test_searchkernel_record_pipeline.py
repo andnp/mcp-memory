@@ -319,6 +319,17 @@ async def test_pipeline_ranking_is_read_only() -> None:
     assert after == before
 
 
+def test_pipeline_matches_native_graph_expansion_bounds() -> None:
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository()),
+    )
+
+    kernel_config = pipeline._pipeline._config
+
+    assert kernel_config.max_graph_seeds == 3
+    assert kernel_config.max_neighbors_per_seed == 10
+
+
 @pytest.mark.asyncio
 async def test_keyword_signal_uses_partial_and_full_token_coverage() -> None:
     partial = _memory(
