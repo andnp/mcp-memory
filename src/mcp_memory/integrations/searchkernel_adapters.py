@@ -21,6 +21,12 @@ from mcp_memory.core.ports.memory import (
     MemoryRecord,
 )
 
+_GRAPH_EDGE_DISCOUNTS = {
+    "DEPENDS_ON": 0.7,
+    "AMENDS": 0.6,
+    "CONTRADICTS": 0.35,
+}
+
 
 class MemoryVectorBackend(Protocol):
     """Memory-owned vector backend consumed by the read-only adapter."""
@@ -213,7 +219,11 @@ class MemoryGraphStore(GraphStore):
     ) -> list[tuple[str, str, float]]:
         if depth < 1:
             return []
-        allowed_types = set(edge_types) if edge_types is not None else None
+        allowed_types = (
+            set(edge_types)
+            if edge_types is not None
+            else set(_GRAPH_EDGE_DISCOUNTS)
+        )
         results: list[tuple[str, str, float]] = []
         frontier = [record_id]
         visited = {record_id}
@@ -226,9 +236,14 @@ class MemoryGraphStore(GraphStore):
                         continue
                     if link.target_id in visited:
                         continue
+                    discount = _GRAPH_EDGE_DISCOUNTS.get(link.link_type)
+                    if discount is None:
+                        continue
                     visited.add(link.target_id)
                     next_frontier.append(link.target_id)
-                    results.append((link.target_id, link.link_type, 1.0 / distance))
+                    results.append(
+                        (link.target_id, link.link_type, discount / distance)
+                    )
             frontier = next_frontier
             if not frontier:
                 break

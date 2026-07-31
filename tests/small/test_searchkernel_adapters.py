@@ -138,7 +138,7 @@ def test_graph_store_reads_links_without_writing_memory_schema():
     store = MemoryGraphStore(cast(MemoryReadPort, repository))
 
     assert isinstance(store, GraphStore)
-    assert store.neighbors("memory-1") == [("memory-2", "DEPENDS_ON", 1.0)]
+    assert store.neighbors("memory-1") == [("memory-2", "DEPENDS_ON", 0.7)]
     with pytest.raises(NotImplementedError):
         store.upsert_edges([("memory-1", "memory-2", "DEPENDS_ON", 1.0)])
 
