@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import RankedMemoryCandidate, MemoryRecord
+from searchkernel.search.fusion import fuse_reciprocal_rank
 
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
@@ -80,11 +81,10 @@ class RankingEngine:
         vector_ranked_ids: list[str],
         keyword_ranked_ids: list[str],
     ) -> dict[str, float]:
-        fused: dict[str, float] = {}
-        for ranked_ids in (vector_ranked_ids, keyword_ranked_ids):
-            for rank, memory_id in enumerate(ranked_ids, start=1):
-                fused[memory_id] = fused.get(memory_id, 0.0) + (1.0 / (self._weights.rrf_k + rank))
-        return fused
+        return fuse_reciprocal_rank(
+            (vector_ranked_ids, keyword_ranked_ids),
+            k=self._weights.rrf_k,
+        )
 
     def calibrate_score(self, rrf_score: float) -> float:
         exponent = -self._weights.calibration_steepness * (rrf_score - self._weights.calibration_threshold)

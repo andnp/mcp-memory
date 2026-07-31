@@ -4,7 +4,7 @@ import pytest
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord, RankedMemoryCandidate
-from mcp_memory.core.search_ranking import RankingEngine, RankingSignals
+from mcp_memory.core.search_ranking import RankingEngine, RankingSignals, ScoringWeights
 
 
 pytestmark = pytest.mark.small
@@ -27,6 +27,16 @@ def _record(memory_id: str, workspace_ids: list[str]) -> MemoryRecord:
         last_surfaced_at=None,
         workspace_ids=workspace_ids,
     )
+
+
+def test_fuse_reciprocal_rank_preserves_kernel_formula_and_configured_k() -> None:
+    engine = RankingEngine(Config(), weights=ScoringWeights(rrf_k=10.0))
+
+    assert engine.fuse_reciprocal_rank(["doc1"], []) == {"doc1": 1 / 11}
+    assert engine.fuse_reciprocal_rank(["doc1", "doc2"], ["doc2", "doc1"]) == {
+        "doc1": 1 / 11 + 1 / 12,
+        "doc2": 1 / 12 + 1 / 11,
+    }
 
 
 def test_pure_ranking_uses_explicit_candidate_authority_without_storage() -> None:
