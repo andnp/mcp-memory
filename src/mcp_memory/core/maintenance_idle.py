@@ -21,7 +21,7 @@ from mcp_memory.core.maintenance_schedule import (
 from mcp_memory.core.task_handlers import task_priority
 from mcp_memory.core.recurring_jitter import compute_recurring_jitter_seconds
 from mcp_memory.core.task_results import TaskRunResult
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunSummary
+from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunSummary
 
 
 AUTONOMOUS_MAINTENANCE_IDLE_THRESHOLD_SECONDS = 3600.0
@@ -124,7 +124,7 @@ def should_preserve_idle_pause(
 
 
 def resume_paused_recurring_maintenance(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     *,
     now: float | None = None,
 ) -> list[TaskRecord]:
@@ -167,7 +167,7 @@ def resume_paused_recurring_maintenance(
 
 
 def drain_legacy_cleanup_tasks(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     *,
     now: float | None = None,
 ) -> list[TaskRecord]:
@@ -217,7 +217,7 @@ def _legacy_cleanup_migration_source(task: TaskRecord, *, drained_at: float) -> 
 
 
 def _ensure_memory_curator_migration_task(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     migration_sources: list[dict[str, Any]],
     *,
     drained_at: float,
@@ -244,7 +244,7 @@ def _ensure_memory_curator_migration_task(
 
 
 def _merge_memory_curator_migration_sources(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     task: TaskRecord,
     migration_sources: list[dict[str, Any]],
 ) -> TaskRecord:
@@ -267,7 +267,7 @@ def _merge_memory_curator_migration_sources(
 
 
 def _list_open_legacy_cleanup_tasks(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     task_name: str,
 ) -> list[TaskRecord]:
     list_helper = getattr(task_queue, "list_open_tasks_any_workspace", None)
@@ -278,7 +278,7 @@ def _list_open_legacy_cleanup_tasks(
 
 
 def _cancel_legacy_cleanup_task(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     source_task: TaskRecord,
     *,
     drained_at: float,

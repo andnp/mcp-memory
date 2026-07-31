@@ -49,7 +49,7 @@ from mcp_memory.core.task_handlers import (
 )
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.curation_reconciliation import CurationReconciler
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 logger = logging.getLogger(__name__)

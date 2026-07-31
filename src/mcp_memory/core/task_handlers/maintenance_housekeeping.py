@@ -13,7 +13,7 @@ from mcp_memory.core.task_handlers.constants import (
     DEFAULT_SWEEP_RETENTION_DAYS,
 )
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_workspace_id as _resolve_workspace_id
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.storage.session import CursorLike, DbConnectionLike
 
 

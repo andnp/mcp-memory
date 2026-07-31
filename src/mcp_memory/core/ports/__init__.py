@@ -19,7 +19,8 @@ if TYPE_CHECKING:
         TaskExecutionAttemptPort,
         TaskExecutionAttemptRecordLike,
     )
-    from .work_items import WorkItemRecordLike, WorkItemRepository
+    from .work_items import WorkItemRecord, WorkItemRecordLike, WorkItemRepository
+    from .tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 
 _EXPORTS = {
     "CurationActionStore": ("curation", "CurationActionStore"),
@@ -38,7 +39,12 @@ _EXPORTS = {
     "TaskExecutionAttemptPort": ("providers", "TaskExecutionAttemptPort"),
     "TaskExecutionAttemptRecordLike": ("providers", "TaskExecutionAttemptRecordLike"),
     "WorkItemRecordLike": ("work_items", "WorkItemRecordLike"),
+    "WorkItemRecord": ("work_items", "WorkItemRecord"),
     "WorkItemRepository": ("work_items", "WorkItemRepository"),
+    "TaskQueue": ("tasks", "TaskQueue"),
+    "TaskRecord": ("tasks", "TaskRecord"),
+    "TaskRunRecord": ("tasks", "TaskRunRecord"),
+    "TaskRunSummary": ("tasks", "TaskRunSummary"),
 }
 
 __all__ = (
@@ -58,7 +64,12 @@ __all__ = (
     "TaskExecutionAttemptPort",
     "TaskExecutionAttemptRecordLike",
     "WorkItemRecordLike",
+    "WorkItemRecord",
     "WorkItemRepository",
+    "TaskQueue",
+    "TaskRecord",
+    "TaskRunRecord",
+    "TaskRunSummary",
 )
 
 

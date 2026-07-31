@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from mcp_memory.core.journal import System1Journal, _ALL_WORKSPACES
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
 
 
 _ALL_WORKSPACES_WIRE = "*"
@@ -20,7 +20,7 @@ class System1IngestScheduleResult:
 
 
 def schedule_system1_ingest(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     journal: System1Journal,
     workspace_id: str | None,
     *,
@@ -80,7 +80,7 @@ def schedule_system1_ingest(
 
 
 def schedule_system1_ingest_continuation(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     journal: System1Journal,
     workspace_id: str | None,
     *,
@@ -147,7 +147,7 @@ def _build_ingest_scheduling_context(
 
 
 def _enqueue_system1_ingest_task(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     *,
     workspace_id: str | None,
     journal_workspace_id: object,
@@ -285,7 +285,7 @@ def _resolve_ingest_suppression_until(now: float, suppression_config) -> float |
 
 
 def _resolve_auto_ingest_rate_limit_until(
-    task_queue: SQLiteTaskQueue,
+    task_queue: TaskQueue,
     *,
     task_name: str,
     cooldown_seconds: float,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.providers import (
@@ -10,51 +10,11 @@ from mcp_memory.core.ports.providers import (
     ProviderUsagePort,
     TaskExecutionAttemptPort,
 )
+from mcp_memory.core.ports.tasks import TaskQueue
 from mcp_memory.core.ports.work_items import WorkItemRepository
 from mcp_memory.core.providers.interfaces import AgenticTaskProvider, JSONTaskProvider
 
-if TYPE_CHECKING:
-    from mcp_memory.core.tasks import TaskRecord
-
-
-class TaskQueueProtocol(Protocol):
-    def find_open_task_with_data_any_workspace(
-        self,
-        task_name: str,
-        *,
-        data_fields: dict[str, Any],
-    ) -> TaskRecord | None: ...
-
-    def enqueue(
-        self,
-        task_name: str,
-        data: dict[str, Any] | None = None,
-        workspace_id: str | None = None,
-        priority: int = 100,
-        max_retries: int = 3,
-        available_at: float | None = None,
-        task_id: str | None = None,
-    ) -> TaskRecord: ...
-
-    def clear_running_task_data_keys(self, task_id: str, *, field_names: list[str]) -> TaskRecord: ...
-
-    def get_task(self, task_id: str) -> TaskRecord: ...
-
-    def extend_running_task_data_int_list(
-        self,
-        task_id: str,
-        *,
-        field_name: str,
-        values: list[int],
-    ) -> TaskRecord: ...
-
-    def extend_running_task_data_object_list(
-        self,
-        task_id: str,
-        *,
-        field_name: str,
-        values: list[dict[str, Any]],
-    ) -> TaskRecord: ...
+TaskQueueProtocol = TaskQueue
 
 
 class TaskQueueContext(Protocol):

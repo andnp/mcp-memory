@@ -32,7 +32,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     enqueue_review_work_item,
     work_item_result_metadata,
 )
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_DEDUP_REVIEW,

@@ -9,7 +9,7 @@ from typing import cast
 from mcp_memory.core.maintenance_idle import resume_paused_recurring_maintenance
 from mcp_memory.core.system1_scheduling import System1IngestScheduleResult, schedule_system1_ingest
 from mcp_memory.core.journal import JournalEntry, System1Journal
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord
 from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
@@ -109,7 +109,7 @@ def _ordered_workspace_ids(workspace_ids: list[str | None]) -> list[str | None]:
 def _schedule_record_thought_follow_up(
     *,
     journal: System1Journal,
-    task_queue: SQLiteTaskQueue | None,
+    task_queue: TaskQueue | None,
     workspace_ids: list[str | None],
     suppression_config=None,
     resumed_now: float | None = None,
@@ -134,7 +134,7 @@ def _schedule_record_thought_follow_up(
 def flush_record_thought_writeback_outbox(
     journal: System1Journal,
     *,
-    task_queue: SQLiteTaskQueue | None,
+    task_queue: TaskQueue | None,
     suppression_config,
     writeback_cache: SharedReadCache | None,
     flush_limit: int = _RECORD_THOUGHT_OUTBOX_FLUSH_LIMIT,
@@ -183,7 +183,7 @@ class RecordThoughtOperation:
     def __init__(
         self,
         journal: System1Journal,
-        task_queue: SQLiteTaskQueue | None,
+        task_queue: TaskQueue | None,
         workspace_id: str | None,
         suppression_config=None,
         writeback_cache: SharedReadCache | None = None,

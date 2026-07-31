@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 def resolve_task_workspace_id(ctx: ApplicationContext, task: TaskRecord) -> str | None:

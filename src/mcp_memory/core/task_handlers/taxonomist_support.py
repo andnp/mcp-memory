@@ -28,7 +28,7 @@ from mcp_memory.core.task_handlers.campaigns import (
     count_named_tool_calls_from_stats,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sample_maintenance_candidates, sampling_payload
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     COMPATIBILITY_GROUP_LIGHTWEIGHT_REVIEW,
     EXECUTION_LANE_AGENTIC,

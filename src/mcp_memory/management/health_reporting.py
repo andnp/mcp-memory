@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-import mcp_memory.core.tasks as task_queue_module
+from mcp_memory.core.ports.tasks import is_process_alive
 import time
 
 from mcp_memory.embeddings import describe_embedder
@@ -93,7 +93,7 @@ def build_execution_attempt_health(
     stale_after_seconds: float = 60.0,
     now: float | None = None,
     fetch_running_attempt_rows: RunningTaskAttemptRowFetcher = fetch_running_task_attempt_rows,
-    process_is_alive: ProcessAliveChecker = task_queue_module._is_process_alive,
+    process_is_alive: ProcessAliveChecker = is_process_alive,
 ) -> ExecutionAttemptHealthPayload:
     rows = fetch_running_attempt_rows(db_manager)
     if not rows:

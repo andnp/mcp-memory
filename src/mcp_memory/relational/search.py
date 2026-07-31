@@ -20,7 +20,7 @@ from mcp_memory.relational.repository import (
     RelationalMemoryRecord,
 )
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.work_item_store import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
+from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
 from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding

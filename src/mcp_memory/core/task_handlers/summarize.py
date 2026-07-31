@@ -4,7 +4,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.summaries import build_deterministic_summary
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 async def handle_summarize_memory_task(

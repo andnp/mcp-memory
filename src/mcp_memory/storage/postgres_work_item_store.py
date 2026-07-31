@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from mcp_memory.storage.postgres_store_support import optional_connection, require_connection
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
-from mcp_memory.work_item_store import (
+from mcp_memory.core.ports.work_items import (
     DEFAULT_WORK_ITEM_LEASE_TTL_SECONDS,
     WORK_ITEM_STATUS_COMPLETED,
     WORK_ITEM_STATUS_DEFERRED,

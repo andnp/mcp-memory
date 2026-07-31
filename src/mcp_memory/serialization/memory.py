@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.management.models import CompactMemoryRecord
 from mcp_memory.relational.repository import MemoryLink, RelationalMemoryRecord
 from mcp_memory.relational.search import RelationalSearchResult

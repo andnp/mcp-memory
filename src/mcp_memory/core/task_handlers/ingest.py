@@ -37,7 +37,7 @@ from mcp_memory.core.task_handlers.agentic_tool_tracking import (
 from mcp_memory.core.task_handlers.constants import DEFAULT_INGEST_BATCH_SIZE
 from mcp_memory.core.task_handlers.tool_loop import run_internal_tool_loop
 from mcp_memory.core.task_handlers.workspace_resolution import resolve_task_or_context_workspace_id
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from searchkernel.ingestion import embed_in_batches
 from searchkernel.utils.similarity import cosine_similarity_lists
 

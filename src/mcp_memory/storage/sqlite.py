@@ -4,7 +4,7 @@ from typing import Any
 
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
-from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -18,7 +18,7 @@ from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.work_item_store import SQLiteWorkItemRepository
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 
 
 def build_sqlite_runtime_components(

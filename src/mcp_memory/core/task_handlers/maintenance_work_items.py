@@ -9,7 +9,7 @@ from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import CurationSpecialistRoute
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.management.models import NerdQualityRemediationSignalPayload
 from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,

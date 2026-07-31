@@ -17,7 +17,7 @@ from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
 )
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
     EXECUTION_LANE_AGENTIC,

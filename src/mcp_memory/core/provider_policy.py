@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, cast
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.task_handlers.constants import TAXONOMIST_TASK_NAME
 from mcp_memory.core.task_policy import is_deterministic_task
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.config import Config
 from mcp_memory.core.ports.providers import ProviderPolicyEventPort
 

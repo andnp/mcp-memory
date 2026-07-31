@@ -29,7 +29,7 @@ from mcp_memory.core.task_handlers import (
     SYSTEM1_INGEST_TASK_NAME,
     task_priority,
 )
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.providers import (
     NullProviderUsagePort,
     ProviderUsagePort,

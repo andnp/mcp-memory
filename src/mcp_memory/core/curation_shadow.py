@@ -15,7 +15,7 @@ from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.mutation_history import ProtectionMode, is_protection_active
 
 

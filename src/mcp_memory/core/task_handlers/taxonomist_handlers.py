@@ -22,7 +22,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     release_work_item,
 )
 import mcp_memory.core.task_handlers.taxonomist_support as _taxonomist_support
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 async def handle_taxonomist_task(

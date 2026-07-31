@@ -25,7 +25,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     work_item_result_metadata,
 )
 import mcp_memory.core.task_handlers.relationship_proposals as _relationship_proposals
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.core.ports.work_items import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_CONFLICT_REVIEW,

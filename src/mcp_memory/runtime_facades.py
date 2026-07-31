@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from mcp_memory.context import MemoryPipelineContext, MemoryReadCapabilities
 from mcp_memory.core.journal import System1Journal
-from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
+from mcp_memory.core.ports.tasks import TaskQueue, TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -74,11 +74,11 @@ class JournalFacade:
 
 @dataclass(frozen=True)
 class TaskQueueFacade:
-    task_queue: SQLiteTaskQueue | None
+    task_queue: TaskQueue | None
 
     @classmethod
     def from_context(cls, ctx: MemoryPipelineContext) -> TaskQueueFacade:
-        return cls(task_queue=cast(SQLiteTaskQueue | None, ctx.task_queue))
+        return cls(task_queue=cast(TaskQueue | None, ctx.task_queue))
 
     def count_by_status(self) -> dict[str, int]:
         if self.task_queue is None:

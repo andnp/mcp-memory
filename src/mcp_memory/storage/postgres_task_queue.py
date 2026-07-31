@@ -4,11 +4,11 @@ import json
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from mcp_memory.core.task_results import TaskRunResult, TaskRunResultSource, coerce_task_run_result
+from mcp_memory.core.ports.tasks import TaskRecord, TaskRunRecord, TaskRunSummary
+from mcp_memory.core.task_results import TaskRunResultSource, coerce_task_run_result
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
 
 
@@ -24,63 +24,6 @@ _TASK_COLUMNS = (
 _TASK_RUN_COLUMNS = (
     "id, task_id, task_name, workspace_id, status, started_at, completed_at, duration_seconds, result_json, error_text"
 )
-
-
-@dataclass
-class TaskRecord:
-    id: str
-    task_name: str
-    data: dict[str, Any]
-    workspace_id: str | None
-    status: str
-    priority: int
-    retries_count: int
-    max_retries: int
-    created_at: float
-    updated_at: float
-    available_at: float
-    claimed_at: float | None
-    started_at: float | None
-    completed_at: float | None
-    last_error: str | None
-    execution_epoch: int = 0
-    subprocess_pid: int | None = None
-    active_request_id: str | None = None
-    cancellation_requested_at: float | None = None
-    cancelled_at: float | None = None
-    cancellation_reason: str | None = None
-    cancelled_by: str | None = None
-
-
-@dataclass
-class TaskRunRecord:
-    id: str
-    task_id: str
-    task_name: str
-    workspace_id: str | None
-    status: str
-    started_at: float
-    completed_at: float
-    duration_seconds: float
-    result: TaskRunResult = field(default_factory=TaskRunResult)
-    error_text: str | None = None
-
-
-@dataclass
-class TaskRunSummary:
-    task_name: str
-    total_runs: int = 0
-    completed_runs: int = 0
-    failed_runs: int = 0
-    cancelled_runs: int = 0
-    retry_runs: int = 0
-    last_status: str | None = None
-    last_started_at: float | None = None
-    last_completed_at: float | None = None
-    last_error: str | None = None
-    last_result: TaskRunResult = field(default_factory=TaskRunResult)
-    avg_duration_seconds: float = 0.0
-    total_lines_compressed: int = 0
 
 
 class PostgresTaskQueue:

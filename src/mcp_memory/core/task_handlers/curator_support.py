@@ -26,7 +26,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     sample_maintenance_candidates,
     support_counts_for_candidates,
 )
-from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.core.ports.tasks import TaskRecord
 
 
 def _sampling_task_id(task: Any) -> str:
