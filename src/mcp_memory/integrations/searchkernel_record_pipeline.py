@@ -8,6 +8,7 @@ from searchkernel.domain import Vector
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.search.record_pipeline import (
     RecordSearchCandidate,
+    RecordSearchConfig,
     RecordSearchOutcome,
     RecordSearchPipeline,
     RecordSearchPolicy,
@@ -166,6 +167,7 @@ def build_memory_record_pipeline(
         vector_store=adapted_vector_store,
         graph_store=MemoryGraphStore(repository),
         embedding_provider=embedding_provider,
+        config=RecordSearchConfig(minimum_candidate_limit=50),
         policy=policy,
         continue_on_error=True,
     )

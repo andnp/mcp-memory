@@ -120,6 +120,7 @@ class FakeVectorStore:
     def __init__(self, results: list[tuple[str, float]] | None = None) -> None:
         self.search_count = 0
         self.write_count = 0
+        self.search_limits: list[int] = []
         self.results = results
 
     def upsert(self, **kwargs: object) -> bool:
@@ -128,6 +129,9 @@ class FakeVectorStore:
 
     def search(self, **kwargs: object) -> list[tuple[str, float]]:
         self.search_count += 1
+        limit = kwargs.get("limit")
+        assert isinstance(limit, int)
+        self.search_limits.append(limit)
         return self.results or [
             ("active", 1.0),
             ("other-workspace", 0.9),
@@ -174,6 +178,7 @@ def test_composition_applies_memory_policy_without_writes() -> None:
 
     assert [result.record_id for result in outcome.results] == ["active"]
     assert vector_store.search_count == 1
+    assert vector_store.search_limits == [50]
     assert vector_store.write_count == 0
     assert embedder.queries == ["query"]
 
