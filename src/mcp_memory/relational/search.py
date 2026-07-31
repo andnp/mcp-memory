@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import inspect
 import sqlite3
 import time
@@ -22,10 +21,16 @@ from mcp_memory.core.ports.memory import (
     MemoryRecord,
 )
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.core.ports.work_items import EXECUTION_LANE_DETERMINISTIC, WORK_FAMILY_MEMORY_EMBEDDING_REPAIR
+from mcp_memory.core.search_graph import GraphCandidateExpander, GraphExpansionInfo
+from mcp_memory.core.search_repair import EmbeddingRepairScheduler
+from mcp_memory.core.search_ranking import (
+    RankingEngine as PureRankingEngine,
+    RankingSignals,
+    ScoringWeights,
+)
+from mcp_memory.relational.semantic import RelationalSemanticSearchAdapter
 from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
 from searchkernel.ports import EmbeddingBatchProvider
-from searchkernel.runtime import get_or_compute_query_embedding
 
 
 ACCESS_HALF_LIFE_DAYS = 7
@@ -139,13 +144,6 @@ class SearchHealthStatus:
 
 
 @dataclass(slots=True)
-class GraphExpansionInfo:
-    rrf_score: float
-    seed_id: str
-    link_type: str
-
-
-@dataclass(slots=True)
 class SemanticCandidatePool:
     candidates: list[RelationalMemoryRecord]
     candidate_ids: list[str] | None = None
@@ -154,265 +152,41 @@ class SemanticCandidatePool:
     skip_semantic_scoring: bool = False
 
 
-@dataclass(slots=True)
-class RankingSignals:
-    matched_by_keyword: bool = False
-    matched_by_semantic: bool = False
-    semantic_score: float = 0.0
-    keyword_token_coverage: float = 0.0
-    expanded_by_graph: bool = False
+class RankingEngine(PureRankingEngine):
+    """Compatibility facade that enriches raw records from the memory port."""
 
-
-@dataclass(slots=True)
-class ScoringWeights:
-    rrf_k: float = 60.0
-    calibration_threshold: float = 0.035
-    calibration_steepness: float = 150.0
-    workspace_multiplier: float = WORKSPACE_BOOST
-    semantic_only_abstain_threshold: float = 0.8
-    semantic_only_keyword_penalty: float = 0.65
-    keyword_coverage_floor: float = 0.6
-    keyword_low_coverage_penalty: float = 0.7
-    graph_expansion_only_penalty: float = 0.35
-    degradation_multiplier: float = DEGRADATION_PENALTY
-    access_half_life_days: float = ACCESS_HALF_LIFE_DAYS
-    access_bonus_scale: float = 0.1
-    authority_link_step: float = 0.02
-    authority_link_cap: int = 10
-
-    @classmethod
-    def from_config(cls, config: Config):
-        ranking = config.search_ranking
-        return cls(
-            rrf_k=ranking.rrf_k,
-            calibration_threshold=ranking.calibration_threshold,
-            calibration_steepness=ranking.calibration_steepness,
-            workspace_multiplier=ranking.workspace_multiplier,
-            semantic_only_abstain_threshold=ranking.semantic_only_abstain_threshold,
-            semantic_only_keyword_penalty=ranking.semantic_only_keyword_penalty,
-            keyword_coverage_floor=ranking.keyword_coverage_floor,
-            keyword_low_coverage_penalty=ranking.keyword_low_coverage_penalty,
-            graph_expansion_only_penalty=ranking.graph_expansion_only_penalty,
-            degradation_multiplier=ranking.degradation_multiplier,
-            access_half_life_days=ranking.access_half_life_days,
-            access_bonus_scale=ranking.access_bonus_scale,
-            authority_link_step=ranking.authority_link_step,
-            authority_link_cap=ranking.authority_link_cap,
-        )
-
-
-class RankingEngine:
-    def __init__(
-        self,
-        repository: SearchRepositoryLike,
-        config: Config,
-        *,
-        weights: ScoringWeights | None = None,
-    ) -> None:
+    def __init__(self, repository: SearchRepositoryLike, config: Config, *, weights: ScoringWeights | None = None) -> None:
+        super().__init__(config, weights=weights)
         self._repository = repository
-        self._config = config
-        self._weights = weights or ScoringWeights.from_config(config)
 
-    def fuse_reciprocal_rank(
-        self,
-        vector_ranked_ids: list[str],
-        keyword_ranked_ids: list[str],
-    ) -> dict[str, float]:
-        fused: dict[str, float] = {}
-        for ranked_ids in (vector_ranked_ids, keyword_ranked_ids):
-            for rank, memory_id in enumerate(ranked_ids, start=1):
-                fused[memory_id] = fused.get(memory_id, 0.0) + (1.0 / (self._weights.rrf_k + rank))
-        return fused
-
-    def calibrate_score(self, rrf_score: float) -> float:
-        exponent = -self._weights.calibration_steepness * (rrf_score - self._weights.calibration_threshold)
-        return 1.0 / (1.0 + math.exp(exponent))
-
-    def type_aware_recency_bonus(self, record: RelationalMemoryRecord) -> float:
-        try:
-            created_at = datetime.fromisoformat(record.created_at)
-        except ValueError:
-            return 0.0
-
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-
-        age_days = max((datetime.now(timezone.utc) - created_at).days, 0)
-        recency = self._config.memory.get_recency_config(record.type)
-        return recency.max_boost_amount * (recency.boost_decay_rate ** age_days)
-
-    def workspace_multiplier(self, record: RelationalMemoryRecord, workspace_id: str | None) -> float:
-        if workspace_id is None or workspace_id not in record.workspace_ids:
-            return 1.0
-        return self._weights.workspace_multiplier
-
-    def access_bonus(self, record: RelationalMemoryRecord) -> float:
-        current_access_score = _decayed_access_score_for_half_life(
-            record.access_score,
-            record.last_accessed_at,
-            half_life_days=self._weights.access_half_life_days,
-        )
-        if current_access_score <= 0:
-            return 0.0
-        return self._weights.access_bonus_scale * math.log10(current_access_score + 1.0)
-
-    def adjusted_access_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
-        bonus = self.access_bonus(record)
-        supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
-        if supporting_links <= 0 and record.type in {"journal", "plan"}:
-            return bonus * 0.5
-        return bonus
-
-    def authority_multiplier(self, record: RelationalMemoryRecord) -> float:
-        incoming_links_count = self._repository.count_incoming_links(record.id)
-        capped_links = min(incoming_links_count, self._weights.authority_link_cap)
-        return 1.0 + (capped_links * self._weights.authority_link_step)
-
-    def authority_multiplier_for_candidate(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> float:
+    def _candidate_with_authority(self, candidate: RankedMemoryCandidate | RelationalMemoryRecord) -> RankedMemoryCandidate:
         if isinstance(candidate, RankedMemoryCandidate):
-            weighted_links = _weighted_incoming_link_count(candidate.incoming_link_type_counts)
-            incoming_links_count = weighted_links if weighted_links > 0 else float(candidate.incoming_links_count)
-        else:
-            incoming_links = self._repository.get_links(candidate.id, direction="incoming")
-            incoming_links_count = _weighted_incoming_link_count(_count_links_by_type(incoming_links))
-        capped_links = min(incoming_links_count, self._weights.authority_link_cap)
-        return 1.0 + (capped_links * self._weights.authority_link_step)
-
-    def degradation_multiplier(self, record: RelationalMemoryRecord) -> float:
-        if record.status not in {"stale", "degraded"}:
-            return 1.0
-        return self._weights.degradation_multiplier
-
-    def graph_support_bonus(self, record: RelationalMemoryRecord, authority_counts: dict[str, int]) -> float:
-        supporting_links = authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0)
-        if supporting_links <= 0 or record.type not in {"fact", "observation", "reflection"}:
-            return 0.0
-        return min((supporting_links * 0.08) + 0.04, 0.2)
-
-    def score_from_rrf(
-        self,
-        record: RelationalMemoryRecord,
-        rrf_score: float,
-        workspace_id: str | None = None,
-    ) -> float:
-        authority_counts = _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
-        score = self.calibrate_score(rrf_score)
-        score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
-        score *= self.workspace_multiplier(record, workspace_id)
-        score += self.adjusted_access_bonus(record, authority_counts)
-        score *= self.authority_multiplier(record)
-        score *= self.degradation_multiplier(record)
-        return min(max(score, 0.0), 1.0)
-
-    def _signal_adjustment_multiplier(
-        self,
-        signals: RankingSignals,
-        *,
-        keyword_candidates_present: bool,
-    ) -> float:
-        if not keyword_candidates_present:
-            if signals.expanded_by_graph and not signals.matched_by_semantic:
-                return self._weights.graph_expansion_only_penalty
-            return 1.0
-        if signals.expanded_by_graph and not signals.matched_by_keyword and not signals.matched_by_semantic:
-            return self._weights.graph_expansion_only_penalty
-        if signals.matched_by_semantic and not signals.matched_by_keyword:
-            return self._weights.semantic_only_keyword_penalty
-        if not signals.matched_by_keyword:
-            return 1.0
-        if signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
-            return 1.0
-        return max(self._weights.keyword_low_coverage_penalty, signals.keyword_token_coverage)
-
-    def rank_records(
-        self,
-        records: Sequence[RankedMemoryCandidate | RelationalMemoryRecord],
-        rrf_scores: dict[str, float],
-        workspace_id: str | None = None,
-        *,
-        ranking_signals: dict[str, RankingSignals] | None = None,
-        keyword_candidates_present: bool = False,
-    ) -> list[tuple[RelationalMemoryRecord, float]]:
-        ranked: list[tuple[RelationalMemoryRecord, float]] = []
-        for candidate in records:
-            record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
-            if record.id not in rrf_scores:
-                continue
-            authority_counts = (
-                candidate.incoming_link_type_counts
-                if isinstance(candidate, RankedMemoryCandidate)
-                else _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
-            )
-            score = self.calibrate_score(rrf_scores[record.id])
-            score = min(score + self.type_aware_recency_bonus(record) + self.graph_support_bonus(record, authority_counts), 1.0)
-            score *= self.workspace_multiplier(record, workspace_id)
-            score += self.adjusted_access_bonus(record, authority_counts)
-            score *= self.authority_multiplier_for_candidate(candidate)
-            score *= self.degradation_multiplier(record)
-            signals = ranking_signals.get(record.id, RankingSignals()) if ranking_signals is not None else RankingSignals()
-            score *= self._signal_adjustment_multiplier(signals, keyword_candidates_present=keyword_candidates_present)
-            ranked.append((record, min(max(score, 0.0), 1.0)))
-        ranked.sort(key=lambda item: item[1], reverse=True)
-        return ranked
-
-    def explain_candidate(
-        self,
-        candidate: RankedMemoryCandidate | RelationalMemoryRecord,
-        rrf_score: float,
-        workspace_id: str | None = None,
-        *,
-        signals: RankingSignals | None = None,
-        keyword_candidates_present: bool = False,
-    ) -> dict[str, float | str | bool]:
-        record = candidate.record if isinstance(candidate, RankedMemoryCandidate) else candidate
-        calibrated_score = self.calibrate_score(rrf_score)
-        recency_bonus = self.type_aware_recency_bonus(record)
-        workspace_multiplier = self.workspace_multiplier(record, workspace_id)
-        authority_counts = (
-            candidate.incoming_link_type_counts
-            if isinstance(candidate, RankedMemoryCandidate)
-            else _count_links_by_type(self._repository.get_links(record.id, direction="incoming"))
+            return candidate
+        links = self._repository.get_links(candidate.id, direction="incoming")
+        return RankedMemoryCandidate(
+            record=candidate,
+            incoming_links_count=len(links),
+            incoming_link_type_counts=_count_links_by_type(links),
         )
-        support_bonus = self.graph_support_bonus(record, authority_counts)
-        access_bonus = self.adjusted_access_bonus(record, authority_counts)
-        authority_multiplier = self.authority_multiplier_for_candidate(candidate)
-        degradation_multiplier = self.degradation_multiplier(record)
-        score_after_recency = min(calibrated_score + recency_bonus + support_bonus, 1.0)
-        final_score = score_after_recency
-        final_score *= workspace_multiplier
-        final_score += access_bonus
-        final_score *= authority_multiplier
-        final_score *= degradation_multiplier
-        active_signals = signals or RankingSignals()
-        signal_multiplier = self._signal_adjustment_multiplier(
-            active_signals,
+
+    def rank_records(self, records, rrf_scores, workspace_id=None, *, ranking_signals=None, keyword_candidates_present=False):
+        return super().rank_records(
+            [self._candidate_with_authority(candidate) for candidate in records],
+            rrf_scores, workspace_id, ranking_signals=ranking_signals,
             keyword_candidates_present=keyword_candidates_present,
         )
-        final_score *= signal_multiplier
-        final_score = min(max(final_score, 0.0), 1.0)
-        return {
-            "rrf_score": round(rrf_score, 6),
-            "calibrated_score": round(calibrated_score, 6),
-            "recency_bonus": round(recency_bonus, 6),
-            "graph_support_bonus": round(support_bonus, 6),
-            "workspace_multiplier": round(workspace_multiplier, 6),
-            "access_bonus": round(access_bonus, 6),
-            "authority_multiplier": round(authority_multiplier, 6),
-            "authority_supporting_links": round(
-                authority_counts.get("DEPENDS_ON", 0) + authority_counts.get("AMENDS", 0),
-                6,
-            ),
-            "authority_contradicting_links": round(authority_counts.get("CONTRADICTS", 0), 6),
-            "authority_superseding_links": round(authority_counts.get("SUPERSEDES", 0), 6),
-            "degradation_multiplier": round(degradation_multiplier, 6),
-            "keyword_token_coverage": round(active_signals.keyword_token_coverage, 6),
-            "semantic_score": round(active_signals.semantic_score, 6),
-            "ranking_signal_multiplier": round(signal_multiplier, 6),
-            "final_score": round(final_score, 6),
-            "memory_type": record.type,
-            "status": record.status,
-            "workspace_match": bool(workspace_id and workspace_id in record.workspace_ids),
-        }
+
+    def explain_candidate(self, candidate, rrf_score, workspace_id=None, *, signals=None, keyword_candidates_present=False):
+        return super().explain_candidate(
+            self._candidate_with_authority(candidate), rrf_score, workspace_id,
+            signals=signals, keyword_candidates_present=keyword_candidates_present,
+        )
+
+    def authority_multiplier(self, record):
+        return super().authority_multiplier_for_candidate(self._candidate_with_authority(record))
+
+    def score_from_rrf(self, record, rrf_score, workspace_id=None):
+        return self.rank_records([record], {record.id: rrf_score}, workspace_id)[0][1]
 
 
 class RelationalMemorySearchService:
@@ -438,6 +212,25 @@ class RelationalMemorySearchService:
         self._work_items = work_items
         self._embedding_repair_queue = embedding_repair_queue
         self._background_repair_wait_seconds = max(background_repair_wait_seconds, 0.0)
+        self._semantic_adapter = (
+            RelationalSemanticSearchAdapter(embedder, vector_store)
+            if embedder is not None and vector_store is not None
+            else None
+        )
+        self._repair_scheduler = (
+            EmbeddingRepairScheduler(
+                config=config,
+                task_queue=task_queue,
+                work_items=work_items,
+                embedding_repair_queue=embedding_repair_queue,
+                wait_seconds=self._background_repair_wait_seconds,
+            )
+            if task_queue is not None and (embedding_repair_queue is not None or work_items is not None)
+            else None
+        )
+        self._graph_expander = GraphCandidateExpander(
+            lambda memory_id: self._repository.get_links(memory_id, direction="outgoing")
+        )
         semantic_enabled = embedder is not None and vector_store is not None
         self._health = SearchHealthStatus(
             semantic_enabled=semantic_enabled,
@@ -829,13 +622,15 @@ class RelationalMemorySearchService:
         )
 
     def _get_query_embedding(self, query: str) -> list[float]:
-        embedder = self._embedder
-        assert embedder is not None
-        return get_or_compute_query_embedding(
-            model_name=embedder.model_name,
-            query=query,
-            compute=lambda: list(embedder.embed([query])[0]),
-        )
+        adapter = self._get_semantic_adapter()
+        return adapter.get_query_embedding(query)
+
+    def _get_semantic_adapter(self) -> RelationalSemanticSearchAdapter:
+        assert self._embedder is not None
+        assert self._vector_store is not None
+        if self._semantic_adapter is None or not self._semantic_adapter.matches(self._embedder, self._vector_store):
+            self._semantic_adapter = RelationalSemanticSearchAdapter(self._embedder, self._vector_store)
+        return self._semantic_adapter
 
     def _semantic_scores(
         self,
@@ -943,28 +738,17 @@ class RelationalMemorySearchService:
         vector_search_diagnostics: dict[str, object] | None = None,
         limit: int,
     ) -> list[tuple[str, float]]:
-        assert self._embedder is not None
-        assert self._vector_store is not None
+        _ = workspace_id
+        adapter = self._get_semantic_adapter()
         self._ensure_searchable_memory_embeddings(candidates, semantic_timing_ms=semantic_timing_ms)
-        query_embedding_started = time.perf_counter()
-        query_embedding = self._get_query_embedding(query)
-        _record_timing_ms(semantic_timing_ms, "semantic_query_embedding", query_embedding_started)
-        search_kwargs: dict[str, object] = {
-            "source_kind": "memory",
-            "model_name": self._embedder.model_name,
-            "query_embedding": query_embedding,
-            "limit": limit,
-        }
-        if candidate_ids and getattr(self._vector_store, "supports_candidate_filtering", False):
-            search_kwargs["candidate_ids"] = list(candidate_ids)
-        if vector_search_diagnostics is not None:
-            search_kwargs["diagnostics"] = vector_search_diagnostics
-        vector_search_started = time.perf_counter()
-        matches = self._vector_store.search(
-            **search_kwargs,
+        return adapter.search(
+            query,
+            candidates,
+            candidate_ids=candidate_ids,
+            limit=limit,
+            semantic_timing_ms=semantic_timing_ms,
+            vector_search_diagnostics=vector_search_diagnostics,
         )
-        _record_timing_ms(semantic_timing_ms, "semantic_vector_search", vector_search_started)
-        return matches
 
     def _run_integrity_check_once(self) -> None:
         if self._db_manager is None or self._embedder is None or self._vector_store is None:
@@ -1253,27 +1037,7 @@ class RelationalMemorySearchService:
         self,
         rrf_scores: dict[str, float],
     ) -> dict[str, GraphExpansionInfo]:
-        expanded: dict[str, GraphExpansionInfo] = {}
-        seed_items = sorted(rrf_scores.items(), key=lambda item: item[1], reverse=True)[:GRAPH_EXPANSION_MAX_SEEDS]
-        for seed_id, seed_score in seed_items:
-            links = self._repository.get_links(seed_id, direction="outgoing")
-            expanded_neighbors = 0
-            for link in links:
-                discount = GRAPH_EXPANSION_DISCOUNTS.get(link.link_type)
-                if discount is None:
-                    continue
-                expanded_neighbors += 1
-                if expanded_neighbors > GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED:
-                    break
-                expanded_score = seed_score * discount
-                current = expanded.get(link.target_id)
-                if current is None or expanded_score > current.rrf_score:
-                    expanded[link.target_id] = GraphExpansionInfo(
-                        rrf_score=expanded_score,
-                        seed_id=seed_id,
-                        link_type=link.link_type,
-                    )
-        return expanded
+        return self._graph_expander.expand(rrf_scores)
 
     def _ensure_searchable_memory_embeddings(
         self,
@@ -1379,111 +1143,34 @@ class RelationalMemorySearchService:
         )
 
     def _queue_memory_embedding_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
-        from mcp_memory.core.task_handlers.constants import EMBEDDING_REPAIR_TASK_NAME, task_priority
-
-        assert self._embedder is not None
-        assert self._task_queue is not None
-
-        queued_count = 0
-        for candidate in candidates:
-            if self._embedding_repair_queue is not None:
-                _, created = self._embedding_repair_queue.enqueue_unique(
-                    memory_id=candidate.id,
-                    workspace_id=None,
-                    model_name=self._embedder.model_name,
-                    memory_updated_at=candidate.updated_at or "",
-                    available_at=time.time(),
-                )
-            else:
-                assert self._work_items is not None
-                _, created = self._work_items.enqueue_unique(
-                    family_key=WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-                    execution_lane=EXECUTION_LANE_DETERMINISTIC,
-                    workspace_id=None,
-                    priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
-                    idempotency_key=f"{WORK_FAMILY_MEMORY_EMBEDDING_REPAIR}:{self._embedder.model_name}:{candidate.id}:{candidate.updated_at or ''}",
-                    payload={
-                        "memory_id": candidate.id,
-                        "model_name": self._embedder.model_name,
-                        "memory_updated_at": candidate.updated_at or "",
-                    },
-                )
-            if created:
-                queued_count += 1
-
-        if queued_count <= 0:
+        if self._repair_scheduler is None or self._embedder is None:
             return
-
-        self._task_queue.enqueue_unique(
-            EMBEDDING_REPAIR_TASK_NAME,
-            data={
-                "trigger": "search_repair",
-                "batch_size": max(int(getattr(self._config.embeddings, "batch_size", DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE)), 1),
-                "max_batches_per_run": DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN,
-            },
-            workspace_id=None,
-            priority=task_priority(EMBEDDING_REPAIR_TASK_NAME),
-            available_at=time.time(),
-        )
+        self._repair_scheduler.schedule(candidates, self._embedder.model_name)
 
     def _wait_for_background_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
-        started_at = time.monotonic()
-        deadline = time.monotonic() + self._background_repair_wait_seconds
-        pending: list[RelationalMemoryRecord] = list(candidates)
-        while time.monotonic() < deadline:
-            pending = self._stale_or_missing_embedding_candidates(candidates)
-            if not pending:
-                break
-            time.sleep(BACKGROUND_REPAIR_POLL_INTERVAL_SECONDS)
+        if self._repair_scheduler is None:
+            return
+        result = self._repair_scheduler.wait_for(candidates, self._stale_or_missing_embedding_candidates)
         self._health.repair_wait_count += 1
-        self._health.last_repair_wait_seconds = time.monotonic() - started_at
+        self._health.last_repair_wait_seconds = result.elapsed_seconds
         self._health.last_repair_candidate_count = len(candidates)
-        self._health.last_repair_pending_count = len(pending)
-        if pending:
+        self._health.last_repair_pending_count = result.pending_count
+        if result.pending_count:
             self._health.partial_semantic_search_count += 1
             self._health.last_partial_semantic_at = _utc_now()
         self._refresh_background_repair_health_snapshot()
 
     def _refresh_background_repair_health_snapshot(self) -> None:
-        if not self._health.semantic_enabled:
+        if not self._health.semantic_enabled or self._repair_scheduler is None:
             self._health.queued_repair_backlog_count = 0
             self._health.running_repair_count = 0
             self._health.oldest_queued_repair_age_seconds = None
             return
-        if self._embedding_repair_queue is not None:
-            snapshot = self._embedding_repair_queue.backlog_snapshot()
-            self._health.queued_repair_backlog_count = snapshot.queued_count
-            self._health.running_repair_count = snapshot.running_count
-            self._health.oldest_queued_repair_age_seconds = snapshot.oldest_queued_age_seconds
-            return
-        if self._db_manager is None:
-            self._health.queued_repair_backlog_count = 0
-            self._health.running_repair_count = 0
-            self._health.oldest_queued_repair_age_seconds = None
-            return
-        row = self._db_manager.get_connection().execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN family_key = ? AND status IN ('pending', 'deferred') THEN 1 ELSE 0 END), 0) AS queued_count,
-                COALESCE(SUM(CASE WHEN family_key = ? AND status = 'running' THEN 1 ELSE 0 END), 0) AS running_count,
-                MIN(CASE WHEN family_key = ? AND status IN ('pending', 'deferred') THEN created_at END) AS oldest_queued_created_at
-            FROM work_items
-            """,
-            (
-                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-                WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
-            ),
-        ).fetchone()
-        queued_count = 0 if row is None or row["queued_count"] is None else int(row["queued_count"])
-        running_count = 0 if row is None or row["running_count"] is None else int(row["running_count"])
-        oldest_created_at = None if row is None else row["oldest_queued_created_at"]
-        self._health.queued_repair_backlog_count = queued_count
-        self._health.running_repair_count = running_count
-        if oldest_created_at is None:
-            self._health.oldest_queued_repair_age_seconds = None
-        else:
-            self._health.oldest_queued_repair_age_seconds = max(time.time() - float(oldest_created_at), 0.0)
+        snapshot = self._repair_scheduler.backlog_snapshot()
+        self._health.queued_repair_backlog_count = snapshot.queued_count
+        self._health.running_repair_count = snapshot.running_count
+        self._health.oldest_queued_repair_age_seconds = snapshot.oldest_queued_age_seconds
+
 
 
 def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
