@@ -341,10 +341,10 @@ class MemoryHydrator:
 
     async def hydrate_record(
         self,
-        identity: RecordIdentity | str,
+        record_id: RecordIdentity | str,
     ) -> Record | None:
-        workspace_id = getattr(identity, "workspace_id", None)
-        source_id = getattr(identity, "source_id", identity)
+        workspace_id = getattr(record_id, "workspace_id", None)
+        source_id = getattr(record_id, "source_id", record_id)
         if not isinstance(source_id, str):
             return None
         context = await self.hydrate_context(source_id)

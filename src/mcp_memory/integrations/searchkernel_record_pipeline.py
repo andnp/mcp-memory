@@ -47,19 +47,12 @@ class MemoryQueryEmbeddingProvider:
 
     def __init__(self, embedder: EmbeddingBatchProvider, dim: int) -> None:
         self._embedder = embedder
-        self._dim = dim
+        self.model_name = embedder.model_name
+        self.dim = dim
 
-    @property
-    def model_name(self) -> str:
-        return self._embedder.model_name
-
-    @property
-    def dim(self) -> int:
-        return self._dim
-
-    async def embed_query(self, query: str) -> Vector:
+    async def embed_query(self, text: str) -> Vector:
         def compute() -> Vector:
-            embeddings = self._embedder.embed([query])
+            embeddings = self._embedder.embed([text])
             if len(embeddings) != 1:
                 raise ValueError("memory embedder must return one query vector")
             return list(embeddings[0])
@@ -67,13 +60,13 @@ class MemoryQueryEmbeddingProvider:
         vector = await asyncio.to_thread(
             get_or_compute_query_embedding,
             model_name=self.model_name,
-            query=query,
+            query=text,
             compute=compute,
         )
-        if len(vector) != self._dim:
+        if len(vector) != self.dim:
             raise ValueError(
                 f"memory query embedding has dimension {len(vector)}, "
-                f"expected {self._dim}"
+                f"expected {self.dim}"
             )
         return vector
 
