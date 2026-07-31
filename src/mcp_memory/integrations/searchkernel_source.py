@@ -14,8 +14,24 @@ import asyncio
 from typing import Any, Iterable
 
 from searchkernel.domain import ScoredRef
+from searchkernel.kernel import SearchKernel
+from searchkernel.ports.content_source import SearchableSource
 
 from mcp_memory.relational.search import RelationalMemorySearchService, RelationalSearchResult
+
+
+def build_memory_search_kernel(
+    search_service: RelationalMemorySearchService,
+    *,
+    extra_sources: Iterable[SearchableSource] = (),
+    per_source_timeout_s: float = 5.0,
+) -> SearchKernel:
+    """Build a federated kernel with memory plus optional source adapters."""
+    sources = [MemorySearchableSource(search_service), *extra_sources]
+    return SearchKernel.build(
+        sources=sources,
+        per_source_timeout_s=per_source_timeout_s,
+    )
 
 
 class MemorySearchableSource:

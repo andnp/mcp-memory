@@ -10,15 +10,29 @@ Tests verify that the adapter correctly:
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from searchkernel.domain import ScoredRef
 
-from mcp_memory.integrations.searchkernel_source import MemorySearchableSource
+from mcp_memory.integrations.searchkernel_source import (
+    MemorySearchableSource,
+    build_memory_search_kernel,
+)
 from mcp_memory.relational.search import RelationalSearchResult
 
 
 pytestmark = pytest.mark.small
+
+
+class ExtraSearchableSource:
+    source_kind = "extra"
+
+    async def search(
+        self, query: str, k: int, filters: dict[str, Any] | None = None
+    ) -> list[ScoredRef]:
+        return []
 
 
 @pytest.fixture
@@ -364,3 +378,22 @@ class TestMemorySearchableSource:
         for i, scored_ref in enumerate(scored_refs):
             assert scored_ref.source_id == f"mem-{i}"
             assert scored_ref.metadata["title"] == f"Memory {i}"
+
+
+def test_build_memory_search_kernel_registers_memory_source() -> None:
+    """Verify the factory registers the memory adapter under its source kind."""
+    kernel = build_memory_search_kernel(MagicMock())
+
+    source = kernel.registry.get("memory")
+
+    assert isinstance(source, MemorySearchableSource)
+
+
+def test_build_memory_search_kernel_preserves_extra_sources() -> None:
+    """Verify extra searchable sources remain registered alongside memory."""
+    extra_source = ExtraSearchableSource()
+
+    kernel = build_memory_search_kernel(MagicMock(), extra_sources=[extra_source])
+
+    assert kernel.registry.get("memory") is not None
+    assert kernel.registry.get("extra") is extra_source
