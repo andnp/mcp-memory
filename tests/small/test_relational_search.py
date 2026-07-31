@@ -2121,6 +2121,68 @@ def test_search_memories_stops_adaptive_expansion_on_large_score_drop(db_manager
     assert [result.memory_id for result in results] == [record.id for record in records[:3]]
 
 
+def test_resolved_result_limit_keeps_requested_limit_when_adaptive_mode_is_disabled(db_manager) -> None:
+    service = RelationalMemorySearchService(RelationalMemoryRepository(db_manager), Config())
+    ranked = [
+        RelationalSearchResult("memory-1", "Title", "Summary", "fact", "active", score=0.9),
+        RelationalSearchResult("memory-2", "Title", "Summary", "fact", "active", score=0.8),
+    ]
+
+    assert service._resolved_result_limit(ranked, requested_limit=1, adaptive_limit=False) == 1
+
+
+def test_resolved_result_limit_stops_at_absolute_score_floor(db_manager) -> None:
+    service = RelationalMemorySearchService(
+        RelationalMemoryRepository(db_manager),
+        Config(
+            search_ranking=SearchRankingConfig(
+                adaptive_result_max=6,
+                adaptive_result_score_ratio_floor=0.0,
+                adaptive_result_min_score=0.7,
+                adaptive_result_max_score_gap=1.0,
+            )
+        ),
+    )
+    ranked = [
+        RelationalSearchResult("memory-1", "Title", "Summary", "fact", "active", score=0.9),
+        RelationalSearchResult("memory-2", "Title", "Summary", "fact", "active", score=0.8),
+        RelationalSearchResult("memory-3", "Title", "Summary", "fact", "active", score=0.6),
+    ]
+
+    assert service._resolved_result_limit(ranked, requested_limit=1, adaptive_limit=True) == 2
+
+
+def test_resolved_result_limit_respects_adaptive_cap(db_manager) -> None:
+    service = RelationalMemorySearchService(
+        RelationalMemoryRepository(db_manager),
+        Config(
+            search_ranking=SearchRankingConfig(
+                adaptive_result_max=3,
+                adaptive_result_score_ratio_floor=0.0,
+                adaptive_result_min_score=0.0,
+                adaptive_result_max_score_gap=1.0,
+            )
+        ),
+    )
+    ranked = [
+        RelationalSearchResult(f"memory-{index}", "Title", "Summary", "fact", "active", score=score)
+        for index, score in enumerate([0.9, 0.89, 0.88, 0.87])
+    ]
+
+    assert service._resolved_result_limit(ranked, requested_limit=1, adaptive_limit=True) == 3
+
+
+@pytest.mark.parametrize("requested_limit", [0, -3])
+def test_resolved_result_limit_bounds_non_positive_requested_limits(db_manager, requested_limit: int) -> None:
+    service = RelationalMemorySearchService(RelationalMemoryRepository(db_manager), Config())
+    ranked = [
+        RelationalSearchResult("memory-1", "Title", "Summary", "fact", "active", score=0.9),
+        RelationalSearchResult("memory-2", "Title", "Summary", "fact", "active", score=0.8),
+    ]
+
+    assert service._resolved_result_limit(ranked, requested_limit=requested_limit, adaptive_limit=False) == 1
+
+
 def test_search_memories_falls_back_to_keyword_results_when_vector_search_fails(db_manager, monkeypatch, caplog) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)

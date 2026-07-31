@@ -31,6 +31,7 @@ from mcp_memory.core.search_ranking import (
 from mcp_memory.relational.semantic import RelationalSemanticSearchAdapter
 from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
 from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.search.adaptive_limit import resolve_adaptive_result_limit
 
 
 ACCESS_HALF_LIFE_DAYS = 7
@@ -516,27 +517,16 @@ class RelationalMemorySearchService:
         requested_limit: int,
         adaptive_limit: bool,
     ) -> int:
-        bounded_requested_limit = max(requested_limit, 1)
-        if len(ranked) <= bounded_requested_limit or not adaptive_limit:
-            return min(len(ranked), bounded_requested_limit)
-
         ranking_config = self._config.search_ranking
-        adaptive_cap = max(bounded_requested_limit, ranking_config.adaptive_result_max)
-        result_limit = bounded_requested_limit
-        top_score = ranked[0].score
-        minimum_ratio_score = top_score * ranking_config.adaptive_result_score_ratio_floor
-        minimum_score = max(ranking_config.adaptive_result_min_score, minimum_ratio_score)
-
-        while result_limit < len(ranked) and result_limit < adaptive_cap:
-            previous_score = ranked[result_limit - 1].score
-            candidate_score = ranked[result_limit].score
-            if candidate_score < minimum_score:
-                break
-            if previous_score - candidate_score > ranking_config.adaptive_result_max_score_gap:
-                break
-            result_limit += 1
-
-        return result_limit
+        return resolve_adaptive_result_limit(
+            [result.score for result in ranked],
+            requested_limit=requested_limit,
+            adaptive_enabled=adaptive_limit,
+            maximum_limit=ranking_config.adaptive_result_max,
+            score_ratio_floor=ranking_config.adaptive_result_score_ratio_floor,
+            minimum_score=ranking_config.adaptive_result_min_score,
+            maximum_score_gap=ranking_config.adaptive_result_max_score_gap,
+        )
 
     def read_memory(self, memory_id: str):
         record = self._repository.get_memory(memory_id)
