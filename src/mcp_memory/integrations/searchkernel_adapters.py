@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
@@ -25,6 +25,7 @@ from searchkernel.ports import (
 
 from mcp_memory.core.ports.memory import (
     MemoryMaintenanceReadPort,
+    MemoryReadContext,
     MemoryReadPort,
     MemoryRecord,
 )
@@ -293,11 +294,28 @@ class MemoryGraphStore(AsyncGraphStore):
 class MemoryHydrator:
     """Hydrate authoritative memory records without retrieval side effects."""
 
-    def __init__(self, repository: MemoryMaintenanceReadPort) -> None:
+    def __init__(
+        self,
+        repository: MemoryReadPort | MemoryMaintenanceReadPort,
+    ) -> None:
         self._repository = repository
 
-    async def hydrate_context(self, memory_id: str):
-        return await asyncio.to_thread(self._repository.peek_memory, memory_id)
+    async def hydrate_context(self, memory_id: str) -> MemoryReadContext | None:
+        get_memory = getattr(self._repository, "get_memory", None)
+        if callable(get_memory):
+            typed_get_memory = cast(
+                Callable[[str], MemoryRecord | None],
+                get_memory,
+            )
+            record = await asyncio.to_thread(typed_get_memory, memory_id)
+            if record is None:
+                return None
+            return MemoryReadContext(record, {}, [])
+        maintenance_repository = cast(MemoryMaintenanceReadPort, self._repository)
+        return await asyncio.to_thread(
+            maintenance_repository.peek_memory,
+            memory_id,
+        )
 
     async def hydrate_record(
         self,

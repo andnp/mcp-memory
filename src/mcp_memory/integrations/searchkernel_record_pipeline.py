@@ -21,7 +21,12 @@ from searchkernel.search.record_pipeline import (
 )
 
 from mcp_memory.config import Config
-from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord, MemoryRepositoryPort
+from mcp_memory.core.ports.memory import (
+    MemoryLink,
+    MemoryReadPort,
+    MemoryRecord,
+    MemoryRepositoryPort,
+)
 from mcp_memory.relational.search import (
     RankingEngine,
     RankingSignals,
@@ -260,7 +265,7 @@ def build_memory_record_pipeline(
         result_filter=lambda result: _result_allowed(repository, result),
         post_process=_sort_results,
     )
-    hydrator = MemoryHydrator(repository)
+    hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
     pipeline = RecordSearchPipeline(
         hydrator=hydrator,
         keyword_store=MemoryKeywordStore(repository),

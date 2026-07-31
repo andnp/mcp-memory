@@ -361,9 +361,22 @@ async def test_policy_lookups_are_cached_for_one_search() -> None:
     outcome = await pipeline.search("query", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["active"]
-    assert repository.memory_calls["active"] == 2
+    assert repository.memory_calls["active"] == 1
     assert repository.link_calls[("active", "incoming", None)] == 1
-    assert repository.link_calls[("active", "outgoing", None)] == 2
+    assert repository.link_calls[("active", "outgoing", None)] == 1
+
+
+@pytest.mark.asyncio
+async def test_hydration_reuses_search_scoped_record_cache() -> None:
+    repository = CountingRepository()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+    )
+
+    outcome = await pipeline.search("query", limit=1)
+
+    assert [result.record_id for result in outcome.results] == ["active"]
+    assert repository.memory_calls["active"] == 1
 
 
 @pytest.mark.asyncio

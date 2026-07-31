@@ -5,7 +5,6 @@ from searchkernel.domain import Record, RecordStatus
 
 from mcp_memory.core.ports.memory import (
     MemoryLink,
-    MemoryMaintenanceReadPort,
     MemoryReadContext,
     MemoryReadPort,
     MemoryRecord,
@@ -61,6 +60,11 @@ class _Repository:
 
     def get_links(self, memory_id: str, direction: str = "outgoing", link_type=None):
         return self.links.get(memory_id, [])
+
+    def get_memory(self, memory_id: str):
+        if memory_id != "memory-1":
+            return None
+        return _memory_record()
 
     def peek_memory(self, memory_id: str):
         if memory_id != "memory-1":
@@ -165,7 +169,7 @@ async def test_graph_store_reads_links_without_writing_memory_schema():
 
 @pytest.mark.asyncio
 async def test_hydrator_returns_kernel_record_without_access_telemetry():
-    hydrator = MemoryHydrator(cast(MemoryMaintenanceReadPort, _Repository()))
+    hydrator = MemoryHydrator(cast(MemoryReadPort, _Repository()))
 
     record = await hydrator.hydrate_record("memory-1")
 
