@@ -111,6 +111,7 @@ class MemoryRecordSearchPipeline:
         )
         active_filters = dict(filters or {})
         active_filters["_mcp_memory_signal_context"] = signal_context
+        active_filters["_mcp_memory_requested_limit"] = limit
         token = _ACTIVE_FILTERS.set(active_filters)
         try:
             return self._pipeline.search(query, limit=limit, filters=active_filters)
@@ -154,6 +155,12 @@ def build_memory_record_pipeline(
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
         vector_candidate_ids=lambda ranking, filters: _vector_candidate_ids(
+            repository,
+            ranking,
+            filters,
+            resolved_config,
+        ),
+        vector_ranking_order=lambda ranking, filters: _order_vector_ranking(
             repository,
             ranking,
             filters,
@@ -240,7 +247,35 @@ def _vector_candidate_ids(
     )
     if strongest_coverage < config.search_ranking.keyword_coverage_floor:
         return None
-    return [record_id for record_id, _ in keyword_ranking]
+    requested_limit = filters.get("_mcp_memory_requested_limit")
+    effective_limit = requested_limit if isinstance(requested_limit, int) else 1
+    candidate_cap = max(effective_limit * 4, 20)
+    return [record_id for record_id, _ in keyword_ranking[:candidate_cap]]
+
+
+def _order_vector_ranking(
+    repository: MemoryRepositoryPort,
+    ranking: Sequence[tuple[str, float]],
+    filters: dict[str, object],
+    config: Config,
+) -> Sequence[tuple[str, float]]:
+    workspace_id = filters.get("workspace_id")
+    workspace = workspace_id if isinstance(workspace_id, str) else None
+
+    def rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
+        record_id, score = item
+        record = repository.get_memory(record_id)
+        workspace_boost = (
+            config.search_ranking.workspace_multiplier
+            if record is not None
+            and workspace is not None
+            and workspace in record.workspace_ids
+            else 1.0
+        )
+        updated_at = "" if record is None else record.updated_at
+        return (score * workspace_boost, score, updated_at, record_id)
+
+    return sorted(ranking, key=rank_key, reverse=True)
 
 
 def _result_allowed(
