@@ -340,12 +340,14 @@ def create_daemon_app(
         )
         await zmq_server.start()
 
+        service = ManagementService(
+            runtime.management_capabilities(),
+            controller=DaemonControllerView(hook_service=hook_service, transport_server=zmq_server),
+        )
         routes = DaemonRoutes(
             ctx=runtime,
-            service=ManagementService(
-                runtime.management_capabilities(),
-                controller=DaemonControllerView(hook_service=hook_service, transport_server=zmq_server),
-            ),
+            service=service,
+            management=service.capabilities,
             hook_service=hook_service,
             metadata_path=metadata_path,
         )

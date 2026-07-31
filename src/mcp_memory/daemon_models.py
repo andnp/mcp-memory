@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
+from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.service import ManagementService
 
 
@@ -39,6 +40,7 @@ class DaemonMetadata:
 class DaemonRoutes:
     ctx: Any
     service: ManagementService
+    management: ManagementCapabilities | None
     hook_service: Any
     metadata_path: Path
 

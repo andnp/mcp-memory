@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +16,7 @@ from mcp_memory.daemon_dispatch import dispatch_management_request
 from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, _workspace_id_for_request_scope, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
+from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.server import MCPServer
 
 
@@ -49,6 +51,33 @@ def test_dispatch_management_request_deprecates_manual_link_mutation_routes() ->
         "status": "error",
         "error": "deprecated_manual_cleanup_endpoint:/api/admin/links/delete use /api/admin/agents/run task_name=memory-curator",
     }
+
+
+def test_dispatch_management_request_uses_typed_management_capability() -> None:
+    class _MaintenanceSpy:
+        workspace_id = "workspace-a"
+        dashboard_static_root = Path(".")
+
+        def enqueue_background_task(self, task_name: str, *, force: bool = False) -> dict[str, object]:
+            return {"task_name": task_name, "force": force}
+
+    maintenance = _MaintenanceSpy()
+    routes = SimpleNamespace(
+        management=ManagementCapabilities.from_service(maintenance),
+        service=SimpleNamespace(
+            enqueue_background_task=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("transport should use the typed capability")
+            )
+        ),
+    )
+    metadata = SimpleNamespace(pid=1, status="running", daemon_scope="global", binary_path=None, version=None, transport="stdio")
+
+    assert dispatch_management_request(
+        routes,
+        metadata,
+        "/api/admin/agents/run",
+        {"task_name": "memory-curator", "force": True},
+    ) == {"task_name": "memory-curator", "force": True}
 
 
 def test_resolve_daemon_request_timeout_seconds_uses_extended_budget_for_memory_and_tool_paths() -> None:

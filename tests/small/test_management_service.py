@@ -12,6 +12,7 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
 from mcp_memory.daemon_models import DaemonControllerView
 from mcp_memory.management.analytics_reporting import is_provenance_process_tag
+from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
 from mcp_memory.management.reporting_rows import extract_copilot_premium_requests
@@ -91,6 +92,22 @@ def test_management_service_accepts_structural_management_context(db_manager) ->
 
     assert health.storage_backend == "sqlite"
     assert service.workspace_id == "workspace-a"
+
+
+def test_management_service_exposes_isolated_typed_capabilities(db_manager) -> None:
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=RelationalMemoryRepository(db_manager),
+        task_queue=SQLiteTaskQueue(db_manager),
+    )
+
+    assert isinstance(service.capabilities, ManagementCapabilities)
+    assert service.capabilities.reporting.get_health() == service.get_health()
+    assert service.capabilities.maintenance.list_tasks() == service.list_tasks()
+    assert service.capabilities.mutation.list_mutation_history().events == []
+    assert service.capabilities.runtime.list_logs().logs == []
+    assert service.capabilities.memory.list_memories().records == []
 
 
 def test_management_service_omits_legacy_curation_mode_flags(db_manager) -> None:

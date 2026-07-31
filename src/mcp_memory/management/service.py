@@ -39,10 +39,12 @@ from mcp_memory.core.task_handlers import (
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.context_resources import (
+    ManagementContextResources,
     _build_default_embedding_integrity_events as _context_build_default_embedding_integrity_events,
     _build_default_provider_usage as _context_build_default_provider_usage,
     ensure_management_context_resources,
 )
+from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.health_reporting import build_embedding_status, build_execution_attempt_health, build_search_health
 from mcp_memory.management.operator_health_reporting import (
     build_operator_health_snapshot_payload,
@@ -62,7 +64,6 @@ from mcp_memory.mutation_history import (
     RestoreResultStatus,
     RestoreScope,
 )
-from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.management.models import (
@@ -326,16 +327,17 @@ class ManagementService:
         ctx: ManagementRuntimeCapabilities | ManagementContext,
         controller,
     ) -> None:
-        capabilities = (
-            ctx
-            if isinstance(ctx, ManagementRuntimeCapabilities)
-            else ManagementRuntimeCapabilities.from_context(ctx)
-        )
+        is_composed_capabilities = isinstance(ctx, ManagementRuntimeCapabilities)
+        capabilities = ctx if is_composed_capabilities else ManagementRuntimeCapabilities.from_context(ctx)
         memory = capabilities.memory
         mutation = capabilities.mutation
         provider = capabilities.provider
         pipeline = MemoryPipeline.from_context(memory, controller, mutation=mutation)
-        resources = ensure_management_context_resources(capabilities)
+        resources = (
+            ManagementContextResources.from_capabilities(capabilities)
+            if is_composed_capabilities
+            else ensure_management_context_resources(capabilities)
+        )
         self._controller = controller
         self._db_manager = cast(Any, memory.db_manager)
         self._storage_backend = capabilities.storage_backend or "sqlite"
@@ -345,7 +347,7 @@ class ManagementService:
         self._task_queue = pipeline.task_queue
         self._memory_queries = pipeline.memory_queries
         self._repository = cast(Any, mutation.repository)
-        self._mutation_history = cast(Any, mutation.mutation_history)
+        self._mutation_history = cast(Any, resources.mutation_history)
         self._curation = cast(Any, mutation.curation)
         self._action_store = cast(Any, mutation.curation_action_store)
         self._provider_usage = resources.provider_usage
@@ -364,6 +366,7 @@ class ManagementService:
         self._dashboard_static_path = self._dashboard_static_root / "index.html"
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"
         self._dashboard_asset_root = self._dashboard_static_root / "dist" / "assets"
+        self.capabilities = ManagementCapabilities.from_service(self)
 
     @property
     def dashboard_static_root(self) -> Path:
@@ -1012,10 +1015,7 @@ class ManagementService:
 
     def _require_mutation_history(self):
         if self._mutation_history is None:
-            if self._db_manager is not None and self._storage_backend != "postgres":
-                self._mutation_history = SQLiteMutationHistoryStore(self._db_manager)
-            else:
-                raise ValueError("mutation_history_unavailable")
+            raise ValueError("mutation_history_unavailable")
         return self._mutation_history
 
     def _get_history_parts(self, event_id: str) -> tuple[MutationEvent, list[RecordRevision], list[LinkRevision]]:
