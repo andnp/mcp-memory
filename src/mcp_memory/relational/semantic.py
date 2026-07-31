@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from mcp_memory.core.ports.memory import MemoryRecord
-from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.ports import CandidateFilterSupport, EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding
 
 
@@ -51,7 +51,8 @@ class RelationalSemanticSearchAdapter:
             "query_embedding": query_embedding,
             "limit": limit,
         }
-        if candidate_ids and getattr(self._vector_store, "supports_candidate_filtering", False):
+        supports_candidate_filtering = isinstance(self._vector_store, CandidateFilterSupport)
+        if candidate_ids and supports_candidate_filtering:
             search_kwargs["candidate_ids"] = list(candidate_ids)
         if vector_search_diagnostics is not None:
             search_kwargs["diagnostics"] = vector_search_diagnostics
