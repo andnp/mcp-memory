@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import cast
 from searchkernel.domain import Vector
 from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.runtime import get_or_compute_query_embedding
 from searchkernel.search.record_pipeline import (
     RecordSearchCandidate,
     RecordSearchConfig,
@@ -52,10 +53,18 @@ class MemoryQueryEmbeddingProvider:
         return self._dim
 
     async def embed_query(self, query: str) -> Vector:
-        embeddings = self._embedder.embed([query])
-        if len(embeddings) != 1:
-            raise ValueError("memory embedder must return one query vector")
-        vector = list(embeddings[0])
+        def compute() -> Vector:
+            embeddings = self._embedder.embed([query])
+            if len(embeddings) != 1:
+                raise ValueError("memory embedder must return one query vector")
+            return list(embeddings[0])
+
+        vector = await asyncio.to_thread(
+            get_or_compute_query_embedding,
+            model_name=self.model_name,
+            query=query,
+            compute=compute,
+        )
         if len(vector) != self._dim:
             raise ValueError(
                 f"memory query embedding has dimension {len(vector)}, "
