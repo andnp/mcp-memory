@@ -133,6 +133,28 @@ class _MemorySearchPolicyContext:
             return [link for link in links if link.link_type == link_type]
         return list(links)
 
+    def prefetch(self, memory_ids: Sequence[str]) -> None:
+        requested_ids = list(dict.fromkeys(memory_ids))
+        if not requested_ids:
+            return
+        candidates = self.repository.get_ranking_candidates(
+            requested_ids,
+            include_superseded=True,
+        )
+        candidates_by_id = {candidate.record.id: candidate for candidate in candidates}
+        for memory_id in requested_ids:
+            candidate = candidates_by_id.get(memory_id)
+            if candidate is None:
+                self.records[memory_id] = None
+                self.links[(memory_id, "incoming")] = ()
+                continue
+            self.records[memory_id] = candidate.record
+            incoming_links = tuple(
+                MemoryLink("", memory_id, link_type, "")
+                for link_type, count in candidate.incoming_link_type_counts.items()
+                for _ in range(count)
+            )
+            self.links[(memory_id, "incoming")] = incoming_links
 
 class _PolicyRepositoryView:
     def __init__(self, repository: MemoryRepositoryPort) -> None:
@@ -223,6 +245,10 @@ def build_memory_record_pipeline(
     """
     resolved_config = config or Config()
     cutover_config = resolved_config.searchkernel_cutover
+
+    def prefetch(memory_ids: Sequence[str]) -> None:
+        _prefetch_memory_records(repository, memory_ids)
+
     policy_repository = _PolicyRepositoryView(repository)
     ranking_engine = RankingEngine(
         cast(MemoryRepositoryPort, policy_repository),
@@ -241,7 +267,7 @@ def build_memory_record_pipeline(
             diagnostics.append("embedding dimension unavailable; using keyword and graph retrieval")
         else:
             embedding_provider = MemoryQueryEmbeddingProvider(embedder, resolved_dim)
-            adapted_vector_store = MemoryVectorStore(vector_store)
+            adapted_vector_store = MemoryVectorStore(vector_store, prefetch=prefetch)
 
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
@@ -268,7 +294,7 @@ def build_memory_record_pipeline(
     hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
     pipeline = RecordSearchPipeline(
         hydrator=hydrator,
-        keyword_store=MemoryKeywordStore(repository),
+        keyword_store=MemoryKeywordStore(repository, prefetch=prefetch),
         vector_store=adapted_vector_store,
         graph_store=MemoryGraphStore(cast(MemoryRepositoryPort, policy_repository)),
         embedding_provider=embedding_provider,
@@ -321,6 +347,15 @@ def _cached_memory(
     if context is not None and context.repository is repository:
         return context.get_memory(memory_id)
     return repository.get_memory(memory_id)
+
+
+def _prefetch_memory_records(
+    repository: MemoryRepositoryPort,
+    memory_ids: Sequence[str],
+) -> None:
+    context = _ACTIVE_POLICY_CONTEXT.get()
+    if context is not None and context.repository is repository:
+        context.prefetch(memory_ids)
 
 
 def _cached_links(

@@ -12,6 +12,7 @@ from mcp_memory.core.ports.memory import (
     MemoryReadContext,
     MemoryRecord,
     MemoryRepositoryPort,
+    RankedMemoryCandidate,
 )
 from mcp_memory.relational.search import RankingEngine, RankingSignals
 from mcp_memory.context import ApplicationContext
@@ -66,6 +67,7 @@ class FakeRepository:
             "superseded": _memory("superseded"),
         }
         self.keyword_ids = keyword_ids
+        self.ranking_candidate_calls = 0
         self.links = [
             MemoryLink("active", "superseded", "SUPERSEDES", ""),
         ]
@@ -75,6 +77,35 @@ class FakeRepository:
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
         return self.records.get(memory_id)
+
+    def get_ranking_candidates(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[RankedMemoryCandidate]:
+        self.ranking_candidate_calls += 1
+        candidates: list[RankedMemoryCandidate] = []
+        for memory_id in memory_ids:
+            record = self.records.get(memory_id)
+            if record is None:
+                continue
+            incoming = [link for link in self.links if link.target_id == memory_id]
+            counts: dict[str, int] = {}
+            for link in incoming:
+                counts[link.link_type] = counts.get(link.link_type, 0) + 1
+            candidates.append(
+                RankedMemoryCandidate(
+                    record=record,
+                    incoming_links_count=len(incoming),
+                    has_incoming_supersedes=any(
+                        link.link_type == "SUPERSEDES" for link in incoming
+                    ),
+                    incoming_link_type_counts=counts,
+                )
+            )
+        return candidates
 
     def get_links(
         self,
@@ -361,8 +392,9 @@ async def test_policy_lookups_are_cached_for_one_search() -> None:
     outcome = await pipeline.search("query", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["active"]
-    assert repository.memory_calls["active"] == 1
-    assert repository.link_calls[("active", "incoming", None)] == 1
+    assert repository.ranking_candidate_calls == 1
+    assert repository.memory_calls["active"] == 0
+    assert repository.link_calls[("active", "incoming", None)] == 0
     assert repository.link_calls[("active", "outgoing", None)] == 1
 
 
@@ -376,7 +408,8 @@ async def test_hydration_reuses_search_scoped_record_cache() -> None:
     outcome = await pipeline.search("query", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["active"]
-    assert repository.memory_calls["active"] == 1
+    assert repository.ranking_candidate_calls == 1
+    assert repository.memory_calls["active"] == 0
 
 
 @pytest.mark.asyncio

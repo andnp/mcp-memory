@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from searchkernel.domain import (
+    GraphNeighbor,
     Record,
     RecordHit,
     RecordIdentity,
@@ -111,8 +112,14 @@ class MemoryRecordAdapter:
 class MemoryKeywordStore(AsyncKeywordStore):
     """Read-only keyword store over the memory-owned relational index."""
 
-    def __init__(self, repository: MemoryReadPort) -> None:
+    def __init__(
+        self,
+        repository: MemoryReadPort,
+        *,
+        prefetch: Callable[[Sequence[str]], None] | None = None,
+    ) -> None:
         self._repository = repository
+        self._prefetch = prefetch
 
     def index(self, records: list[Record]) -> None:
         """Validate source ownership; relational indexing remains authoritative."""
@@ -135,6 +142,8 @@ class MemoryKeywordStore(AsyncKeywordStore):
             include_superseded=bool(filters.get("include_superseded", False)),
             limit=k,
         )
+        if self._prefetch is not None and memory_ids:
+            await asyncio.to_thread(self._prefetch, memory_ids)
         signal_context = filters.get("_mcp_memory_signal_context")
         if hasattr(signal_context, "keyword_candidates_present"):
             setattr(signal_context, "keyword_candidates_present", bool(memory_ids))
@@ -147,8 +156,14 @@ class MemoryKeywordStore(AsyncKeywordStore):
 class MemoryVectorStore(AsyncVectorStore):
     """Adapt the memory vector stores to searchkernel's VectorStore port."""
 
-    def __init__(self, vector_store: MemoryVectorBackend) -> None:
+    def __init__(
+        self,
+        vector_store: MemoryVectorBackend,
+        *,
+        prefetch: Callable[[Sequence[str]], None] | None = None,
+    ) -> None:
         self._vector_store = vector_store
+        self._prefetch = prefetch
         self.supports_candidate_filtering = isinstance(
             vector_store, CandidateFilterSupport
         )
@@ -204,10 +219,17 @@ class MemoryVectorStore(AsyncVectorStore):
         workspace_id = _string_filter(filters, "workspace_id")
         if workspace_id is not None:
             kwargs["workspace_id"] = workspace_id
-        return cast(
+        results = cast(
             list[RecordHit | tuple[str, float]],
             await asyncio.to_thread(self._vector_store.search, **kwargs),
         )
+        if self._prefetch is not None and results:
+            record_ids = [
+                result.source_id if isinstance(result, RecordHit) else result[0]
+                for result in results
+            ]
+            await asyncio.to_thread(self._prefetch, record_ids)
+        return results
 
     def delete(self, record_ids: list[str]) -> None:
         for record_id in record_ids:
@@ -244,7 +266,7 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str | RecordIdentity,
         edge_types: list[str] | None = None,
         depth: int = 1,
-    ) -> list[tuple[str, str, float]]:
+    ) -> list[GraphNeighbor | tuple[str, str, float]]:
         return await asyncio.to_thread(
             self._neighbors_sync,
             record_id.source_id if isinstance(record_id, RecordIdentity) else record_id,
@@ -257,7 +279,7 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str,
         edge_types: list[str] | None,
         depth: int,
-    ) -> list[tuple[str, str, float]]:
+    ) -> list[GraphNeighbor | tuple[str, str, float]]:
         if depth < 1:
             return []
         allowed_types = (
@@ -265,7 +287,7 @@ class MemoryGraphStore(AsyncGraphStore):
             if edge_types is not None
             else set(_GRAPH_EDGE_DISCOUNTS)
         )
-        results: list[tuple[str, str, float]] = []
+        results: list[GraphNeighbor | tuple[str, str, float]] = []
         frontier = [record_id]
         visited = {record_id}
         for distance in range(1, depth + 1):
