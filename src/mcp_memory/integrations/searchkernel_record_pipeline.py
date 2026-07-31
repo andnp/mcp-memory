@@ -174,7 +174,10 @@ def build_memory_record_pipeline(
         vector_store=adapted_vector_store,
         graph_store=MemoryGraphStore(repository),
         embedding_provider=embedding_provider,
-        config=RecordSearchConfig(minimum_candidate_limit=50),
+        config=RecordSearchConfig(
+            minimum_candidate_limit=50,
+            graph_fusion="max",
+        ),
         policy=policy,
         continue_on_error=True,
     )
