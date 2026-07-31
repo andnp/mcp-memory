@@ -265,6 +265,7 @@ def _order_vector_ranking(
     def rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
         record_id, score = item
         record = repository.get_memory(record_id)
+        semantic_score = max(min((score + 1.0) / 2.0, 1.0), 0.0)
         workspace_boost = (
             config.search_ranking.workspace_multiplier
             if record is not None
@@ -273,7 +274,12 @@ def _order_vector_ranking(
             else 1.0
         )
         updated_at = "" if record is None else record.updated_at
-        return (score * workspace_boost, score, updated_at, record_id)
+        return (
+            semantic_score * workspace_boost,
+            semantic_score,
+            updated_at,
+            record_id,
+        )
 
     return sorted(ranking, key=rank_key, reverse=True)
 
