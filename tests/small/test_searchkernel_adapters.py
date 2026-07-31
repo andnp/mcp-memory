@@ -102,7 +102,7 @@ def test_keyword_store_delegates_relational_policy():
         ("memory-1", 1.0),
         ("memory-2", 0.5),
     ]
-    assert repository.keyword_kwargs["workspace_id"] == "workspace-1"
+    assert "workspace_id" not in repository.keyword_kwargs
 
 
 def test_vector_store_uses_formal_candidate_filter_capability():

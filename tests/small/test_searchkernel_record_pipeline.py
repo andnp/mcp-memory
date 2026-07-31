@@ -184,7 +184,10 @@ def test_composition_applies_memory_policy_without_writes() -> None:
         },
     )
 
-    assert [result.record_id for result in outcome.results] == ["active"]
+    assert [result.record_id for result in outcome.results] == [
+        "active",
+        "other-workspace",
+    ]
     assert vector_store.search_count == 1
     assert vector_store.search_limits == [50]
     assert vector_store.write_count == 0
@@ -449,7 +452,7 @@ async def test_shadow_compares_pipeline_without_replacing_native_results() -> No
     )
 
     assert diagnostics.native_ids == ("native",)
-    assert diagnostics.kernel_ids == ("active",)
+    assert diagnostics.kernel_ids == ("active", "other-workspace")
     assert diagnostics.error is not None
 
 

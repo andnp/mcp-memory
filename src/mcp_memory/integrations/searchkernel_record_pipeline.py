@@ -331,10 +331,6 @@ def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> b
     elif memory.status == "archived":
         return False
 
-    workspace_id = filters.get("workspace_id")
-    if isinstance(workspace_id, str) and workspace_id not in memory.workspace_ids:
-        return False
-
     memory_type = filters.get("memory_type")
     if isinstance(memory_type, str) and memory.type != memory_type:
         return False

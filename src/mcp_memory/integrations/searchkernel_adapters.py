@@ -108,7 +108,6 @@ class MemoryKeywordStore(KeywordStore):
         filters = filters or {}
         memory_ids = self._repository.search_keyword_memory_ids(
             query,
-            workspace_id=_string_filter(filters, "workspace_id"),
             memory_type=_string_filter(filters, "memory_type"),
             status=_memory_status_filter(filters.get("status")),
             include_superseded=bool(filters.get("include_superseded", False)),
