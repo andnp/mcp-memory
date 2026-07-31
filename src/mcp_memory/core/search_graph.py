@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from mcp_memory.core.ports.memory import MemoryLink
+from searchkernel.search.bounded_graph import TypedGraphEdge, expand_bounded_typed_graph
 
 GRAPH_EXPANSION_MAX_SEEDS = 3
 GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED = 10
@@ -30,23 +31,24 @@ class GraphCandidateExpander:
         self._link_reader = link_reader
 
     def expand(self, rrf_scores: Mapping[str, float]) -> dict[str, GraphExpansionInfo]:
-        expanded: dict[str, GraphExpansionInfo] = {}
-        seed_items = sorted(rrf_scores.items(), key=lambda item: item[1], reverse=True)[:GRAPH_EXPANSION_MAX_SEEDS]
-        for seed_id, seed_score in seed_items:
-            expanded_neighbors = 0
-            for link in self._link_reader(seed_id):
-                discount = GRAPH_EXPANSION_DISCOUNTS.get(link.link_type)
-                if discount is None:
-                    continue
-                expanded_neighbors += 1
-                if expanded_neighbors > GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED:
-                    break
-                expanded_score = seed_score * discount
-                current = expanded.get(link.target_id)
-                if current is None or expanded_score > current.rrf_score:
-                    expanded[link.target_id] = GraphExpansionInfo(
-                        rrf_score=expanded_score,
-                        seed_id=seed_id,
-                        link_type=link.link_type,
-                    )
-        return expanded
+        def outgoing_edges(seed_id: str) -> Iterable[TypedGraphEdge[str, str]]:
+            return (
+                TypedGraphEdge(target_id=link.target_id, edge_type=link.link_type)
+                for link in self._link_reader(seed_id)
+            )
+
+        expanded = expand_bounded_typed_graph(
+            rrf_scores,
+            outgoing_edges,
+            GRAPH_EXPANSION_DISCOUNTS,
+            max_seed_count=GRAPH_EXPANSION_MAX_SEEDS,
+            max_neighbors_per_seed=GRAPH_EXPANSION_MAX_NEIGHBORS_PER_SEED,
+        )
+        return {
+            target_id: GraphExpansionInfo(
+                rrf_score=result.contribution,
+                seed_id=result.provenance.seed_id,
+                link_type=result.provenance.edge_type,
+            )
+            for target_id, result in expanded.items()
+        }
