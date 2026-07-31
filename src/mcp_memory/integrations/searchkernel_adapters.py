@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from searchkernel.domain import Record, RecordStatus, Vector
 from searchkernel.ports import (
@@ -20,6 +20,41 @@ from mcp_memory.core.ports.memory import (
     MemoryReadPort,
     MemoryRecord,
 )
+
+
+class MemoryVectorBackend(Protocol):
+    """Memory-owned vector backend consumed by the read-only adapter."""
+
+    def upsert(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        workspace_id: str | None,
+        model_name: str,
+        embedding: list[float],
+        source_updated_at: str | None = None,
+    ) -> bool: ...
+
+    def search(
+        self,
+        *,
+        source_kind: str,
+        model_name: str,
+        query_embedding: list[float],
+        candidate_ids: list[str] | None = None,
+        diagnostics: dict[str, object] | None = None,
+        workspace_id: str | None = None,
+        limit: int = 20,
+    ) -> list[tuple[str, float]]: ...
+
+    def delete(
+        self,
+        *,
+        source_kind: str,
+        source_id: str,
+        model_name: str | None = None,
+    ) -> int: ...
 
 
 class MemoryRecordAdapter:
@@ -88,7 +123,7 @@ class MemoryKeywordStore(KeywordStore):
 class MemoryVectorStore(VectorStore):
     """Adapt the memory vector stores to searchkernel's VectorStore port."""
 
-    def __init__(self, vector_store: Any) -> None:
+    def __init__(self, vector_store: MemoryVectorBackend) -> None:
         self._vector_store = vector_store
         self.supports_candidate_filtering = isinstance(
             vector_store, CandidateFilterSupport
@@ -222,7 +257,7 @@ class MemoryEmbeddingSink(EmbeddingSink):
 
     source_kind = "memory"
 
-    def __init__(self, vector_store: Any) -> None:
+    def __init__(self, vector_store: MemoryVectorBackend) -> None:
         self._vector_store = vector_store
 
     def upsert(
@@ -322,5 +357,6 @@ __all__ = [
     "MemoryKeywordStore",
     "MemoryRecordAdapter",
     "MemoryRepairQueue",
+    "MemoryVectorBackend",
     "MemoryVectorStore",
 ]

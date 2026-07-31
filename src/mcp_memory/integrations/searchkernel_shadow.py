@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
+
+from searchkernel.search.record_pipeline import RecordSearchOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +149,60 @@ async def run_searchkernel_shadow(
     max_results: int = 20,
 ) -> SearchKernelShadowDiagnostics:
     started_at = perf_counter()
+    pipeline_search = getattr(kernel, "search", None)
+    if callable(pipeline_search) and not callable(
+        getattr(kernel, "search_anything", None)
+    ):
+        try:
+            outcome = cast(
+                RecordSearchOutcome,
+                await asyncio.to_thread(
+                    pipeline_search,
+                    query,
+                    limit=requested_limit,
+                    filters=filters,
+                ),
+            )
+            kernel_results = outcome.results
+            errors: list[str] = []
+            composition_diagnostics = getattr(kernel, "diagnostics", None)
+            reasons = getattr(composition_diagnostics, "reasons", ())
+            errors.extend(str(reason) for reason in reasons)
+            if getattr(outcome, "degraded", False):
+                errors.extend(
+                    f"{failure.stage}: {failure.message}"
+                    for failure in outcome.failures
+                )
+                if outcome.missing_record_ids:
+                    errors.append(
+                        "hydration missing records: "
+                        + ", ".join(outcome.missing_record_ids)
+                    )
+            diagnostics = compare_ranked_results(
+                query=query,
+                requested_limit=requested_limit,
+                native_results=native_results,
+                kernel_results=kernel_results,
+                source_kind=source_kind,
+                elapsed_ms=(perf_counter() - started_at) * 1000.0,
+                max_results=max_results,
+            )
+            if errors:
+                diagnostics = replace(diagnostics, error="; ".join(errors))
+            return diagnostics
+        except Exception as exc:
+            return replace(
+                compare_ranked_results(
+                    query=query,
+                    requested_limit=requested_limit,
+                    native_results=native_results,
+                    kernel_results=(),
+                    source_kind=source_kind,
+                    elapsed_ms=(perf_counter() - started_at) * 1000.0,
+                    max_results=max_results,
+                ),
+                error=f"{type(exc).__name__}: {exc}",
+            )
     try:
         kernel_results = await kernel.search_anything(
             query,

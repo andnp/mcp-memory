@@ -29,6 +29,9 @@ from mcp_memory.mcp.cache_policy import (
 )
 from mcp_memory.mcp.payloads import build_read_payload, build_search_result_payloads
 from mcp_memory.application.ports import RetrievalTelemetryPort
+from mcp_memory.integrations.searchkernel_record_pipeline import (
+    build_memory_record_pipeline,
+)
 from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
 from mcp_memory.integrations.searchkernel_source import build_memory_search_kernel
 from mcp_memory.relational.operations import ReadMemoryRecordOperation, SearchMemoryRecordsOperation
@@ -53,11 +56,20 @@ def _run_searchkernel_shadow(
     if shadow_config is None or not shadow_config.enabled:
         return
     try:
-        kernel = build_memory_search_kernel(
-            ctx.relational_search,
-            per_source_timeout_s=shadow_config.per_source_timeout_seconds,
-            side_effect_free=True,
-        )
+        if ctx.repository is not None:
+            kernel = build_memory_record_pipeline(
+                ctx.repository,
+                vector_store=ctx.vector_store,
+                embedder=ctx.embedder,
+            )
+        else:
+            # Keep compatibility for partial test contexts that predate the
+            # repository-owned record pipeline composition.
+            kernel = build_memory_search_kernel(
+                ctx.relational_search,
+                per_source_timeout_s=shadow_config.per_source_timeout_seconds,
+                side_effect_free=True,
+            )
         diagnostics = asyncio.run(
             run_searchkernel_shadow(
                 kernel,
