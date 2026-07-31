@@ -121,6 +121,8 @@ class FakeVectorStore:
         self.search_count = 0
         self.write_count = 0
         self.search_limits: list[int] = []
+        self.search_filters: list[dict[str, object] | None] = []
+        self.search_candidate_ids: list[list[str] | None] = []
         self.results = results
 
     def upsert(self, **kwargs: object) -> bool:
@@ -132,6 +134,12 @@ class FakeVectorStore:
         limit = kwargs.get("limit")
         assert isinstance(limit, int)
         self.search_limits.append(limit)
+        filters = kwargs.get("filters")
+        assert filters is None or isinstance(filters, dict)
+        self.search_filters.append(filters)
+        candidate_ids = kwargs.get("candidate_ids")
+        assert candidate_ids is None or isinstance(candidate_ids, list)
+        self.search_candidate_ids.append(candidate_ids)
         return self.results or [
             ("active", 1.0),
             ("other-workspace", 0.9),
@@ -181,6 +189,24 @@ def test_composition_applies_memory_policy_without_writes() -> None:
     assert vector_store.search_limits == [50]
     assert vector_store.write_count == 0
     assert embedder.queries == ["query"]
+
+
+def test_strong_keyword_matches_bound_vector_candidates() -> None:
+    repository = FakeRepository(keyword_ids=["active"])
+    vector_store = FakeVectorStore()
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+    )
+
+    pipeline.search(
+        "active",
+        limit=3,
+        filters={"workspace_id": "workspace-1"},
+    )
+
+    assert vector_store.search_candidate_ids == [["active"]]
 
 
 def test_superseded_policy_is_expressible() -> None:

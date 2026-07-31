@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from searchkernel.domain import Vector
@@ -152,6 +153,12 @@ def build_memory_record_pipeline(
 
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
+        vector_candidate_ids=lambda ranking, filters: _vector_candidate_ids(
+            repository,
+            ranking,
+            filters,
+            resolved_config,
+        ),
         score_adjuster=lambda candidate: _adjust_score(
             ranking_engine,
             repository,
@@ -203,6 +210,34 @@ def _candidate_allowed(
     if signal_context is not None and "keyword" in candidate.provenance.strategies:
         signal_context.keyword_candidates_present = True
     return True
+
+
+def _vector_candidate_ids(
+    repository: MemoryRepositoryPort,
+    keyword_ranking: Sequence[tuple[str, float]],
+    filters: dict[str, object],
+    config: Config,
+) -> Sequence[str] | None:
+    if not keyword_ranking:
+        return None
+    signal_context = filters.get("_mcp_memory_signal_context")
+    if not isinstance(signal_context, _MemorySearchSignalContext):
+        return None
+    keyword_records = [
+        record
+        for record_id, _ in keyword_ranking
+        if (record := repository.get_memory(record_id)) is not None
+    ]
+    strongest_coverage = max(
+        (
+            _keyword_token_coverage(signal_context.query_tokens, record)
+            for record in keyword_records[:5]
+        ),
+        default=0.0,
+    )
+    if strongest_coverage < config.search_ranking.keyword_coverage_floor:
+        return None
+    return [record_id for record_id, _ in keyword_ranking]
 
 
 def _result_allowed(
