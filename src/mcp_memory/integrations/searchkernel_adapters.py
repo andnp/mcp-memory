@@ -174,9 +174,6 @@ class MemoryVectorStore(VectorStore):
             "query_embedding": list(query_vector),
             "limit": k,
         }
-        workspace_id = _string_filter(filters, "workspace_id")
-        if workspace_id is not None:
-            kwargs["workspace_id"] = workspace_id
         diagnostics = filters.get("diagnostics")
         if isinstance(diagnostics, dict):
             kwargs["diagnostics"] = diagnostics
