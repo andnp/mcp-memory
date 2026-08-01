@@ -46,6 +46,38 @@ def get_internal_maintenance_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="internal_read_memory_records",
+            description=(
+                "Read up to 50 memory records for maintenance by memory_refs or legacy UUIDs. "
+                "The legacy memory_ids field is also accepted. "
+                "Internal calls include relationships and superseded breadcrumbs by default."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "memory_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50,
+                    },
+                    "memory_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50,
+                    },
+                    "include_relationships": {"type": "boolean"},
+                    "include_superseded": {"type": "boolean"},
+                    "include_metadata": {"type": "boolean"},
+                },
+                "anyOf": [
+                    {"required": ["memory_refs"]},
+                    {"required": ["memory_ids"]},
+                ],
+            },
+        ),
+        Tool(
             name="internal_peek_record",
             description="Read one authoritative memory record for maintenance without user access updates or shared-cache reads.",
             input_schema={

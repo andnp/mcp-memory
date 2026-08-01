@@ -19,7 +19,9 @@ from mcp_memory.storage.shared_read_cache import (
 )
 
 
-SEARCH_READ_GUIDANCE = "Read promising memory_ref values with read_memory_record."
+SEARCH_READ_GUIDANCE = (
+    "Read promising memory_ref values with read_memory_record or read_memory_records."
+)
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _CACHE_VALIDATION_TOKENS_FIELD = "_cache_validation_tokens"
 logger = logging.getLogger(__name__)

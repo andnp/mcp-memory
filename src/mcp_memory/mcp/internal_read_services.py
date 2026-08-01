@@ -8,6 +8,7 @@ from mcp_memory.mcp.services import (
     _record_read_invocation,
     _record_search_invocation,
     read_memory_record_service,
+    read_memory_records_service,
     search_memory_records_service,
     search_memory_records_async_service,
 )
@@ -74,6 +75,10 @@ async def internal_search_memory_records_async_service(
 
 def internal_read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
     return read_memory_record_service(ctx, arguments, caller_kind="internal")
+
+
+def internal_read_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    return read_memory_records_service(ctx, arguments, caller_kind="internal")
 
 
 def internal_peek_record_service(ctx: ApplicationContext, arguments: dict) -> dict:

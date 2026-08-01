@@ -11,6 +11,7 @@ from mcp_memory.mcp.internal_read_services import (
     internal_maintenance_search_service,
     internal_peek_record_service,
     internal_read_memory_record_service,
+    internal_read_memory_records_service,
     internal_search_memory_records_service,
 )
 from mcp_memory.mcp.internal_ingest_services import (
@@ -30,6 +31,7 @@ __all__ = [
     "internal_create_memory_record_for_ingest_service",
     "internal_search_memory_records_service",
     "internal_read_memory_record_service",
+    "internal_read_memory_records_service",
     "internal_peek_record_service",
     "internal_maintenance_search_service",
     "internal_list_relationships_service",

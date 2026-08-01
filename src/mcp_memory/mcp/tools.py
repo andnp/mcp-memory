@@ -24,7 +24,8 @@ def get_memory_tools() -> list[Tool]:
             description=(
                 "Search relational memory records with summary-first results. "
                 "Results use compact format (memory_ref, title, summary) to minimize tokens. "
-                "Use summaries to choose promising memory_ref values, then read with read_memory_record. "
+                "Use summaries to choose promising memory_ref values, then read with read_memory_record "
+                "or read_memory_records. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             input_schema={
@@ -42,6 +43,39 @@ def get_memory_tools() -> list[Tool]:
                     "debug": {"type": "boolean"},
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="read_memory_records",
+            description=(
+                "Read up to 20 memory records by memory_refs or legacy UUIDs in one call. "
+                "The legacy memory_ids field is also accepted. "
+                "Returns compact records plus a missing list; optional relationships, superseded breadcrumbs, "
+                "and metadata can be requested when needed."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "memory_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "memory_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "include_relationships": {"type": "boolean"},
+                    "include_superseded": {"type": "boolean"},
+                    "include_metadata": {"type": "boolean"},
+                },
+                "anyOf": [
+                    {"required": ["memory_refs"]},
+                    {"required": ["memory_ids"]},
+                ],
             },
         ),
         Tool(

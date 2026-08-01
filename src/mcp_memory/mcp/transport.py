@@ -103,6 +103,7 @@ async def _dispatch_tool(
 def tool_services() -> dict[str, ToolService]:
     from mcp_memory.mcp.services import (
         read_memory_record_service,
+        read_memory_records_service,
         record_thought_service,
         search_memory_records_async_service,
     )
@@ -111,6 +112,7 @@ def tool_services() -> dict[str, ToolService]:
         "record_thought": record_thought_service,
         "search_memory_records": search_memory_records_async_service,
         "read_memory_record": read_memory_record_service,
+        "read_memory_records": read_memory_records_service,
     }
 
 
@@ -126,6 +128,7 @@ def internal_tool_services() -> dict[str, ToolService]:
         internal_maintenance_search_service,
         internal_peek_record_service,
         internal_read_memory_record_service,
+        internal_read_memory_records_service,
         internal_search_memory_records_async_service,
     )
     from mcp_memory.mcp.internal_mutation_services import (
@@ -159,6 +162,7 @@ def internal_tool_services() -> dict[str, ToolService]:
     return {
         "internal_search_memory_records": internal_search_memory_records_async_service,
         "internal_read_memory_record": internal_read_memory_record_service,
+        "internal_read_memory_records": internal_read_memory_records_service,
         "internal_peek_record": internal_peek_record_service,
         "internal_maintenance_search": internal_maintenance_search_service,
         "internal_list_relationships": internal_list_relationships_service,

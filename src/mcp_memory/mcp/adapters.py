@@ -5,6 +5,7 @@ from mcp_memory.mcp.validation import (
     optional_positive_int,
     optional_string,
     require_string,
+    string_list,
 )
 
 
@@ -27,6 +28,24 @@ def parse_search_arguments(arguments: dict) -> dict:
 def parse_read_arguments(arguments: dict, *, caller_kind: str) -> dict:
     return {
         "memory_id": require_string(arguments, "memory_id"),
+        "include_relationships": optional_bool(
+            arguments, "include_relationships", caller_kind == "internal"
+        ),
+        "include_superseded": optional_bool(
+            arguments, "include_superseded", caller_kind == "internal"
+        ),
+        "include_metadata": optional_bool(arguments, "include_metadata", False),
+    }
+
+
+def parse_batch_read_arguments(arguments: dict, *, caller_kind: str) -> dict:
+    field_name = "memory_refs" if "memory_refs" in arguments else "memory_ids"
+    memory_ids = list(dict.fromkeys(string_list(arguments, field_name, required=True)))
+    maximum = 20 if caller_kind == "external" else 50
+    if len(memory_ids) > maximum:
+        raise ValueError(f"memory_ids must contain at most {maximum} identifiers")
+    return {
+        "memory_ids": memory_ids,
         "include_relationships": optional_bool(
             arguments, "include_relationships", caller_kind == "internal"
         ),

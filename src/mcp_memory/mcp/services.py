@@ -16,6 +16,7 @@ from mcp_memory.application.memory_use_cases import (
 )
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.adapters import (
+    parse_batch_read_arguments,
     parse_read_arguments,
     parse_record_thought_arguments,
     parse_search_arguments,
@@ -91,11 +92,53 @@ def read_memory_record_service(
     ).execute(parsed, caller_kind=caller_kind)
 
 
+def read_memory_records_service(
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    caller_kind: str = "external",
+) -> dict:
+    parsed = parse_batch_read_arguments(arguments, caller_kind=caller_kind)
+    records: list[dict] = []
+    missing: list[str] = []
+    for memory_id in parsed["memory_ids"]:
+        response = read_memory_record_service(
+            ctx,
+            {
+                "memory_id": memory_id,
+                "include_relationships": parsed["include_relationships"],
+                "include_superseded": parsed["include_superseded"],
+                "include_metadata": parsed["include_metadata"],
+            },
+            caller_kind=caller_kind,
+        )
+        if response.get("status") == "ok":
+            record = response.get("record")
+            if isinstance(record, dict):
+                records.append(record)
+            continue
+        if response.get("error") == "memory_not_found":
+            missing.append(memory_id)
+            continue
+        return response
+    return {
+        "status": "ok",
+        "records": records,
+        "missing": missing,
+        "budget": {
+            "requested": len(parsed["memory_ids"]),
+            "returned": len(records),
+            "missing": len(missing),
+        },
+    }
+
+
 __all__ = [
     "record_thought_service",
     "search_memory_records_service",
     "search_memory_records_async_service",
     "read_memory_record_service",
+    "read_memory_records_service",
     "_record_read_invocation",
     "_record_search_invocation",
     "_retrieval_telemetry_repository",
