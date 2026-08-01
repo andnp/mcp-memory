@@ -45,6 +45,8 @@ def isolate_test_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_dir))
     monkeypatch.setenv("XDG_STATE_HOME", str(state_dir))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
 
     config_path = ensure_default_config_exists(resolve_default_config_path())
     document = tomlkit.parse(config_path.read_text(encoding="utf-8"))

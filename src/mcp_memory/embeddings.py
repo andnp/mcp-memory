@@ -118,7 +118,7 @@ class SentenceTransformerEmbedder:
             model = _load_sentence_transformer(self._configured_model_name, local_files_only=True)
             if model is not None:
                 return model
-        if not allow_download:
+        if not allow_download or os.environ.get("MCP_MEMORY_TEST_MODE") == "1":
             return None
         return _load_sentence_transformer(self._configured_model_name, local_files_only=False)
 

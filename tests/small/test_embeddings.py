@@ -163,6 +163,18 @@ def test_sentence_transformer_cache_model_uses_local_cache_before_network(monkey
     assert calls == [True]
 
 
+def test_sentence_transformer_cache_model_skips_uncached_download_in_test_mode(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_MEMORY_TEST_MODE", "1")
+    monkeypatch.setattr("mcp_memory.embeddings._is_model_cached_locally", lambda _model_name: False)
+
+    def fail_load(*_args, **_kwargs):
+        raise AssertionError("test mode must not attempt an uncached model load")
+
+    monkeypatch.setattr("mcp_memory.embeddings._load_sentence_transformer", fail_load)
+
+    assert SentenceTransformerEmbedder(EmbeddingsConfig()).cache_model() is False
+
+
 def test_sentence_transformer_embedder_switches_to_effective_fallback_model_name(monkeypatch) -> None:
     config = EmbeddingsConfig(model="sentence-transformers/all-MiniLM-L6-v2")
     embedder = SentenceTransformerEmbedder(config)
@@ -187,6 +199,7 @@ def test_sentence_transformer_embedder_restores_configured_model_name_after_succ
     config = EmbeddingsConfig(model="sentence-transformers/all-MiniLM-L6-v2")
     embedder = SentenceTransformerEmbedder(config)
 
+    monkeypatch.delenv("MCP_MEMORY_TEST_MODE", raising=False)
     monkeypatch.setattr("mcp_memory.embeddings._is_model_cached_locally", lambda _model_name: False)
 
     embedder.embed(["hello world"])
