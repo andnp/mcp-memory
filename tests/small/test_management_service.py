@@ -74,6 +74,45 @@ def _build_management_service(
     )
 
 
+def test_management_search_uses_retrieval_facade_and_preserves_surfacing(db_manager, monkeypatch) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    native_search = RelationalMemorySearchService(repository, Config())
+    context = ApplicationContext(
+        config=Config(),
+        workspace_id="workspace-a",
+        memory_path=db_manager.db_path.parent,
+        db_manager=db_manager,
+        repository=repository,
+        relational_search=native_search,
+    )
+    service = ManagementService(
+        context,
+        SimpleNamespace(has_runtime=True, client_count=1),
+    )
+    record = repository.create_memory(
+        title="Facade management result",
+        content="Management retrieval facade routing.",
+        workspace_ids=["workspace-a"],
+        memory_type="fact",
+    )
+    assert record is not None
+
+    def native_search_is_forbidden(*args, **kwargs):
+        raise AssertionError("management search bypassed the retrieval facade")
+
+    monkeypatch.setattr(native_search, "search_memories", native_search_is_forbidden)
+
+    payload = service.search_memories(
+        query="facade management",
+        workspace_id="workspace-a",
+        limit=5,
+    )
+
+    assert [result.title for result in payload.results] == ["Facade management result"]
+    refreshed = repository.get_memory(record.id)
+    assert refreshed is not None and refreshed.last_surfaced_at is not None
+
+
 def test_management_service_accepts_structural_management_context(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)

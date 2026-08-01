@@ -66,6 +66,8 @@ from mcp_memory.mutation_history import (
 )
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
+from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     AIConversationListPayload,
@@ -358,6 +360,17 @@ class ManagementService:
         self._embedder = cast(Any, memory.embedder)
         self._vector_store = cast(Any, memory.vector_store)
         self._relational_search = cast(Any, memory.relational_search)
+        self._retrieval = (
+            build_memory_retrieval_facade(
+                self._repository,
+                config=memory.config,
+                vector_store=self._vector_store,
+                embedder=self._embedder,
+                native_search=self._relational_search,
+            )
+            if self._repository is not None
+            else None
+        )
         self._config = memory.config
         self._ai_json_provider = provider.ai_json_provider
         self._ai_agent_provider = provider.ai_agent_provider
@@ -1431,16 +1444,29 @@ class ManagementService:
     ) -> MemorySearchPayload:
         if self._relational_search is None:
             return MemorySearchPayload()
+        if self._retrieval is None:
+            return MemorySearchPayload()
         started_at = perf_counter()
-        results = self._relational_search.search_memories(
-            query,
-            workspace_id=workspace_id,
+        results = SearchMemoryRecordsOperation(self._retrieval).execute(
+            query=query,
+            # Management search is global; workspace context must not filter results.
+            workspace_id=None,
             limit=limit,
+            adaptive_limit=False,
+            ranking_workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,
             include_superseded=include_superseded,
             debug=debug,
         )
+        surfaced_memory_ids = [result.memory_id for result in results]
+        touch_last_surfaced = getattr(self._repository, "touch_last_surfaced", None)
+        if surfaced_memory_ids and callable(touch_last_surfaced):
+            touch_last_surfaced(
+                surfaced_memory_ids,
+                datetime.now(UTC).isoformat(),
+                best_effort=True,
+            )
         duration_ms = (perf_counter() - started_at) * 1000.0
         self._retrieval_telemetry.record_search(
             invocation_id=str(uuid4()),

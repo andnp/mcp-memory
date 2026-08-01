@@ -184,4 +184,26 @@ def _run_in_thread(factory: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
     return asyncio.run(factory())
 
 
-__all__ = ["MemoryRetrievalFacade", "MemoryRetrievalPort"]
+def build_memory_retrieval_facade(
+    repository: MemoryRepositoryPort,
+    *,
+    config: Config | None = None,
+    vector_store: Any | None = None,
+    embedder: Any | None = None,
+    native_search: Any | None = None,
+) -> MemoryRetrievalFacade:
+    """Compose the canonical retrieval boundary for an application caller."""
+    return MemoryRetrievalFacade(
+        repository,
+        config=config,
+        vector_store=vector_store,
+        embedder=embedder,
+        native_search=native_search,
+    )
+
+
+__all__ = [
+    "MemoryRetrievalFacade",
+    "MemoryRetrievalPort",
+    "build_memory_retrieval_facade",
+]

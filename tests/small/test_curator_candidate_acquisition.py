@@ -163,13 +163,18 @@ def test_semantic_candidates_use_global_search_seam() -> None:
     repository.by_id[neighbor.id] = neighbor
     search_calls: list[dict[str, object]] = []
 
-    def search_memories(query: str, **kwargs: object) -> list[object]:
-        search_calls.append({"query": query, **kwargs})
-        return [SimpleNamespace(memory_id=neighbor.id)]
+    class RetrievalFacade:
+        def search_sync(self, query: str, **kwargs: object) -> Any:
+            search_calls.append({"query": query, **kwargs})
+            result = SimpleNamespace(
+                record=SimpleNamespace(source_id=neighbor.id),
+            )
+            return SimpleNamespace(results=[result])
 
     ctx: Any = SimpleNamespace(
         repository=repository,
-        relational_search=SimpleNamespace(search_memories=search_memories),
+        relational_search=None,
+        memory_retrieval=RetrievalFacade(),
         db_manager=None,
         workspace_id=None,
     )

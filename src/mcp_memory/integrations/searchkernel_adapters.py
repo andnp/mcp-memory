@@ -88,6 +88,7 @@ class MemoryRecordAdapter:
                 "memory_status": memory.status,
                 "summary": memory.summary,
                 "workspace_ids": list(memory.workspace_ids),
+                "memory_ref": memory.memory_ref,
                 "tags": list(memory.tags),
                 "read_count": memory.read_count,
                 "access_score": memory.access_score,

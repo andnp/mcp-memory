@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from time import perf_counter, time
 import logging
 from typing import Any, Sequence
@@ -29,6 +30,7 @@ from mcp_memory.mcp.cache_policy import (
 )
 from mcp_memory.mcp.payloads import build_read_payload, build_search_result_payloads
 from mcp_memory.application.ports import RetrievalTelemetryPort
+from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
@@ -137,7 +139,18 @@ def _search_memory_records(
         return {"status": "error", "error": "relational_search_not_initialized"}
 
     query = arguments["query"]
-    operation = SearchMemoryRecordsOperation(ctx.relational_search)
+    retrieval = getattr(ctx, "memory_retrieval", None)
+    if retrieval is None and ctx.repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+    if retrieval is None:
+        retrieval = build_memory_retrieval_facade(
+            ctx.repository,
+            config=ctx.config,
+            vector_store=ctx.vector_store,
+            embedder=ctx.embedder,
+            native_search=ctx.relational_search,
+        )
+    operation = SearchMemoryRecordsOperation(retrieval)
     started_at = perf_counter()
     debug_enabled = arguments["debug"]
     execution_arguments = {
@@ -259,6 +272,17 @@ def _search_memory_records(
         raise
     duration_ms = (perf_counter() - started_at) * 1000.0
     surfaced_memory_ids = [result.memory_id for result in results]
+    touch_last_surfaced = (
+        None
+        if ctx.repository is None
+        else getattr(ctx.repository, "touch_last_surfaced", None)
+    )
+    if surfaced_memory_ids and callable(touch_last_surfaced):
+        touch_last_surfaced(
+            surfaced_memory_ids,
+            datetime.now(UTC).isoformat(),
+            best_effort=True,
+        )
     telemetry.record_search(
         ctx,
         caller_kind=caller_kind,

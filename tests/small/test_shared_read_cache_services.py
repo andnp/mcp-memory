@@ -57,6 +57,44 @@ class SuccessfulSearchService:
         ]
 
 
+class LegacyRetrievalAdapter:
+    """Test-only facade seam for lightweight native-service doubles."""
+
+    def __init__(self, context) -> None:
+        self.context = context
+
+    def search_sync(self, query: str, **kwargs):
+        results = self.context.relational_search.search_memories(query=query, **kwargs)
+        return SimpleNamespace(results=[self._result(result) for result in results])
+
+    async def search(self, query: str, **kwargs):
+        return self.search_sync(query, **kwargs)
+
+    @staticmethod
+    def _result(result):
+        record = SimpleNamespace(
+            source_id=result.memory_id,
+            title=result.title,
+            body=result.summary,
+            metadata={
+                "summary": result.summary,
+                "memory_type": result.memory_type,
+                "memory_status": result.status,
+                "tags": result.tags,
+                "workspace_ids": result.workspace_ids,
+                "memory_ref": getattr(result, "memory_ref", None),
+            },
+            status=SimpleNamespace(value=result.status),
+            storage_key=f"memory:memory:{result.memory_id}",
+            workspace_id=result.workspace_ids[0] if result.workspace_ids else None,
+        )
+        return SimpleNamespace(
+            record=record,
+            score=result.score,
+            provenance=SimpleNamespace(to_dict=lambda: {}),
+        )
+
+
 class CountingSearchService:
     def __init__(self, *, should_fail: bool = False) -> None:
         self.should_fail = should_fail
@@ -381,7 +419,7 @@ class ConfigurableReadService:
 
 
 def _build_context(*, read_cache: SharedReadCache, relational_search: object) -> ApplicationContext:
-    return ApplicationContext(
+    context = ApplicationContext(
         workspace_id="workspace-123",
         storage_backend="postgres",
         relational_search=relational_search,
@@ -389,6 +427,8 @@ def _build_context(*, read_cache: SharedReadCache, relational_search: object) ->
         retrieval_telemetry=FakeTelemetryRepository(),
         runtime_logs=FakeRuntimeLogs(),
     )
+    setattr(context, "memory_retrieval", LegacyRetrievalAdapter(context))
+    return context
 
 
 def _projection_payload(

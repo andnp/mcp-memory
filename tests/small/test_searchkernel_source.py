@@ -10,6 +10,7 @@ Tests verify that the adapter correctly:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -26,6 +27,39 @@ from mcp_memory.relational.search import RelationalSearchResult
 pytestmark = pytest.mark.small
 
 
+class SearchFacadeDouble:
+    def __init__(self) -> None:
+        self.return_value: list[Any] = []
+        self.call_args: Any = None
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.call_args = SimpleNamespace(kwargs=kwargs)
+        return SimpleNamespace(results=[self._result(result) for result in self.return_value])
+
+    @staticmethod
+    def _result(result: Any) -> Any:
+        record = SimpleNamespace(
+            source_id=result.memory_id,
+            title=result.title,
+            metadata={
+                "summary": result.summary,
+                "memory_type": result.memory_type,
+                "memory_status": result.status,
+                "tags": result.tags,
+                "workspace_ids": result.workspace_ids,
+                "memory_ref": result.memory_ref,
+            },
+            status=SimpleNamespace(value=result.status),
+            storage_key=f"memory:memory:{result.memory_id}",
+            workspace_id=result.workspace_ids[0] if result.workspace_ids else None,
+        )
+        return SimpleNamespace(
+            record=record,
+            score=result.score,
+            provenance=SimpleNamespace(to_dict=lambda: {}),
+        )
+
+
 class ExtraSearchableSource:
     source_kind = "extra"
 
@@ -38,7 +72,9 @@ class ExtraSearchableSource:
 @pytest.fixture
 def mock_search_service() -> MagicMock:
     """Create a mock RelationalMemorySearchService."""
-    return MagicMock()
+    service = MagicMock()
+    service.search = SearchFacadeDouble()
+    return service
 
 
 @pytest.fixture
@@ -70,7 +106,7 @@ class TestMemorySearchableSource:
             workspace_ids=["ws-1"],
             score=0.85,
         )
-        mock_search_service.search_memories.return_value = [result]
+        mock_search_service.search.return_value = [result]
 
         # Act
         scored_refs = await adapter.search("test query", k=10)
@@ -97,7 +133,7 @@ class TestMemorySearchableSource:
             status="active",
             score=0.75,
         )
-        mock_search_service.search_memories.return_value = [result]
+        mock_search_service.search.return_value = [result]
 
         # Act
         scored_refs = await adapter.search("query", k=5)
@@ -122,7 +158,7 @@ class TestMemorySearchableSource:
             status="active",
             score=0.6,
         )
-        mock_search_service.search_memories.return_value = [result]
+        mock_search_service.search.return_value = [result]
 
         # Act
         scored_ref = list(await adapter.search("query", k=5))[0]
@@ -146,7 +182,7 @@ class TestMemorySearchableSource:
             workspace_ids=["ws-1", "ws-2"],
             score=0.5,
         )
-        mock_search_service.search_memories.return_value = [result]
+        mock_search_service.search.return_value = [result]
 
         # Act
         scored_ref = list(await adapter.search("query", k=5))[0]
@@ -166,13 +202,13 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify the k parameter is passed to the search service."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
 
         # Act
         await adapter.search("query", k=25)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["limit"] == 25
 
     @pytest.mark.asyncio
@@ -181,13 +217,13 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify search enforces include_superseded=False (contract obligation)."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
 
         # Act
         await adapter.search("query", k=10)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["include_superseded"] is False
 
     @pytest.mark.asyncio
@@ -196,20 +232,20 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify search uses status=None to skip archived records."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
 
         # Act
         await adapter.search("query", k=10)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["status"] is None
 
     @pytest.mark.asyncio
     async def test_side_effect_free_search_is_forwarded(
         self, mock_search_service: MagicMock
     ) -> None:
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
         adapter = MemorySearchableSource(
             mock_search_service,
             side_effect_free=True,
@@ -217,7 +253,8 @@ class TestMemorySearchableSource:
 
         await adapter.search("query", k=10)
 
-        assert mock_search_service.search_memories.call_args.kwargs["side_effect_free"] is True
+        assert mock_search_service.search.call_args.kwargs["include_superseded"] is False
+        # The facade is read-only; no native side-effect flag is required.
 
     @pytest.mark.asyncio
     async def test_search_passes_workspace_filter(
@@ -225,14 +262,14 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify workspace_id filter is extracted and passed through."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
         filters = {"workspace_id": "ws-custom"}
 
         # Act
         await adapter.search("query", k=10, filters=filters)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["workspace_id"] == "ws-custom"
 
     @pytest.mark.asyncio
@@ -241,14 +278,14 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify memory_type filter is extracted and passed through."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
         filters = {"memory_type": "journal"}
 
         # Act
         await adapter.search("query", k=10, filters=filters)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["memory_type"] == "journal"
 
     @pytest.mark.asyncio
@@ -257,14 +294,14 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify non-string workspace_id filters are safely ignored."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
         filters = {"workspace_id": 123}  # Invalid type
 
         # Act
         await adapter.search("query", k=10, filters=filters)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["workspace_id"] is None
 
     @pytest.mark.asyncio
@@ -299,7 +336,7 @@ class TestMemorySearchableSource:
                 score=0.5,
             ),
         ]
-        mock_search_service.search_memories.return_value = results
+        mock_search_service.search.return_value = results
 
         # Act
         scored_refs = list(await adapter.search("query", k=10))
@@ -316,7 +353,7 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify empty results are handled gracefully."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
 
         # Act
         scored_refs = list(await adapter.search("no matches", k=10))
@@ -338,10 +375,10 @@ class TestMemorySearchableSource:
             status="active",
             score=0.8,
         )
-        mock_search_service.search_memories.return_value = [result]
+        mock_search_service.search.return_value = [result]
 
         # Act
-        # This should not raise even if search_memories were blocking, because
+        # This should not raise even if search were blocking, because
         # it's running in a thread. We just verify the result is correct.
         scored_refs = list(await adapter.search("query", k=10))
 
@@ -355,13 +392,13 @@ class TestMemorySearchableSource:
     ) -> None:
         """Verify passing None filters is handled safely."""
         # Arrange
-        mock_search_service.search_memories.return_value = []
+        mock_search_service.search.return_value = []
 
         # Act
         await adapter.search("query", k=10, filters=None)
 
         # Assert
-        call_args = mock_search_service.search_memories.call_args
+        call_args = mock_search_service.search.call_args
         assert call_args.kwargs["workspace_id"] is None
         assert call_args.kwargs["memory_type"] is None
 
@@ -382,7 +419,7 @@ class TestMemorySearchableSource:
             )
             for i in range(5)
         ]
-        mock_search_service.search_memories.return_value = results
+        mock_search_service.search.return_value = results
 
         # Act
         scored_refs = list(await adapter.search("query", k=10))

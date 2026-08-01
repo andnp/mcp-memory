@@ -27,6 +27,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
     support_counts_for_candidates,
 )
 from mcp_memory.core.ports.tasks import TaskRecord
+from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 
 
 def _sampling_task_id(task: Any) -> str:
@@ -606,43 +607,30 @@ def _query_curator_backend_candidates(
         for record in records:
             candidates_by_id[record.id] = record
 
-    semantic_candidate_ids = getattr(ctx.relational_search, "_semantic_candidate_ids", None)
-    semantic_search = getattr(ctx.relational_search, "search_memories", None)
-    if callable(semantic_candidate_ids):
+    retrieval = getattr(ctx, "memory_retrieval", None)
+    if retrieval is None and ctx.relational_search is not None:
+        retrieval = build_memory_retrieval_facade(
+            ctx.repository,
+            config=getattr(ctx, "config", None),
+            vector_store=getattr(ctx, "vector_store", None),
+            embedder=getattr(ctx, "embedder", None),
+            native_search=ctx.relational_search,
+        )
+    if retrieval is not None:
         for anchor in seeded_candidates[: min(3, query_limit)]:
-            result = semantic_candidate_ids(
+            outcome = retrieval.search_sync(
                 anchor.content,
-                None,
+                limit=query_limit,
+                workspace_id=None,
                 status="active",
                 include_superseded=False,
-                keyword_ids=(),
-                query_tokens=(),
-                requested_limit=query_limit,
-                diagnostics=None,
-                limit=query_limit,
             )
-            semantic_ids = cast(list[Any], result[0]) if isinstance(result, tuple) else []
-            for memory_id in semantic_ids:
+            for result in outcome.results:
+                memory_id = getattr(result.record, "source_id", None)
                 if isinstance(memory_id, str):
                     record = ctx.repository.get_memory(memory_id)
                     if record is not None:
                         candidates_by_id[record.id] = record
-    elif callable(semantic_search):
-        for anchor in seeded_candidates[: min(3, query_limit)]:
-            results = cast(
-                list[Any],
-                semantic_search(
-                    anchor.content,
-                    workspace_id=None,
-                    limit=query_limit,
-                    status="active",
-                    include_superseded=False,
-                ),
-            )
-            for result in results:
-                record = _semantic_result_record(ctx, result)
-                if record is not None:
-                    candidates_by_id[record.id] = record
 
     return filter_curator_candidates(ctx, list(candidates_by_id.values()))
 
@@ -664,15 +652,6 @@ def _curator_backend_query_limit(
             CURATOR_MAX_BATCH_RECORDS * CURATOR_CANDIDATE_POOL_MULTIPLIER,
         ),
     )
-
-
-def _semantic_result_record(ctx: ApplicationContext, result: Any) -> Any | None:
-    if hasattr(result, "content") and hasattr(result, "id"):
-        return result
-    memory_id = getattr(result, "memory_id", None)
-    if not isinstance(memory_id, str) or ctx.repository is None:
-        return None
-    return ctx.repository.get_memory(memory_id)
 
 
 def _normalize_curator_seed_limit(value: int | None) -> int:

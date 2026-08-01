@@ -430,7 +430,7 @@ def _order_vector_ranking(
     filters: dict[str, object],
     config: Config,
 ) -> Sequence[tuple[str, float]]:
-    workspace_id = filters.get("workspace_id")
+    workspace_id = filters.get("_ranking_workspace_id", filters.get("workspace_id"))
     workspace = workspace_id if isinstance(workspace_id, str) else None
 
     def rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
@@ -481,7 +481,10 @@ def _adjust_score(
     if record is None:
         return 0.0
 
-    workspace_id = _ACTIVE_FILTERS.get().get("workspace_id")
+    workspace_id = _ACTIVE_FILTERS.get().get(
+        "_ranking_workspace_id",
+        _ACTIVE_FILTERS.get().get("workspace_id"),
+    )
     workspace = workspace_id if isinstance(workspace_id, str) else None
     provenance = candidate.provenance
     keyword = provenance.strategy_details.get("keyword")
