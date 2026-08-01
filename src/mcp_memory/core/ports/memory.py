@@ -117,6 +117,8 @@ class MemoryReadPort(Protocol):
 
     def get_memory(self, memory_id: str) -> MemoryRecord | None: ...
 
+    def resolve_memory_id(self, memory_id: str) -> str | None: ...
+
     def list_memories(
         self,
         workspace_id: str | None = None,

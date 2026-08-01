@@ -23,8 +23,8 @@ def get_memory_tools() -> list[Tool]:
             name="search_memory_records",
             description=(
                 "Search relational memory records with summary-first results. "
-                "Results use compact format (memory_id, title, summary) to minimize tokens. "
-                "Use summaries to choose promising memory_id values, then read with read_memory_record. "
+                "Results use compact format (memory_ref, title, summary) to minimize tokens. "
+                "Use summaries to choose promising memory_ref values, then read with read_memory_record. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             input_schema={
@@ -47,8 +47,9 @@ def get_memory_tools() -> list[Tool]:
         Tool(
             name="read_memory_record",
             description=(
-                "Read one memory record. Returns minimal fields (id, title, content) by default to save tokens. "
-                "Request optional extras (relationships, superseded, metadata) only when needed."
+                "Read one memory record using its memory_ref or legacy UUID. Returns minimal fields "
+                "(memory_ref, title, content) by default to save tokens. Request optional extras "
+                "(relationships, superseded, metadata) only when needed."
             ),
             input_schema={
                 "type": "object",

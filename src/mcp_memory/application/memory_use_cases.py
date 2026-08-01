@@ -5,6 +5,7 @@ import logging
 from typing import Any, Sequence
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.memory import parse_memory_ref
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.mcp.cache_policy import (
     _CACHE_VALIDATION_TOKENS_FIELD,
@@ -412,8 +413,19 @@ async def _search_memory_records_async(
 
 def _record_search_result_to_relational(result) -> RelationalSearchResult:
     record = result.record
+    memory_ref_value = record.metadata.get("memory_ref")
+    memory_ref = (
+        memory_ref_value
+        if isinstance(memory_ref_value, int) and memory_ref_value > 0
+        else (
+            parse_memory_ref(memory_ref_value)
+            if isinstance(memory_ref_value, str)
+            else None
+        )
+    )
     return RelationalSearchResult(
         memory_id=record.source_id,
+        memory_ref=memory_ref,
         title=record.title,
         summary=str(record.metadata.get("summary", "")),
         memory_type=str(record.metadata.get("memory_type", "")),

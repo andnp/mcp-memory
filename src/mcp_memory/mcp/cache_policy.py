@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.ports.memory import parse_memory_ref
 from mcp_memory.relational.search import RelationalSearchResult
 from mcp_memory.serialization import (
     search_result_payload_compact,
@@ -18,7 +19,7 @@ from mcp_memory.storage.shared_read_cache import (
 )
 
 
-SEARCH_READ_GUIDANCE = "Read promising memory_id values with read_memory_record."
+SEARCH_READ_GUIDANCE = "Read promising memory_ref values with read_memory_record."
 _FRESH_SEARCH_CACHE_HIT_TTL_SECONDS = 5.0
 _CACHE_VALIDATION_TOKENS_FIELD = "_cache_validation_tokens"
 logger = logging.getLogger(__name__)
@@ -91,9 +92,32 @@ def _compact_cached_search_payload(payload: dict[str, object]) -> dict[str, obje
 
 
 def _compact_cached_search_result(result: dict[str, object]) -> dict[str, object]:
+    identifier_key = (
+        "memory_ref" if isinstance(result.get("memory_ref"), str) else "memory_id"
+    )
     return {
-        key: result[key] for key in ("memory_id", "title", "summary") if key in result
+        key: result[key]
+        for key in (identifier_key, "title", "summary")
+        if key in result
     }
+
+
+def _cached_result_memory_id(
+    ctx: ApplicationContext, result: dict[str, object]
+) -> str | None:
+    memory_id = result.get("memory_id")
+    if isinstance(memory_id, str) and memory_id:
+        return memory_id
+    memory_ref = result.get("memory_ref")
+    resolver = getattr(getattr(ctx, "relational_search", None), "resolve_memory_id", None)
+    if not isinstance(memory_ref, str):
+        return None
+    if parse_memory_ref(memory_ref) is None:
+        return memory_ref
+    if not callable(resolver):
+        return None
+    resolved_id = resolver(memory_ref)
+    return resolved_id if isinstance(resolved_id, str) and resolved_id else None
 
 
 def _compact_cached_read_payload(
@@ -343,11 +367,14 @@ def _cached_search_payload_has_current_records(
     results = payload.get("results")
     if not isinstance(results, list):
         return True
-    memory_ids = [
-        result["memory_id"]
-        for result in results
-        if isinstance(result, dict) and isinstance(result.get("memory_id"), str)
-    ]
+    memory_ids: list[str] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        memory_id = _cached_result_memory_id(ctx, result)
+        if memory_id is None:
+            return False
+        memory_ids.append(memory_id)
     if not memory_ids:
         return True
     cached_tokens = payload.get(_CACHE_VALIDATION_TOKENS_FIELD)
@@ -412,12 +439,12 @@ def _store_cached_projection_entries(
     cache.store_projection_entries(
         [
             SharedReadCacheProjectionUpsert(
-                memory_id=str(payload["memory_id"]),
+                memory_id=memory_id,
                 payload=payload,
-                validation_token=validation_tokens.get(str(payload["memory_id"])),
+                validation_token=validation_tokens.get(memory_id),
             )
             for payload in payloads
-            if isinstance(payload.get("memory_id"), str) and payload["memory_id"]
+            if (memory_id := _cached_result_memory_id(ctx, payload)) is not None
         ]
     )
 
@@ -437,11 +464,15 @@ def _warm_cached_search_projections(
     warmed_payloads = [
         payload
         for payload in result_payloads
-        if isinstance(payload.get("memory_id"), str) and payload["memory_id"]
+        if _cached_result_memory_id(ctx, payload) is not None
     ]
     if not warmed_payloads:
         return 0
-    memory_ids = [str(payload["memory_id"]) for payload in warmed_payloads]
+    memory_ids = [
+        memory_id
+        for payload in warmed_payloads
+        if (memory_id := _cached_result_memory_id(ctx, payload)) is not None
+    ]
     resolved_tokens = validation_tokens or {}
     if memory_ids and validation_tokens is None:
         try:

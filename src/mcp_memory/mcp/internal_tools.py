@@ -7,7 +7,7 @@ def get_internal_maintenance_tools() -> list[Tool]:
             name="internal_search_memory_records",
             description=(
                 "Search memory records for maintenance and organization tasks. "
-                "Use summaries to choose promising memory_id values, then read only those records. "
+                "Use summaries to choose promising memory_ref values, then read only those records. "
                 "Omit `limit` unless you need a strict fixed cap; when omitted, search may return an adaptive number of high-confidence results."
             ),
             input_schema={
@@ -31,7 +31,8 @@ def get_internal_maintenance_tools() -> list[Tool]:
             name="internal_read_memory_record",
             description=(
                 "Read one memory record for maintenance. Internal calls include relationships and superseded "
-                "breadcrumbs by default; pass false for compact reads. Metadata remains opt-in."
+                "breadcrumbs by default; pass false for compact reads. Metadata remains opt-in. "
+                "Accepts a memory_ref or legacy UUID."
             ),
             input_schema={
                 "type": "object",

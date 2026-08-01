@@ -18,6 +18,7 @@ from searchkernel.kernel import SearchKernel
 from searchkernel.ports.content_source import SearchableSource
 
 from mcp_memory.relational.search import RelationalMemorySearchService, RelationalSearchResult
+from mcp_memory.core.ports.memory import format_memory_ref
 
 
 def build_memory_search_kernel(
@@ -156,6 +157,8 @@ class MemorySearchableSource:
                 "status": result.status,
                 "tags": result.tags,
                 "workspace_ids": result.workspace_ids,
+                "memory_ref": result.memory_ref,
+                "memory_reference": format_memory_ref(result.memory_ref),
                 "canonical_id": canonical_storage_key(
                     result.workspace_ids[0] if result.workspace_ids else None,
                     "memory",

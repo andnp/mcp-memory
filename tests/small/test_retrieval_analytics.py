@@ -186,11 +186,18 @@ def test_build_nerd_metrics_includes_retrieval_analytics(monkeypatch, tmp_path: 
         assert second_alpha_read["status"] == "ok"
         assert beta_read["status"] == "ok"
 
-        alpha_result_ids = {row["memory_id"] for row in alpha_search["results"]}
-        beta_result_ids = {row["memory_id"] for row in beta_search["results"]}
-        gamma_result_ids = {row["memory_id"] for row in gamma_search["results"]}
-        missing_result_ids = {row["memory_id"] for row in missing_search["results"]}
-        internal_beta_result_ids = {row["memory_id"] for row in internal_beta_search["results"]}
+        def resolved_result_ids(search_payload: dict) -> set[str]:
+            return {
+                runtime.repository.resolve_memory_id(row["memory_ref"]) or row["memory_ref"]
+                for row in search_payload["results"]
+                if isinstance(row.get("memory_ref"), str)
+            }
+
+        alpha_result_ids = resolved_result_ids(alpha_search)
+        beta_result_ids = resolved_result_ids(beta_search)
+        gamma_result_ids = resolved_result_ids(gamma_search)
+        missing_result_ids = resolved_result_ids(missing_search)
+        internal_beta_result_ids = resolved_result_ids(internal_beta_search)
         expected_search_hits = sum(
             len(result_ids)
             for result_ids in (
@@ -383,7 +390,9 @@ def test_search_memory_records_service_returns_results_while_sqlite_write_lock_i
             payload = search_memory_records_service(runtime, {"query": "parallel search reliability", "limit": 5})
 
             assert payload["status"] == "ok"
-            assert [row["memory_id"] for row in payload["results"]] == [record.id]
+            assert [row["memory_ref"] for row in payload["results"]] == [
+                f"mem-{record.memory_ref}"
+            ]
         finally:
             lock_conn.rollback()
             lock_conn.close()

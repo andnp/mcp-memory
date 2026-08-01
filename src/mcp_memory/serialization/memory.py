@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.management.models import CompactMemoryRecord
-from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
+from mcp_memory.core.ports.memory import (
+    MemoryLink,
+    MemoryRecord,
+    format_memory_ref,
+)
 
 from mcp_memory.relational.search import RelationalSearchResult
 
@@ -10,6 +14,7 @@ from mcp_memory.relational.search import RelationalSearchResult
 def memory_record_payload(record: MemoryRecord) -> dict:
     return {
         "id": record.id,
+        "memory_ref": format_memory_ref(getattr(record, "memory_ref", None)),
         "title": record.title,
         "content": record.content,
         "summary": record.summary,
@@ -34,13 +39,13 @@ def agent_memory_record_payload(record: MemoryRecord) -> dict:
     """Minimal record payload for agent consumption.
 
     Contains only the fields a model needs to understand the memory:
-    id for referencing, title for identity, content for the body.
+    memory_ref for referencing, title for identity, content for the body.
     Summary is dropped because it's auto-generated from content.
     Everything else (type, status, timestamps, tags, internal fields)
     burns context without adding agent-useful information.
     """
     return {
-        "id": record.id,
+        "memory_ref": format_memory_ref(getattr(record, "memory_ref", None)) or record.id,
         "title": record.title,
         "content": record.content,
     }
@@ -104,6 +109,7 @@ def link_payload(link: MemoryLink) -> dict:
 def search_result_payload(result: RelationalSearchResult) -> dict:
     return {
         "memory_id": result.memory_id,
+        "memory_ref": format_memory_ref(getattr(result, "memory_ref", None)),
         "title": result.title,
         "summary": result.summary,
         "memory_type": result.memory_type,
@@ -118,11 +124,11 @@ def search_result_payload_compact(result: RelationalSearchResult) -> dict:
     """Minimal search result for agent consumption.
 
     Returns only the fields needed to decide whether to read a record:
-    memory_id, title, summary. Omits type, status, tags, and ranking
+    memory_ref, title, summary. Omits type, status, tags, and ranking
     fields that burn context without helping the selection decision.
     """
     return {
-        "memory_id": result.memory_id,
+        "memory_ref": format_memory_ref(getattr(result, "memory_ref", None)) or result.memory_id,
         "title": result.title,
         "summary": result.summary,
     }

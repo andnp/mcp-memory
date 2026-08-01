@@ -81,6 +81,7 @@ class RelationalSearchResult:
     workspace_ids: list[str] = field(default_factory=list)
     score: float = 0.0
     ranking_debug: dict[str, float | str | bool] | None = None
+    memory_ref: int | None = None
 
 
 @dataclass(slots=True)
@@ -449,6 +450,7 @@ class RelationalMemorySearchService:
         ranked = [
             RelationalSearchResult(
                 memory_id=record.id,
+                memory_ref=record.memory_ref,
                 title=record.title,
                 summary=_search_result_summary(record),
                 memory_type=record.type,
@@ -596,6 +598,9 @@ class RelationalMemorySearchService:
 
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         return self._repository.get_read_cache_validation_tokens(memory_ids)
+
+    def resolve_memory_id(self, memory_id: str) -> str | None:
+        return self._repository.resolve_memory_id(memory_id)
 
     def _blocked_embedding_persistence_reason(self) -> str | None:
         if self._embedder is None or self._vector_store is None:

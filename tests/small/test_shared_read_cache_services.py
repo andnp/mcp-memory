@@ -948,7 +948,7 @@ def test_search_memory_records_service_refreshes_fresh_cache_when_record_was_del
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
     refreshed_response = search_memory_records_service(ctx, {"query": "warm cache"})
 
-    assert warm_response["results"][0]["memory_id"] == "memory-1"
+    assert warm_response["results"][0]["memory_ref"] == "memory-1"
     assert refreshed_response["results"] == []
     assert search_service.calls == 2
     assert search_service.validation_calls == [["memory-1"], ["memory-1"]]
