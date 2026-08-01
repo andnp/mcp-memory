@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from time import perf_counter, time
-import logging
-from typing import Any, Sequence
+from typing import Any, cast
 
+from mcp_memory.application.ports import RetrievalTelemetryPort
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.ports.memory import parse_memory_ref
 from mcp_memory.core.journal_operations import RecordThoughtOperation
+from mcp_memory.core.ports.memory import parse_memory_ref
+from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.integrations.searchkernel_record_pipeline import (
+    build_memory_record_pipeline,
+)
+from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
 from mcp_memory.mcp.cache_policy import (
     _CACHE_VALIDATION_TOKENS_FIELD,
     _begin_inflight_search_coalescing,
-    build_search_cache_request,
     _compact_cached_read_payload,
     _compact_cached_search_payload,
     _finish_inflight_search_coalescing,
@@ -27,17 +33,14 @@ from mcp_memory.mcp.cache_policy import (
     _store_cached_read_response,
     _store_cached_search_response,
     _warm_cached_search_projections,
+    build_search_cache_request,
 )
 from mcp_memory.mcp.payloads import build_read_payload, build_search_result_payloads
-from mcp_memory.application.ports import RetrievalTelemetryPort
-from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
-from mcp_memory.integrations.searchkernel_record_pipeline import (
-    build_memory_record_pipeline,
+from mcp_memory.relational.operations import (
+    ReadMemoryRecordOperation,
+    SearchMemoryRecordsOperation,
 )
-from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
-from mcp_memory.relational.operations import ReadMemoryRecordOperation, SearchMemoryRecordsOperation
 from mcp_memory.relational.search import RelationalSearchResult
-
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +144,24 @@ def _search_memory_records(
     query = arguments["query"]
     retrieval = getattr(ctx, "memory_retrieval", None)
     if retrieval is None and ctx.repository is None:
+        native_diagnostics_search = getattr(ctx.relational_search, "search_memories_with_diagnostics", None)
+        if arguments["debug"] and callable(native_diagnostics_search):
+            started_at = perf_counter()
+            native_results, diagnostics = cast(tuple[Sequence[RelationalSearchResult], Any], native_diagnostics_search(
+                query=query,
+                workspace_id=ctx.workspace_id,
+                limit=arguments["limit"],
+                memory_type=arguments["memory_type"],
+                status=arguments["status"],
+                include_superseded=arguments["include_superseded"],
+                debug=True,
+            ))
+            return {
+                "status": "ok",
+                "results": build_search_result_payloads(native_results, debug_enabled=True),
+                "timing_ms": {"total": round((perf_counter() - started_at) * 1000.0, 3)},
+                "search_diagnostics": diagnostics.to_payload(),
+            }
         return {"status": "error", "error": "repository_not_initialized"}
     if retrieval is None:
         retrieval = build_memory_retrieval_facade(

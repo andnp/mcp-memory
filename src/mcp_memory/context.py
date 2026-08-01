@@ -86,6 +86,7 @@ class MemoryReadCapabilities:
     read_cache: object | None = None
     embedder: object | None = None
     vector_store: object | None = None
+    embedding_maintenance: object | None = None
 
     @classmethod
     def from_context(cls, ctx: MemoryPipelineContext) -> MemoryReadCapabilities:
@@ -100,6 +101,7 @@ class MemoryReadCapabilities:
             read_cache=getattr(ctx, "read_cache", None),
             embedder=getattr(ctx, "embedder", None),
             vector_store=getattr(ctx, "vector_store", None),
+            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
         )
 
 
@@ -207,6 +209,7 @@ class TaskRuntimeCapabilities:
             journal=self.mutation.journal,
             repository=self.mutation.repository,
             relational_search=self.mutation.relational_search,
+            embedding_maintenance=self.memory.embedding_maintenance,
             task_queue=self.mutation.task_queue,
             curation=self.mutation.curation,
             mutation_history=self.mutation.mutation_history,
@@ -256,6 +259,7 @@ class _TaskRuntimeContextAdapter:
     journal: object | None
     repository: object | None
     relational_search: object | None
+    embedding_maintenance: object | None
     task_queue: object | None
     curation: object | None
     mutation_history: object | None
@@ -306,6 +310,7 @@ _MEMORY_PIPELINE_FIELDS = frozenset(
         "journal",
         "repository",
         "relational_search",
+        "embedding_maintenance",
         "task_queue",
     }
 )
@@ -375,6 +380,7 @@ class ApplicationContext:
     journal: Any = None
     repository: Any = None
     relational_search: Any = None
+    embedding_maintenance: Any = None
     read_cache: Any = None
     task_queue: Any = None
     curation: Any = None

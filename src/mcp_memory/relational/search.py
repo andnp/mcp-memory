@@ -1,38 +1,40 @@
 from __future__ import annotations
 
-import logging
 import inspect
+import logging
 import sqlite3
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypedDict, cast
 
+from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.search.adaptive_limit import resolve_adaptive_result_limit
+
+from mcp_memory.application.memory_embedding_maintenance import (
+    MemoryEmbeddingMaintenance,
+)
 from mcp_memory.config import Config
-from mcp_memory.embeddings import is_fallback_embedding_model
 from mcp_memory.core.ports.memory import (
     FTS_QUERY_TOKEN_PATTERN,
     MemoryLink,
     MemoryMaintenanceReadPort,
     MemoryReadContext,
     MemoryReadPort,
-    RankedMemoryCandidate,
     MemoryRecord,
+    RankedMemoryCandidate,
 )
-from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.core.search_graph import GraphCandidateExpander, GraphExpansionInfo
-from mcp_memory.core.search_repair import EmbeddingRepairScheduler
 from mcp_memory.core.search_ranking import (
     RankingEngine as PureRankingEngine,
+)
+from mcp_memory.core.search_ranking import (
     RankingSignals,
     ScoringWeights,
 )
 from mcp_memory.relational.semantic import RelationalSemanticSearchAdapter
-from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
-from searchkernel.ports import EmbeddingBatchProvider
-from searchkernel.search.adaptive_limit import resolve_adaptive_result_limit
-
+from mcp_memory.utils.db import DatabaseManager
 
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
@@ -47,10 +49,8 @@ GRAPH_EXPANSION_DISCOUNTS = {
     "AMENDS": 0.6,
     "CONTRADICTS": 0.35,
 }
-INLINE_EMBEDDING_REPAIR_LIMIT = 64
 BACKGROUND_REPAIR_POLL_INTERVAL_SECONDS = 0.05
-DEFAULT_BACKGROUND_REPAIR_BATCH_SIZE = 32
-DEFAULT_BACKGROUND_REPAIR_MAX_BATCHES_PER_RUN = 8
+INLINE_EMBEDDING_REPAIR_LIMIT = 64
 
 
 class _SemanticScoreKwargs(TypedDict, total=False):
@@ -205,30 +205,27 @@ class RelationalMemorySearchService:
         work_items = None,
         embedding_repair_queue = None,
         background_repair_wait_seconds: float = 0.0,
+        embedding_maintenance: MemoryEmbeddingMaintenance | None = None,
     ) -> None:
         self._repository = repository
         self._config = config
         self._embedder = embedder
         self._vector_store = vector_store
         self._db_manager = db_manager
-        self._task_queue = task_queue
-        self._work_items = work_items
-        self._embedding_repair_queue = embedding_repair_queue
-        self._background_repair_wait_seconds = max(background_repair_wait_seconds, 0.0)
+        self._embedding_maintenance = embedding_maintenance or MemoryEmbeddingMaintenance(
+            repository,
+            config,
+            embedder=embedder,
+            vector_store=vector_store,
+            db_manager=db_manager,
+            task_queue=task_queue,
+            work_items=work_items,
+            embedding_repair_queue=embedding_repair_queue,
+            background_repair_wait_seconds=background_repair_wait_seconds,
+        )
         self._semantic_adapter = (
             RelationalSemanticSearchAdapter(embedder, vector_store)
             if embedder is not None and vector_store is not None
-            else None
-        )
-        self._repair_scheduler = (
-            EmbeddingRepairScheduler(
-                config=config,
-                task_queue=task_queue,
-                work_items=work_items,
-                embedding_repair_queue=embedding_repair_queue,
-                wait_seconds=self._background_repair_wait_seconds,
-            )
-            if task_queue is not None and (embedding_repair_queue is not None or work_items is not None)
             else None
         )
         self._graph_expander = GraphCandidateExpander(
@@ -238,89 +235,29 @@ class RelationalMemorySearchService:
         self._health = SearchHealthStatus(
             semantic_enabled=semantic_enabled,
             available=semantic_enabled,
-            background_repair_enabled=background_repair_wait_seconds > 0 and task_queue is not None and (embedding_repair_queue is not None or work_items is not None),
-            background_repair_wait_seconds=max(background_repair_wait_seconds, 0.0),
+            background_repair_enabled=self._embedding_maintenance.get_health().background_repair_enabled,
+            background_repair_wait_seconds=self._embedding_maintenance.get_health().background_repair_wait_seconds,
         )
 
+    def _sync_embedding_maintenance_health(self) -> None:
+        maintenance_health = self._embedding_maintenance.get_health()
+        for field_name in SearchHealthStatus.__dataclass_fields__:
+            if hasattr(maintenance_health, field_name):
+                setattr(self._health, field_name, getattr(maintenance_health, field_name))
+
     def get_health(self) -> SearchHealthStatus:
-        self._refresh_background_repair_health_snapshot()
+        self._sync_embedding_maintenance_health()
         return replace(self._health)
 
     def run_startup_health_check(self) -> SearchHealthStatus:
-        check_timestamp = _utc_now()
-        self._health.last_integrity_check_at = check_timestamp
-        self._health.integrity_check_error = None
-        if not self._health.semantic_enabled:
-            self._health.available = False
-            self._health.degraded = False
-            return self.get_health()
-
-        try:
-            self._run_integrity_check_once()
-            self._mark_semantic_recovered()
-            self._health.last_recovery_at = check_timestamp
-        except (OSError, sqlite3.Error, ValueError) as exc:
-            recovered = self._retry_after_reopen(
-                "startup health check",
-                lambda: self._run_integrity_check_once() or True,
-            )
-            if not recovered:
-                self._mark_semantic_failure(exc, fallback=False)
-                self._health.integrity_check_error = str(exc)
+        self._embedding_maintenance.run_startup_health_check()
+        self._sync_embedding_maintenance_health()
         return self.get_health()
 
     def rebuild_semantic_index(self, *, limit: int = 10_000) -> dict[str, int | bool | str | None]:
-        if not self._health.semantic_enabled or self._embedder is None or self._vector_store is None:
-            return {
-                "semantic_enabled": False,
-                "rebuilt": False,
-                "records_indexed": 0,
-                "reason": "semantic_search_disabled",
-            }
-
-        blocked_reason = self._blocked_embedding_persistence_reason()
-        if blocked_reason is not None:
-            self._mark_semantic_failure(ValueError(blocked_reason), fallback=True)
-            return {
-                "semantic_enabled": True,
-                "rebuilt": False,
-                "records_indexed": 0,
-                "reason": "fallback_embedding_persistence_blocked",
-            }
-
-        candidates = [
-            record
-            for record in self._repository.list_memories(limit=limit)
-            if record.status != "archived"
-        ]
-        if self._db_manager is None:
-            return {
-                "semantic_enabled": True,
-                "rebuilt": False,
-                "records_indexed": 0,
-                "reason": "db_manager_unavailable",
-            }
-
-        conn = self._db_manager.get_connection()
-        with conn:
-            conn.execute(
-                "DELETE FROM embeddings WHERE source_kind = ? AND model_name = ?",
-                ("memory", self._embedder.model_name),
-            )
-        self._ensure_memory_embeddings(candidates)
-        self._health.rebuild_count += 1
-        self._health.last_recovery_at = _utc_now()
-        self._health.last_error = None
-        self._health.last_failure_at = None
-        self._health.available = True
-        self._health.degraded = False
-        self._health.integrity_check_error = None
-        return {
-            "semantic_enabled": True,
-            "rebuilt": True,
-            "records_indexed": len(candidates),
-            "reason": None,
-        }
+        result = self._embedding_maintenance.rebuild_semantic_index(limit=limit)
+        self._sync_embedding_maintenance_health()
+        return result
 
     def search_memories(
         self,
@@ -603,23 +540,7 @@ class RelationalMemorySearchService:
         return self._repository.resolve_memory_id(memory_id)
 
     def _blocked_embedding_persistence_reason(self) -> str | None:
-        if self._embedder is None or self._vector_store is None:
-            return None
-        if not is_fallback_embedding_model(self._embedder.model_name):
-            return None
-
-        get_write_policy_state = getattr(self._vector_store, "get_write_policy_state", None)
-        if not callable(get_write_policy_state):
-            return None
-
-        policy_state = get_write_policy_state()
-        if getattr(policy_state, "fallback_persistence_policy", None) != "blocked":
-            return None
-
-        return (
-            "Fallback/hash embeddings cannot be persisted in Postgres/shared mode; "
-            f"blocked model_name {self._embedder.model_name!r}"
-        )
+        return self._embedding_maintenance.blocked_embedding_persistence_reason()
 
     def _get_query_embedding(self, query: str) -> list[float]:
         adapter = self._get_semantic_adapter()
@@ -763,20 +684,6 @@ class RelationalMemorySearchService:
             vector_search_diagnostics=vector_search_diagnostics,
         )
 
-    def _run_integrity_check_once(self) -> None:
-        if self._db_manager is None or self._embedder is None or self._vector_store is None:
-            return
-        connection = self._db_manager.get_connection()
-        quick_check = connection.execute("PRAGMA quick_check").fetchone()
-        if quick_check is not None and str(quick_check[0]).lower() != "ok":
-            raise sqlite3.DatabaseError(f"quick_check_failed:{quick_check[0]}")
-        self._vector_store.search(
-            source_kind="memory",
-            model_name=self._embedder.model_name,
-            query_embedding=[0.0],
-            limit=1,
-        )
-
     def _retry_after_reopen(self, reason: str, operation):
         if self._db_manager is None:
             return None
@@ -791,20 +698,12 @@ class RelationalMemorySearchService:
         return result
 
     def _mark_semantic_failure(self, exc: Exception, *, fallback: bool) -> None:
-        self._health.available = False
-        self._health.degraded = fallback or self._health.degraded
-        self._health.last_error = str(exc)
-        self._health.last_failure_at = _utc_now()
-        if fallback:
-            self._health.fallback_count += 1
+        self._embedding_maintenance.mark_semantic_failure(exc, fallback=fallback)
+        self._sync_embedding_maintenance_health()
 
     def _mark_semantic_recovered(self) -> None:
-        self._health.available = self._health.semantic_enabled
-        self._health.degraded = False
-        self._health.last_error = None
-        self._health.last_failure_at = None
-        self._health.last_recovery_at = _utc_now()
-        self._health.integrity_check_error = None
+        self._embedding_maintenance.mark_semantic_recovered()
+        self._sync_embedding_maintenance_health()
 
     def _semantic_candidate_ids(
         self,
@@ -1062,153 +961,32 @@ class RelationalMemorySearchService:
         *,
         semantic_timing_ms: dict[str, float] | None = None,
     ) -> None:
-        blocked_reason = self._blocked_embedding_persistence_reason()
-        if blocked_reason is not None:
-            raise ValueError(blocked_reason)
+        self._embedding_maintenance.ensure_searchable_memory_embeddings(
+            candidates,
+            semantic_timing_ms=semantic_timing_ms,
+        )
+        self._sync_embedding_maintenance_health()
 
-        stale_check_started = time.perf_counter()
-        stale_or_missing = self._stale_or_missing_embedding_candidates(candidates)
-        _record_timing_ms(semantic_timing_ms, "semantic_embedding_stale_check", stale_check_started)
-        if not stale_or_missing:
-            return
-
-        if self._background_repair_wait_seconds > 0 and self._task_queue is not None and (self._embedding_repair_queue is not None or self._work_items is not None):
-            refresh_started = time.perf_counter()
-            self._queue_memory_embedding_repairs(stale_or_missing)
-            self._wait_for_background_repairs(stale_or_missing)
-            _record_timing_ms(semantic_timing_ms, "semantic_embedding_refresh", refresh_started)
-            return
-
-        refresh_started = time.perf_counter()
-        self._ensure_memory_embeddings(stale_or_missing)
-        _record_timing_ms(semantic_timing_ms, "semantic_embedding_refresh", refresh_started)
-
-    def _stale_or_missing_embedding_candidates(self, candidates: list[RelationalMemoryRecord]) -> list[RelationalMemoryRecord]:
-        assert self._embedder is not None
-        assert self._vector_store is not None
-
-        get_memory_updated_at_map = getattr(self._vector_store, "get_memory_updated_at_map", None)
-        memory_updated_at_by_id: dict[str, str | None] | None = None
-        if callable(get_memory_updated_at_map):
-            memory_updated_at_by_id = cast(dict[str, str | None], get_memory_updated_at_map(
-                source_kind="memory",
-                model_name=self._embedder.model_name,
-                source_ids=[candidate.id for candidate in candidates],
-            ))
-        get_updated_at_map = getattr(self._vector_store, "get_updated_at_map", None)
-        updated_at_by_id: dict[str, float] | None = None
-        if callable(get_updated_at_map):
-            updated_at_by_id = cast(dict[str, float], get_updated_at_map(
-                source_kind="memory",
-                model_name=self._embedder.model_name,
-                source_ids=[candidate.id for candidate in candidates],
-            ))
-
-        stale_or_missing: list[RelationalMemoryRecord] = []
-        for candidate in candidates:
-            if memory_updated_at_by_id is not None:
-                if memory_updated_at_by_id.get(candidate.id) == candidate.updated_at:
-                    continue
-                if memory_updated_at_by_id.get(candidate.id) is not None:
-                    stale_or_missing.append(candidate)
-                    continue
-            existing_updated_at = (
-                updated_at_by_id.get(candidate.id)
-                if updated_at_by_id is not None
-                else None
-            )
-            if updated_at_by_id is None:
-                existing = self._vector_store.get(
-                    source_kind="memory",
-                    source_id=candidate.id,
-                    model_name=self._embedder.model_name,
-                )
-                existing_updated_at = None if existing is None else cast(Any, existing).updated_at
-            if existing_updated_at is None or _embedding_is_stale(existing_updated_at, candidate.updated_at):
-                stale_or_missing.append(candidate)
-
-        return stale_or_missing
+    def _stale_or_missing_embedding_candidates(
+        self,
+        candidates: list[RelationalMemoryRecord],
+    ) -> list[RelationalMemoryRecord]:
+        return self._embedding_maintenance.stale_or_missing_embedding_candidates(candidates)
 
     def _ensure_memory_embeddings(self, stale_or_missing: list[RelationalMemoryRecord]) -> None:
-        assert self._embedder is not None
-        assert self._vector_store is not None
-
-        if not stale_or_missing:
-            return
-
-        if len(stale_or_missing) > INLINE_EMBEDDING_REPAIR_LIMIT:
-            prioritized_candidates = _prioritize_embedding_repairs(stale_or_missing)
-            logger.info(
-                "Semantic search deferred %s embedding refreshes; repairing the freshest %s inline",
-                len(stale_or_missing) - INLINE_EMBEDDING_REPAIR_LIMIT,
-                INLINE_EMBEDDING_REPAIR_LIMIT,
-            )
-            stale_or_missing = prioritized_candidates[:INLINE_EMBEDDING_REPAIR_LIMIT]
-
-        embed_and_upsert(
-            [
-                EmbeddingInput(
-                    source_kind="memory",
-                    source_id=candidate.id,
-                    workspace_id=(
-                        candidate.workspace_ids[0]
-                        if candidate.workspace_ids
-                        else None
-                    ),
-                    text=_memory_embedding_text(candidate),
-                    source_updated_at=candidate.updated_at,
-                )
-                for candidate in stale_or_missing
-            ],
-            provider=self._embedder,
-            sink=self._vector_store,
-            batch_size=len(stale_or_missing),
-        )
+        self._embedding_maintenance._ensure_memory_embeddings(stale_or_missing)
 
     def _queue_memory_embedding_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
-        if self._repair_scheduler is None or self._embedder is None:
-            return
-        self._repair_scheduler.schedule(candidates, self._embedder.model_name)
+        self._embedding_maintenance.queue_memory_embedding_repairs(candidates)
 
     def _wait_for_background_repairs(self, candidates: list[RelationalMemoryRecord]) -> None:
-        if self._repair_scheduler is None:
-            return
-        result = self._repair_scheduler.wait_for(candidates, self._stale_or_missing_embedding_candidates)
-        self._health.repair_wait_count += 1
-        self._health.last_repair_wait_seconds = result.elapsed_seconds
-        self._health.last_repair_candidate_count = len(candidates)
-        self._health.last_repair_pending_count = result.pending_count
-        if result.pending_count:
-            self._health.partial_semantic_search_count += 1
-            self._health.last_partial_semantic_at = _utc_now()
-        self._refresh_background_repair_health_snapshot()
+        self._embedding_maintenance.wait_for_background_repairs(
+            candidates,
+        )
+        self._sync_embedding_maintenance_health()
 
     def _refresh_background_repair_health_snapshot(self) -> None:
-        if not self._health.semantic_enabled or self._repair_scheduler is None:
-            self._health.queued_repair_backlog_count = 0
-            self._health.running_repair_count = 0
-            self._health.oldest_queued_repair_age_seconds = None
-            return
-        snapshot = self._repair_scheduler.backlog_snapshot()
-        self._health.queued_repair_backlog_count = snapshot.queued_count
-        self._health.running_repair_count = snapshot.running_count
-        self._health.oldest_queued_repair_age_seconds = snapshot.oldest_queued_age_seconds
-
-
-
-def _memory_embedding_text(record: RelationalMemoryRecord) -> str:
-    tag_text = ", ".join(record.tags)
-    return "\n".join(
-        part
-        for part in [
-            record.title,
-            record.summary or "",
-            record.content,
-            f"tags: {tag_text}" if tag_text else "",
-            f"type: {record.type}",
-        ]
-        if part
-    )
+        self._sync_embedding_maintenance_health()
 
 
 def _search_result_summary(record: RelationalMemoryRecord):
@@ -1308,27 +1086,15 @@ def _decayed_access_score_for_half_life(access_score: float, last_accessed_at: s
         return max(access_score, 0.0)
 
     if accessed_at.tzinfo is None:
-        accessed_at = accessed_at.replace(tzinfo=timezone.utc)
+        accessed_at = accessed_at.replace(tzinfo=UTC)
 
-    elapsed = datetime.now(timezone.utc) - accessed_at
+    elapsed = datetime.now(UTC) - accessed_at
     elapsed_days = max(elapsed / timedelta(days=1), 0.0)
     return access_score * (0.5 ** (elapsed_days / half_life_days))
 
 
-def _embedding_is_stale(embedding_updated_at: float, memory_updated_at: str | None) -> bool:
-    if not memory_updated_at:
-        return False
-    try:
-        updated_at = datetime.fromisoformat(memory_updated_at)
-    except ValueError:
-        return False
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-    return embedding_updated_at + 1e-6 < updated_at.timestamp()
-
-
 def _utc_now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _rank_semantic_candidate_ids(
@@ -1363,17 +1129,6 @@ def _count_links_by_type(links: Sequence[MemoryLink]) -> dict[str, int]:
     return counts
 
 
-def _prioritize_embedding_repairs(candidates: Sequence[RelationalMemoryRecord]) -> list[RelationalMemoryRecord]:
-    def _repair_priority(record: RelationalMemoryRecord) -> tuple[float, float, str]:
-        return (
-            _iso_timestamp_to_sortable_float(record.updated_at),
-            _iso_timestamp_to_sortable_float(record.created_at),
-            record.id,
-        )
-
-    return sorted(candidates, key=_repair_priority, reverse=True)
-
-
 def _iso_timestamp_to_sortable_float(value: str | None) -> float:
     if not value:
         return float("-inf")
@@ -1382,7 +1137,7 @@ def _iso_timestamp_to_sortable_float(value: str | None) -> float:
     except ValueError:
         return float("-inf")
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp()
 
 

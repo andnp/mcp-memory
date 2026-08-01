@@ -350,6 +350,15 @@ class SQLiteVectorStore:
             )
         return scored[:limit]
 
+    def delete_by_model(self, *, source_kind: str, model_name: str) -> int:
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            "DELETE FROM embeddings WHERE source_kind = ? AND model_name = ?",
+            (source_kind, model_name),
+        )
+        conn.commit()
+        return cursor.rowcount
+
     def delete(
         self,
         *,

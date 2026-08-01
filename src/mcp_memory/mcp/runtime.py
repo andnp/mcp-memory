@@ -180,6 +180,7 @@ def create_runtime_composition(
         journal=storage.journal,
         repository=storage.repository,
         relational_search=storage.relational_search,
+        embedding_maintenance=storage.embedding_maintenance,
         read_cache=storage.read_cache,
         task_queue=storage.task_queue,
         curation=storage.curation,

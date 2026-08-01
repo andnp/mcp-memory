@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 
 import pytest
 
+from mcp_memory.application.memory_embedding_maintenance import (
+    MemoryEmbeddingMaintenance,
+)
+from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
-from mcp_memory.management.health_reporting import build_search_health
 from mcp_memory.core.task_handlers.constants import EMBEDDING_REPAIR_TASK_NAME
 from mcp_memory.core.task_handlers.embedding_repair import handle_embedding_repair_task
 from mcp_memory.core.task_worker import RuntimeTaskWorker
-from mcp_memory.core.tasks import SQLiteTaskQueue
+from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
+from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import EmbeddingRecord, SQLiteVectorStore
+from mcp_memory.management.health_reporting import build_search_health
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.work_item_store import SQLiteWorkItemRepository
-
 
 pytestmark = pytest.mark.small
 
@@ -157,7 +159,7 @@ async def test_search_can_wait_for_queue_backed_embedding_repairs(db_manager) ->
     vector_store = SQLiteVectorStore(db_manager)
     service = RelationalMemorySearchService(
         repository,
-        config=__import__("mcp_memory.config", fromlist=["Config"]).Config(),
+        config=Config(),
         embedder=_QueueAwareFakeEmbedder(),
         vector_store=vector_store,
         db_manager=db_manager,
@@ -376,6 +378,44 @@ def test_versioned_embedding_repair_rejects_a_stale_write(db_manager) -> None:
     assert stored is not None
     assert stored.embedding == [0.0, 1.0]
     assert stored.memory_updated_at == newer.updated_at
+
+
+def test_memory_embedding_maintenance_rebuilds_without_database_manager(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    vector_store = SQLiteVectorStore(db_manager)
+    embedder = _QueueAwareFakeEmbedder()
+    record = repository.create_memory(
+        title="Rebuild policy",
+        content="Rebuild the current semantic index.",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+    assert vector_store.upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id="workspace-alpha",
+        model_name=embedder.model_name,
+        embedding=[9.0, 9.0],
+        source_updated_at=record.updated_at,
+    ) is True
+
+    maintenance = MemoryEmbeddingMaintenance(
+        repository,
+        __import__("mcp_memory.config", fromlist=["Config"]).Config(),
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+
+    result = maintenance.rebuild_semantic_index()
+    stored = vector_store.get(
+        source_kind="memory",
+        source_id=record.id,
+        model_name=embedder.model_name,
+    )
+
+    assert result["rebuilt"] is True
+    assert stored is not None
+    assert stored.embedding != [9.0, 9.0]
 
 
 @pytest.mark.asyncio

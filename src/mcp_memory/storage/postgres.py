@@ -15,6 +15,7 @@ from mcp_memory.storage.postgres_task_queue import PostgresTaskQueue
 from mcp_memory.storage.postgres_vector_store import PostgresVectorStore
 from mcp_memory.storage.postgres_work_item_store import PostgresWorkItemRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
+from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
 from mcp_memory.storage.bootstrap import StorageBootstrapState
 from mcp_memory.storage.postgres_connection import (
     PostgresConnectionManager,
@@ -171,6 +172,16 @@ def build_postgres_runtime_components(
         connection_manager,
         event_repository=embedding_integrity_events,
     )
+    embedding_maintenance = MemoryEmbeddingMaintenance(
+        repository,
+        spec.config,
+        embedder=embedder,
+        vector_store=vector_store,
+        db_manager=connection_manager,
+        task_queue=task_queue if enable_background_repair_queue else None,
+        work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
+    )
     relational_search = RelationalMemorySearchService(
         repository,
         spec.config,
@@ -179,6 +190,7 @@ def build_postgres_runtime_components(
         task_queue=task_queue if enable_background_repair_queue else None,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
+        embedding_maintenance=embedding_maintenance,
     )
     read_cache = None
     if spec.config.storage.cache.enabled and spec.config.storage.cache.mode in {"readonly", "writeback"}:
@@ -195,6 +207,7 @@ def build_postgres_runtime_components(
         journal=journal,
         repository=repository,
         relational_search=relational_search,
+        embedding_maintenance=embedding_maintenance,
         read_cache=read_cache,
         task_queue=task_queue,
         provider_usage=provider_usage,

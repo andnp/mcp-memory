@@ -676,6 +676,19 @@ class PostgresVectorStore:
             )
         return scored[:limit]
 
+    def delete_by_model(self, *, source_kind: str, model_name: str) -> int:
+        if self._sessions is None:
+            return 0
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM embeddings WHERE source_kind = %s AND model_name = %s",
+                    (source_kind, model_name),
+                )
+                deleted = int(getattr(cursor, "rowcount", 0) or 0)
+            connection.commit()
+        return deleted
+
     def delete(
         self,
         *,

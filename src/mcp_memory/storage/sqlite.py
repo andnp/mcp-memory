@@ -2,23 +2,26 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp_memory.application.memory_embedding_maintenance import (
+    MemoryEmbeddingMaintenance,
+)
 from mcp_memory.core.journal import System1Journal
+from mcp_memory.curation_action_store import SQLiteCurationActionStore
+from mcp_memory.curation_store import SQLiteCurationStore
 from mcp_memory.embedding_integrity_event_store import EmbeddingIntegrityEventRepository
-from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.embeddings import SQLiteVectorStore
-from mcp_memory.provider_usage_store import ProviderUsageRepository
+from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
 from mcp_memory.provider_policy_event_store import ProviderPolicyEventRepository
+from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.relational.repository import SQLiteRelationalMemoryRepository
 from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.runtime_log_store import RuntimeLogRepository
-from mcp_memory.curation_store import SQLiteCurationStore
-from mcp_memory.curation_action_store import SQLiteCurationActionStore
-from mcp_memory.mutation_history_store import SQLiteMutationHistoryStore
+from mcp_memory.storage.sqlite_task_queue import SQLiteTaskQueue
+from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 from mcp_memory.storage.types import StorageBackendResources, StorageBootstrapSpec
 from mcp_memory.task_execution_store import TaskExecutionAttemptRepository
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.storage.sqlite_work_item_store import SQLiteWorkItemRepository
 
 
 def build_sqlite_runtime_components(
@@ -41,7 +44,7 @@ def build_sqlite_runtime_components(
     task_execution_attempts = TaskExecutionAttemptRepository(db_manager, workspace_id=spec.workspace_id)
     work_items = SQLiteWorkItemRepository(db_manager)
     embedding_repair_queue = SQLiteEmbeddingRepairQueue(db_manager)
-    relational_search = RelationalMemorySearchService(
+    embedding_maintenance = MemoryEmbeddingMaintenance(
         repository,
         spec.config,
         embedder=embedder,
@@ -52,13 +55,26 @@ def build_sqlite_runtime_components(
         embedding_repair_queue=embedding_repair_queue,
         background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
     )
-    relational_search.run_startup_health_check()
+    relational_search = RelationalMemorySearchService(
+        repository,
+        spec.config,
+        embedder=embedder,
+        vector_store=vector_store,
+        db_manager=db_manager,
+        task_queue=task_queue,
+        work_items=work_items,
+        embedding_repair_queue=embedding_repair_queue,
+        embedding_maintenance=embedding_maintenance,
+        background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
+    )
+    embedding_maintenance.run_startup_health_check()
     return StorageBackendResources(
         backend="sqlite",
         db_manager=db_manager,
         journal=journal,
         repository=repository,
         relational_search=relational_search,
+        embedding_maintenance=embedding_maintenance,
         read_cache=None,
         task_queue=task_queue,
         provider_usage=provider_usage,

@@ -13,6 +13,7 @@ from time import perf_counter
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
 from mcp_memory.core.curation_identity import link_token, record_token
@@ -360,6 +361,11 @@ class ManagementService:
         self._embedder = cast(Any, memory.embedder)
         self._vector_store = cast(Any, memory.vector_store)
         self._relational_search = cast(Any, memory.relational_search)
+        self._embedding_maintenance = cast(Any, (
+            memory.embedding_maintenance
+            or getattr(self._relational_search, "_embedding_maintenance", None)
+            or MemoryEmbeddingMaintenance.from_context(ctx)
+        ))
         self._retrieval = (
             build_memory_retrieval_facade(
                 self._repository,
@@ -588,9 +594,9 @@ class ManagementService:
         )
 
     def repair_search_index(self) -> dict[str, int | bool | str | None]:
-        if self._relational_search is None:
+        if self._embedding_maintenance is None:
             raise ValueError("search_not_initialized")
-        return self._relational_search.rebuild_semantic_index()
+        return self._embedding_maintenance.rebuild_semantic_index()
 
     def enqueue_background_task(
         self,
