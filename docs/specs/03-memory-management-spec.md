@@ -5,7 +5,7 @@
 ## 1. Relational Schema
 
 ### 1.1 Core Tables
-- **`memories`**: `id (UUID PRIMARY KEY)`, `title (TEXT)`, `content (TEXT)`, `summary (TEXT)`, `type (VARCHAR)`, `status (VARCHAR: active, stale, degraded, archived)`, `access_score (REAL)`, `last_accessed_at (DATETIME)`, `last_surfaced_at (DATETIME)`, `created_at (DATETIME)`, `updated_at (DATETIME)`, `metadata (JSON)`.
+- **`memories`**: `id (UUID PRIMARY KEY)`, `memory_ref (unique positive integer)`, `title (TEXT)`, `content (TEXT)`, `summary (TEXT)`, `type (VARCHAR)`, `status (VARCHAR: active, stale, degraded, archived)`, `access_score (REAL)`, `last_accessed_at (DATETIME)`, `last_surfaced_at (DATETIME)`, `created_at (DATETIME)`, `updated_at (DATETIME)`, `metadata (JSON)`.
     - **Types**: `journal`, `plan`, `fact`, `observation`, `reflection`.
     - **Current metadata conventions** may include ingest lineage (`source_entry_ids`, `appended_entry_ids`, `ingest_task_id`), merge lineage (`merged_source_ids`), and split lineage (`split_group_id`, `split_from_memory_id`, `split_part_index`, `split_part_count`, `split_child_memory_ids`, `split_sibling_memory_ids`).
 - **`memory_workspaces`**: `memory_id (UUID)`, `workspace_id (VARCHAR)`. (Many-to-many junction for "Soft Projects").
@@ -18,13 +18,16 @@
 1. **`search_memories`**:
     - **Inputs**: `query`, `limit`, with optional `memory_type` / `status`.
     - **Workspace Context**: caller workspace is runtime context supplied by the client/proxy layer, not an agent-controlled search argument.
-    - **Outputs**: Returns compact summary-first matches by default: `memory_id`, title, summary, type, status, and tags. Ranking scores, workspace IDs, and diagnostics are debug/audit fields, not routine agent context.
+    - **Outputs**: Returns compact summary-first matches by default: `memory_ref`, title, and summary. `memory_ref` is rendered as `mem-<number>` for agents; canonical UUIDs remain available in debug/audit fields.
     - **Telemetry**: Updates `last_surfaced_at` for all returned results in one batch write.
 2. **`read_memory`**:
-    - **Inputs**: `memory_id`.
+    - **Inputs**: `memory_ref` or a legacy UUID.
     - **Outputs**: Returns full record content plus compact `related_counts` by default. Relationship edges, superseded breadcrumbs, and metadata/workspace routing fields are explicit opt-ins for callers that need traceability.
     - **Side Effect**: Decays `access_score` and adds `+1.0` (Working Memory boost).
-3. **`record_thought`**: Quickly stashes raw context into System 1.
+3. **`read_memory_records`**:
+    - **Inputs**: Up to 20 `memory_ref` values or legacy UUIDs.
+    - **Outputs**: Returns all found records and a separate missing-reference list without aborting the batch.
+4. **`record_thought`**: Quickly stashes raw context into System 1.
 
 ## 3. Search Ranking & Scoring Pipeline (The 10-Stage Gauntlet)
 

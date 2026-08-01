@@ -44,6 +44,7 @@ That product goal shapes the maintenance architecture:
 - **Typed Relational Links**: Memory records can carry explicit typed relationships such as `SUPERSEDES`, `EXTENDS`, and `CONTRADICTS`.
 - **Categorized Memories**: Built-in support for `journal`, `plan`, `fact`, `observation`, and `reflection` types.
 - **Relational Memory Foundation**: UUID-backed relational memory records with workspace IDs, tags, and typed links.
+- **Stable Agent References**: Agent-facing search and read payloads use persisted `mem-<number>` references, while canonical UUIDs remain available for debugging and internal lineage.
 - **Local Semantic Search**: Fully local embeddings via `sentence-transformers` enrich search and ingest without any external AI provider.
 - **Shared Global Storage**: All memories live in one shared XDG data directory, with workspace identity attached to thoughts, tasks, and memories.
 - **Shared-Mode Local Cache**: In Postgres shared mode, an optional local SQLite sidecar can serve fresh exact search hits, validated read hits, and degraded cached search/read fallbacks without becoming a second source of truth.
@@ -110,7 +111,10 @@ The following tools are exposed via the MCP server:
 ### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the system-1 journal. In shared Postgres `writeback` mode, this can degrade into a durable local outbox queue when the authoritative write times out or connectivity fails.
 - `search_memory_records`: Search relational memory records with compact summary-first results and staged ranking over weighted keyword + optional semantic retrieval. Debug mode exposes score/workspace/ranking details.
-- `read_memory_record`: Read one memory record with compact related-counts by default. Relationships, superseded breadcrumbs, and metadata are explicit opt-ins.
+- `read_memory_record`: Read one memory record by stable reference or legacy UUID with compact related-counts by default. Relationships, superseded breadcrumbs, and metadata are explicit opt-ins.
+- `read_memory_records`: Read up to 20 records by stable references in one call; missing references are reported without aborting the batch.
+
+Agent-facing search results use `memory_ref` values such as `mem-123`. These references are persisted with each memory and are stable across restarts and migrations. Read tools accept both stable references and legacy UUIDs; UUIDs remain canonical in storage, telemetry, lineage, and debug/admin payloads.
 
 Everything else is intentionally kept out of the public MCP surface. Admin, migration, browsing, and operational views belong in the daemon management surface or CLI, not in the assistant-facing protocol.
 
