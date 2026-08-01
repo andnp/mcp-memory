@@ -328,7 +328,7 @@ class PostgresCurationActionStore:
             return {}
         cursor.execute(
             "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, "
-            "last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(%s::text[])",
+            "last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY(%s::text[])",
             (list(memory_ids),),
         )
         return {str(row[0]): _hydrate_record(cursor, row) for row in cursor.fetchall()}
@@ -887,7 +887,7 @@ def _link_token_key(key: str) -> tuple[str, str, str] | None:
 def _select_memory_row(cursor: CursorLike, memory_id: str) -> tuple[object, ...] | None:
     cursor.execute(
         "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, "
-        "last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = %s",
+        "last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = %s",
         (memory_id,),
     )
     return cursor.fetchone()
@@ -923,6 +923,7 @@ def _hydrate_record(cursor: CursorLike, row: tuple[object, ...]) -> MemoryRecord
         last_accessed_at=None if row[10] is None else str(row[10]),
         last_surfaced_at=None if row[11] is None else str(row[11]),
         metadata={str(key): value for key, value in metadata.items()},
+        memory_ref=int(cast(Any, row[13])) if row[13] is not None else None,
         workspace_ids=[str(item[0]) for item in workspace_rows],
         tags=[str(item[0]) for item in tag_rows],
     )

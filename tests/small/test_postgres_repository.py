@@ -46,6 +46,7 @@ class FakePostgresState:
     memory_search_documents: set[str] = field(default_factory=set)
     query_log: list[str] = field(default_factory=list)
     next_tag_id: int = 1
+    next_memory_ref: int = 1
 
 
 class FakeCursor:
@@ -67,19 +68,26 @@ class FakeCursor:
         if normalized.startswith("INSERT INTO memories ("):
             self._insert_memory(arguments)
         elif normalized.startswith(
-            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags FROM memories LEFT JOIN ( SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids FROM memory_workspaces GROUP BY memory_id ) workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id ) tag_agg ON tag_agg.memory_id = memories.id LEFT JOIN ( SELECT target_id AS memory_id, COUNT(*) AS incoming_links_count FROM links GROUP BY target_id ) incoming_counts ON incoming_counts.memory_id = memories.id WHERE"
-        ):
+            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, memories.memory_ref,"
+        ) and "incoming_counts" in normalized:
             self._select_maintenance_candidates(normalized, arguments)
         elif normalized.startswith(
-            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags FROM memories LEFT JOIN ( SELECT memory_id, array_agg(DISTINCT workspace_id ORDER BY workspace_id) AS workspace_ids FROM memory_workspaces GROUP BY memory_id ) workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id GROUP BY memory_tags.memory_id ) tag_agg ON tag_agg.memory_id = memories.id WHERE"
+            "SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, memories.memory_ref,"
         ):
             self._select_searchable_memories(normalized, arguments)
         elif normalized.startswith(
-            "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY("
+            "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY("
         ):
             self._select_memories_by_ids(arguments)
         elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,") and "FROM memories WHERE id = %s" in normalized:
             self._select_memory(arguments)
+        elif normalized == "SELECT id FROM memories WHERE memory_ref = %s":
+            memory_ref = self._as_int(arguments[0])
+            memory = next(
+                (memory for memory in self._state.memories.values() if memory["memory_ref"] == memory_ref),
+                None,
+            )
+            self._result = [] if memory is None else [(memory["id"],)]
         elif normalized.startswith("UPDATE memories SET"):
             self._update_memory(normalized, arguments)
         elif normalized == "DELETE FROM memory_workspaces WHERE memory_id = %s":
@@ -143,6 +151,8 @@ class FakeCursor:
             self._select_memories(normalized, arguments)
         elif normalized.startswith("SELECT DISTINCT memories.id,"):
             self._search_keyword_memory_ids(normalized, arguments)
+        elif normalized.startswith("WITH input_ids AS ("):
+            self._select_ranking_candidates(normalized, arguments)
         elif normalized.startswith(
             "WITH input_ids AS ( SELECT memory_id, ordinality FROM unnest(%s::text[]) WITH ORDINALITY AS requested(memory_id, ordinality) ), workspace_agg AS ( SELECT memory_workspaces.memory_id, array_agg(DISTINCT memory_workspaces.workspace_id ORDER BY memory_workspaces.workspace_id) AS workspace_ids FROM memory_workspaces JOIN input_ids ON input_ids.memory_id = memory_workspaces.memory_id GROUP BY memory_workspaces.memory_id ), tag_agg AS ( SELECT memory_tags.memory_id, array_agg(DISTINCT tags.name ORDER BY tags.name) AS tags FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id JOIN input_ids ON input_ids.memory_id = memory_tags.memory_id GROUP BY memory_tags.memory_id ), link_counts AS ( SELECT links.target_id AS memory_id, COUNT(*) AS incoming_links_count, MAX(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS has_incoming_supersedes, SUM(CASE WHEN links.type = 'DEPENDS_ON' THEN 1 ELSE 0 END) AS incoming_depends_on_count, SUM(CASE WHEN links.type = 'AMENDS' THEN 1 ELSE 0 END) AS incoming_amends_count, SUM(CASE WHEN links.type = 'CONTRADICTS' THEN 1 ELSE 0 END) AS incoming_contradicts_count, SUM(CASE WHEN links.type = 'SUPERSEDES' THEN 1 ELSE 0 END) AS incoming_supersedes_count FROM links JOIN input_ids ON input_ids.memory_id = links.target_id GROUP BY links.target_id ) SELECT memories.id, memories.title, memories.content, memories.summary, memories.type, memories.status, memories.created_at, memories.updated_at, memories.read_count, memories.access_score, memories.last_accessed_at, memories.last_surfaced_at, memories.metadata, COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids, COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags, COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count, COALESCE(link_counts.has_incoming_supersedes, 0) AS has_incoming_supersedes, COALESCE(link_counts.incoming_depends_on_count, 0) AS incoming_depends_on_count, COALESCE(link_counts.incoming_amends_count, 0) AS incoming_amends_count, COALESCE(link_counts.incoming_contradicts_count, 0) AS incoming_contradicts_count, COALESCE(link_counts.incoming_supersedes_count, 0) AS incoming_supersedes_count FROM input_ids JOIN memories ON memories.id = input_ids.memory_id LEFT JOIN workspace_agg ON workspace_agg.memory_id = memories.id LEFT JOIN tag_agg ON tag_agg.memory_id = memories.id LEFT JOIN link_counts ON link_counts.memory_id = memories.id"
         ):
@@ -210,7 +220,9 @@ class FakeCursor:
             "last_accessed_at": arguments[10],
             "last_surfaced_at": arguments[11],
             "metadata": str(arguments[12]),
+            "memory_ref": self._state.next_memory_ref,
         }
+        self._state.next_memory_ref += 1
         self._result = []
 
     def _select_memory(self, arguments: SqlParams) -> None:
@@ -609,6 +621,7 @@ class FakeCursor:
             memory["last_accessed_at"],
             memory["last_surfaced_at"],
             memory["metadata"],
+            memory["memory_ref"],
         )
 
     def _sorted_memories(self) -> Iterable[dict[str, object]]:
@@ -1277,7 +1290,7 @@ def test_postgres_repository_list_memories_batches_workspace_and_tag_hydration(
     queries = state.query_log[query_start:]
     assert len(queries) == 3
     assert queries[0].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories"
     )
     assert queries[1] == "SELECT memory_id, workspace_id FROM memory_workspaces WHERE memory_id = ANY(%s::text[]) ORDER BY memory_id ASC, workspace_id ASC"
     assert queries[2] == "SELECT memory_tags.memory_id, tags.name FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id WHERE memory_tags.memory_id = ANY(%s::text[]) ORDER BY memory_tags.memory_id ASC, tags.name ASC"
@@ -1581,12 +1594,12 @@ def test_postgres_repository_read_cache_validation_tokens_are_stable_for_unchang
     assert second == first
     assert len(first_queries) == 4
     assert first_queries[0].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(%s::text[])"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY(%s::text[])"
     )
     assert first_queries[1] == "SELECT source_id, target_id, type, context FROM links WHERE source_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
     assert first_queries[2] == "SELECT source_id, target_id, type, context FROM links WHERE target_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
     assert first_queries[3].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories WHERE id = ANY(%s::text[])"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY(%s::text[])"
     )
     assert not any(query == "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" for query in first_queries)
     assert not any(

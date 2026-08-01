@@ -13,6 +13,8 @@ from mcp_memory.core.summaries import build_deterministic_summary
 VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
 VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
 FTS_QUERY_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
+MEMORY_REF_PREFIX = "mem-"
+_MEMORY_REF_PATTERN = re.compile(r"(?:mem-)?([1-9][0-9]*)\Z", re.IGNORECASE)
 _DEFAULT_CANDIDATE_LIMIT = 50
 _DEFAULT_OVERSIZED_CANDIDATE_MIN_CHARS = 3_000
 _DEFAULT_THIN_CANDIDATE_MAX_CHARS = 800
@@ -43,6 +45,20 @@ class MemoryRecord:
     metadata: dict[str, object] = field(default_factory=dict)
     workspace_ids: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    memory_ref: int | None = None
+
+
+def format_memory_ref(memory_ref: int | None) -> str | None:
+    if memory_ref is None:
+        return None
+    if memory_ref < 1:
+        raise ValueError("memory_ref must be a positive integer")
+    return f"{MEMORY_REF_PREFIX}{memory_ref}"
+
+
+def parse_memory_ref(value: str) -> int | None:
+    match = _MEMORY_REF_PATTERN.fullmatch(value.strip())
+    return None if match is None else int(match.group(1))
 
 
 @dataclass

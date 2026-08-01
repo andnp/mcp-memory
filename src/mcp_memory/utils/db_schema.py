@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -72,6 +72,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS memories (
             id TEXT PRIMARY KEY,
+            memory_ref INTEGER,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
             summary TEXT,
@@ -369,6 +370,11 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "memories", "last_accessed_at", "TEXT")
     ensure_column(conn, "memories", "last_surfaced_at", "TEXT")
     ensure_column(conn, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'"
+    )
+    ensure_column(conn, "memories", "memory_ref", "INTEGER")
+    _backfill_memory_refs(conn)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_memory_ref ON memories(memory_ref)"
     )
     ensure_column(conn, "embeddings", "memory_updated_at", "TEXT")
     ensure_column(conn, "hook_conversations", "workspace_id", "TEXT")
@@ -877,3 +883,27 @@ def rebuild_memories_fts(conn: sqlite3.Connection) -> None:
         GROUP BY memories.id, memories.title, memories.summary, memories.content
         """
     )
+
+
+def _backfill_memory_refs(conn: sqlite3.Connection) -> None:
+    missing_rows = conn.execute(
+        """
+        SELECT id
+        FROM memories
+        WHERE memory_ref IS NULL
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+    if not missing_rows:
+        return
+
+    next_ref_row = conn.execute(
+        "SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories"
+    ).fetchone()
+    next_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
+    for row in missing_rows:
+        conn.execute(
+            "UPDATE memories SET memory_ref = ? WHERE id = ?",
+            (next_ref, row[0]),
+        )
+        next_ref += 1

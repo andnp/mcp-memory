@@ -24,6 +24,7 @@ from mcp_memory.core.ports.memory import (
     _QUALITY_SIGNAL_ALIASES,
     build_memory_summary,
     build_read_cache_validation_token,
+    parse_memory_ref,
 )
 from mcp_memory.utils.db import DatabaseManager
 
@@ -75,11 +76,19 @@ class RelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return []
 
         conn = self._db.get_connection()
-        placeholders = ",".join("?" for _ in normalized_ids)
+        placeholders = ",".join("?" for _ in resolved_ids)
         clauses = [f"memories.id IN ({placeholders})"]
-        params: list[object] = [*normalized_ids]
+        params: list[object] = [*resolved_ids]
         if status is not None:
             clauses.append("memories.status = ?")
             params.append(status)
@@ -117,6 +126,7 @@ class RelationalMemoryRepository:
             metadata = json.loads(row["metadata"] or "{}")
             records_by_id[str(row["id"])] = RelationalMemoryRecord(
                 id=row["id"],
+                memory_ref=row["memory_ref"],
                 title=row["title"],
                 content=row["content"],
                 summary=row["summary"],
@@ -132,7 +142,7 @@ class RelationalMemoryRepository:
                 workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
                 tags=_split_csv_values(row["tags_csv"]),
             )
-        return [records_by_id[memory_id] for memory_id in normalized_ids if memory_id in records_by_id]
+        return [records_by_id[memory_id] for memory_id in resolved_ids if memory_id in records_by_id]
 
     def create_memory(
         self,
@@ -172,15 +182,20 @@ class RelationalMemoryRepository:
 
         conn = self._db.get_connection()
         with conn:
+            next_ref_row = conn.execute(
+                "SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories"
+            ).fetchone()
+            memory_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
             conn.execute(
                 """
                 INSERT INTO memories (
-                    id, title, content, summary, type, status, created_at, updated_at,
+                    id, memory_ref, title, content, summary, type, status, created_at, updated_at,
                     read_count, access_score, last_accessed_at, last_surfaced_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
+                    memory_ref,
                     normalized_title,
                     normalized_content,
                     summary_text,
@@ -248,7 +263,10 @@ class RelationalMemoryRepository:
         return cursor.rowcount > 0
 
     def delete_memory(self, memory_id: str):
-        existing = self.get_memory(memory_id)
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
+        existing = self.get_memory(resolved_memory_id)
         if existing is None:
             return None
 
@@ -256,10 +274,10 @@ class RelationalMemoryRepository:
         with conn:
             conn.execute(
                 "DELETE FROM links WHERE source_id = ? OR target_id = ?",
-                (memory_id, memory_id),
+                (resolved_memory_id, resolved_memory_id),
             )
-            conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
-            conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (resolved_memory_id,))
+            conn.execute("DELETE FROM memories WHERE id = ?", (resolved_memory_id,))
         return existing
 
     def search_keyword_memory_ids(
@@ -338,11 +356,19 @@ class RelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return []
 
         conn = self._db.get_connection()
-        placeholders = ",".join("?" for _ in normalized_ids)
+        placeholders = ",".join("?" for _ in resolved_ids)
         clauses = [f"memories.id IN ({placeholders})"]
-        params: list[object] = [*normalized_ids]
+        params: list[object] = [*resolved_ids]
         if status is not None:
             clauses.append("memories.status = ?")
             params.append(status)
@@ -397,6 +423,7 @@ class RelationalMemoryRepository:
             ranked_by_id[str(row["id"])] = RankedMemoryCandidate(
                 record=RelationalMemoryRecord(
                     id=row["id"],
+                    memory_ref=row["memory_ref"],
                     title=row["title"],
                     content=row["content"],
                     summary=row["summary"],
@@ -421,7 +448,7 @@ class RelationalMemoryRepository:
                     "SUPERSEDES": int(row["incoming_supersedes_count"] or 0),
                 },
             )
-        return [ranked_by_id[memory_id] for memory_id in normalized_ids if memory_id in ranked_by_id]
+        return [ranked_by_id[memory_id] for memory_id in resolved_ids if memory_id in ranked_by_id]
 
     def query_maintenance_candidates(
         self,
@@ -678,6 +705,9 @@ class RelationalMemoryRepository:
         direction: str = "outgoing",
         link_type: str | None = None,
     ):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return []
         conn = self._db.get_connection()
         if direction == "incoming":
             clause = "target_id = ?"
@@ -687,7 +717,7 @@ class RelationalMemoryRepository:
             order_by = "ORDER BY source_id ASC, target_id ASC"
 
         query = f"SELECT source_id, target_id, type, context FROM links WHERE {clause}"
-        params: list[str] = [memory_id]
+        params: list[str] = [resolved_memory_id]
         if link_type is not None:
             query += " AND type = ?"
             params.append(self._normalize_link_type(link_type))
@@ -706,17 +736,23 @@ class RelationalMemoryRepository:
 
     def has_incoming_link(self, memory_id: str, link_type: str):
         normalized_link_type = self._normalize_link_type(link_type)
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return False
         conn = self._db.get_connection()
         row = conn.execute(
             "SELECT 1 FROM links WHERE target_id = ? AND type = ? LIMIT 1",
-            (memory_id, normalized_link_type),
+            (resolved_memory_id, normalized_link_type),
         ).fetchone()
         return row is not None
 
     def count_incoming_links(self, memory_id: str) -> int:
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return 0
         row = self._db.get_connection().execute(
             "SELECT COUNT(*) FROM links WHERE target_id = ?",
-            (memory_id,),
+            (resolved_memory_id,),
         ).fetchone()
         return 0 if row is None else int(row[0])
 
@@ -724,14 +760,22 @@ class RelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return 0
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return 0
 
         conn = self._db.get_connection() if not best_effort else self._db.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
-        placeholders = ",".join("?" for _ in normalized_ids)
+        placeholders = ",".join("?" for _ in resolved_ids)
         try:
             with conn:
                 cursor = conn.execute(
                     f"UPDATE memories SET last_surfaced_at = ? WHERE id IN ({placeholders})",
-                    [surfaced_at, *normalized_ids],
+                    [surfaced_at, *resolved_ids],
                 )
             return cursor.rowcount
         except sqlite3.OperationalError as exc:
@@ -750,6 +794,9 @@ class RelationalMemoryRepository:
         accessed_at: str,
         increment_read_count: bool = False,
     ):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         conn = self._db.get_connection()
         read_count_clause = "read_count = read_count + 1, " if increment_read_count else ""
         with conn:
@@ -759,11 +806,11 @@ class RelationalMemoryRepository:
                 SET {read_count_clause}access_score = ?, last_accessed_at = ?
                 WHERE id = ?
                 """,
-                (access_score, accessed_at, memory_id),
+                (access_score, accessed_at, resolved_memory_id),
             )
         if cursor.rowcount == 0:
             return None
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def list_most_read_memories(
         self,
@@ -789,11 +836,14 @@ class RelationalMemoryRepository:
         return [self._hydrate_record(conn, row) for row in rows]
 
     def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         normalized_workspace_ids = self._normalize_values(workspace_ids)
         if not normalized_workspace_ids:
-            return self.get_memory(memory_id)
+            return self.get_memory(resolved_memory_id)
 
-        current = self.get_memory(memory_id)
+        current = self.get_memory(resolved_memory_id)
         if current is None:
             return None
 
@@ -802,18 +852,21 @@ class RelationalMemoryRepository:
         )
         conn = self._db.get_connection()
         with conn:
-            self._replace_workspace_mappings(conn, memory_id, merged_workspace_ids)
+            self._replace_workspace_mappings(conn, resolved_memory_id, merged_workspace_ids)
             conn.execute(
                 "UPDATE memories SET updated_at = ? WHERE id = ?",
-                (self._utc_now(), memory_id),
+                (self._utc_now(), resolved_memory_id),
             )
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def get_memory(self, memory_id: str):
         conn = self._db.get_connection()
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         row = conn.execute(
             "SELECT * FROM memories WHERE id = ?",
-            (memory_id,),
+            (resolved_memory_id,),
         ).fetchone()
         if row is None:
             return None
@@ -882,7 +935,8 @@ class RelationalMemoryRepository:
         last_surfaced_at: str | None = None,
     ):
         conn = self._db.get_connection()
-        if self.get_memory(memory_id) is None:
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
             return None
 
         normalized_type = (
@@ -900,7 +954,7 @@ class RelationalMemoryRepository:
         if workspace_ids is not None and not self._normalize_values(workspace_ids):
             raise ValueError("workspace_ids must contain at least one non-empty value")
 
-        existing = self.get_memory(memory_id)
+        existing = self.get_memory(resolved_memory_id)
         if existing is None:
             return None
 
@@ -938,7 +992,7 @@ class RelationalMemoryRepository:
 
         columns.append("updated_at = ?")
         values.append(self._utc_now())
-        values.append(memory_id)
+        values.append(resolved_memory_id)
 
         with conn:
             conn.execute(
@@ -948,18 +1002,18 @@ class RelationalMemoryRepository:
             if workspace_ids is not None:
                 self._replace_workspace_mappings(
                     conn,
-                    memory_id,
+                    resolved_memory_id,
                     self._normalize_values(workspace_ids),
                 )
             if tags is not None:
                 self._replace_tag_mappings(
                     conn,
-                    memory_id,
+                    resolved_memory_id,
                     self._normalize_values(tags),
                 )
             current_row = conn.execute(
                 "SELECT title, summary, content FROM memories WHERE id = ?",
-                (memory_id,),
+                (resolved_memory_id,),
             ).fetchone()
             current_tags = (
                 self._normalize_values(tags)
@@ -972,20 +1026,20 @@ class RelationalMemoryRepository:
                     WHERE memory_tags.memory_id = ?
                     ORDER BY tags.name ASC
                     """,
-                    (memory_id,),
+                    (resolved_memory_id,),
                 ).fetchall()]
             )
             assert current_row is not None
             self._replace_fts_row(
                 conn,
-                memory_id,
+                resolved_memory_id,
                 title=str(current_row["title"]),
                 summary=str(current_row["summary"] or ""),
                 content=str(current_row["content"]),
                 tags=current_tags,
             )
 
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def list_memories(
         self,
@@ -1085,6 +1139,7 @@ class RelationalMemoryRepository:
         metadata = json.loads(row["metadata"] or "{}")
         return RelationalMemoryRecord(
             id=row["id"],
+            memory_ref=row["memory_ref"],
             title=row["title"],
             content=row["content"],
             summary=row["summary"],
@@ -1104,6 +1159,7 @@ class RelationalMemoryRepository:
     def _candidate_record_from_row(self, row) -> RelationalMemoryRecord:
         return RelationalMemoryRecord(
             id=row["id"],
+            memory_ref=row["memory_ref"],
             title=row["title"],
             content=row["content"],
             summary=row["summary"],
@@ -1119,6 +1175,21 @@ class RelationalMemoryRepository:
             workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
             tags=_split_csv_values(row["tags_csv"]),
         )
+
+    def resolve_memory_id(self, memory_id: str) -> str | None:
+        conn = self._db.get_connection()
+        row = conn.execute("SELECT id FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if row is not None:
+            return str(row[0])
+
+        memory_ref = parse_memory_ref(memory_id)
+        if memory_ref is None:
+            return None
+        row = conn.execute(
+            "SELECT id FROM memories WHERE memory_ref = ?",
+            (memory_ref,),
+        ).fetchone()
+        return None if row is None else str(row[0])
 
     def _replace_workspace_mappings(self, conn, memory_id: str, workspace_ids: list[str]):
         conn.execute("DELETE FROM memory_workspaces WHERE memory_id = ?", (memory_id,))

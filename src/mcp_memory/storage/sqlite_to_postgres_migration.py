@@ -14,6 +14,7 @@ from mcp_memory.storage.postgres_connection import PostgresConnectionManager
 @dataclass(frozen=True)
 class SQLiteSourceMemory:
     id: str
+    memory_ref: int | None
     title: str
     content: str
     summary: str | None
@@ -141,6 +142,7 @@ def _read_sqlite_export(sqlite_path: Path) -> _SQLiteExport:
             """
             SELECT
                 id,
+                memory_ref,
                 title,
                 content,
                 summary,
@@ -164,6 +166,7 @@ def _read_sqlite_export(sqlite_path: Path) -> _SQLiteExport:
             memories.append(
                 SQLiteSourceMemory(
                     id=memory_id,
+                    memory_ref=None if row["memory_ref"] is None else int(row["memory_ref"]),
                     title=str(row["title"]),
                     content=str(row["content"]),
                     summary=None if row["summary"] is None else str(row["summary"]),
@@ -237,6 +240,7 @@ def _import_memories(cursor, memories: tuple[SQLiteSourceMemory, ...]) -> None:
             """
             INSERT INTO memories (
                 id,
+                memory_ref,
                 title,
                 content,
                 summary,
@@ -249,9 +253,10 @@ def _import_memories(cursor, memories: tuple[SQLiteSourceMemory, ...]) -> None:
                 last_accessed_at,
                 last_surfaced_at,
                 metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             ON CONFLICT (id)
             DO UPDATE SET
+                memory_ref = EXCLUDED.memory_ref,
                 title = EXCLUDED.title,
                 content = EXCLUDED.content,
                 summary = EXCLUDED.summary,
@@ -267,6 +272,7 @@ def _import_memories(cursor, memories: tuple[SQLiteSourceMemory, ...]) -> None:
             """,
             (
                 memory.id,
+                memory.memory_ref,
                 memory.title,
                 memory.content,
                 memory.summary,

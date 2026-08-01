@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 17
+POSTGRES_SCHEMA_VERSION = 18
 
 
 @dataclass(frozen=True)
@@ -686,6 +686,32 @@ POSTGRES_MIGRATIONS = (
         name="add_curation_verification_descriptor",
         statements=(
             "ALTER TABLE curation_action_receipts ADD COLUMN IF NOT EXISTS verification_descriptor_json JSONB",
+        ),
+    ),
+    PostgresMigration(
+        version=18,
+        name="add_memory_references",
+        statements=(
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_ref BIGINT",
+            "CREATE SEQUENCE IF NOT EXISTS memory_ref_seq",
+            (
+                "SELECT setval("
+                "'memory_ref_seq', "
+                "GREATEST(COALESCE(MAX(memory_ref), 1), 1), "
+                "COUNT(memory_ref) > 0"
+                ") FROM memories"
+            ),
+            "UPDATE memories SET memory_ref = nextval('memory_ref_seq') WHERE memory_ref IS NULL",
+            (
+                "SELECT setval("
+                "'memory_ref_seq', "
+                "GREATEST(COALESCE(MAX(memory_ref), 1), 1), "
+                "COUNT(memory_ref) > 0"
+                ") FROM memories"
+            ),
+            "ALTER TABLE memories ALTER COLUMN memory_ref SET DEFAULT nextval('memory_ref_seq')",
+            "ALTER TABLE memories ALTER COLUMN memory_ref SET NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_memory_ref ON memories(memory_ref)",
         ),
     ),
 )

@@ -22,6 +22,7 @@ from mcp_memory.core.ports.memory import (
     MemoryRecord,
     RankedMemoryCandidate,
     build_read_cache_validation_token,
+    parse_memory_ref,
     VALID_MEMORY_STATUSES,
     VALID_MEMORY_TYPES,
 )
@@ -109,9 +110,17 @@ class PostgresRelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return []
 
         clauses = ["memories.id = ANY(%s::text[])"]
-        params: list[object] = [normalized_ids]
+        params: list[object] = [resolved_ids]
         if status is not None:
             clauses.append("memories.status = %s")
             params.append(status)
@@ -138,6 +147,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_accessed_at,
                         memories.last_surfaced_at,
                         memories.metadata,
+                        memories.memory_ref,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
                     FROM memories
@@ -176,10 +186,11 @@ class PostgresRelationalMemoryRepository:
                 last_accessed_at=None if row[10] is None else str(row[10]),
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
-                workspace_ids=self._load_text_values(row[13]),
-                tags=self._load_text_values(row[14]),
+                memory_ref=self._coerce_int(row[13]),
+                workspace_ids=self._load_text_values(row[14]),
+                tags=self._load_text_values(row[15]),
             )
-        return [records_by_id[memory_id] for memory_id in normalized_ids if memory_id in records_by_id]
+        return [records_by_id[memory_id] for memory_id in resolved_ids if memory_id in records_by_id]
 
     def create_memory(
         self,
@@ -257,12 +268,29 @@ class PostgresRelationalMemoryRepository:
         return self.get_memory(record_id)
 
     def get_memory(self, memory_id: str):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                row = self._select_memory_row(cursor, memory_id)
+                row = self._select_memory_row(cursor, resolved_memory_id)
                 if row is None:
                     return None
                 return self._hydrate_record(cursor, row)
+
+    def resolve_memory_id(self, memory_id: str) -> str | None:
+        memory_ref = parse_memory_ref(memory_id)
+        if memory_ref is None:
+            return memory_id
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM memories WHERE memory_ref = %s",
+                    (memory_ref,),
+                )
+                row = cursor.fetchone()
+                return None if row is None else str(row[0])
 
     def peek_memory(self, memory_id: str) -> RelationalMemoryReadContext | None:
         """Read authoritative memory context without changing retrieval telemetry."""
@@ -326,7 +354,10 @@ class PostgresRelationalMemoryRepository:
         last_accessed_at: str | None = None,
         last_surfaced_at: str | None = None,
     ):
-        existing = self.get_memory(memory_id)
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
+        existing = self.get_memory(resolved_memory_id)
         if existing is None:
             return None
 
@@ -375,7 +406,7 @@ class PostgresRelationalMemoryRepository:
 
         columns.append("updated_at = %s")
         values.append(self._utc_now())
-        values.append(memory_id)
+        values.append(resolved_memory_id)
 
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
@@ -386,7 +417,7 @@ class PostgresRelationalMemoryRepository:
                 if workspace_ids is not None:
                     self._replace_workspace_mappings(
                         cursor,
-                        memory_id,
+                        resolved_memory_id,
                         self._normalize_values(workspace_ids),
                     )
                 if tags is not None:
@@ -398,7 +429,7 @@ class PostgresRelationalMemoryRepository:
                 effective_tags = existing.tags if tags is None else self._normalize_values(tags)
                 self._upsert_search_document(
                     cursor,
-                    memory_id=memory_id,
+                    memory_id=resolved_memory_id,
                     title=normalized_title or existing.title,
                     summary=cast(str | None, existing.summary if resolved_summary is _SUMMARY_UNSET else resolved_summary),
                     content=normalized_content or existing.content,
@@ -406,7 +437,7 @@ class PostgresRelationalMemoryRepository:
                 )
             connection.commit()
 
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def list_memories(
         self,
@@ -431,7 +462,7 @@ class PostgresRelationalMemoryRepository:
 
         query = (
             "SELECT id, title, content, summary, type, status, created_at, updated_at, "
-            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata "
+            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref "
             "FROM memories "
         )
         if joins:
@@ -467,6 +498,7 @@ class PostgresRelationalMemoryRepository:
                 last_accessed_at=None if row[10] is None else str(row[10]),
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
+                memory_ref=self._coerce_int(row[13]),
                 workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
                 tags=tags_by_memory_id.get(memory_id, []),
             )
@@ -611,11 +643,19 @@ class PostgresRelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return []
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return []
 
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 clauses: list[str] = []
-                params: list[object] = [normalized_ids]
+                params: list[object] = [resolved_ids]
                 if status is not None:
                     clauses.append("memories.status = %s")
                     params.append(status)
@@ -673,6 +713,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_accessed_at,
                         memories.last_surfaced_at,
                         memories.metadata,
+                        memories.memory_ref,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags,
                         COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
@@ -701,7 +742,7 @@ class PostgresRelationalMemoryRepository:
         candidate_build_started = time.perf_counter()
         candidates: list[RankedMemoryCandidate] = []
         for row in rows:
-            has_incoming_supersedes = self._coerce_int(row[16]) > 0
+            has_incoming_supersedes = self._coerce_int(row[17]) > 0
             candidates.append(
                 RankedMemoryCandidate(
                     record=RelationalMemoryRecord(
@@ -718,16 +759,17 @@ class PostgresRelationalMemoryRepository:
                         last_accessed_at=None if row[10] is None else str(row[10]),
                         last_surfaced_at=None if row[11] is None else str(row[11]),
                         metadata=self._load_metadata(row[12]),
-                        workspace_ids=self._load_text_values(row[13]),
-                        tags=self._load_text_values(row[14]),
+                        memory_ref=self._coerce_int(row[13]),
+                        workspace_ids=self._load_text_values(row[14]),
+                        tags=self._load_text_values(row[15]),
                     ),
-                    incoming_links_count=self._coerce_int(row[15]),
+                    incoming_links_count=self._coerce_int(row[16]),
                     has_incoming_supersedes=has_incoming_supersedes,
                     incoming_link_type_counts={
-                        "DEPENDS_ON": self._coerce_int(row[17]),
-                        "AMENDS": self._coerce_int(row[18]),
-                        "CONTRADICTS": self._coerce_int(row[19]),
-                        "SUPERSEDES": self._coerce_int(row[20]),
+                        "DEPENDS_ON": self._coerce_int(row[18]),
+                        "AMENDS": self._coerce_int(row[19]),
+                        "CONTRADICTS": self._coerce_int(row[20]),
+                        "SUPERSEDES": self._coerce_int(row[21]),
                     },
                 )
             )
@@ -845,6 +887,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_accessed_at,
                         memories.last_surfaced_at,
                         memories.metadata,
+                        memories.memory_ref,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
                     FROM memories
@@ -889,8 +932,9 @@ class PostgresRelationalMemoryRepository:
                 last_accessed_at=None if row[10] is None else str(row[10]),
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
-                workspace_ids=self._load_text_values(row[13]),
-                tags=self._load_text_values(row[14]),
+                memory_ref=self._coerce_int(row[13]),
+                workspace_ids=self._load_text_values(row[14]),
+                tags=self._load_text_values(row[15]),
             )
             for row in rows
         ]
@@ -1005,15 +1049,23 @@ class PostgresRelationalMemoryRepository:
         normalized_ids = self._normalize_values(memory_ids)
         if not normalized_ids:
             return 0
+        resolved_ids = [
+            resolved_id
+            for memory_id in normalized_ids
+            for resolved_id in [self.resolve_memory_id(memory_id)]
+            if resolved_id is not None
+        ]
+        if not resolved_ids:
+            return 0
 
         if best_effort:
             self._last_surfaced_writer.write_many(
-                [(memory_id, surfaced_at) for memory_id in normalized_ids]
+                [(memory_id, surfaced_at) for memory_id in resolved_ids]
             )
-            return len(normalized_ids)
+            return len(resolved_ids)
 
-        self._update_last_surfaced_ids(normalized_ids, surfaced_at)
-        return len(normalized_ids)
+        self._update_last_surfaced_ids(resolved_ids, surfaced_at)
+        return len(resolved_ids)
 
     def close(self) -> None:
         self._last_surfaced_writer.close()
@@ -1044,24 +1096,27 @@ class PostgresRelationalMemoryRepository:
             connection.commit()
 
     def append_workspace_ids(self, memory_id: str, workspace_ids: list[str]):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         normalized_workspace_ids = self._normalize_values(workspace_ids)
         if not normalized_workspace_ids:
-            return self.get_memory(memory_id)
+            return self.get_memory(resolved_memory_id)
 
-        current = self.get_memory(memory_id)
+        current = self.get_memory(resolved_memory_id)
         if current is None:
             return None
 
         merged_workspace_ids = self._normalize_values([*current.workspace_ids, *normalized_workspace_ids])
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
-                self._replace_workspace_mappings(cursor, memory_id, merged_workspace_ids)
+                self._replace_workspace_mappings(cursor, resolved_memory_id, merged_workspace_ids)
                 cursor.execute(
                     "UPDATE memories SET updated_at = %s WHERE id = %s",
-                    (self._utc_now(), memory_id),
+                    (self._utc_now(), resolved_memory_id),
                 )
             connection.commit()
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def add_link(
         self,
@@ -1097,6 +1152,9 @@ class PostgresRelationalMemoryRepository:
         direction: str = "outgoing",
         link_type: str | None = None,
     ):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return []
         if direction == "incoming":
             clause = "target_id = %s"
             order_by = "ORDER BY source_id ASC, target_id ASC"
@@ -1105,7 +1163,7 @@ class PostgresRelationalMemoryRepository:
             order_by = "ORDER BY source_id ASC, target_id ASC"
 
         query = f"SELECT source_id, target_id, type, context FROM links WHERE {clause}"
-        params: list[object] = [memory_id]
+        params: list[object] = [resolved_memory_id]
         if link_type is not None:
             query += " AND type = %s"
             params.append(self._normalize_link_type(link_type))
@@ -1147,26 +1205,35 @@ class PostgresRelationalMemoryRepository:
 
     def has_incoming_link(self, memory_id: str, link_type: str):
         normalized_link_type = self._normalize_link_type(link_type)
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return False
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT 1 FROM links WHERE target_id = %s AND type = %s LIMIT 1",
-                    (memory_id, normalized_link_type),
+                    (resolved_memory_id, normalized_link_type),
                 )
                 return cursor.fetchone() is not None
 
     def count_incoming_links(self, memory_id: str) -> int:
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return 0
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT COUNT(*) FROM links WHERE target_id = %s",
-                    (memory_id,),
+                    (resolved_memory_id,),
                 )
                 row = cursor.fetchone()
                 return self._coerce_int(row[0]) if row is not None else 0
 
     def delete_memory(self, memory_id: str):
-        existing = self.get_memory(memory_id)
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
+        existing = self.get_memory(resolved_memory_id)
         if existing is None:
             return None
 
@@ -1174,10 +1241,10 @@ class PostgresRelationalMemoryRepository:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM links WHERE source_id = %s OR target_id = %s",
-                    (memory_id, memory_id),
+                    (resolved_memory_id, resolved_memory_id),
                 )
-                cursor.execute("DELETE FROM memory_search_documents WHERE memory_id = %s", (memory_id,))
-                cursor.execute("DELETE FROM memories WHERE id = %s", (memory_id,))
+                cursor.execute("DELETE FROM memory_search_documents WHERE memory_id = %s", (resolved_memory_id,))
+                cursor.execute("DELETE FROM memories WHERE id = %s", (resolved_memory_id,))
             connection.commit()
         return existing
 
@@ -1188,15 +1255,18 @@ class PostgresRelationalMemoryRepository:
         accessed_at: str,
         increment_read_count: bool = False,
     ):
+        resolved_memory_id = self.resolve_memory_id(memory_id)
+        if resolved_memory_id is None:
+            return None
         read_count_clause = "read_count = read_count + 1, " if increment_read_count else ""
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"UPDATE memories SET {read_count_clause}access_score = %s, last_accessed_at = %s WHERE id = %s",
-                    (access_score, accessed_at, memory_id),
+                    (access_score, accessed_at, resolved_memory_id),
                 )
             connection.commit()
-        return self.get_memory(memory_id)
+        return self.get_memory(resolved_memory_id)
 
     def list_most_read_memories(
         self,
@@ -1217,7 +1287,7 @@ class PostgresRelationalMemoryRepository:
 
         query = (
             "SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at, "
-            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata FROM memories "
+            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories "
         )
         if joins:
             query += " ".join(joins) + " "
@@ -1235,7 +1305,7 @@ class PostgresRelationalMemoryRepository:
         cursor.execute(
             """
             SELECT id, title, content, summary, type, status, created_at, updated_at,
-                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref
             FROM memories
             WHERE id = %s
             """,
@@ -1253,7 +1323,7 @@ class PostgresRelationalMemoryRepository:
         cursor.execute(
             """
             SELECT id, title, content, summary, type, status, created_at, updated_at,
-                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref
             FROM memories
             WHERE id = ANY(%s::text[])
             """,
@@ -1398,6 +1468,7 @@ class PostgresRelationalMemoryRepository:
             last_accessed_at=None if row[10] is None else str(row[10]),
             last_surfaced_at=None if row[11] is None else str(row[11]),
             metadata=self._load_metadata(row[12]),
+            memory_ref=self._coerce_int(row[13]),
             workspace_ids=[str(workspace_row[0]) for workspace_row in workspace_rows],
             tags=[str(tag_row[0]) for tag_row in tag_rows],
         )
@@ -1417,6 +1488,7 @@ class PostgresRelationalMemoryRepository:
             last_accessed_at=None if row[10] is None else str(row[10]),
             last_surfaced_at=None if row[11] is None else str(row[11]),
             metadata=self._load_metadata(row[12]),
+            memory_ref=self._coerce_int(row[13]),
             workspace_ids=[],
             tags=[],
         )

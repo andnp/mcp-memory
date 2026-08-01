@@ -802,9 +802,13 @@ class _SQLiteCurationTransaction:
         created_at = str(values.get("created_at", _now_text()))
         updated_at = str(values.get("updated_at", created_at))
         metadata = cast(Mapping[str, object], values.get("metadata", {}))
+        next_ref_row = self._connection.execute(
+            "SELECT COALESCE(MAX(memory_ref), 0) + 1 FROM memories"
+        ).fetchone()
+        memory_ref = int(next_ref_row[0]) if next_ref_row is not None else 1
         self._connection.execute(
-            "INSERT INTO memories (id, title, content, summary, type, status, created_at, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (memory_id, title, content, str(summary), memory_type, status, created_at, updated_at, json.dumps(dict(metadata), sort_keys=True)),
+            "INSERT INTO memories (id, memory_ref, title, content, summary, type, status, created_at, updated_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (memory_id, memory_ref, title, content, str(summary), memory_type, status, created_at, updated_at, json.dumps(dict(metadata), sort_keys=True)),
         )
         self._replace_workspaces(memory_id, workspace_ids)
         self._replace_tags(memory_id, tags)
@@ -977,7 +981,7 @@ def _hydrate_record(connection: sqlite3.Connection, row: sqlite3.Row) -> MemoryR
         (row["id"],),
     ).fetchall()
     return MemoryRecord(
-        id=str(row["id"]), title=str(row["title"]), content=str(row["content"]), summary=row["summary"],
+        id=str(row["id"]), memory_ref=row["memory_ref"], title=str(row["title"]), content=str(row["content"]), summary=row["summary"],
         type=str(row["type"]), status=str(row["status"]), created_at=str(row["created_at"]), updated_at=str(row["updated_at"]),
         read_count=int(row["read_count"] or 0), access_score=float(row["access_score"] or 0),
         last_accessed_at=row["last_accessed_at"], last_surfaced_at=row["last_surfaced_at"],
