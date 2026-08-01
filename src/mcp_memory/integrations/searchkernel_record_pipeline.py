@@ -130,12 +130,20 @@ class _MemorySearchPolicyContext:
         requested_ids = list(dict.fromkeys(memory_ids))
         if not requested_ids:
             return
+        missing_ids = [
+            memory_id
+            for memory_id in requested_ids
+            if memory_id not in self.records
+            or (memory_id, "incoming") not in self.links
+        ]
+        if not missing_ids:
+            return
         candidates = self.repository.get_ranking_candidates(
-            requested_ids,
+            missing_ids,
             include_superseded=True,
         )
         candidates_by_id = {candidate.record.id: candidate for candidate in candidates}
-        for memory_id in requested_ids:
+        for memory_id in missing_ids:
             candidate = candidates_by_id.get(memory_id)
             if candidate is None:
                 self.records[memory_id] = None

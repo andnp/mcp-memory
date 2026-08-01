@@ -399,6 +399,22 @@ async def test_policy_lookups_are_cached_for_one_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_policy_prefetch_avoids_rehydrating_overlapping_rankings() -> None:
+    repository = CountingRepository()
+    vector_store = FakeVectorStore([("active", 1.0)])
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search("query", limit=1)
+
+    assert [result.record_id for result in outcome.results] == ["active"]
+    assert repository.ranking_candidate_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_hydration_reuses_search_scoped_record_cache() -> None:
     repository = CountingRepository()
     pipeline = build_memory_record_pipeline(
