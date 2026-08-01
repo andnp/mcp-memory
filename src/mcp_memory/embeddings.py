@@ -140,6 +140,8 @@ class HashingEmbedder:
 
 
 class SQLiteVectorStore:
+    supports_candidate_filtering = True
+
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
 
@@ -302,15 +304,23 @@ class SQLiteVectorStore:
         source_kind: str,
         model_name: str,
         query_embedding: list[float],
+        candidate_ids: list[str] | None = None,
         diagnostics: dict[str, object] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
+        normalized_candidate_ids = [candidate_id for candidate_id in (candidate_ids or []) if candidate_id]
+        if candidate_ids is not None and not normalized_candidate_ids:
+            return []
         query = (
             "SELECT source_id, embedding_json FROM embeddings "
             "WHERE source_kind = ? AND model_name = ?"
         )
         params: list[object] = [source_kind, model_name]
+        if normalized_candidate_ids:
+            placeholders = ",".join("?" for _ in normalized_candidate_ids)
+            query += f" AND source_id IN ({placeholders})"
+            params.extend(normalized_candidate_ids)
         if workspace_id is not None:
             query += " AND workspace_id = ?"
             params.append(workspace_id)
@@ -341,6 +351,7 @@ class SQLiteVectorStore:
                 {
                     "backend": "sqlite",
                     "row_count": len(rows),
+                    "candidate_filter_count": len(normalized_candidate_ids),
                     "raw_type_counts": raw_type_counts,
                     "fetch_ms": round(fetch_ms, 3),
                     "decode_ms": round(decode_ms, 3),

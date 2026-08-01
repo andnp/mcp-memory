@@ -11,6 +11,7 @@ from mcp_memory.embeddings import (
     SQLiteVectorStore,
     _cap_torch_threads_before_sentence_transformer_load,
 )
+from searchkernel.ports import CandidateFilterSupport
 from searchkernel.utils.similarity import cosine_similarity_lists
 
 
@@ -86,6 +87,58 @@ def test_sqlite_vector_store_round_trips_embeddings(db_manager) -> None:
     assert record is not None
     assert record.embedding == [1.0, 0.0]
     assert [result[0] for result in results] == ["memory-1", "memory-2"]
+    assert isinstance(store, CandidateFilterSupport)
+
+
+def test_sqlite_vector_store_candidate_filtering_limits_rows_and_results(db_manager) -> None:
+    store = SQLiteVectorStore(db_manager)
+    for source_id, embedding in (
+        ("memory-1", [1.0, 0.0]),
+        ("memory-2", [0.8, 0.2]),
+        ("memory-3", [0.0, 1.0]),
+        ("memory-other-workspace", [1.0, 0.0]),
+        ("memory-other-model", [1.0, 0.0]),
+    ):
+        store.upsert(
+            source_kind="memory",
+            source_id=source_id,
+            workspace_id="workspace-b" if source_id == "memory-other-workspace" else "workspace-a",
+            model_name="other-model" if source_id == "memory-other-model" else "test-model",
+            embedding=embedding,
+        )
+
+    diagnostics: dict[str, object] = {}
+    results = store.search(
+        source_kind="memory",
+        model_name="test-model",
+        workspace_id="workspace-a",
+        query_embedding=[1.0, 0.0],
+        candidate_ids=["memory-3", "memory-other-workspace", "memory-other-model"],
+        diagnostics=diagnostics,
+        limit=20,
+    )
+
+    assert results == [("memory-3", 0.0)]
+    assert diagnostics["row_count"] == 1
+    assert diagnostics["candidate_filter_count"] == 3
+
+
+def test_sqlite_vector_store_empty_candidate_filter_returns_no_results(db_manager) -> None:
+    store = SQLiteVectorStore(db_manager)
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-1",
+        workspace_id="workspace-a",
+        model_name="test-model",
+        embedding=[1.0, 0.0],
+    )
+
+    assert store.search(
+        source_kind="memory",
+        model_name="test-model",
+        query_embedding=[1.0, 0.0],
+        candidate_ids=[],
+    ) == []
 
 
 def test_sentence_transformer_cache_model_uses_local_cache_before_network(monkeypatch) -> None:
