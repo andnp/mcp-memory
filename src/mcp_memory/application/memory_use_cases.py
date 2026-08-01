@@ -463,6 +463,12 @@ def _read_memory_record(
     include_relationships = arguments["include_relationships"]
     include_superseded = arguments["include_superseded"]
     include_metadata = arguments["include_metadata"]
+    resolve_memory_id = getattr(ctx.relational_search, "resolve_memory_id", None)
+    telemetry_memory_id = memory_id
+    if callable(resolve_memory_id):
+        resolved_memory_id = resolve_memory_id(memory_id)
+        if isinstance(resolved_memory_id, str) and resolved_memory_id:
+            telemetry_memory_id = resolved_memory_id
     default_external_read_shape = (
         caller_kind == "external"
         and not include_relationships
@@ -494,7 +500,7 @@ def _read_memory_record(
         telemetry.record_read(
             ctx,
             caller_kind=caller_kind,
-            memory_id=memory_id,
+            memory_id=telemetry_memory_id,
             duration_ms=(perf_counter() - started_at) * 1000.0,
         )
         return cached_payload
@@ -517,7 +523,7 @@ def _read_memory_record(
     telemetry.record_read(
         ctx,
         caller_kind=caller_kind,
-        memory_id=memory_id,
+        memory_id=telemetry_memory_id,
         duration_ms=duration_ms,
     )
 
