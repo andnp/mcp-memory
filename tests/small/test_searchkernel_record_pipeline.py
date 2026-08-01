@@ -5,8 +5,7 @@ from typing import cast
 
 import pytest
 
-from mcp_memory.application import memory_use_cases
-from mcp_memory.config import Config, SearchKernelShadowConfig, SearchRankingConfig
+from mcp_memory.config import Config, SearchKernelConfig, SearchRankingConfig
 from mcp_memory.core.ports.memory import (
     MemoryLink,
     MemoryReadContext,
@@ -15,12 +14,10 @@ from mcp_memory.core.ports.memory import (
     RankedMemoryCandidate,
 )
 from mcp_memory.core.search_ranking import RankingEngine, RankingSignals
-from mcp_memory.context import ApplicationContext
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
-from mcp_memory.integrations.searchkernel_shadow import run_searchkernel_shadow
 
 
 pytestmark = pytest.mark.small
@@ -382,6 +379,21 @@ def test_pipeline_matches_native_graph_expansion_bounds() -> None:
     assert kernel_config.max_neighbors_per_seed == 10
 
 
+def test_pipeline_uses_searchkernel_failure_mode() -> None:
+    repository = FakeRepository()
+
+    lenient = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+    )
+    strict = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        config=Config(searchkernel=SearchKernelConfig(failure_mode="strict")),
+    )
+
+    assert lenient._pipeline._config.failure_mode == "lenient"
+    assert strict._pipeline._config.failure_mode == "strict"
+
+
 @pytest.mark.asyncio
 async def test_policy_lookups_are_cached_for_one_search() -> None:
     repository = CountingRepository()
@@ -557,82 +569,3 @@ async def test_keyword_match_survives_semantic_only_abstention_threshold() -> No
     outcome = await pipeline.search("ripgrep ban", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["exact"]
-
-
-@pytest.mark.asyncio
-async def test_shadow_compares_pipeline_without_replacing_native_results() -> None:
-    repository = FakeRepository()
-    pipeline = build_memory_record_pipeline(cast("MemoryRepositoryPort", repository))
-
-    diagnostics = await run_searchkernel_shadow(
-        pipeline,
-        query="query",
-        requested_limit=2,
-        native_results=[type("Native", (), {"memory_id": "native", "score": 1.0})()],
-        filters={"workspace_id": "workspace-1"},
-    )
-
-    assert diagnostics.native_ids == ("native",)
-    assert diagnostics.kernel_ids == ("active",)
-    assert diagnostics.error is not None
-
-
-@pytest.mark.asyncio
-async def test_enabled_shadow_path_builds_record_pipeline(monkeypatch) -> None:
-    runtime_logs: list[dict[str, object]] = []
-    context = ApplicationContext(
-        config=Config(searchkernel_shadow=SearchKernelShadowConfig(enabled=True)),
-        repository=FakeRepository(),
-        relational_search=object(),
-        runtime_logs=type(
-            "RuntimeLogs",
-            (),
-            {"write_log": lambda _self, **kwargs: runtime_logs.append(kwargs)},
-        )(),
-    )
-    pipeline = object()
-    called = False
-    captured_config = None
-
-    def build_pipeline(*args: object, **kwargs: object) -> object:
-        nonlocal called, captured_config
-        called = True
-        captured_config = kwargs["config"]
-        return pipeline
-
-    async def run_shadow(kernel: object, **kwargs: object):
-        assert kernel is pipeline
-        return type(
-            "Diagnostics",
-            (),
-            {
-                "error": None,
-                "to_payload": lambda _self: {
-                    "native_ids": ["native"],
-                    "kernel_ids": ["kernel"],
-                },
-            },
-        )()
-
-    monkeypatch.setattr(
-        memory_use_cases,
-        "build_memory_record_pipeline",
-        build_pipeline,
-    )
-    monkeypatch.setattr(memory_use_cases, "run_searchkernel_shadow", run_shadow)
-    await memory_use_cases._run_searchkernel_shadow(
-        context,
-        query="query",
-        limit=2,
-        native_results=[],
-        workspace_id=None,
-        memory_type=None,
-        status=None,
-        include_superseded=False,
-    )
-
-    assert called
-    assert captured_config is context.config
-    payload = runtime_logs[0]["data"]
-    assert isinstance(payload, dict)
-    assert payload["native_ids"] == ["native"]

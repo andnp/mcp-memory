@@ -74,7 +74,7 @@ class MemoryQueryEmbeddingProvider:
 
 @dataclass(frozen=True, slots=True)
 class MemoryRecordPipelineDiagnostics:
-    """Composition-time degradation that remains visible to shadow logging."""
+    """Composition-time degradation exposed for retrieval diagnostics."""
 
     reasons: tuple[str, ...] = ()
 
@@ -264,7 +264,7 @@ def build_memory_record_pipeline(
     carries query-wide keyword presence and semantic abstention state.
     """
     resolved_config = config or Config()
-    cutover_config = resolved_config.searchkernel_cutover
+    searchkernel_config = resolved_config.searchkernel
 
     def prefetch(memory_ids: Sequence[str]) -> None:
         _prefetch_memory_records(repository, memory_ids)
@@ -340,7 +340,7 @@ def build_memory_record_pipeline(
             maximum_score_gap=resolved_config.search_ranking.adaptive_result_max_score_gap,
             failure_mode=(
                 "strict"
-                if cutover_config.failure_mode == "strict"
+                if searchkernel_config.failure_mode == "strict"
                 else "lenient"
             ),
         ),

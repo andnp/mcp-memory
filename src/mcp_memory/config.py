@@ -380,26 +380,12 @@ class SearchRankingConfig:
 
 
 @dataclass
-class SearchKernelShadowConfig:
-    enabled: bool = False
-    per_source_timeout_seconds: float = 5.0
-    max_diagnostic_results: int = 20
-
-    def __post_init__(self) -> None:
-        if self.per_source_timeout_seconds <= 0:
-            raise ValueError("searchkernel_shadow.per_source_timeout_seconds must be > 0")
-        if self.max_diagnostic_results < 1:
-            raise ValueError("searchkernel_shadow.max_diagnostic_results must be >= 1")
-
-
-@dataclass
-class SearchKernelCutoverConfig:
-    enabled: bool = False
+class SearchKernelConfig:
     failure_mode: str = "lenient"
 
     def __post_init__(self) -> None:
         if self.failure_mode not in {"strict", "lenient"}:
-            raise ValueError("searchkernel_cutover.failure_mode must be strict or lenient")
+            raise ValueError("searchkernel.failure_mode must be strict or lenient")
 
 
 @dataclass
@@ -411,8 +397,7 @@ class Config:
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     search_ranking: SearchRankingConfig = field(default_factory=SearchRankingConfig)
-    searchkernel_shadow: SearchKernelShadowConfig = field(default_factory=SearchKernelShadowConfig)
-    searchkernel_cutover: SearchKernelCutoverConfig = field(default_factory=SearchKernelCutoverConfig)
+    searchkernel: SearchKernelConfig = field(default_factory=SearchKernelConfig)
     provider_routing: ProviderRoutingConfig = field(default_factory=ProviderRoutingConfig)
     ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
     ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
@@ -723,13 +708,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "adaptive_result_min_score": 0.35,
         "adaptive_result_max_score_gap": 0.08,
     }
-    document["searchkernel_shadow"] = {
-        "enabled": False,
-        "per_source_timeout_seconds": 5.0,
-        "max_diagnostic_results": 20,
-    }
-    document["searchkernel_cutover"] = {
-        "enabled": False,
+    document["searchkernel"] = {
         "failure_mode": "lenient",
     }
     document["provider_routing"] = _default_provider_routing_data()
@@ -792,12 +771,7 @@ def load_config(config_path: Path | None = None) -> Config:
         embeddings=_load_dataclass_from_dict(EmbeddingsConfig, raw.get("embeddings", {})),
         logging=_load_dataclass_from_dict(LoggingConfig, raw.get("logging", {})),
         search_ranking=_load_dataclass_from_dict(SearchRankingConfig, raw.get("search_ranking", {})),
-        searchkernel_shadow=_load_dataclass_from_dict(
-            SearchKernelShadowConfig, raw.get("searchkernel_shadow", {})
-        ),
-        searchkernel_cutover=_load_dataclass_from_dict(
-            SearchKernelCutoverConfig, raw.get("searchkernel_cutover", {})
-        ),
+        searchkernel=_load_dataclass_from_dict(SearchKernelConfig, raw.get("searchkernel", {})),
         provider_routing=_load_provider_routing_config(_provider_routing_data_for_config(raw)),
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),

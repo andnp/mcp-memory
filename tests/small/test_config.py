@@ -8,8 +8,7 @@ from mcp_memory.config import (
     DaemonConfig,
     MemoryConfig,
     SearchRankingConfig,
-    SearchKernelCutoverConfig,
-    SearchKernelShadowConfig,
+    SearchKernelConfig,
     ensure_default_config_exists,
     load_config,
     resolve_default_config_path,
@@ -32,16 +31,14 @@ def test_memory_config_rejects_invalid_checkpoint_interval() -> None:
         MemoryConfig(checkpoint_interval_ops=0)
 
 
-def test_searchkernel_shadow_is_disabled_by_default() -> None:
-    config = SearchKernelShadowConfig()
-
-    assert config.enabled is False
-
-
-def test_searchkernel_cutover_is_disabled_by_default() -> None:
-    config = SearchKernelCutoverConfig()
-    assert config.enabled is False
+def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
+    config = SearchKernelConfig()
     assert config.failure_mode == "lenient"
+
+
+def test_searchkernel_rejects_invalid_failure_mode() -> None:
+    with pytest.raises(ValueError, match="searchkernel.failure_mode"):
+        SearchKernelConfig(failure_mode="mystery")
 
 
 def test_default_config_is_created_once(tmp_path: Path) -> None:
@@ -83,9 +80,7 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.search_ranking.adaptive_result_score_ratio_floor == 0.7
     assert loaded.search_ranking.adaptive_result_min_score == 0.35
     assert loaded.search_ranking.adaptive_result_max_score_gap == 0.08
-    assert loaded.searchkernel_shadow.enabled is False
-    assert loaded.searchkernel_shadow.max_diagnostic_results == 20
-    assert loaded.searchkernel_cutover.enabled is False
+    assert loaded.searchkernel.failure_mode == "lenient"
     assert loaded.memory.recency_plan.max_boost_amount == 0.15
     assert loaded.memory.recency_plan.boost_decay_rate == 0.97
     assert loaded.memory.recency_fact.max_boost_amount == 0.05
@@ -100,6 +95,27 @@ def test_default_paths_resolve_inside_the_test_temp_area(tmp_path: Path) -> None
 
 def test_default_test_config_uses_ephemeral_daemon_port() -> None:
     assert load_config().daemon.port == 0
+
+
+def test_load_config_ignores_legacy_searchkernel_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "legacy-searchkernel-config.toml"
+    config_path.write_text(
+        """
+[searchkernel_shadow]
+enabled = true
+
+[searchkernel_cutover]
+enabled = true
+failure_mode = "strict"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.searchkernel.failure_mode == "lenient"
+    assert not hasattr(loaded, "searchkernel_shadow")
+    assert not hasattr(loaded, "searchkernel_cutover")
 
 
 def test_daemon_config_rejects_invalid_port() -> None:
