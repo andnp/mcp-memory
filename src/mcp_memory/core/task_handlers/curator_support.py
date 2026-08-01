@@ -614,6 +614,7 @@ def _query_curator_backend_candidates(
             config=getattr(ctx, "config", None),
             vector_store=getattr(ctx, "vector_store", None),
             embedder=getattr(ctx, "embedder", None),
+            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
             native_search=ctx.relational_search,
         )
     if retrieval is not None:

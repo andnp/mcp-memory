@@ -162,9 +162,12 @@ class MemoryVectorStore(AsyncVectorStore):
         vector_store: MemoryVectorBackend,
         *,
         prefetch: Callable[[Sequence[str]], None] | None = None,
+        ensure_embeddings: Callable[[Sequence[str], Mapping[str, Any]], None]
+        | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._prefetch = prefetch
+        self._ensure_embeddings = ensure_embeddings
         self.supports_candidate_filtering = isinstance(
             vector_store, CandidateFilterSupport
         )
@@ -205,6 +208,13 @@ class MemoryVectorStore(AsyncVectorStore):
                 f"Query vector has dimension {len(query_vector)}, expected {dim}"
             )
         filters = filters or {}
+        if self._ensure_embeddings is not None:
+            candidate_ids = _string_sequence_filter(filters.get("candidate_ids"))
+            await asyncio.to_thread(
+                self._ensure_embeddings,
+                candidate_ids,
+                filters,
+            )
         kwargs: dict[str, Any] = {
             "source_kind": MemoryRecordAdapter.source_kind,
             "model_name": model_name,

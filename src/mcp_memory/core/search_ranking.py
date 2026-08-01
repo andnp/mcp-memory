@@ -11,13 +11,55 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from mcp_memory.config import Config
-from mcp_memory.core.ports.memory import RankedMemoryCandidate, MemoryRecord
+from mcp_memory.core.ports.memory import (
+    FTS_QUERY_TOKEN_PATTERN,
+    RankedMemoryCandidate,
+    MemoryRecord,
+)
 from searchkernel.search.fusion import fuse_reciprocal_rank
 
 ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
 RelationalMemoryRecord = MemoryRecord
+
+
+def _query_tokens(query: str) -> list[str]:
+    return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+
+
+def _keyword_token_coverage(
+    query_tokens: Sequence[str],
+    record: RankedMemoryCandidate | RelationalMemoryRecord,
+) -> float:
+    if not query_tokens:
+        return 0.0
+    resolved_record = record.record if isinstance(record, RankedMemoryCandidate) else record
+    title_coverage = _token_presence_ratio(query_tokens, resolved_record.title)
+    summary_coverage = _token_presence_ratio(query_tokens, resolved_record.summary or "")
+    content_coverage = _token_presence_ratio(query_tokens, resolved_record.content)
+    tag_coverage = _token_presence_ratio(query_tokens, " ".join(resolved_record.tags))
+    coverage = (
+        (0.25 * title_coverage)
+        + (0.4 * summary_coverage)
+        + (0.25 * content_coverage)
+        + (0.1 * tag_coverage)
+    )
+    if title_coverage >= 0.75:
+        coverage += 0.1
+    if summary_coverage >= 0.75:
+        coverage += 0.15
+    if content_coverage >= 0.75:
+        coverage += 0.05
+    return min(coverage, 1.0)
+
+
+def _token_presence_ratio(query_tokens: Sequence[str], text: str) -> float:
+    if not query_tokens or not text.strip():
+        return 0.0
+    haystack = text.lower()
+    matched_tokens = sum(1 for token in query_tokens if token in haystack)
+    return matched_tokens / len(query_tokens)
 
 @dataclass(slots=True)
 class RankingSignals:
@@ -300,4 +342,10 @@ def _weighted_incoming_link_count(counts: dict[str, int]) -> float:
     return float(counts.get("DEPENDS_ON", 0) + counts.get("AMENDS", 0)) + (0.5 * float(counts.get("CONTRADICTS", 0)))
 
 
-__all__ = ["RankingEngine", "RankingSignals", "ScoringWeights"]
+__all__ = [
+    "RankingEngine",
+    "RankingSignals",
+    "ScoringWeights",
+    "_keyword_token_coverage",
+    "_query_tokens",
+]

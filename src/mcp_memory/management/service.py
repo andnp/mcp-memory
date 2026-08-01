@@ -372,6 +372,7 @@ class ManagementService:
                 config=memory.config,
                 vector_store=self._vector_store,
                 embedder=self._embedder,
+                embedding_maintenance=self._embedding_maintenance,
                 native_search=self._relational_search,
             )
             if self._repository is not None

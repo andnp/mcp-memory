@@ -14,7 +14,7 @@ from mcp_memory.core.ports.memory import (
     MemoryRepositoryPort,
     RankedMemoryCandidate,
 )
-from mcp_memory.relational.search import RankingEngine, RankingSignals
+from mcp_memory.core.search_ranking import RankingEngine, RankingSignals
 from mcp_memory.context import ApplicationContext
 from mcp_memory.integrations.searchkernel_adapters import MemoryVectorBackend
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -313,11 +313,11 @@ async def test_score_adjustment_matches_relational_ranking_engine() -> None:
         limit=10,
         filters={"workspace_id": "workspace-1"},
     )).results
-    engine = RankingEngine(cast("MemoryRepositoryPort", repository), config)
+    engine = RankingEngine(config)
     expected = {
         record.id: score
         for record, score in engine.rank_records(
-            list(repository.records.values()),
+            repository.get_ranking_candidates(list(repository.records)),
             {
                 memory_id: 1.0 / (config.search_ranking.rrf_k + rank + 1)
                 for rank, memory_id in enumerate(

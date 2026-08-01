@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from time import perf_counter, time
-from typing import Any, cast
+from typing import Any
 
 from mcp_memory.application.ports import RetrievalTelemetryPort
 from mcp_memory.context import ApplicationContext
@@ -67,6 +67,7 @@ async def _run_searchkernel_shadow(
             ctx.repository,
             vector_store=ctx.vector_store,
             embedder=ctx.embedder,
+            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
             config=config,
         )
         diagnostics = await run_searchkernel_shadow(
@@ -144,24 +145,6 @@ def _search_memory_records(
     query = arguments["query"]
     retrieval = getattr(ctx, "memory_retrieval", None)
     if retrieval is None and ctx.repository is None:
-        native_diagnostics_search = getattr(ctx.relational_search, "search_memories_with_diagnostics", None)
-        if arguments["debug"] and callable(native_diagnostics_search):
-            started_at = perf_counter()
-            native_results, diagnostics = cast(tuple[Sequence[RelationalSearchResult], Any], native_diagnostics_search(
-                query=query,
-                workspace_id=ctx.workspace_id,
-                limit=arguments["limit"],
-                memory_type=arguments["memory_type"],
-                status=arguments["status"],
-                include_superseded=arguments["include_superseded"],
-                debug=True,
-            ))
-            return {
-                "status": "ok",
-                "results": build_search_result_payloads(native_results, debug_enabled=True),
-                "timing_ms": {"total": round((perf_counter() - started_at) * 1000.0, 3)},
-                "search_diagnostics": diagnostics.to_payload(),
-            }
         return {"status": "error", "error": "repository_not_initialized"}
     if retrieval is None:
         retrieval = build_memory_retrieval_facade(
@@ -169,6 +152,7 @@ def _search_memory_records(
             config=ctx.config,
             vector_store=ctx.vector_store,
             embedder=ctx.embedder,
+            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
             native_search=ctx.relational_search,
         )
     operation = SearchMemoryRecordsOperation(retrieval)
@@ -395,6 +379,7 @@ async def _search_memory_records_async(
         ctx.repository,
         vector_store=ctx.vector_store,
         embedder=ctx.embedder,
+        embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
         adaptive_enabled=arguments.get("adaptive_limit", "limit" not in arguments),
         config=ctx.config,
     )
@@ -453,6 +438,14 @@ async def _search_memory_records_async(
             "pipeline_diagnostics": list(pipeline.diagnostics.reasons),
             "timing_ms": {"total": round(duration_ms, 3)},
         }
+        payload["timing_ms"] = {"total": round(duration_ms, 3)}
+        payload["adaptive_limit_enabled"] = arguments.get(
+            "adaptive_limit",
+            "limit" not in arguments,
+        )
+        payload["requested_limit"] = limit
+        payload["expanded_result_window"] = len(results) > limit
+        payload["returned_result_count"] = len(results)
     return payload
 
 

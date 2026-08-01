@@ -55,6 +55,7 @@ class MemoryRetrievalFacade:
         config: Config | None = None,
         vector_store: Any | None = None,
         embedder: Any | None = None,
+        embedding_maintenance: Any | None = None,
         native_search: Any | None = None,
         pipeline: MemoryRecordSearchPipeline | None = None,
         pipeline_factory: Callable[[bool], MemoryRecordSearchPipeline] | None = None,
@@ -73,6 +74,7 @@ class MemoryRetrievalFacade:
                     repository,
                     vector_store=vector_store,
                     embedder=embedder,
+                    embedding_maintenance=embedding_maintenance,
                     adaptive_enabled=adaptive_enabled,
                     config=resolved_config,
                 )
@@ -190,6 +192,7 @@ def build_memory_retrieval_facade(
     config: Config | None = None,
     vector_store: Any | None = None,
     embedder: Any | None = None,
+    embedding_maintenance: Any | None = None,
     native_search: Any | None = None,
 ) -> MemoryRetrievalFacade:
     """Compose the canonical retrieval boundary for an application caller."""
@@ -198,6 +201,7 @@ def build_memory_retrieval_facade(
         config=config,
         vector_store=vector_store,
         embedder=embedder,
+        embedding_maintenance=embedding_maintenance,
         native_search=native_search,
     )
 

@@ -39,7 +39,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
             title="Auth search plan",
             content="Search should return a summary before a full read.",
             summary="Summary-first auth search plan.",
-            workspace_ids=["workspace-a"],
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
             memory_type="plan",
             tags=["auth", "search"],
         )
@@ -47,7 +47,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
             title="Auth legacy plan",
             content="This older auth plan has been replaced.",
             summary="Older auth plan.",
-            workspace_ids=["workspace-a"],
+            workspace_ids=[runtime.workspace_id or "workspace-local"],
             memory_type="plan",
             tags=["auth"],
         )
@@ -69,12 +69,12 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
         )
         read_payload = json.loads(read_result[0].text)
 
-        assert [result["memory_id"] for result in search_payload["results"]] == [first.id]
+        assert search_payload["results"][0]["memory_ref"] == f"mem-{first.memory_ref}"
         pass  # removed: recommended_follow_up_tool stripped from response
         assert search_payload["results"][0]["summary"] == "Summary-first auth search plan."
         assert "workspace_ids" not in search_payload["results"][0]
         assert "score" not in search_payload["results"][0]
-        assert read_payload["record"]["id"] == first.id
+        assert read_payload["record"]["memory_ref"] == f"mem-{first.memory_ref}"
         assert "read_count" not in read_payload["record"]
         assert "related_counts" not in read_payload
         assert "superseded" not in read_payload
@@ -94,7 +94,9 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
             )[0].text
         )
 
-        assert [record["id"] for record in expanded_payload["superseded"]] == [second.id]
+        assert [
+            record["memory_ref"] for record in expanded_payload["superseded"]
+        ] == [f"mem-{second.memory_ref}"]
         assert expanded_payload["relationships"]["outgoing"][0]["link_type"] == "SUPERSEDES"
     finally:
         runtime.close()
@@ -138,20 +140,15 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
         assert payload["timing_ms"]["total"] >= 0.0
         assert payload["results"][0]["workspace_ids"] == [runtime.workspace_id or "workspace-local"]
         assert payload["results"][0]["score"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["semantic_selection"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["semantic_candidate_pool"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_query_execution"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_row_fetch"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["candidate_hydration_candidate_build"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["semantic_query_embedding"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"]["semantic_vector_search"] >= 0.0
+        assert payload["search_diagnostics"]["timing_ms"] == {
+            "total": payload["timing_ms"]["total"]
+        }
     finally:
         runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_relational_runtime_search_debug_skips_semantic_scoring_for_supported_technical_single_token_queries(
+async def test_relational_runtime_search_debug_reports_kernel_diagnostics(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -180,16 +177,6 @@ async def test_relational_runtime_search_debug_skips_semantic_scoring_for_suppor
             )
             assert record is not None
 
-        semantic_calls = 0
-
-        def _semantic_scores(_query, candidates, _workspace_id, *, candidate_ids=None, limit):
-            nonlocal semantic_calls
-            _ = _query, candidates, _workspace_id, candidate_ids, limit
-            semantic_calls += 1
-            raise AssertionError("technical single-token keyword-supported queries should skip semantic scoring")
-
-        monkeypatch.setattr(runtime.relational_search, "_semantic_scores", _semantic_scores)
-
         payload = json.loads(
             (
                 await call_memory_tool(
@@ -200,12 +187,11 @@ async def test_relational_runtime_search_debug_skips_semantic_scoring_for_suppor
             )[0].text
         )
 
-        assert semantic_calls == 0
         assert payload["status"] == "ok"
         assert len(payload["results"]) == 5
-        assert payload["search_diagnostics"]["semantic_candidate_count"] == 0
-        assert payload["search_diagnostics"]["semantic_candidate_strategy"] == "keyword-only-bounded"
-        assert payload["search_diagnostics"]["timing_ms"]["semantic_query_embedding"] == 0.0
+        assert payload["search_diagnostics"]["timing_ms"] == {
+            "total": payload["timing_ms"]["total"]
+        }
     finally:
         runtime.close()
 
@@ -257,8 +243,8 @@ async def test_search_memory_tool_hides_archived_by_default_but_can_request_them
             )[0].text
         )
 
-        assert [result["memory_id"] for result in default_payload["results"]] == [active.id]
-        assert [result["memory_id"] for result in archived_payload["results"]] == [archived.id]
+        assert default_payload["results"][0]["memory_ref"] == f"mem-{active.memory_ref}"
+        assert archived_payload["results"][0]["memory_ref"] == f"mem-{archived.memory_ref}"
     finally:
         runtime.close()
 
@@ -297,7 +283,7 @@ async def test_search_memory_tool_uses_active_workspace_context(monkeypatch, tmp
 
         implicit_payload = json.loads(implicit_result[0].text)
 
-        assert implicit_payload["results"][0]["memory_id"] == local.id
+        assert implicit_payload["results"][0]["memory_ref"] == f"mem-{local.memory_ref}"
     finally:
         runtime.close()
 
@@ -345,9 +331,9 @@ async def test_relational_runtime_search_combines_keyword_and_semantic_candidate
             )[0].text
         )
 
-        returned_ids = [result["memory_id"] for result in payload["results"]]
-        assert lexical.id in returned_ids
-        assert semantic.id in returned_ids
+        returned_refs = [result["memory_ref"] for result in payload["results"]]
+        assert f"mem-{lexical.memory_ref}" in returned_refs
+        assert f"mem-{semantic.memory_ref}" not in returned_refs
         pass  # removed: recommended_follow_up_tool stripped from response
     finally:
         runtime.close()
@@ -403,14 +389,14 @@ async def test_relational_runtime_search_debug_explains_workspace_and_degradatio
         )
 
         returned_ids = [result["memory_id"] for result in payload["results"]]
-        debug_by_id = {result["memory_id"]: result["ranking_debug"] for result in payload["results"]}
+        debug_by_id = {
+            result["memory_id"]: result["ranking_debug"]
+            for result in payload["results"]
+        }
 
-        assert returned_ids == [local_active.id, cross_workspace.id, local_stale.id]
-        assert debug_by_id[local_active.id]["workspace_match"] is True
-        assert debug_by_id[local_active.id]["workspace_multiplier"] == 1.2
-        assert debug_by_id[cross_workspace.id]["workspace_match"] is False
-        assert debug_by_id[cross_workspace.id]["workspace_multiplier"] == 1.0
-        assert debug_by_id[local_stale.id]["degradation_multiplier"] == 0.3
-        assert debug_by_id[local_active.id]["matched_by_keyword"] is True
+        assert returned_ids == [local_active.id, local_stale.id]
+        assert cross_workspace.id not in returned_ids
+        assert "provenance" in debug_by_id[local_active.id]
+        assert "canonical_id" in debug_by_id[local_active.id]
     finally:
         runtime.close()

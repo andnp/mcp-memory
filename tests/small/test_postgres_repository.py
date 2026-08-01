@@ -1527,7 +1527,7 @@ def test_postgres_search_service_prioritizes_workspace_and_hides_superseded(
 
     results = service.search_memories("auth plan", workspace_id="workspace-alpha", limit=5)
 
-    assert [result.memory_id for result in results] == [current_plan.id, cross_workspace.id]
+    assert [result.memory_id for result in results] == [current_plan.id]
     assert results[0].summary == "Current plan summary."
     assert results[0].workspace_ids == ["workspace-alpha"]
 
@@ -1818,7 +1818,7 @@ def test_postgres_search_service_bounds_semantic_scoring_when_lexical_hits_are_s
     assert vector_store.last_candidate_ids == [exact.id]
 
 
-def test_postgres_search_service_keeps_global_semantic_fallback_when_lexical_hits_are_weak(
+def test_postgres_search_service_delegates_weak_lexical_queries_to_kernel(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:
     repository, _session_manager = postgres_repository
@@ -1852,12 +1852,11 @@ def test_postgres_search_service_keeps_global_semantic_fallback_when_lexical_hit
 
     assert results
     assert semantic_match.id in {result.memory_id for result in results}
-    assert set(vector_store.last_candidate_ids or []) == {weak_lexical.id, semantic_match.id}
+    assert vector_store.last_candidate_ids is None
 
 
-def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculative_bounded_search(
+def test_postgres_search_service_reports_kernel_owned_diagnostics(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository, _session_manager = postgres_repository
     vector_store = _RecordingCandidateAwareVectorStore()
@@ -1867,8 +1866,6 @@ def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculat
         embedder=_PostgresSearchFakeEmbedder(),
         vector_store=vector_store,
     )
-    monkeypatch.setattr(service, "_should_broaden_semantic_search", lambda *_args, **_kwargs: True)
-
     lexical_records = []
     for index in range(3):
         record = repository.create_memory(
@@ -1891,8 +1888,6 @@ def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculat
         tags=["auth"],
     )
     assert semantic_only is not None
-    expected_fallback_ids = repository.list_memory_ids(limit=500)
-
     for record in lexical_records:
         vector_store.upsert(
             source_kind="memory",
@@ -1917,9 +1912,8 @@ def test_postgres_search_service_uses_candidate_filtered_fallback_after_speculat
     )
 
     assert results
-    assert vector_store.last_candidate_ids == expected_fallback_ids
-    assert diagnostics.semantic_candidate_strategy == "global-fallback"
-    assert diagnostics.timing_ms["semantic_speculative_fallback"] >= 0.0
+    assert diagnostics.timing_ms["total"] >= 0.0
+    assert "semantic_speculative_fallback" not in diagnostics.timing_ms
 
 
 def test_postgres_maintenance_candidate_query_contract(

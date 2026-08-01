@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Any, cast
 from searchkernel.domain import Vector
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding
@@ -26,8 +26,9 @@ from mcp_memory.core.ports.memory import (
     MemoryReadPort,
     MemoryRecord,
     MemoryRepositoryPort,
+    RankedMemoryCandidate,
 )
-from mcp_memory.relational.search import (
+from mcp_memory.core.search_ranking import (
     RankingEngine,
     RankingSignals,
     _keyword_token_coverage,
@@ -157,6 +158,22 @@ class _MemorySearchPolicyContext:
             )
             self.links[(memory_id, "incoming")] = incoming_links
 
+    def ranking_candidate(self, memory_id: str) -> RankedMemoryCandidate | None:
+        self.prefetch([memory_id])
+        record = self.records.get(memory_id)
+        if record is None:
+            return None
+        incoming_links = self.links.get((memory_id, "incoming"), ())
+        counts: dict[str, int] = {}
+        for link in incoming_links:
+            counts[link.link_type] = counts.get(link.link_type, 0) + 1
+        return RankedMemoryCandidate(
+            record=record,
+            incoming_links_count=len(incoming_links),
+            has_incoming_supersedes=counts.get("SUPERSEDES", 0) > 0,
+            incoming_link_type_counts=counts,
+        )
+
 class _PolicyRepositoryView:
     def __init__(self, repository: MemoryRepositoryPort) -> None:
         self._repository = repository
@@ -233,13 +250,15 @@ def build_memory_record_pipeline(
     vector_store: MemoryVectorBackend | None = None,
     embedder: EmbeddingBatchProvider | None = None,
     embedding_dim: int | None = None,
+    embedding_maintenance: Any | None = None,
     adaptive_enabled: bool = False,
     config: Config | None = None,
 ) -> MemoryRecordSearchPipeline:
     """Compose a read-only memory pipeline with memory-owned ranking hooks.
 
-    The generic kernel can express lifecycle, workspace, type, and supersession
-    filtering through policy hooks. Memory's RankingEngine supplies the
+    The generic kernel owns retrieval orchestration while policy hooks retain
+    lifecycle, workspace, type, supersession, and ranking authority. Memory's
+    core RankingEngine supplies the
     recency, workspace, access, authority, degradation, and signal adjustments
     without moving policy into searchkernel. The memory-owned signal context
     carries query-wide keyword presence and semantic abstention state.
@@ -251,10 +270,7 @@ def build_memory_record_pipeline(
         _prefetch_memory_records(repository, memory_ids)
 
     policy_repository = _PolicyRepositoryView(repository)
-    ranking_engine = RankingEngine(
-        cast(MemoryRepositoryPort, policy_repository),
-        resolved_config,
-    )
+    ranking_engine = RankingEngine(resolved_config)
     diagnostics: list[str] = []
     embedding_provider: MemoryQueryEmbeddingProvider | None = None
     adapted_vector_store: MemoryVectorStore | None = None
@@ -268,7 +284,20 @@ def build_memory_record_pipeline(
             diagnostics.append("embedding dimension unavailable; using keyword and graph retrieval")
         else:
             embedding_provider = MemoryQueryEmbeddingProvider(embedder, resolved_dim)
-            adapted_vector_store = MemoryVectorStore(vector_store, prefetch=prefetch)
+            adapted_vector_store = MemoryVectorStore(
+                vector_store,
+                prefetch=prefetch,
+                ensure_embeddings=(
+                    lambda candidate_ids, filters: _ensure_searchable_embeddings(
+                        repository,
+                        embedding_maintenance,
+                        candidate_ids,
+                        filters,
+                    )
+                    if embedding_maintenance is not None
+                    else None
+                ),
+            )
 
     policy = RecordSearchPolicy(
         candidate_filter=lambda candidate: _candidate_allowed(repository, candidate),
@@ -338,6 +367,36 @@ def _embedding_dimension(embedder: EmbeddingBatchProvider) -> int | None:
     if len(embeddings) != 1 or not embeddings[0]:
         return None
     return len(embeddings[0])
+
+
+def _ensure_searchable_embeddings(
+    repository: MemoryRepositoryPort,
+    embedding_maintenance: Any,
+    candidate_ids: Sequence[str],
+    filters: Mapping[str, Any],
+) -> None:
+    requested_status = filters.get("status")
+    status = requested_status if isinstance(requested_status, str) else None
+    if status is None and filters.get("statuses") == ["active"]:
+        status = "active"
+    if candidate_ids:
+        memory_ids = list(candidate_ids)
+    else:
+        memory_ids = repository.list_memory_ids(
+            workspace_id=(
+                filters["workspace_id"]
+                if isinstance(filters.get("workspace_id"), str)
+                else None
+            ),
+            status=status,
+            limit=500,
+        )
+    candidates = repository.get_searchable_memories(
+        memory_ids,
+        status=status,
+        include_superseded=bool(filters.get("include_superseded", False)),
+    )
+    embedding_maintenance.ensure_searchable_memory_embeddings(candidates)
 
 
 def _cached_memory(
@@ -480,6 +539,9 @@ def _adjust_score(
     record = _cached_memory(repository, candidate.record_id)
     if record is None:
         return 0.0
+    ranked_candidate = _ranking_candidate(repository, candidate.record_id)
+    if ranked_candidate is None:
+        return 0.0
 
     workspace_id = _ACTIVE_FILTERS.get().get(
         "_ranking_workspace_id",
@@ -509,7 +571,7 @@ def _adjust_score(
         expanded_by_graph="graph" in provenance.strategies,
     )
     ranked = ranking_engine.rank_records(
-        [record],
+        [ranked_candidate],
         {record.id: candidate.score},
         workspace,
         ranking_signals={record.id: signals},
@@ -527,6 +589,28 @@ def _adjust_score(
         signal_context.top_record_id = record.id
         signal_context.top_semantic_score = semantic_score
     return adjusted_score
+
+
+def _ranking_candidate(
+    repository: MemoryRepositoryPort,
+    memory_id: str,
+) -> RankedMemoryCandidate | None:
+    context = _ACTIVE_POLICY_CONTEXT.get()
+    if context is not None and context.repository is repository:
+        return context.ranking_candidate(memory_id)
+    record = repository.get_memory(memory_id)
+    if record is None:
+        return None
+    incoming_links = repository.get_links(memory_id, direction="incoming")
+    counts: dict[str, int] = {}
+    for link in incoming_links:
+        counts[link.link_type] = counts.get(link.link_type, 0) + 1
+    return RankedMemoryCandidate(
+        record=record,
+        incoming_links_count=len(incoming_links),
+        has_incoming_supersedes=counts.get("SUPERSEDES", 0) > 0,
+        incoming_link_type_counts=counts,
+    )
 
 
 def _signal_context() -> _MemorySearchSignalContext | None:
