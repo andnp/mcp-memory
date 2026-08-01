@@ -115,6 +115,15 @@ def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
     assert any("PRIMARY KEY (run_id, action_id)" in statement for statement in migration.statements)
 
 
+def test_postgres_migration_adds_memory_references() -> None:
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 18)
+
+    assert migration.name == "add_memory_references"
+    assert any("ADD COLUMN IF NOT EXISTS memory_ref BIGINT" in statement for statement in migration.statements)
+    assert any("CREATE SEQUENCE IF NOT EXISTS memory_ref_seq" in statement for statement in migration.statements)
+    assert any("CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_memory_ref" in statement for statement in migration.statements)
+
+
 def test_postgres_curation_repository_contract() -> None:
     session_manager = FakeSessionManager()
     assert_curation_repository_contract(

@@ -819,6 +819,40 @@ def test_postgres_repository_create_read_update_and_list_memory(
     assert any(connection.commit_count > 0 for connection in session_manager.connections)
 
 
+def test_postgres_repository_persists_and_resolves_memory_references(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, _session_manager = postgres_repository
+
+    first = repository.create_memory(
+        title="First memory",
+        content="First content.",
+        workspace_ids=["workspace-a"],
+    )
+    second = repository.create_memory(
+        title="Second memory",
+        content="Second content.",
+        workspace_ids=["workspace-a"],
+    )
+
+    assert first is not None and second is not None
+    assert (first.memory_ref, second.memory_ref) == (1, 2)
+    first_by_ref = repository.get_memory("mem-1")
+    second_by_ref = repository.get_memory("2")
+    assert first_by_ref is not None and first_by_ref.id == first.id
+    assert second_by_ref is not None and second_by_ref.id == second.id
+
+    updated = repository.update_memory("mem-2", title="Updated second memory")
+    assert updated is not None
+    assert updated.id == second.id
+    assert updated.title == "Updated second memory"
+
+    deleted = repository.delete_memory("mem-1")
+    assert deleted is not None
+    assert deleted.id == first.id
+    assert repository.get_memory("mem-1") is None
+
+
 def test_postgres_repository_rejects_invalid_domain_values(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:

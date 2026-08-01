@@ -135,6 +135,79 @@ def test_database_manager_migrates_legacy_journal_schema_without_claim_columns(t
         manager.close()
 
 
+def test_database_manager_backfills_memory_references_in_creation_order(tmp_path: Path) -> None:
+    legacy_db_path = tmp_path / "legacy-memory-refs.db"
+    conn = sqlite3.connect(legacy_db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                summary TEXT,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                read_count INTEGER NOT NULL DEFAULT 0,
+                access_score REAL NOT NULL DEFAULT 0,
+                last_accessed_at TEXT,
+                last_surfaced_at TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            INSERT INTO memories (id, title, content, type, created_at, updated_at)
+            VALUES
+                ('later', 'Later', 'Later content', 'fact', '2026-03-15', '2026-03-15'),
+                ('earlier', 'Earlier', 'Earlier content', 'fact', '2026-03-14', '2026-03-14');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    manager = DatabaseManager(legacy_db_path)
+    try:
+        rows = manager.get_connection().execute(
+            "SELECT id, memory_ref FROM memories ORDER BY memory_ref"
+        ).fetchall()
+        assert [(row[0], row[1]) for row in rows] == [("earlier", 1), ("later", 2)]
+    finally:
+        manager.close()
+
+
+def test_relational_repository_persists_and_resolves_memory_references(db_manager):
+    repository = RelationalMemoryRepository(db_manager)
+
+    first = repository.create_memory(
+        title="First memory",
+        content="First content.",
+        workspace_ids=["workspace-a"],
+    )
+    second = repository.create_memory(
+        title="Second memory",
+        content="Second content.",
+        workspace_ids=["workspace-a"],
+    )
+
+    assert first is not None and second is not None
+    assert (first.memory_ref, second.memory_ref) == (1, 2)
+    first_by_ref = repository.get_memory("mem-1")
+    second_by_ref = repository.get_memory("2")
+    assert first_by_ref is not None and first_by_ref.id == first.id
+    assert second_by_ref is not None and second_by_ref.id == second.id
+
+    updated = repository.update_memory("mem-2", title="Updated second memory")
+    assert updated is not None
+    assert updated.id == second.id
+    assert updated.title == "Updated second memory"
+
+    deleted = repository.delete_memory("mem-1")
+    assert deleted is not None
+    assert deleted.id == first.id
+    assert repository.get_memory("mem-1") is None
+
+
 def test_relational_repository_create_read_update_and_list_memory(db_manager):
     repository = RelationalMemoryRepository(db_manager)
 
