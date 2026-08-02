@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_policy import is_generic_summary
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -111,10 +112,9 @@ def _memory_write_quality_warnings(
     content: str | None = None,
 ) -> list[str]:
     warnings: list[str] = []
-    normalized_summary = _normalize_quality_text(summary or "")
     normalized_memory_type = memory_type.strip().lower()
 
-    if normalized_summary.startswith("covers "):
+    if summary is not None and is_generic_summary(summary):
         warnings.append("generic_summary")
     if normalized_memory_type == "observation" and not tags:
         warnings.append("observation_missing_tags")
