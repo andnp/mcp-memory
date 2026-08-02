@@ -26,7 +26,6 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
     CurationRunOutcome,
     CurationRunResult,
-    RetentionDecision,
 )
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_execution_service import CurationExecutionService
@@ -62,6 +61,7 @@ from mcp_memory.core.ports.curation import (
     CurationActionReceipt,
     CandidateDisposition,
     CurationCandidateState,
+    CurationReceiptState,
     CurationRepository,
     CurationRun,
     CurationRunState,
@@ -163,6 +163,52 @@ def _materialize_read(
     value: Mapping[str, Any] | AcceptedMaintenanceRead,
 ) -> AcceptedMaintenanceRead:
     return value if isinstance(value, AcceptedMaintenanceRead) else accept_maintenance_read(value)
+
+
+def _context_memory_ids(context: ImmutableCurationContextPacket) -> set[UUID]:
+    return {
+        UUID(memory_id)
+        for memory_id in (*context.seed_memory_ids, *context.support_memory_ids)
+    }
+
+
+def _candidate_token(
+    context: ImmutableCurationContextPacket,
+    memory_id: UUID,
+) -> str | None:
+    record_token = context.record_tokens.get(str(memory_id))
+    graph_token = context.graph_tokens.get(str(memory_id))
+    if record_token is None or graph_token is None:
+        return None
+    return candidate_revision_token(record_token, graph_token)
+
+
+def _action_memory_ids(action: Any) -> set[UUID]:
+    ids: set[UUID] = set()
+    for attribute in ("target_id", "source_id", "canonical_id"):
+        value = getattr(action, attribute, None)
+        if isinstance(value, UUID):
+            ids.add(value)
+    ids.update(value for value in getattr(action, "source_ids", ()) if isinstance(value, UUID))
+    return ids
+
+
+def _merge_candidate_outcomes(
+    outcomes: dict[UUID, tuple[CandidateDisposition, str, bool]],
+    memory_ids: Iterable[UUID],
+    disposition: CandidateDisposition,
+    reason: str,
+    escalated: bool,
+) -> None:
+    priority = {
+        CandidateDisposition.COOLDOWN: 0,
+        CandidateDisposition.ACTIONED: 1,
+        CandidateDisposition.ESCALATED: 2,
+    }
+    for memory_id in memory_ids:
+        current = outcomes.get(memory_id)
+        if current is None or priority[disposition] >= priority[current[0]]:
+            outcomes[memory_id] = (disposition, reason, escalated)
 
 
 def _assemble_context(
@@ -399,8 +445,16 @@ class CurationDryRunHarness:
         if terminal is None:
             raise RuntimeError(f"curation run {run_id} was not persisted")
 
-        if outcome is CurationRunOutcome.NO_OP and plan is not None:
-            self._persist_no_op_dispositions(plan.retained, context, run_id, frontier_key)
+        self._persist_candidate_outcomes(
+            plan=plan,
+            validation=validation,
+            context=context,
+            run_id=run_id,
+            frontier_key=frontier_key,
+            strategy=frontier.strategy,
+            reason_code=reason_code,
+            receipts=receipts,
+        )
 
         work_item = self._work_item_service.decide(outcome, reason_code, latest)
         specialist_work_items: tuple[WorkItemRecordLike, ...] = ()
@@ -463,39 +517,164 @@ class CurationDryRunHarness:
         )
         return result.plan, result.validation, result.envelopes, result.retry_reason, result.failure
 
-    def _persist_no_op_dispositions(
+    def _persist_candidate_outcomes(
         self,
-        retained: Iterable[RetentionDecision],
+        *,
+        plan: CurationPlan | None,
+        validation: CurationValidationResult | None,
         context: ImmutableCurationContextPacket,
         run_id: UUID,
         frontier_key: str,
+        strategy: str,
+        reason_code: str,
+        receipts: tuple[CurationActionReceipt, ...],
     ) -> None:
         now = self._clock()
-        for decision in retained:
-            memory_id = decision.memory_id
-            record_token = context.record_tokens.get(str(memory_id))
-            graph_token = context.graph_tokens.get(str(memory_id))
-            token = (
-                None
-                if record_token is None or graph_token is None
-                else candidate_revision_token(record_token, graph_token)
-            )
-            previous = self._curation_store.get_candidate_state(memory_id)
-            count = 1
-            if previous is not None and previous.last_observed_revision_token == token:
-                count = previous.consecutive_no_op_count + 1
-            self._curation_store.put_candidate_state(
-                CurationCandidateState(
+        if plan is None:
+            for memory_id in _context_memory_ids(context):
+                self._put_candidate_outcome(
                     memory_id=memory_id,
-                    last_observed_revision_token=token,
-                    disposition=CandidateDisposition.COOLDOWN,
-                    consecutive_no_op_count=count,
-                    cooldown_until=now + timedelta(seconds=self._config.no_op_cooldown_seconds),
-                    last_disposition_reason=str(decision.reason),
-                    last_frontier_key=frontier_key,
-                    last_run_id=run_id,
+                    token=_candidate_token(context, memory_id),
+                    disposition=CandidateDisposition.ESCALATED,
+                    reason=reason_code,
+                    strategy=strategy,
+                    frontier_key=frontier_key,
+                    run_id=run_id,
+                    now=now,
+                )
+            return
+
+        outcomes: dict[UUID, tuple[CandidateDisposition, str, bool]] = {}
+
+        for decision in plan.retained:
+            outcomes[decision.memory_id] = (
+                CandidateDisposition.COOLDOWN,
+                str(decision.reason),
+                False,
+            )
+
+        receipt_by_action_id = {receipt.action_id: receipt for receipt in receipts}
+        if validation is not None:
+            for item in validation.rejected_actions:
+                _merge_candidate_outcomes(
+                    outcomes,
+                    _action_memory_ids(item.action),
+                    CandidateDisposition.ESCALATED,
+                    ",".join(str(code) for code in item.reason_codes),
+                    True,
+                )
+            for route in validation.specialist_routes:
+                _merge_candidate_outcomes(
+                    outcomes,
+                    _action_memory_ids(route.action),
+                    CandidateDisposition.ESCALATED,
+                    str(route.reason_code),
+                    True,
+                )
+            for item in validation.accepted_actions:
+                receipt = receipt_by_action_id.get(item.action.action_id)
+                if receipt is not None and receipt.status is CurationReceiptState.VERIFIED:
+                    disposition = CandidateDisposition.ACTIONED
+                    reason = "verified_receipt"
+                    escalated = False
+                else:
+                    disposition = CandidateDisposition.ESCALATED
+                    reason = (
+                        "unverified_receipt"
+                        if receipt is not None
+                        else reason_code
+                    )
+                    escalated = True
+                _merge_candidate_outcomes(
+                    outcomes,
+                    _action_memory_ids(item.action),
+                    disposition,
+                    reason,
+                    escalated,
+                )
+
+        for memory_id in set(plan.seed_memory_ids) | set(outcomes):
+            disposition, reason, escalated = outcomes.get(
+                memory_id,
+                (CandidateDisposition.ESCALATED, reason_code, True),
+            )
+            self._put_candidate_outcome(
+                memory_id=memory_id,
+                token=_candidate_token(context, memory_id),
+                disposition=disposition,
+                reason=reason,
+                strategy=strategy if escalated else None,
+                frontier_key=frontier_key,
+                run_id=run_id,
+                now=now,
+            )
+
+    def _put_candidate_outcome(
+        self,
+        *,
+        memory_id: UUID,
+        token: str | None,
+        disposition: CandidateDisposition,
+        reason: str,
+        strategy: str | None,
+        frontier_key: str,
+        run_id: UUID,
+        now: datetime,
+    ) -> None:
+        previous = self._curation_store.get_candidate_state(memory_id)
+        if previous is not None and previous.last_run_id == run_id:
+            return
+        if (
+            previous is not None
+            and previous.last_observed_revision_token not in (None, token)
+        ):
+            return
+        if (
+            previous is not None
+            and previous.last_frontier_key not in (None, frontier_key)
+            and (
+                previous.disposition is CandidateDisposition.ACTIONED
+                or (
+                    previous.disposition is CandidateDisposition.ESCALATED
+                    and previous.last_escalated_strategy != strategy
                 )
             )
+        ):
+            return
+        no_op_count = 0
+        escalation_count = 0
+        if disposition is CandidateDisposition.COOLDOWN:
+            no_op_count = (
+                previous.consecutive_no_op_count + 1
+                if previous is not None
+                and previous.last_observed_revision_token == token
+                else 1
+            )
+        if disposition is CandidateDisposition.ESCALATED:
+            escalation_count = (
+                previous.escalation_count + 1
+                if previous is not None
+                and previous.last_observed_revision_token == token
+                else 1
+            )
+        self._curation_store.put_candidate_state(
+            CurationCandidateState(
+                memory_id=memory_id,
+                last_observed_revision_token=token,
+                disposition=disposition,
+                consecutive_no_op_count=no_op_count,
+                cooldown_until=(
+                    now + timedelta(seconds=self._config.no_op_cooldown_seconds)
+                    if disposition is CandidateDisposition.COOLDOWN
+                    else None
+                ),
+                last_disposition_reason=reason,
+                last_frontier_key=frontier_key,
+                last_run_id=run_id,
+                escalation_count=escalation_count,
+                last_escalated_strategy=strategy,
+            )
+        )
 
     def _classify_outcome(
         self,

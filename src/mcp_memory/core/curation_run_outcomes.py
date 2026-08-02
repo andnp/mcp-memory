@@ -153,15 +153,16 @@ def budget_usage(
 
 
 def project_receipts(receipts: tuple[CurationReceipt, ...]) -> list[MutationReceipt]:
-    return [
-        MutationReceipt.model_validate(
-            receipt.model_dump(
-                mode="json",
-                exclude={"mutation_event_id", "intent_hash", "verification_descriptor"},
-            )
+    projected: list[MutationReceipt] = []
+    for receipt in receipts:
+        payload = receipt.model_dump(
+            mode="json",
+            exclude={"mutation_event_id", "intent_hash", "verification_descriptor"},
         )
-        for receipt in receipts
-    ]
+        if payload["status"] == "verification_failed":
+            payload["status"] = "failed"
+        projected.append(MutationReceipt.model_validate(payload))
+    return projected
 
 
 def count_verified_receipts(receipts: tuple[CurationReceipt, ...]) -> int:

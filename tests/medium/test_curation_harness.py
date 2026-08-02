@@ -41,7 +41,11 @@ from mcp_memory.core.curation_planner import (
 )
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_routing import MaintenanceFamily
-from mcp_memory.core.curation_validation import AcceptedCurationAction, CurationValidationResult
+from mcp_memory.core.curation_validation import (
+    AcceptedCurationAction,
+    CurationSpecialistRoute,
+    CurationValidationResult,
+)
 from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
 from mcp_memory.utils.db import DatabaseManager
 from mcp_memory.work_item_store import SQLiteWorkItemRepository, WORK_ITEM_STATUS_DEFERRED
@@ -294,6 +298,17 @@ class _DispatchingVerifier:
         )
 
 
+class _FailingVerifier(_DispatchingVerifier):
+    def verify(self, receipt: CurationActionReceipt, action) -> CurationActionReceipt:
+        self.calls.append(action.operation)
+        return receipt.model_copy(
+            update={
+                "status": CurationReceiptState.VERIFICATION_FAILED,
+                "error_code": "after_token_mismatch",
+            }
+        )
+
+
 class _TransitionOnlyStore:
     def __init__(self) -> None:
         self.transitions: list[tuple[UUID, CurationRunState]] = []
@@ -392,6 +407,28 @@ async def test_valid_noop_completes_claimed_work_and_persists_disposition(db_man
 
 
 @pytest.mark.asyncio
+async def test_repeated_noop_advances_cooldown_metadata(db_manager: DatabaseManager) -> None:
+    seed = uuid4()
+    frontier = _frontier(seed)
+    planner = _RequestBoundFakePlanner([
+        FakePlannerScenario(plan=_plan(frontier, seed)),
+        FakePlannerScenario(plan=_plan(frontier, seed)),
+    ])
+    harness = _harness(db_manager, planner)
+
+    first = await harness.run(frontier)
+    second = await harness.run(frontier)
+
+    state = SQLiteCurationStore(db_manager).get_candidate_state(seed)
+    assert state is not None
+    assert state.disposition.value == "cooldown"
+    assert state.consecutive_no_op_count == 2
+    assert state.last_frontier_key == second.run.frontier_key
+    assert state.last_run_id == second.run.run_id
+    assert first.run.run_id != second.run.run_id
+
+
+@pytest.mark.asyncio
 async def test_valid_action_is_deferred_and_never_executes_mutation(db_manager: DatabaseManager) -> None:
     seed = uuid4()
     work_items = SQLiteWorkItemRepository(db_manager)
@@ -422,6 +459,12 @@ async def test_valid_action_is_deferred_and_never_executes_mutation(db_manager: 
     assert result.work_item.action is WorkItemAction.DEFER
     assert work_items.get_item(item.id).status == WORK_ITEM_STATUS_DEFERRED
     assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+    state = SQLiteCurationStore(db_manager).get_candidate_state(seed)
+    assert state is not None
+    assert state.disposition.value == "escalated"
+    assert state.escalation_count == 1
+    assert state.last_escalated_strategy == "focused"
+    assert state.last_disposition_reason == "dry_run_requires_executor"
 
 
 @pytest.mark.asyncio
@@ -721,12 +764,118 @@ async def test_execute_accepted_actions_runs_all_seven_operations_through_harnes
         assert result.result.verified_action_count == 7
         assert len(result.result.receipts) == 7
         assert result.specialist_work_items == ()
+        for record in records:
+            state = SQLiteCurationStore(manager).get_candidate_state(cast(UUID, record["id"]))
+            assert state is not None
+            assert state.disposition.value == "actioned"
+            assert state.last_observed_revision_token is not None
+            assert state.last_frontier_key == result.run.frontier_key
+            assert state.last_run_id == result.run.run_id
     finally:
         manager.close()
         for suffix in ("", "-wal", "-shm"):
             candidate = db_path.with_name(db_path.name + suffix)
             if candidate.exists():
                 candidate.unlink()
+
+
+@pytest.mark.asyncio
+async def test_verification_failure_escalates_without_marking_candidate_actioned(
+    db_manager: DatabaseManager,
+) -> None:
+    seed = uuid4()
+    record = _action_tokenized_record(seed)
+    action = _normalize_action(record)
+    frontier = _frontier(seed)
+    plan = CurationPlan(
+        plan_id=uuid4(),
+        run_id=uuid4(),
+        frontier_key="frontier",
+        context_fingerprint="context",
+        seed_memory_ids=[seed],
+        actions=[action],
+        rationale="verification failure",
+    )
+    planner = _RequestBoundFakePlanner([
+        FakePlannerScenario(plan=plan),
+        FakePlannerScenario(plan=plan),
+    ])
+    executor = _DispatchingExecutor()
+    verifier = _FailingVerifier()
+    harness = CurationDryRunHarness(
+        curation_store=SQLiteCurationStore(db_manager),
+        planner=planner,
+        config=CurationHarnessConfig(execute_accepted_actions=True),
+        memory_types={seed: "fact"},
+        executor=cast(Any, executor),
+        verifier=cast(Any, verifier),
+        clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    first = await harness.run(frontier)
+    second = await harness.run(frontier)
+
+    assert first.outcome is CurationRunOutcome.VERIFICATION_FAILED
+    assert second.outcome is CurationRunOutcome.VERIFICATION_FAILED
+    state = SQLiteCurationStore(db_manager).get_candidate_state(seed)
+    assert state is not None
+    assert state.disposition.value == "escalated"
+    assert state.escalation_count == 2
+    assert state.last_run_id == second.run.run_id
+    assert state.last_disposition_reason == "unverified_receipt"
+
+
+def test_specialist_route_persists_escalated_candidate_state(db_manager: DatabaseManager) -> None:
+    seed = uuid4()
+    record = _action_tokenized_record(seed)
+    frontier = _frontier(seed)
+    context = build_context_packet(
+        family=frontier.family,
+        strategy=frontier.strategy,
+        seed_reads=frontier.seed_reads,
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+    action = _normalize_action(record)
+    plan = CurationPlan(
+        plan_id=uuid4(),
+        run_id=uuid4(),
+        frontier_key=context.frontier_fingerprint,
+        context_fingerprint=context.context_fingerprint,
+        seed_memory_ids=[seed],
+        actions=[action],
+        rationale="specialist route",
+    )
+    validation = CurationValidationResult(
+        plan=plan,
+        specialist_routes=(
+            CurationSpecialistRoute(action=action, family=MaintenanceFamily.CURATOR),
+        ),
+    )
+    harness = CurationDryRunHarness(
+        curation_store=SQLiteCurationStore(db_manager),
+        planner=cast(Any, object()),
+        clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    run_id = uuid4()
+
+    harness._persist_candidate_outcomes(
+        plan=plan,
+        validation=validation,
+        context=context,
+        run_id=run_id,
+        frontier_key=context.frontier_fingerprint,
+        strategy=frontier.strategy,
+        reason_code="needs_different_specialist",
+        receipts=(),
+    )
+
+    state = SQLiteCurationStore(db_manager).get_candidate_state(seed)
+    assert state is not None
+    assert state.disposition.value == "escalated"
+    assert state.escalation_count == 1
+    assert state.last_escalated_strategy == frontier.strategy
+    assert state.last_frontier_key == context.frontier_fingerprint
+    assert state.last_run_id == run_id
 
 
 @pytest.mark.asyncio
