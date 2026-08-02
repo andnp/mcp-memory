@@ -353,7 +353,10 @@ class CurationPlan(CurationModel):
         if not self.actions and not self.retained:
             raise ValueError("an empty plan requires a retention decision")
         if action_ids & retained_ids:
-            raise ValueError("a memory cannot be both acted on and retained")
+            raise ValueError(
+                "each seed memory must have exactly one disposition: "
+                "a memory cannot be both acted on and retained"
+            )
         return self
 
 

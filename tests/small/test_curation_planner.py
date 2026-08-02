@@ -87,6 +87,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "content is the final persisted durable memory body" in contract
     assert "canonical_id is the retained base" in contract
     assert "Do not write mutation-status prose" in contract
+    assert "exactly one disposition" in contract
+    assert "action source, target, canonical, and child-source IDs all count as affected" in contract
     assert "target 1600 characters or less" in contract
     assert "split content above 3000 characters" in contract
     assert "retention decision instead of inventing an ID" in contract
@@ -99,6 +101,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "Every memory ID in an action or retention decision must be copied" in prompt
     assert "content is the final persisted durable memory body" in prompt
     assert "do not write status prose" in prompt
+    assert "Give every seed exactly one disposition" in prompt
     assert "If no visible canonical is appropriate, retain the memory" in prompt
 
 

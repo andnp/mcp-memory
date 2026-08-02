@@ -4,6 +4,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from mcp_memory.core.curation_models import (
+    ActionPreconditions,
     ArchiveMemoryAction,
     ClaimMapping,
     ClaimManifest,
@@ -50,6 +51,35 @@ def test_plan_requires_complete_seed_dispositions() -> None:
         rationale="no safe action", seed_memory_ids=[seed], retained=[decision],
     )
     assert plan.retained == [decision]
+
+
+def test_plan_rejects_overlapping_action_and_retention_dispositions() -> None:
+    seed = uuid4()
+    action = NormalizeMemoryAction(
+        action_id=uuid4(),
+        target_id=seed,
+        confidence=1,
+        rationale="normalize focused record",
+        summary="Focused record",
+        preconditions=ActionPreconditions(),
+    )
+    retained = RetentionDecision(
+        memory_id=seed,
+        reason=RetentionReason.ALREADY_FOCUSED,
+        rationale="focused",
+    )
+
+    with pytest.raises(ValidationError, match="exactly one disposition"):
+        CurationPlan(
+            plan_id=uuid4(),
+            run_id=uuid4(),
+            frontier_key="frontier",
+            context_fingerprint="context",
+            rationale="invalid overlap",
+            seed_memory_ids=[seed],
+            actions=[action],
+            retained=[retained],
+        )
 
 
 def test_defaults_are_isolated_and_contracts_are_pure() -> None:

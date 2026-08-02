@@ -543,6 +543,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "For merge_memories, canonical_id is the retained base; preserve its supported claims, integrate justified source claims, and make content stand alone after sources are archived.",
             "Use claim_manifest to map preserved or transformed claims to source records; do not use it as a substitute for writing those claims into the final content.",
             "Do not write mutation-status prose such as 'merged ... into the canonical' or 'added ... to the record' as memory content.",
+            "Each seed memory must have exactly one disposition: it appears in an action's affected IDs or in retained, never both; action source, target, canonical, and child-source IDs all count as affected.",
             "Prefer one conclusion-first takeaway with concrete evidence; target 1600 characters or less, and split content above 3000 characters when it contains multiple takeaways.",
             "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
@@ -574,7 +575,9 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "content is the final persisted durable memory body, not a description of the "
         "mutation: preserve the canonical's supported claims, integrate justified "
         "source claims, and do not write status prose such as 'merged into the "
-        "canonical'. Use one conclusion-first takeaway with concrete evidence, target "
+        "canonical'. Give every seed exactly one disposition: put it in an action "
+        "or in retained, never both; any action source, target, canonical, or "
+        "child-source ID counts as acted on. Use one conclusion-first takeaway with concrete evidence, target "
         "1600 characters or less, and split multi-takeaway content above 3000 "
         "characters. If no visible canonical is appropriate, retain the memory instead "
         "of inventing an ID.\n"
