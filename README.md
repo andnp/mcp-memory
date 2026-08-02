@@ -201,8 +201,10 @@ create_startup_snapshot = true
 warn_on_shared_storage = true
 
 [embeddings]
+provider = "sentence-transformers"
 model = "sentence-transformers/all-MiniLM-L6-v2"
 batch_size = 32
+ollama_base_url = "http://localhost:11434"
 
 [search_ranking]
 rrf_k = 60.0
@@ -312,6 +314,16 @@ Then perform the import:
 
 ```bash
 uv run mcp-memory admin migrate-sqlite-to-postgres --postgres-dsn 'postgresql://mcp_memory:change-me@127.0.0.1:5432/mcp_memory'
+```
+
+`embeddings.provider` defaults to `sentence-transformers`. To use an Ollama
+embedding model instead, set the provider, model, and Ollama endpoint:
+
+```toml
+[embeddings]
+provider = "ollama"
+model = "qwen3-embedding:0.6b"
+ollama_base_url = "http://localhost:11434"
 ```
 
 For the full operator path, backup notes, and smoke checklist, see `docs/postgres-shared-mode-runbook.md`.
