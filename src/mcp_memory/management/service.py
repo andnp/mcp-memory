@@ -52,7 +52,7 @@ from mcp_memory.management.operator_health_reporting import (
     summarize_memory_tool_latency,
     summarize_provider_policy,
 )
-from mcp_memory.management.overview_reporting import build_overview
+from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.mutation_history import (
@@ -379,6 +379,23 @@ class ManagementService:
             if self._repository is not None
             else None
         )
+        self._overview_service = OverviewService(
+            OverviewServiceDependencies(
+                memory_queries=self._memory_queries,
+                repository=self._repository,
+                task_queue=self._task_queue,
+                runtime_info=self._runtime_info,
+                db_manager=self._db_manager,
+                provider_usage_repo=self._provider_usage,
+                runtime_logs_repo=self._runtime_logs,
+                embedder=self._embedder,
+                storage_backend=self._storage_backend,
+                vector_store=self._vector_store,
+                relational_search=self._relational_search,
+                cache_health=self._build_cache_health,
+                embedding_integrity_summary=lambda: self._embedding_integrity_summary(workspace_id=None),
+            )
+        )
         self._config = memory.config
         self._ai_json_provider = provider.ai_json_provider
         self._ai_agent_provider = provider.ai_agent_provider
@@ -565,20 +582,7 @@ class ManagementService:
         recent_limit: int = 10,
         failed_limit: int = 10,
     ):
-        return build_overview(
-            memory_queries=self._memory_queries,
-            repository=self._repository,
-            task_queue=self._task_queue,
-            runtime_info=self._runtime_info,
-            db_manager=self._db_manager,
-            provider_usage_repo=self._provider_usage,
-            runtime_logs_repo=self._runtime_logs,
-            embedder=self._embedder,
-            storage_backend=self._storage_backend,
-            vector_store=self._vector_store,
-            relational_search=self._relational_search,
-            cache=self._build_cache_health(),
-            embedding_integrity_summary=self._embedding_integrity_summary(workspace_id=None),
+        return self._overview_service.get_overview(
             recent_limit=recent_limit,
             failed_limit=failed_limit,
         )
