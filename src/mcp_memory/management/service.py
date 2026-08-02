@@ -25,18 +25,6 @@ from mcp_memory.core.mutation_restore import (
     RestoreExecutor,
     build_inverse,
 )
-from mcp_memory.core.task_handlers import (
-    CONFLICT_DETECTOR_TASK_NAME,
-    CURATOR_TASK_NAME,
-    DEDUPLICATOR_TASK_NAME,
-    DEFRAGMENTER_TASK_NAME,
-    FACT_CHECKER_TASK_NAME,
-    GRAPH_LINKER_TASK_NAME,
-    PROJECT_MANAGER_TASK_NAME,
-    TAXONOMIST_TASK_NAME,
-    TRIGGERABLE_BACKGROUND_TASK_NAMES,
-    task_priority,
-)
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.context_resources import (
@@ -58,6 +46,10 @@ from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspac
 from mcp_memory.management.task_reporting_service import (
     TaskReportingService,
     TaskReportingServiceDependencies,
+)
+from mcp_memory.management.task_administration import (
+    TaskAdministrationService,
+    TaskAdministrationServiceDependencies,
 )
 from mcp_memory.mutation_history import (
     LinkRevision,
@@ -129,15 +121,6 @@ _USE_SERVICE_WORKSPACE = object()
 _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 _LOW_CONVERSION_DEFAULT_MIN_SEARCH_COUNT = 3
 _LOW_CONVERSION_DEFAULT_MAX_RATE = 0.25
-_CURATOR_CAMPAIGN_ALIAS_TASK_NAMES = frozenset({
-    CONFLICT_DETECTOR_TASK_NAME,
-    DEDUPLICATOR_TASK_NAME,
-    DEFRAGMENTER_TASK_NAME,
-    FACT_CHECKER_TASK_NAME,
-    GRAPH_LINKER_TASK_NAME,
-    PROJECT_MANAGER_TASK_NAME,
-    TAXONOMIST_TASK_NAME,
-})
 _QUALITY_CLEANUP_CRITERIA: dict[str, tuple[str, str, int]] = {
     "trace_like_memory_count": (
         "Trace-like memory",
@@ -322,12 +305,6 @@ def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnost
     return TransportDiagnosticsPayload()
 
 
-def _resolve_manual_maintenance_task_name(task_name: str) -> tuple[str, str | None]:
-    if task_name in _CURATOR_CAMPAIGN_ALIAS_TASK_NAMES:
-        return CURATOR_TASK_NAME, task_name
-    return task_name, None
-
-
 class ManagementService:
     def __init__(
         self,
@@ -403,6 +380,13 @@ class ManagementService:
             TaskReportingServiceDependencies(
                 db_manager=self._db_manager,
                 workspace_id=self._workspace_id,
+            )
+        )
+        self._task_administration_service = TaskAdministrationService(
+            TaskAdministrationServiceDependencies(
+                task_queue=self._task_queue,
+                terminate_process=_terminate_process,
+                task_payload=task_payload,
             )
         )
         self._config = memory.config
@@ -619,51 +603,10 @@ class ManagementService:
         *,
         force: bool = False,
     ) -> dict:
-        canonical_task_name, redirected_from_task_name = _resolve_manual_maintenance_task_name(task_name)
-        if canonical_task_name not in TRIGGERABLE_BACKGROUND_TASK_NAMES:
-            raise ValueError(f"unknown_background_task:{task_name}")
-
-        payload = {"workspace_id": None}
-        if force:
-            task = self._task_queue.enqueue(
-                task_name=canonical_task_name,
-                workspace_id=None,
-                data=payload,
-                priority=task_priority(canonical_task_name),
-            )
-            result = {"status": "enqueued", "created": True, "task": task_payload(task)}
-        else:
-            task, created = self._task_queue.enqueue_unique(
-                task_name=canonical_task_name,
-                workspace_id=None,
-                data=payload,
-                priority=task_priority(canonical_task_name),
-            )
-            result = {
-                "status": "enqueued" if created else "already_pending",
-                "created": created,
-                "task": task_payload(task),
-            }
-
-        if redirected_from_task_name is not None:
-            result["redirected_from_task_name"] = redirected_from_task_name
-        return result
+        return self._task_administration_service.enqueue_background_task(task_name, force=force)
 
     def enqueue_all_background_tasks(self, *, force: bool = False) -> list[dict]:
-        grouped_task_names: dict[str, list[str]] = {}
-        for task_name in TRIGGERABLE_BACKGROUND_TASK_NAMES:
-            canonical_task_name, redirected_from_task_name = _resolve_manual_maintenance_task_name(task_name)
-            grouped_task_names.setdefault(canonical_task_name, [])
-            if redirected_from_task_name is not None:
-                grouped_task_names[canonical_task_name].append(redirected_from_task_name)
-
-        results: list[dict] = []
-        for canonical_task_name, redirected_from_task_names in grouped_task_names.items():
-            result = self.enqueue_background_task(canonical_task_name, force=force)
-            if redirected_from_task_names:
-                result["redirected_from_task_names"] = redirected_from_task_names
-            results.append(result)
-        return results
+        return self._task_administration_service.enqueue_all_background_tasks(force=force)
 
     def cancel_task(
         self,
@@ -672,19 +615,11 @@ class ManagementService:
         cancelled_by: str = "cli",
         reason: str = "cancelled_by_user",
     ) -> dict:
-        task = self._task_queue.request_cancel(
+        return self._task_administration_service.cancel_task(
             task_id,
             cancelled_by=cancelled_by,
             reason=reason,
         )
-        signal_sent = False
-        if task.status == "running" and task.subprocess_pid is not None:
-            signal_sent = _terminate_process(task.subprocess_pid)
-        return {
-            "status": "cancelled" if task.status == "cancelled" else "cancellation_requested",
-            "signal_sent": signal_sent,
-            "task": task_payload(self._task_queue.get_task(task_id)),
-        }
 
     def list_ai_conversations(
         self,
@@ -1181,12 +1116,11 @@ class ManagementService:
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> TaskListPayload:
-        tasks = self._task_queue.list_tasks(
+        return self._task_administration_service.list_tasks(
             status=status,
             workspace_id=workspace_id,
             limit=limit,
         )
-        return TaskListPayload(tasks=[task_payload(task) for task in tasks])
 
     def list_recent_agent_runs(self, *, limit: int = 20, detail_level: str = "compact") -> AgentRunHistoryListPayload:
         return self._task_reporting_service.list_recent_agent_runs(
@@ -1224,27 +1158,7 @@ class ManagementService:
         )
 
     def get_task_detail(self, task_id: str) -> TaskDetailPayload:
-        task = self._task_queue.get_task(task_id)
-        runs = self._task_queue.list_task_runs(task_id=task_id, limit=50)
-        from mcp_memory.management.agent_run_reporting import build_agent_run_history_payload
-
-        return TaskDetailPayload(
-            task=task_payload(task),
-            runs=[
-                build_agent_run_history_payload(
-                    task_id=run.task_id,
-                    task_name=run.task_name,
-                    status=run.status,
-                    started_at=run.started_at,
-                    completed_at=run.completed_at,
-                    duration_seconds=run.duration_seconds,
-                    error_text=run.error_text,
-                    result=run.result,
-                    detail_level="full",
-                )
-                for run in runs
-            ],
-        )
+        return self._task_administration_service.get_task_detail(task_id)
 
     def get_nerd_metrics(
         self,
