@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,8 +8,10 @@ from mcp_memory.config import Config
 from mcp_memory.core.search_ranking import RankingEngine, ScoringWeights
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
+from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.relational.search import (
     RelationalMemorySearchService,
+    _to_relational_search_result,
 )
 from searchkernel.runtime import clear_query_embedding_cache
 from tests.small.maintenance_read_repository_contract import (
@@ -190,6 +193,57 @@ def test_service_search_preserves_content_summary_fallback(db_manager) -> None:
 
     assert results
     assert results[0].summary.startswith("This memory has no formal summary.")
+
+
+def test_search_operation_reuses_canonical_result_mapping() -> None:
+    status = SimpleNamespace(value="active")
+    record = SimpleNamespace(
+        source_id="memory-id",
+        storage_key="workspace:memory-id",
+        title="Mapped result",
+        body="Body fallback for a result without summary metadata.",
+        status=status,
+        metadata={
+            "memory_ref": "mem-42",
+            "summary": "",
+            "memory_type": 123,
+            "memory_status": None,
+            "tags": ["useful", 123],
+            "workspace_ids": ["workspace-a", 456],
+        },
+    )
+    search_result = SimpleNamespace(
+        record=record,
+        score=0.1234567,
+        provenance=SimpleNamespace(to_dict=lambda: {"matched_by_keyword": True}),
+    )
+
+    class _Retrieval:
+        def search_sync(self, request):
+            return SimpleNamespace(results=[search_result])
+
+    expected = _to_relational_search_result(search_result)
+    actual = SearchMemoryRecordsOperation(_Retrieval()).execute(
+        query="mapped result",
+        workspace_id=None,
+        limit=5,
+        adaptive_limit=False,
+        memory_type=None,
+        status=None,
+        include_superseded=False,
+    )[0]
+
+    assert actual == expected
+    assert actual.memory_ref == 42
+    assert actual.summary == record.body
+    assert actual.memory_type == ""
+    assert actual.status == "active"
+    assert actual.tags == ["useful"]
+    assert actual.workspace_ids == ["workspace-a"]
+    assert actual.ranking_debug == {
+        "provenance": {"matched_by_keyword": True},
+        "canonical_id": "workspace:memory-id",
+    }
 
 
 def test_service_search_filters_archived_records_by_default(db_manager) -> None:
