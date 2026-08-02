@@ -114,6 +114,7 @@ async def run_curator_verified_campaign(
         curation_work_item_action=str(result.work_item.action),
         curation_rejection_codes=result.result.rejection_codes,
         curation_planner_attempts=result.planner_attempts,
+        curation_failure_details=result.result.failure_details,
         curation_plan=None if plan is None else plan.model_dump(mode="json"),
         curation_decisions=decisions,
         curation_campaign_result=campaign_result,

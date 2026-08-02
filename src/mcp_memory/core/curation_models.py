@@ -398,6 +398,7 @@ class CurationRunResult(CurationModel):
     receipts: list[MutationReceipt] = Field(default_factory=list)
     rejection_codes: list[str] = Field(default_factory=list)
     retry_reason: str | None = None
+    failure_details: dict[str, object] = Field(default_factory=dict)
     budget_usage: CurationBudgetUsage = Field(default_factory=CurationBudgetUsage)
     context_record_counts: dict[str, int] = Field(default_factory=dict)
     verified_action_count: int = 0

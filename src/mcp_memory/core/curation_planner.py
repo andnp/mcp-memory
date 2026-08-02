@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
+from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.curation_models import CurationContextPacket
 from mcp_memory.core.curation_models import CurationPlan, CurationPlanningRequest
 from mcp_memory.core.curation_context import CurationContextPacket as ImmutableCurationContextPacket
@@ -105,9 +106,15 @@ class CurationPlannerProviderError(CurationPlannerError):
     reason_code = "provider_failed"
 
     def __init__(self, message: str, *, reason_code: str = "provider_failed",
+                 reason_category: str | None = None,
+                 retry_delay_seconds: float | None = None,
+                 route_available: bool | None = None,
                  envelope: PlannerExecutionEnvelope[None] | None = None) -> None:
         super().__init__(message, envelope=envelope)
         self.reason_code = reason_code
+        self.reason_category = reason_category
+        self.retry_delay_seconds = retry_delay_seconds
+        self.route_available = route_available
 
 
 class CurationPlannerCancelledError(asyncio.CancelledError, CurationPlannerError):
@@ -151,6 +158,8 @@ class InstrumentedCurationPlanner:
         provider_key: str = "provider",
         provider_name: str = "provider",
         model_name: str = "model",
+        provider_profile: str | None = None,
+        route_available: bool | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         supports_agentic = getattr(provider, "supports_agentic", None)
@@ -161,6 +170,10 @@ class InstrumentedCurationPlanner:
         self._provider_key = provider_key
         self._provider_name = provider_name
         self._model_name = model_name
+        self._provider_profile = provider_profile or _provider_profile(provider, provider_key)
+        self._route_available = (
+            route_available if route_available is not None else _route_available(provider)
+        )
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def create_plan(
@@ -178,7 +191,7 @@ class InstrumentedCurationPlanner:
                     status=PlannerExecutionStatus.CANCELLED,
                     reason_code="provider_cancelled",
                     cancellation_requested=True,
-                    **_envelope_base(cast(ProviderJSONCall, recorded_call)),
+                    **self._envelope_base(cast(ProviderJSONCall, recorded_call)),
                 )
                 if isinstance(recorded_call, ProviderJSONCall)
                 else self._local_cancellation_envelope(request, started_at)
@@ -243,6 +256,8 @@ class InstrumentedCurationPlanner:
                 completed_at=completed_at.timestamp(),
                 status="error",
                 error_text="provider does not support JSON planning",
+                reason_code="provider_capability_missing",
+                reason_category="routing",
                 admission_status="not_started",
                 premium_request=False,
             )
@@ -252,6 +267,7 @@ class InstrumentedCurationPlanner:
             raise
         except Exception as exc:
             completed_at = self._clock()
+            classification = classify_provider_failure(exc)
             return ProviderJSONCall(
                 response=None,
                 provider_key=self._provider_key,
@@ -263,6 +279,9 @@ class InstrumentedCurationPlanner:
                 completed_at=completed_at.timestamp(),
                 status="error",
                 error_text=str(exc),
+                reason_code=classification.reason_code,
+                reason_category=classification.reason_category,
+                retry_delay_seconds=classification.retry_delay_seconds,
                 admission_status="admitted",
                 premium_request=True,
             )
@@ -307,7 +326,7 @@ class InstrumentedCurationPlanner:
         request: CurationPlanningRequest,
         call: ProviderJSONCall,
     ) -> PlannerExecutionEnvelope[CurationPlan]:
-        envelope_base = _envelope_base(call)
+        envelope_base = self._envelope_base(call)
         if call.status == "cancelled" or call.cancellation_requested:
             envelope = PlannerExecutionEnvelope[None](
                 plan=None,
@@ -335,6 +354,9 @@ class InstrumentedCurationPlanner:
             raise CurationPlannerProviderError(
                 call.error_text or "provider failed during curation planning",
                 reason_code=call.reason_code or "provider_failed",
+                reason_category=call.reason_category,
+                retry_delay_seconds=call.retry_delay_seconds,
+                route_available=self._route_available,
                 envelope=envelope,
             )
         try:
@@ -365,6 +387,13 @@ class InstrumentedCurationPlanner:
             cancellation_requested=True,
             admission_status="not_started",
             premium_request=False,
+        )
+
+    def _envelope_base(self, call: ProviderJSONCall) -> dict[str, Any]:
+        return _envelope_base(
+            call,
+            provider_profile=self._provider_profile,
+            route_available=self._route_available,
         )
 
 
@@ -478,9 +507,9 @@ def _request_for_packet(
         plan_id=uuid4(),
         frontier_key=context_packet.frontier_fingerprint,
         context_fingerprint=context_packet.context_fingerprint,
-        context=CurationContextPacket(
-            seed_memory_ids=[UUID(value) for value in context_packet.seed_memory_ids],
-            support_memory_ids=[UUID(value) for value in context_packet.support_memory_ids],
+        context=CurationContextPacket.from_visible_ids(
+            seed_memory_ids=context_packet.seed_memory_ids,
+            support_memory_ids=context_packet.support_memory_ids,
             context_fingerprint=context_packet.context_fingerprint,
         ),
     )
@@ -536,7 +565,12 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
     )
 
 
-def _envelope_base(call: ProviderJSONCall) -> dict[str, Any]:
+def _envelope_base(
+    call: ProviderJSONCall,
+    *,
+    provider_profile: str | None = None,
+    route_available: bool | None = None,
+) -> dict[str, Any]:
     return {
         "provider_key": call.provider_key,
         "model_name": call.model_name,
@@ -553,8 +587,29 @@ def _envelope_base(call: ProviderJSONCall) -> dict[str, Any]:
         "metadata": {
             "provider_status": call.status,
             "raw_response_recorded": call.raw_text is not None,
+            "provider_profile": provider_profile or call.provider_key,
+            "route_available": route_available,
+            "reason_category": getattr(call, "reason_category", None),
+            "error_text": call.error_text,
+            "retry_delay_seconds": call.retry_delay_seconds,
         },
     }
+
+
+def _provider_profile(provider: Any, provider_key: str) -> str:
+    for name in ("provider_profile", "_provider_profile", "profile_name", "_profile_name"):
+        value = getattr(provider, name, None)
+        if value is not None:
+            return str(value)
+    return provider_key
+
+
+def _route_available(provider: Any) -> bool | None:
+    for name in ("route_available", "_route_available", "alternative_route_available"):
+        value = getattr(provider, name, None)
+        if value is not None:
+            return bool(value)
+    return None
 
 
 def _expected_plan_fields() -> tuple[str, ...]:

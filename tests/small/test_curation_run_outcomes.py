@@ -3,11 +3,17 @@ from typing import Any, cast
 from uuid import uuid4
 
 from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_planner import (
+    CurationPlannerProviderError,
+    PlannerExecutionEnvelope,
+    PlannerExecutionStatus,
+)
 from mcp_memory.core.curation_run_outcomes import (
     budget_usage,
     classify_outcome,
     count_affected_memory_ids,
     count_verified_receipts,
+    failure_details,
     project_receipts,
     rejection_codes,
 )
@@ -83,3 +89,38 @@ def test_receipt_projection_accepts_lightweight_receipt_double() -> None:
     assert count_verified_receipts(receipts) == 1
     assert count_affected_memory_ids(receipts) == 1
     assert project_receipts(receipts)[0].affected_ids == [memory_id]
+
+
+def test_failure_details_project_provider_route_diagnostics() -> None:
+    failure = CurationPlannerProviderError(
+        "provider unavailable",
+        reason_code="model_burst_limit_exceeded",
+        reason_category="admission",
+        retry_delay_seconds=300.0,
+        route_available=True,
+    )
+    envelope = PlannerExecutionEnvelope(
+        plan=None,
+        provider_key="profile-a",
+        model_name="model-a",
+        request_id="request-1",
+        attempt=2,
+        started_at=SimpleNamespace(),
+        completed_at=SimpleNamespace(),
+        status=PlannerExecutionStatus.PROVIDER_FAILED,
+        reason_code="model_burst_limit_exceeded",
+        metadata={
+            "provider_profile": "profile-a",
+            "reason_category": "admission",
+            "route_available": True,
+            "retry_delay_seconds": 300.0,
+        },
+    )
+
+    details = failure_details(failure, [envelope])
+
+    assert details["reason_code"] == "model_burst_limit_exceeded"
+    assert details["provider_profile"] == "profile-a"
+    assert details["model"] == "model-a"
+    assert details["retry_count"] == 1
+    assert details["another_route_available"] is True

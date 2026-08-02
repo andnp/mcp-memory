@@ -298,3 +298,30 @@ async def test_instrumented_adapter_classifies_recorded_invalid_json_as_schema_f
     assert raised.value.envelope is not None
     assert raised.value.envelope.status == PlannerExecutionStatus.SCHEMA_FAILED
     assert raised.value.envelope.reason_code == "schema_invalid"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_adapter_classifies_provider_route_failure() -> None:
+    class _FailingProvider:
+        async def ask_json(self, prompt: str) -> dict[str, object]:
+            del prompt
+            raise RuntimeError("route unavailable")
+
+    planner = InstrumentedCurationPlanner(
+        _FailingProvider(),
+        provider_key="route-a",
+        provider_profile="profile-a",
+        model_name="model-a",
+        route_available=True,
+    )
+
+    with pytest.raises(CurationPlannerProviderError) as raised:
+        await planner.create_plan(_request(uuid4()), object())
+
+    error = raised.value
+    assert error.reason_code == "provider_execution_error"
+    assert error.reason_category == "execution"
+    assert error.route_available is True
+    assert error.envelope is not None
+    assert error.envelope.metadata["provider_profile"] == "profile-a"
+    assert error.envelope.metadata["route_available"] is True

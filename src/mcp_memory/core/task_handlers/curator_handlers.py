@@ -34,7 +34,21 @@ async def handle_memory_curator_task(
     if ctx.repository is None:
         return {"summary": None, "tool_calls_executed": 0, "mutations": 0}
     if provider is None:
-        return {"summary": None, "tool_calls_executed": 0, "mutations": 0, "reason": "provider_not_configured"}
+        return {
+            "summary": None,
+            "tool_calls_executed": 0,
+            "mutations": 0,
+            "reason": "provider_not_configured",
+            "failure_details": {
+                "reason_code": "provider_route_unavailable",
+                "reason_category": "routing",
+                "provider_key": None,
+                "provider_profile": None,
+                "model": None,
+                "retry_count": 0,
+                "another_route_available": False,
+            },
+        }
 
     claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
     claimed_review_item = claimed_review_items[0] if claimed_review_items else None

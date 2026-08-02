@@ -28,6 +28,7 @@ class ProviderJSONCall:
     status: str
     error_text: str | None = None
     reason_code: str | None = None
+    reason_category: str | None = None
     retry_delay_seconds: float | None = None
     raw_text: str | None = None
     parsed: dict[str, Any] | None = None

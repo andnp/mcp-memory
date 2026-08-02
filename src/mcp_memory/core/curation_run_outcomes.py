@@ -65,6 +65,68 @@ def rejection_codes(validation: CurationValidationResult | None) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
+def failure_rejection_codes(
+    failure: CurationPlannerError | BaseException | None,
+) -> list[str]:
+    if failure is None:
+        return []
+    codes = [str(getattr(failure, "reason_code", "provider_failed"))]
+    codes.extend(str(issue.code) for issue in getattr(failure, "validation_issues", ()))
+    return list(dict.fromkeys(codes))
+
+
+def failure_details(
+    failure: CurationPlannerError | BaseException | None,
+    envelopes: list[PlannerExecutionEnvelope[Any]],
+) -> dict[str, Any]:
+    if failure is None:
+        return {}
+    envelope = envelopes[-1] if envelopes else getattr(failure, "envelope", None)
+    metadata = {} if envelope is None else dict(envelope.metadata)
+    attempted = [
+        {
+            "provider_key": item.provider_key,
+            "provider_profile": item.metadata.get("provider_profile", item.provider_key),
+            "model": item.model_name,
+            "attempt": item.attempt,
+            "reason_code": item.reason_code,
+        }
+        for item in envelopes
+    ]
+    issues = [
+        {
+            "code": str(issue.code),
+            "message": issue.message,
+            "field": issue.field,
+        }
+        for issue in getattr(failure, "validation_issues", ())
+    ]
+    route_available = metadata.get("route_available")
+    if route_available is None:
+        route_available = getattr(failure, "route_available", False)
+    return {
+        "reason_code": str(getattr(failure, "reason_code", "provider_failed")),
+        "reason_category": metadata.get("reason_category", getattr(failure, "reason_category", None)),
+        "message": str(failure),
+        "provider_key": None if envelope is None else envelope.provider_key,
+        "provider_profile": metadata.get(
+            "provider_profile",
+            None if envelope is None else envelope.provider_key,
+        ),
+        "model": None if envelope is None else envelope.model_name,
+        "retry_count": len(envelopes),
+        "retry_delay_seconds": metadata.get(
+            "retry_delay_seconds",
+            getattr(failure, "retry_delay_seconds", None),
+        ),
+        "validation_issues": issues,
+        "expected_fields": list(getattr(failure, "expected_fields", ())),
+        "received_fields": list(getattr(failure, "received_fields", ())),
+        "another_route_available": bool(route_available),
+        "attempted": attempted,
+    }
+
+
 def budget_usage(
     context: ImmutableCurationContextPacket,
     envelopes: list[PlannerExecutionEnvelope[Any]],
@@ -120,6 +182,8 @@ def build_run_result(
     retry_reason: str | None,
     budget_usage: CurationBudgetUsage,
     context_record_counts: dict[str, int],
+    failure: CurationPlannerError | BaseException | None = None,
+    envelopes: list[PlannerExecutionEnvelope[Any]] | None = None,
 ) -> CurationRunResult:
     return CurationRunResult(
         run_id=run_id,
@@ -128,6 +192,7 @@ def build_run_result(
         receipts=project_receipts(receipts),
         rejection_codes=rejection_codes,
         retry_reason=retry_reason,
+        failure_details=failure_details(failure, envelopes or []),
         budget_usage=budget_usage,
         context_record_counts=context_record_counts,
         verified_action_count=count_verified_receipts(receipts),

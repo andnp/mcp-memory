@@ -120,6 +120,16 @@ def select_provider_for_request(
                 continue
             found_routed_provider = True
             bound_provider = bind_provider_context(selected_provider, request=request)
+            bound_provider = bind_route_context(
+                bound_provider,
+                provider_profile=route_key,
+                route_available=_has_later_route(
+                    candidate_route_keys,
+                    route_key,
+                    registry=registry,
+                    prefer_agentic=prefer_agentic,
+                ),
+            )
             admission = _provider_admission_decision(selected_provider)
             if not admission.allowed:
                 if record_admission_skips:
@@ -208,7 +218,11 @@ def select_provider_for_request(
             warning_suppressed=warning_suppressed,
         )
         return None
-    return bind_provider_context(selected_provider, request=request)
+    return bind_route_context(
+        bind_provider_context(selected_provider, request=request),
+        provider_profile=getattr(selected_provider, "_provider_key", "legacy"),
+        route_available=False,
+    )
 
 
 def select_provider_for_inputs(
@@ -286,6 +300,38 @@ def bind_provider_context(selected_provider: Any, *, request: ProviderSelectionR
         task_id=request.task_id,
         execution_epoch=request.execution_epoch,
         workspace_id=request.workspace_id,
+    )
+
+
+def bind_route_context(
+    selected_provider: Any,
+    *,
+    provider_profile: str,
+    route_available: bool,
+):
+    binder = getattr(selected_provider, "with_route_context", None)
+    if not callable(binder):
+        return selected_provider
+    return binder(
+        provider_profile=provider_profile,
+        route_available=route_available,
+    )
+
+
+def _has_later_route(
+    candidate_route_keys: list[str],
+    route_key: str,
+    *,
+    registry: Mapping[str, Mapping[str, object]],
+    prefer_agentic: bool,
+) -> bool:
+    try:
+        index = candidate_route_keys.index(route_key)
+    except ValueError:
+        return False
+    return any(
+        select_provider_from_bundle(registry.get(key, {}), prefer_agentic=prefer_agentic) is not None
+        for key in candidate_route_keys[index + 1 :]
     )
 
 

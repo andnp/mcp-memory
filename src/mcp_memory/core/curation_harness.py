@@ -34,7 +34,6 @@ from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.curation_planner import (
     CurationPlanner,
     CurationPlannerError,
-    CurationPlannerSchemaError,
     PlannerExecutionEnvelope,
 )
 from mcp_memory.core.curation_validation import (
@@ -50,6 +49,7 @@ from mcp_memory.core.curation_run_outcomes import (
     build_run_result,
     budget_usage as project_budget_usage,
     classify_outcome as project_classify_outcome,
+    failure_rejection_codes as project_failure_rejection_codes,
     rejection_codes as project_rejection_codes,
 )
 from mcp_memory.core.curation_work_items import (
@@ -337,15 +337,16 @@ class CurationDryRunHarness:
             plan: CurationPlan | None = None
             validation: CurationValidationResult | None = None
             envelopes: list[PlannerExecutionEnvelope[Any]] = []
+            failure: CurationPlannerError | BaseException | None = None
         else:
             request = CurationPlanningRequest(
                 run_id=run_id,
                 plan_id=plan_id,
                 frontier_key=frontier_key,
                 context_fingerprint=context.context_fingerprint,
-                context=CurationContextPacket(
-                    seed_memory_ids=[UUID(value) for value in context.seed_memory_ids],
-                    support_memory_ids=[UUID(value) for value in context.support_memory_ids],
+                context=CurationContextPacket.from_visible_ids(
+                    seed_memory_ids=context.seed_memory_ids,
+                    support_memory_ids=context.support_memory_ids,
                     context_fingerprint=context.context_fingerprint,
                 ),
             )
@@ -356,8 +357,9 @@ class CurationDryRunHarness:
 
             outcome, reason_code = self._classify_outcome(plan, validation, failure)
             rejection_codes = project_rejection_codes(validation)
-            if not rejection_codes and isinstance(failure, CurationPlannerSchemaError):
-                rejection_codes.append("schema_invalid")
+            rejection_codes.extend(
+                code for code in project_failure_rejection_codes(failure) if code not in rejection_codes
+            )
             budget_usage = project_budget_usage(context, envelopes, validation)
             latest = envelopes[-1] if envelopes else None
         executing = run.model_copy(
@@ -423,6 +425,8 @@ class CurationDryRunHarness:
             retry_reason=retry_reason,
             budget_usage=budget_usage,
             context_record_counts=context_record_counts,
+            failure=failure,
+            envelopes=envelopes,
         )
         return CurationDryRunResult(
             run=terminal,

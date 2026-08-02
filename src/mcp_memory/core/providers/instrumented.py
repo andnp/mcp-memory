@@ -51,12 +51,16 @@ class InstrumentedAIProvider:
         block_test_execution: bool = False,
         provider_trust_class: str | None = None,
         provider_allowlisted: bool | None = None,
+        provider_profile: str | None = None,
+        route_available: bool | None = None,
     ) -> None:
         self._provider = provider
         self._usage_repository = usage_repository
         self._provider_key = provider_key
         self._provider_name = provider_name
         self._model_name = model_name
+        self._provider_profile = provider_profile or provider_key
+        self._route_available = route_available
         self._task_name = task_name
         self._task_id = task_id
         self._execution_epoch = execution_epoch
@@ -109,6 +113,37 @@ class InstrumentedAIProvider:
             block_test_execution=self._block_test_execution,
             provider_trust_class=self._provider_trust_class,
             provider_allowlisted=self._provider_allowlisted,
+            provider_profile=self._provider_profile,
+            route_available=self._route_available,
+        )
+
+    def with_route_context(
+        self,
+        *,
+        provider_profile: str,
+        route_available: bool,
+    ):
+        return InstrumentedAIProvider(
+            self._provider,
+            usage_repository=self._usage_repository,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            task_name=self._task_name,
+            task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
+            workspace_id=self._workspace_id,
+            task_queue=self._task_queue,
+            task_execution_attempts=self._task_execution_attempts,
+            budget_key=self._budget_key,
+            daily_call_limit=self._daily_call_limit,
+            model_burst_call_limit=self._model_burst_call_limit,
+            model_burst_window_seconds=self._model_burst_window_seconds,
+            block_test_execution=self._block_test_execution,
+            provider_trust_class=self._provider_trust_class,
+            provider_allowlisted=self._provider_allowlisted,
+            provider_profile=provider_profile,
+            route_available=route_available,
         )
 
     def _record_attempt_start(self, *, request_id: str, event: ProviderAttemptStartedEvent) -> None:
@@ -361,6 +396,7 @@ class InstrumentedAIProvider:
                     status="skipped",
                     error_text=classification.error_text,
                     reason_code=classification.reason_code,
+                    reason_category=classification.reason_category,
                     retry_delay_seconds=classification.retry_delay_seconds,
                     admission_status="skipped",
                     premium_request=False,
@@ -506,6 +542,7 @@ class InstrumentedAIProvider:
                     status=_extract_status(observer_state.last_event, fallback="error"),
                     error_text=classification.error_text,
                     reason_code=classification.reason_code,
+                    reason_category=classification.reason_category,
                     retry_delay_seconds=classification.retry_delay_seconds,
                     raw_text=_extract_raw_text(observer_state.last_event),
                     parsed=None,
