@@ -58,11 +58,12 @@ _UNCONSTRAINED_REQUEST_PATHS = frozenset(
 )
 
 
-def suspend_aware_now() -> float:
-    clock_boottime = getattr(time_module, "CLOCK_BOOTTIME", None)
+def suspend_aware_now(clock: Any | None = None) -> float:
+    clock_module: Any = time_module if clock is None else clock
+    clock_boottime = getattr(clock_module, "CLOCK_BOOTTIME", None)
     if clock_boottime is None:
-        return time_module.monotonic()
-    return time_module.clock_gettime(clock_boottime)
+        return clock_module.monotonic()
+    return clock_module.clock_gettime(clock_boottime)
 
 
 def suspend_aware_deadline(timeout_seconds: float) -> float:
