@@ -54,6 +54,7 @@ def build_sqlite_runtime_components(
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
         background_repair_wait_seconds=5.0 if enable_background_repair_queue else 0.0,
+        embedding_cache_path=spec.memory_path / "cache" / "embedding-cache.sqlite3",
     )
     relational_search = RelationalMemorySearchService(
         repository,

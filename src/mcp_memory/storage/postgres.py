@@ -181,6 +181,7 @@ def build_postgres_runtime_components(
         task_queue=task_queue if enable_background_repair_queue else None,
         work_items=work_items,
         embedding_repair_queue=embedding_repair_queue,
+        embedding_cache_path=spec.memory_path / "cache" / "embedding-cache.sqlite3",
     )
     relational_search = RelationalMemorySearchService(
         repository,

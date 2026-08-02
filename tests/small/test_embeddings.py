@@ -9,11 +9,14 @@ from unittest import mock
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.embeddings import (
+    HashingEmbedder,
     OllamaEmbedder,
     SentenceTransformerEmbedder,
+    SQLiteCachedEmbeddingProvider,
     SQLiteVectorStore,
     _cap_torch_threads_before_sentence_transformer_load,
     build_embedder,
+    with_local_embedding_cache,
 )
 from searchkernel.ports import CandidateFilterSupport
 from searchkernel.utils.similarity import cosine_similarity_lists
@@ -214,6 +217,92 @@ def test_ollama_embedder_embed_returns_empty_list_for_no_texts() -> None:
         embedder = OllamaEmbedder(config)
 
     assert embedder.embed([]) == []
+
+
+def test_ollama_embedder_uses_query_aware_provider_when_available() -> None:
+    config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider") as mock_provider_cls:
+        mock_provider = mock_provider_cls.return_value
+        mock_provider.embed_query.return_value = [0.3, 0.7]
+        embedder = OllamaEmbedder(config)
+
+        result = embedder.embed_query("query text")
+
+    assert result == [0.3, 0.7]
+    mock_provider.embed_query.assert_called_once_with("query text")
+    mock_provider.embed.assert_not_called()
+
+
+def test_sentence_transformer_embed_query_delegates_to_query_aware_model(monkeypatch) -> None:
+    class DummyModel:
+        def encode(self, texts, **_kwargs):
+            raise AssertionError(f"document encoder used for query: {texts}")
+
+        def embed_query(self, text):
+            assert text == "query text"
+            return [0.2, 0.8]
+
+    monkeypatch.setattr("mcp_memory.embeddings._is_model_cached_locally", lambda _model_name: True)
+    monkeypatch.setattr(
+        "mcp_memory.embeddings._load_sentence_transformer",
+        lambda _model_name, *, local_files_only: DummyModel(),
+    )
+
+    embedder = SentenceTransformerEmbedder(
+        EmbeddingsConfig(provider="sentence-transformers", model="local-model")
+    )
+
+    assert embedder.embed_query("query text") == [0.2, 0.8]
+
+
+def test_sqlite_cached_embedding_provider_reuses_content_hashes_across_instances(tmp_path) -> None:
+    class FakeProvider:
+        model_name = "local-model"
+        encoder_namespace = "local-model|documents-v1"
+        supports_persistent_embedding_cache = True
+
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(list(texts))
+            return [[float(len(text)), 1.0] for text in texts]
+
+    cache_path = tmp_path / "embedding-cache.sqlite3"
+    first_provider = FakeProvider()
+    first = SQLiteCachedEmbeddingProvider(first_provider, cache_path)
+    assert first.embed(["same text", "same text", "other text"]) == [
+        [9.0, 1.0],
+        [9.0, 1.0],
+        [10.0, 1.0],
+    ]
+    assert first_provider.calls == [["same text", "other text"]]
+
+    second_provider = FakeProvider()
+    second = SQLiteCachedEmbeddingProvider(second_provider, cache_path)
+    assert second.embed(["same text"]) == [[9.0, 1.0]]
+    assert second_provider.calls == []
+
+    isolated_provider = FakeProvider()
+    isolated_provider.encoder_namespace = "local-model|documents-v2"
+    isolated = SQLiteCachedEmbeddingProvider(isolated_provider, cache_path)
+    assert isolated.embed(["same text"]) == [[9.0, 1.0]]
+    assert isolated_provider.calls == [["same text"]]
+
+
+def test_persistent_cache_is_opt_in_for_local_computation(tmp_path) -> None:
+    hash_fallback = HashingEmbedder()
+    assert with_local_embedding_cache(hash_fallback, tmp_path / "cache.sqlite3") is hash_fallback
+
+    class RemoteProvider:
+        model_name = "remote"
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] for _ in texts]
+
+    remote = RemoteProvider()
+    assert with_local_embedding_cache(remote, tmp_path / "cache.sqlite3") is remote
 
 
 def test_sentence_transformer_cache_model_uses_local_cache_before_network(monkeypatch) -> None:

@@ -6,6 +6,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
@@ -17,7 +18,7 @@ from mcp_memory.core.ports.work_items import (
     WORK_FAMILY_MEMORY_EMBEDDING_REPAIR,
 )
 from mcp_memory.core.search_repair import EmbeddingRepairScheduler
-from mcp_memory.embeddings import is_fallback_embedding_model
+from mcp_memory.embeddings import is_fallback_embedding_model, with_local_embedding_cache
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +69,11 @@ class MemoryEmbeddingMaintenance:
         work_items: Any | None = None,
         embedding_repair_queue: Any | None = None,
         background_repair_wait_seconds: float = 0.0,
+        embedding_cache_path: str | Path | None = None,
     ) -> None:
         self._repository = repository
         self._config = config
-        self._embedder = embedder
+        self._embedder = with_local_embedding_cache(embedder, embedding_cache_path)
         self._vector_store = vector_store
         self._db_manager = db_manager
         self._work_items = work_items

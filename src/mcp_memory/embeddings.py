@@ -6,15 +6,26 @@ import math
 import os
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from hashlib import blake2b
+from hashlib import blake2b, sha256
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, cast
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.utils.similarity import cosine_similarity_lists
+
+try:
+    from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
+except ImportError:  # pragma: no cover - compatibility with older searchkernel releases
+    SQLiteEmbeddingCache = None  # type: ignore[assignment,misc]
+
+try:
+    from searchkernel.indexing.semantic import embedding_identity
+except ImportError:  # pragma: no cover - compatibility with older searchkernel releases
+    embedding_identity = None  # type: ignore[assignment]
 
 
 logger = logging.getLogger(__name__)
@@ -65,6 +76,18 @@ class SentenceTransformerEmbedder:
     def configured_model_name(self) -> str:
         return self._configured_model_name
 
+    @property
+    def encoder_namespace(self) -> str:
+        """Return the stable namespace used by searchkernel caches."""
+        provider_namespace = getattr(self._model, "encoder_namespace", None)
+        if isinstance(provider_namespace, str) and provider_namespace:
+            return provider_namespace
+        return self.model_name
+
+    @property
+    def supports_persistent_embedding_cache(self) -> bool:
+        return True
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
@@ -78,6 +101,29 @@ class SentenceTransformerEmbedder:
             show_progress_bar=False,
         )
         return [list(map(float, vector)) for vector in vectors]
+
+    def embed_query(self, text: str) -> list[float]:
+        if not self._ensure_model_loaded(allow_download=False):
+            return self._fallback.embed([text])[0]
+        assert self._model is not None
+        query_embedder = getattr(self._model, "embed_query", None)
+        if callable(query_embedder):
+            return list(map(float, cast(Sequence[float], query_embedder(text))))
+        query_encoder = getattr(self._model, "encode_query", None)
+        if callable(query_encoder):
+            vector = query_encoder(
+                [text],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            return list(map(float, cast(Sequence[Sequence[float]], vector)[0]))
+        vectors = self._model.encode(
+            [text],
+            batch_size=self._batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return list(map(float, vectors[0]))
 
     def cache_model(self) -> bool:
         return self._ensure_model_loaded(allow_download=True)
@@ -140,10 +186,26 @@ class OllamaEmbedder:
     def configured_model_name(self) -> str:
         return self._configured_model_name
 
+    @property
+    def encoder_namespace(self) -> str:
+        provider_namespace = getattr(self._provider, "encoder_namespace", None)
+        if isinstance(provider_namespace, str) and provider_namespace:
+            return provider_namespace
+        return self.model_name
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         return self._provider.embed(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        query_embedder = getattr(self._provider, "embed_query", None)
+        if callable(query_embedder):
+            return list(map(float, cast(Sequence[float], query_embedder(text))))
+        vectors = self._provider.embed([text])
+        if len(vectors) != 1:
+            raise ValueError("Ollama embedder must return one query vector")
+        return list(map(float, vectors[0]))
 
     def status(self) -> EmbedderStatus:
         return EmbedderStatus(
@@ -162,12 +224,183 @@ class HashingEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [_hash_text_to_unit_vector(text, self._dimensions) for text in texts]
 
+    @property
+    def encoder_namespace(self) -> str:
+        return self.model_name
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
+
     def status(self) -> EmbedderStatus:
         return EmbedderStatus(
             model_name=self.model_name,
             backend="hashing",
             model_cached=True,
         )
+
+
+class SQLiteCachedEmbeddingProvider:
+    """Add best-effort content-hash reuse to a local embedding provider."""
+
+    def __init__(self, provider: EmbeddingBatchProvider, cache_path: str | Path) -> None:
+        self._provider = provider
+        self._cache_path = Path(cache_path)
+        self._cache: Any | None = None
+        self._cache_namespace: str | None = None
+        self._cache_disabled = False
+
+    @property
+    def model_name(self) -> str:
+        return self._provider.model_name
+
+    @property
+    def configured_model_name(self) -> str | None:
+        configured_model_name = getattr(self._provider, "configured_model_name", None)
+        return configured_model_name if isinstance(configured_model_name, str) else None
+
+    @property
+    def encoder_namespace(self) -> str:
+        namespace = getattr(self._provider, "encoder_namespace", None)
+        return namespace if isinstance(namespace, str) and namespace else self.model_name
+
+    @property
+    def dim(self) -> int:
+        dimension = getattr(self._provider, "dim", None)
+        if isinstance(dimension, int) and dimension > 0:
+            return dimension
+        dimensions = getattr(self._provider, "_dimensions", None)
+        if isinstance(dimensions, int) and dimensions > 0:
+            return dimensions
+        raise AttributeError("embedding dimension is not available")
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        if is_fallback_embedding_model(self.model_name):
+            return self._provider.embed(texts)
+        cache = self._get_cache()
+        if cache is None:
+            return self._provider.embed(texts)
+
+        namespace = cache.encoder_namespace
+        content_hashes = [_embedding_content_hash(text, namespace) for text in texts]
+        try:
+            cached = cache.get_many(content_hashes)
+        except Exception as exc:  # noqa: BLE001
+            self._disable_cache(exc)
+            return self._provider.embed(texts)
+
+        vectors_by_hash = {content_hash: list(vector) for content_hash, vector in cached.items()}
+        missing_texts: dict[str, str] = {
+            content_hash: text
+            for content_hash, text in zip(content_hashes, texts, strict=True)
+            if content_hash not in vectors_by_hash
+        }
+        if missing_texts:
+            computed = self._provider.embed(list(missing_texts.values()))
+            if len(computed) != len(missing_texts):
+                raise ValueError(
+                    f"Embedding provider {self.model_name!r} returned {len(computed)} "
+                    f"vectors for {len(missing_texts)} inputs"
+                )
+            computed_by_hash = dict(
+                zip(missing_texts, computed, strict=True)
+            )
+            vectors_by_hash.update(
+                {content_hash: list(vector) for content_hash, vector in computed_by_hash.items()}
+            )
+            self._put_computed_vectors(
+                computed_by_hash,
+                source_namespace=namespace,
+                texts_by_hash=missing_texts,
+            )
+
+        return [vectors_by_hash[content_hash] for content_hash in content_hashes]
+
+    def embed_query(self, text: str) -> list[float]:
+        query_embedder = getattr(self._provider, "embed_query", None)
+        if callable(query_embedder):
+            return list(map(float, cast(Sequence[float], query_embedder(text))))
+        vectors = self._provider.embed([text])
+        if len(vectors) != 1:
+            raise ValueError("embedding provider must return one query vector")
+        return list(map(float, vectors[0]))
+
+    def status(self) -> EmbedderStatus | Any:
+        status = getattr(self._provider, "status", None)
+        if callable(status):
+            return status()
+        return describe_embedder(self._provider)
+
+    def _get_cache(self) -> Any | None:
+        if self._cache_disabled or SQLiteEmbeddingCache is None:
+            return None
+        namespace = self.encoder_namespace
+        if self._cache is not None and self._cache_namespace == namespace:
+            return self._cache
+        if self._cache is not None:
+            close = getattr(self._cache, "close", None)
+            if callable(close):
+                close()
+        try:
+            self._cache = SQLiteEmbeddingCache(
+                self._cache_path,
+                namespace,
+                dimension=0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._disable_cache(exc)
+            return None
+        self._cache_namespace = namespace
+        return self._cache
+
+    def _put_computed_vectors(
+        self,
+        vectors: dict[str, list[float]],
+        *,
+        source_namespace: str,
+        texts_by_hash: dict[str, str],
+    ) -> None:
+        if is_fallback_embedding_model(self.model_name):
+            return
+        cache = self._get_cache()
+        if cache is None:
+            return
+        vectors_to_store = vectors
+        if cache.encoder_namespace != source_namespace:
+            vectors_to_store = {
+                _embedding_content_hash(texts_by_hash[content_hash], cache.encoder_namespace): vector
+                for content_hash, vector in vectors.items()
+            }
+        try:
+            cache.put_many(vectors_to_store)
+        except Exception as exc:  # noqa: BLE001
+            self._disable_cache(exc)
+
+    def _disable_cache(self, exc: Exception) -> None:
+        logger.warning("Embedding cache unavailable; continuing without reuse: %s", exc)
+        self._cache_disabled = True
+        self._cache = None
+        self._cache_namespace = None
+
+
+def with_local_embedding_cache(
+    embedder: EmbeddingBatchProvider | None,
+    cache_path: str | Path | None,
+) -> EmbeddingBatchProvider | None:
+    """Wrap only providers that explicitly opt into local content caching."""
+    if embedder is None or cache_path is None:
+        return embedder
+    if not getattr(embedder, "supports_persistent_embedding_cache", False):
+        return embedder
+    return SQLiteCachedEmbeddingProvider(embedder, cache_path)
+
+
+def _embedding_content_hash(text: str, encoder_namespace: str) -> str:
+    if embedding_identity is not None:
+        return embedding_identity(text, encoder_namespace)
+    payload = f"{encoder_namespace}\x00{text}".encode("utf-8")
+    return sha256(payload).hexdigest()
 
 
 class SQLiteVectorStore:
