@@ -98,3 +98,29 @@ def test_coerce_task_result_view_exposes_generic_mutation_and_tool_call_counts()
     assert result.tool_calls_executed == 7
     assert result.meaningful_actions == 2
     assert result.metadata.mutations == 4
+
+
+def test_coerce_task_result_view_exposes_curator_yield_telemetry() -> None:
+    result = coerce_task_result_view(
+        {
+            "curation_outcome": "applied",
+            "curation_campaign_result": {
+                "budget_usage": {"accepted_mutations": 2, "planner_attempts": 2},
+                "verification_failure_count": 1,
+                "receipts": [
+                    {"operation": "normalize_memory"},
+                    {"operation": "create_link"},
+                ],
+            },
+        }
+    )
+
+    assert result.curation_outcome == "applied"
+    assert result.curation_accepted_mutation_count == 2
+    assert result.curation_verification_failure_count == 1
+    assert result.curation_provider_failure_count == 0
+    assert result.curation_retry_count == 1
+    assert result.curation_mutation_categories == {
+        "content_tag": 1,
+        "structural_link": 1,
+    }
