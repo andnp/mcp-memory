@@ -242,6 +242,7 @@ async def test_graph_store_reads_links_without_writing_memory_schema():
             0.7,
         )
     ]
+    assert await store.neighbors("memory-1", max_neighbors=0) == []
     with pytest.raises(NotImplementedError):
         store.upsert_edges([("memory-1", "memory-2", "DEPENDS_ON", 1.0)])
 

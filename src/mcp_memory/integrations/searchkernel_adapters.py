@@ -364,12 +364,14 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str | RecordIdentity,
         edge_types: list[str] | None = None,
         depth: int = 1,
+        max_neighbors: int | None = None,
     ) -> list[GraphNeighbor]:
         return await asyncio.to_thread(
             self._neighbors_sync,
             record_id,
             edge_types,
             depth,
+            max_neighbors,
         )
 
     def _neighbors_sync(
@@ -377,6 +379,7 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str | RecordIdentity,
         edge_types: list[str] | None,
         depth: int,
+        max_neighbors: int | None,
     ) -> list[GraphNeighbor]:
         identity = _record_identity(record_id)
         results = self._neighbors_many_sync(
@@ -384,7 +387,8 @@ class MemoryGraphStore(AsyncGraphStore):
             edge_types=edge_types,
             depth=depth,
         )
-        return next(iter(results.values()), [])
+        neighbors = next(iter(results.values()), [])
+        return neighbors if max_neighbors is None else neighbors[:max_neighbors]
 
     async def neighbors_many(
         self,
