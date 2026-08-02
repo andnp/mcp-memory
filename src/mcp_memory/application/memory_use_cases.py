@@ -4,8 +4,11 @@ import logging
 from datetime import UTC, datetime
 from time import perf_counter
 
-from mcp_memory.application.ports import RetrievalTelemetryPort
-from mcp_memory.context import ApplicationContext
+from mcp_memory.application.ports import (
+    MemoryMutationDependencies,
+    MemoryReadDependencies,
+    RetrievalTelemetryPort,
+)
 from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 from mcp_memory.integrations.searchkernel_record_pipeline import (
@@ -45,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 def _record_thought(
-    ctx: ApplicationContext,
+    ctx: MemoryMutationDependencies,
     content: str,
     *,
     writeback_cache=None,
@@ -68,7 +71,7 @@ def _record_thought(
 
 
 def _search_memory_records(
-    ctx: ApplicationContext,
+    ctx: MemoryReadDependencies,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -78,7 +81,7 @@ def _search_memory_records(
         return {"status": "error", "error": "relational_search_not_initialized"}
 
     query = arguments["query"]
-    retrieval = getattr(ctx, "memory_retrieval", None)
+    retrieval = ctx.memory_retrieval
     if retrieval is None and ctx.repository is None:
         return {"status": "error", "error": "repository_not_initialized"}
     if retrieval is None:
@@ -87,7 +90,7 @@ def _search_memory_records(
             config=ctx.config,
             vector_store=ctx.vector_store,
             embedder=ctx.embedder,
-            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+            embedding_maintenance=ctx.embedding_maintenance,
             native_search=ctx.relational_search,
         )
     operation = SearchMemoryRecordsOperation(retrieval)
@@ -132,7 +135,10 @@ def _search_memory_records(
     )
     if inflight_search is not None and not inflight_search.is_leader:
         try:
-            coalesced_payload = ctx.read_cache.wait_for_inflight_search(inflight_search)
+            read_cache = ctx.read_cache
+            if read_cache is None:
+                raise RuntimeError("shared read cache disappeared during coalescing")
+            coalesced_payload = read_cache.wait_for_inflight_search(inflight_search)
         except Exception as error:
             if _shared_read_cache_enabled(
                 ctx, caller_kind=caller_kind, debug_enabled=debug_enabled
@@ -167,7 +173,6 @@ def _search_memory_records(
             if isinstance(result, dict) and isinstance(result.get("memory_id"), str)
         ]
         telemetry.record_search(
-            ctx,
             caller_kind=caller_kind,
             query=query,
             surfaced_memory_ids=surfaced_memory_ids,
@@ -212,11 +217,8 @@ def _search_memory_records(
         raise
     duration_ms = (perf_counter() - started_at) * 1000.0
     surfaced_memory_ids = [result.memory_id for result in results]
-    touch_last_surfaced = (
-        None
-        if ctx.repository is None
-        else getattr(ctx.repository, "touch_last_surfaced", None)
-    )
+    surface_tracker = ctx.surface_tracker or ctx.repository
+    touch_last_surfaced = getattr(surface_tracker, "touch_last_surfaced", None)
     if surfaced_memory_ids and callable(touch_last_surfaced):
         touch_last_surfaced(
             surfaced_memory_ids,
@@ -224,7 +226,6 @@ def _search_memory_records(
             best_effort=True,
         )
     telemetry.record_search(
-        ctx,
         caller_kind=caller_kind,
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
@@ -297,7 +298,7 @@ def _search_memory_records(
 
 
 async def _search_memory_records_async(
-    ctx: ApplicationContext,
+    ctx: MemoryReadDependencies,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -314,7 +315,7 @@ async def _search_memory_records_async(
         ctx.repository,
         vector_store=ctx.vector_store,
         embedder=ctx.embedder,
-        embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+        embedding_maintenance=ctx.embedding_maintenance,
         adaptive_enabled=arguments.get("adaptive_limit", "limit" not in arguments),
         config=ctx.config,
     )
@@ -335,7 +336,6 @@ async def _search_memory_records_async(
     surfaced_memory_ids = [result.memory_id for result in results]
     duration_ms = (perf_counter() - started_at) * 1000.0
     telemetry.record_search(
-        ctx,
         caller_kind=caller_kind,
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
@@ -375,7 +375,7 @@ async def _search_memory_records_async(
 
 
 def _read_memory_record(
-    ctx: ApplicationContext,
+    ctx: MemoryReadDependencies,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -424,7 +424,6 @@ def _read_memory_record(
             include_metadata=include_metadata,
         )
         telemetry.record_read(
-            ctx,
             caller_kind=caller_kind,
             memory_id=telemetry_memory_id,
             duration_ms=(perf_counter() - started_at) * 1000.0,
@@ -447,7 +446,6 @@ def _read_memory_record(
     if result is None:
         return {"status": "error", "error": "memory_not_found"}
     telemetry.record_read(
-        ctx,
         caller_kind=caller_kind,
         memory_id=telemetry_memory_id,
         duration_ms=duration_ms,
@@ -483,7 +481,7 @@ def _read_memory_record(
 class RecordThoughtUseCase:
     def __init__(
         self,
-        ctx: ApplicationContext,
+        ctx: MemoryMutationDependencies,
         *,
         writeback_cache=None,
         max_outbox_entries: int | None = None,
@@ -503,7 +501,7 @@ class RecordThoughtUseCase:
 
 class SearchMemoryRecordsUseCase:
     def __init__(
-        self, ctx: ApplicationContext, telemetry: RetrievalTelemetryPort
+        self, ctx: MemoryReadDependencies, telemetry: RetrievalTelemetryPort
     ) -> None:
         self._ctx = ctx
         self._telemetry = telemetry
@@ -532,7 +530,7 @@ class SearchMemoryRecordsUseCase:
 
 class ReadMemoryRecordUseCase:
     def __init__(
-        self, ctx: ApplicationContext, telemetry: RetrievalTelemetryPort
+        self, ctx: MemoryReadDependencies, telemetry: RetrievalTelemetryPort
     ) -> None:
         self._ctx = ctx
         self._telemetry = telemetry

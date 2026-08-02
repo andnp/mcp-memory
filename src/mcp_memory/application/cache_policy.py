@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 import logging
 from typing import Any
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.application.ports import MemoryReadPort
 from mcp_memory.core.ports.memory import parse_memory_ref
 from mcp_memory.relational.search import RelationalSearchResult
 from mcp_memory.serialization import (
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_search_cache_request(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     arguments: dict[str, Any],
 ) -> SharedReadCacheSearchRequest:
     return SharedReadCacheSearchRequest(
@@ -43,7 +43,7 @@ def build_search_cache_request(
 
 
 def _shared_read_cache_enabled(
-    ctx: ApplicationContext, *, caller_kind: str, debug_enabled: bool = False
+    ctx: MemoryReadPort, *, caller_kind: str, debug_enabled: bool = False
 ) -> bool:
     return (
         caller_kind == "external"
@@ -53,7 +53,7 @@ def _shared_read_cache_enabled(
 
 
 def _increment_shared_read_cache_metric(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     metric_name: str,
     *,
     amount: int = 1,
@@ -105,7 +105,7 @@ def _compact_cached_search_result(result: dict[str, object]) -> dict[str, object
 
 
 def _cached_result_memory_id(
-    ctx: ApplicationContext, result: dict[str, object]
+    ctx: MemoryReadPort, result: dict[str, object]
 ) -> str | None:
     memory_id = result.get("memory_id")
     if isinstance(memory_id, str) and memory_id:
@@ -187,7 +187,7 @@ def _read_related_counts(
 
 
 def _load_cached_search_fallback(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
     *,
     error: Exception,
@@ -208,7 +208,7 @@ def _load_cached_search_fallback(
 
 
 def _load_projection_search_fallback(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
     *,
     error: Exception,
@@ -243,7 +243,7 @@ def _load_projection_search_fallback(
 
 
 def _load_fresh_cached_search_hit(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
     *,
     caller_kind: str,
@@ -267,7 +267,7 @@ def _load_fresh_cached_search_hit(
 
 
 def _load_cached_read_fallback(
-    ctx: ApplicationContext, memory_id: str, *, error: Exception
+    ctx: MemoryReadPort, memory_id: str, *, error: Exception
 ) -> dict | None:
     cache = getattr(ctx, "read_cache", None)
     if cache is None:
@@ -282,7 +282,7 @@ def _load_cached_read_fallback(
 
 
 def _store_cached_search_response(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
     payload: dict[str, object],
     *,
@@ -297,7 +297,7 @@ def _store_cached_search_response(
 
 
 def _begin_inflight_search_coalescing(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     request: SharedReadCacheSearchRequest,
     *,
     caller_kind: str,
@@ -314,7 +314,7 @@ def _begin_inflight_search_coalescing(
 
 
 def _finish_inflight_search_coalescing(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     entry: SharedReadCacheInFlightSearch | None,
     *,
     payload: dict[str, object] | None = None,
@@ -329,7 +329,7 @@ def _finish_inflight_search_coalescing(
 
 
 def _resolve_read_cache_validation_tokens(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     memory_ids: list[str],
 ) -> dict[str, str]:
     resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
@@ -355,13 +355,13 @@ def _resolve_read_cache_validation_tokens(
 
 
 def _resolve_read_cache_validation_token(
-    ctx: ApplicationContext, memory_id: str
+    ctx: MemoryReadPort, memory_id: str
 ) -> str | None:
     return _resolve_read_cache_validation_tokens(ctx, [memory_id]).get(memory_id)
 
 
 def _cached_search_payload_has_current_records(
-    ctx: ApplicationContext, payload: dict[str, object]
+    ctx: MemoryReadPort, payload: dict[str, object]
 ) -> bool:
     resolver = getattr(ctx.relational_search, "get_read_cache_validation_tokens", None)
     if not callable(resolver):
@@ -430,7 +430,7 @@ def _build_search_result_payloads(
 
 
 def _store_cached_projection_entries(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     payloads: list[dict[str, object]],
     *,
     validation_tokens: dict[str, str],
@@ -452,7 +452,7 @@ def _store_cached_projection_entries(
 
 
 def _warm_cached_search_projections(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     result_payloads: list[dict[str, object]],
     *,
     caller_kind: str,
@@ -497,7 +497,7 @@ def _warm_cached_search_projections(
 
 
 def _load_validated_cached_projection_entries(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     memory_ids: list[str],
     *,
     caller_kind: str,
@@ -517,7 +517,7 @@ def _load_validated_cached_projection_entries(
 
 
 def _validate_cached_projection_entries(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     entries: list[SharedReadCacheProjectionEntry],
 ) -> list[SharedReadCacheProjectionEntry]:
     cache = getattr(ctx, "read_cache", None)
@@ -557,7 +557,7 @@ def _validate_cached_projection_entries(
 
 
 def _load_validated_cached_read_hit(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     memory_id: str,
     *,
     caller_kind: str,
@@ -599,7 +599,7 @@ def _load_validated_cached_read_hit(
 
 
 def _store_cached_read_response(
-    ctx: ApplicationContext,
+    ctx: MemoryReadPort,
     memory_id: str,
     payload: dict[str, object],
     *,

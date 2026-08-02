@@ -14,6 +14,7 @@ from mcp_memory.application.memory_use_cases import (
     RecordThoughtUseCase,
     SearchMemoryRecordsUseCase,
 )
+from mcp_memory.application.ports import MemoryReadDependencies
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.adapters import (
     parse_batch_read_arguments,
@@ -32,6 +33,57 @@ from mcp_memory.mcp.telemetry import (
 )
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
+
+
+class _ContextBoundRetrievalTelemetry:
+    def __init__(self, ctx: ApplicationContext) -> None:
+        self._ctx = ctx
+        self._adapter = McpRetrievalTelemetryAdapter()
+
+    def record_search(
+        self,
+        *,
+        caller_kind: str,
+        query: str,
+        surfaced_memory_ids: list[str],
+        duration_ms: float,
+    ) -> None:
+        self._adapter.record_search(
+            self._ctx,
+            caller_kind=caller_kind,
+            query=query,
+            surfaced_memory_ids=surfaced_memory_ids,
+            duration_ms=duration_ms,
+        )
+
+    def record_read(
+        self,
+        *,
+        caller_kind: str,
+        memory_id: str,
+        duration_ms: float,
+    ) -> None:
+        self._adapter.record_read(
+            self._ctx,
+            caller_kind=caller_kind,
+            memory_id=memory_id,
+            duration_ms=duration_ms,
+        )
+
+
+def _memory_read_dependencies(ctx: ApplicationContext) -> MemoryReadDependencies:
+    return MemoryReadDependencies(
+        config=ctx.config,
+        workspace_id=ctx.workspace_id,
+        repository=ctx.repository,
+        surface_tracker=ctx.repository,
+        relational_search=ctx.relational_search,
+        memory_retrieval=getattr(ctx, "memory_retrieval", None),
+        read_cache=getattr(ctx, "read_cache", None),
+        vector_store=ctx.vector_store,
+        embedder=ctx.embedder,
+        embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+    )
 
 
 def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
@@ -56,7 +108,7 @@ def search_memory_records_service(
 ) -> dict:
     parsed = parse_search_arguments(arguments)
     return SearchMemoryRecordsUseCase(
-        ctx, McpRetrievalTelemetryAdapter()
+        _memory_read_dependencies(ctx), _ContextBoundRetrievalTelemetry(ctx)
     ).execute(parsed, caller_kind=caller_kind)
 
 
@@ -69,8 +121,8 @@ async def search_memory_records_async_service(
     parsed = parse_search_arguments(arguments)
     if ctx.repository is not None:
         return await SearchMemoryRecordsUseCase(
-            ctx,
-            McpRetrievalTelemetryAdapter(),
+            _memory_read_dependencies(ctx),
+            _ContextBoundRetrievalTelemetry(ctx),
         ).execute_async(parsed, caller_kind=caller_kind)
     return await asyncio.to_thread(
         search_memory_records_service,
@@ -88,7 +140,7 @@ def read_memory_record_service(
 ) -> dict:
     parsed = parse_read_arguments(arguments, caller_kind=caller_kind)
     return ReadMemoryRecordUseCase(
-        ctx, McpRetrievalTelemetryAdapter()
+        _memory_read_dependencies(ctx), _ContextBoundRetrievalTelemetry(ctx)
     ).execute(parsed, caller_kind=caller_kind)
 
 
