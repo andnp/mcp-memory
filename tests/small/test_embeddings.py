@@ -5,11 +5,15 @@ import sys
 import threading
 import time
 
+from unittest import mock
+
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.embeddings import (
+    OllamaEmbedder,
     SentenceTransformerEmbedder,
     SQLiteVectorStore,
     _cap_torch_threads_before_sentence_transformer_load,
+    build_embedder,
 )
 from searchkernel.ports import CandidateFilterSupport
 from searchkernel.utils.similarity import cosine_similarity_lists
@@ -139,6 +143,66 @@ def test_sqlite_vector_store_empty_candidate_filter_returns_no_results(db_manage
         query_embedding=[1.0, 0.0],
         candidate_ids=[],
     ) == []
+
+
+def test_build_embedder_defaults_to_sentence_transformer() -> None:
+    embedder = build_embedder(EmbeddingsConfig())
+    assert isinstance(embedder, SentenceTransformerEmbedder)
+
+
+def test_build_embedder_returns_ollama_embedder_for_ollama_provider() -> None:
+    config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider"):
+        embedder = build_embedder(config)
+
+    assert isinstance(embedder, OllamaEmbedder)
+
+
+def test_embeddings_config_rejects_unknown_provider() -> None:
+    try:
+        EmbeddingsConfig(provider="unknown")
+    except ValueError as exc:
+        assert "provider" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for unknown provider")
+
+
+def test_ollama_embedder_model_name_and_status() -> None:
+    config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider"):
+        embedder = OllamaEmbedder(config)
+
+    assert embedder.model_name == "qwen3-embedding:0.6b"
+    assert embedder.configured_model_name == "qwen3-embedding:0.6b"
+    status = embedder.status()
+    assert status.backend == "ollama"
+    assert status.model_name == "qwen3-embedding:0.6b"
+    assert status.model_cached is True
+
+
+def test_ollama_embedder_embed_delegates_to_provider() -> None:
+    config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider") as mock_provider_cls:
+        mock_provider = mock_provider_cls.return_value
+        mock_provider.embed.return_value = [[0.1, 0.2]]
+        embedder = OllamaEmbedder(config)
+
+        result = embedder.embed(["hello"])
+
+    assert result == [[0.1, 0.2]]
+    mock_provider.embed.assert_called_once_with(["hello"])
+
+
+def test_ollama_embedder_embed_returns_empty_list_for_no_texts() -> None:
+    config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider"):
+        embedder = OllamaEmbedder(config)
+
+    assert embedder.embed([]) == []
 
 
 def test_sentence_transformer_cache_model_uses_local_cache_before_network(monkeypatch) -> None:
