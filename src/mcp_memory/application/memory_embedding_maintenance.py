@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 import time
@@ -9,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from searchkernel.ingestion import EmbeddingInput, embed_and_upsert
+from searchkernel.ports.content_source import IngestionError, IngestionReceipt
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord
@@ -19,6 +20,7 @@ from mcp_memory.core.ports.work_items import (
 )
 from mcp_memory.core.search_repair import EmbeddingRepairScheduler
 from mcp_memory.embeddings import is_fallback_embedding_model, with_local_embedding_cache
+from mcp_memory.integrations.searchkernel_ingestion import MemoryRecordIngestor
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ class MemoryEmbeddingMaintenance:
         self._config = config
         self._embedder = with_local_embedding_cache(embedder, embedding_cache_path)
         self._vector_store = vector_store
+        self._record_ingestor: MemoryRecordIngestor | None = None
         self._db_manager = db_manager
         self._work_items = work_items
         self._repair_queue = embedding_repair_queue
@@ -281,12 +284,21 @@ class MemoryEmbeddingMaintenance:
             return
         if len(stale_or_missing) > INLINE_EMBEDDING_REPAIR_LIMIT:
             stale_or_missing = _prioritize_embedding_repairs(stale_or_missing)[:INLINE_EMBEDDING_REPAIR_LIMIT]
-        embed_and_upsert(
-            [_embedding_input(candidate) for candidate in stale_or_missing],
-            provider=self._embedder,
-            sink=self._vector_store,
-            batch_size=len(stale_or_missing),
-        )
+        self._index_memory_records(stale_or_missing)
+
+    def _index_memory_records(self, records: Sequence[MemoryRecord]) -> IngestionReceipt:
+        if self._repository is None or self._embedder is None or self._vector_store is None:
+            raise RuntimeError("memory ingestion is not initialized")
+        if self._record_ingestor is None:
+            self._record_ingestor = MemoryRecordIngestor(
+                self._repository,
+                self._vector_store,
+                self._embedder,
+            )
+        receipt = asyncio.run(self._record_ingestor.index_records(records))
+        if receipt.failed:
+            raise IngestionError(receipt)
+        return receipt
 
     def queue_memory_embedding_repairs(self, candidates: Sequence[MemoryRecord]) -> None:
         if self._scheduler is not None and self._embedder is not None:
@@ -361,15 +373,13 @@ class MemoryEmbeddingMaintenance:
                 repair_pairs.append((record, work_item))
             if not repair_pairs:
                 continue
-            embedding_result = embed_and_upsert(
-                [_embedding_input(record) for record, _ in repair_pairs],
-                provider=self._embedder,
-                sink=self._vector_store,
-                batch_size=len(repair_pairs),
+            receipt = await asyncio.to_thread(
+                self._index_memory_records,
+                [record for record, _ in repair_pairs],
             )
             for _, work_item in repair_pairs:
                 self._complete_item(work_item.id)
-            repaired += embedding_result.stored
+            repaired += receipt.committed
         pruned_completed = 0
         if self._repair_queue is not None:
             pruned_completed = self._repair_queue.prune_completed(limit=DEFAULT_EMBEDDING_REPAIR_PRUNE_LIMIT)
@@ -554,24 +564,6 @@ class MemoryEmbeddingMaintenance:
             "enqueued_memory_repairs": counts["enqueued"],
             "already_queued_memory_repairs": counts["already"],
         }
-
-
-def _embedding_input(record: MemoryRecord) -> EmbeddingInput:
-    return EmbeddingInput(
-        source_kind="memory",
-        source_id=record.id,
-        workspace_id=next((item for item in record.workspace_ids if item), None),
-        text=_memory_embedding_text(record),
-        source_updated_at=record.updated_at,
-    )
-
-
-def _memory_embedding_text(record: MemoryRecord) -> str:
-    return "\n".join(
-        part
-        for part in [record.title, record.summary or "", record.content, ", ".join(record.tags)]
-        if part
-    )
 
 
 def _embedding_is_stale(embedding_updated_at: float, memory_updated_at: str | None) -> bool:
