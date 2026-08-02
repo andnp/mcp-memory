@@ -848,7 +848,92 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
         ("schema_version", str(SCHEMA_VERSION)),
     )
     rebuild_memories_fts(conn)
+    _ensure_search_epoch_tracking(conn)
     conn.commit()
+
+
+def _ensure_search_epoch_tracking(conn: sqlite3.Connection) -> None:
+    for lane in ("keyword", "vector", "graph"):
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_metadata (key, value) VALUES (?, '0')",
+            (f"search_epoch_{lane}",),
+        )
+    conn.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS memories_search_epoch_insert
+        AFTER INSERT ON memories
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_search_epoch_update
+        AFTER UPDATE ON memories
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS memories_search_epoch_delete
+        AFTER DELETE ON memories
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS workspaces_search_epoch_insert
+        AFTER INSERT ON memory_workspaces
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS workspaces_search_epoch_update
+        AFTER UPDATE ON memory_workspaces
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS workspaces_search_epoch_delete
+        AFTER DELETE ON memory_workspaces
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_keyword';
+        END;
+        CREATE TRIGGER IF NOT EXISTS links_search_epoch_insert
+        AFTER INSERT ON links
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_graph';
+        END;
+        CREATE TRIGGER IF NOT EXISTS links_search_epoch_update
+        AFTER UPDATE ON links
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_graph';
+        END;
+        CREATE TRIGGER IF NOT EXISTS links_search_epoch_delete
+        AFTER DELETE ON links
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_graph';
+        END;
+        CREATE TRIGGER IF NOT EXISTS embeddings_search_epoch_insert
+        AFTER INSERT ON embeddings
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_vector';
+        END;
+        CREATE TRIGGER IF NOT EXISTS embeddings_search_epoch_update
+        AFTER UPDATE ON embeddings
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_vector';
+        END;
+        CREATE TRIGGER IF NOT EXISTS embeddings_search_epoch_delete
+        AFTER DELETE ON embeddings
+        BEGIN
+            UPDATE schema_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+            WHERE key = 'search_epoch_vector';
+        END;
+        """
+    )
 
 
 def ensure_column(

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
 from searchkernel.domain import Vector
-from searchkernel.ports import EmbeddingBatchProvider
+from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding
 from searchkernel.search.record_pipeline import (
     RecordSearchCandidate,
@@ -42,17 +42,29 @@ from mcp_memory.integrations.searchkernel_adapters import (
     MemoryVectorStore,
 )
 
+MEMORY_SEARCH_POLICY_VERSION = "mcp-memory-record-policy-v1"
 
-class MemoryQueryEmbeddingProvider:
+
+class MemoryQueryEmbeddingProvider(AsyncEmbeddingProvider):
     """Adapt mcp-memory's batch embedder to the query seam."""
 
     def __init__(self, embedder: EmbeddingBatchProvider, dim: int) -> None:
         self._embedder = embedder
         self.model_name = embedder.model_name
         self.dim = dim
+        namespace = getattr(embedder, "encoder_namespace", None)
+        self.encoder_namespace = (
+            namespace if isinstance(namespace, str) and namespace else self.model_name
+        )
 
     async def embed_query(self, text: str) -> Vector:
         def compute() -> Vector:
+            query_embedder = getattr(self._embedder, "embed_query", None)
+            if callable(query_embedder):
+                vector = query_embedder(text)
+                if inspect.isawaitable(vector):
+                    raise TypeError("async query embedding is not supported by this adapter")
+                return list(cast(Sequence[float], vector))
             embeddings = self._embedder.embed([text])
             if len(embeddings) != 1:
                 raise ValueError("memory embedder must return one query vector")
@@ -61,6 +73,7 @@ class MemoryQueryEmbeddingProvider:
         vector = await asyncio.to_thread(
             get_or_compute_query_embedding,
             model_name=self.model_name,
+            encoder_namespace=self.encoder_namespace,
             query=text,
             compute=compute,
         )
@@ -181,6 +194,9 @@ class _PolicyRepositoryView:
     def get_memory(self, memory_id: str) -> MemoryRecord | None:
         return _cached_memory(self._repository, memory_id)
 
+    def get_search_epochs(self) -> dict[str, int]:
+        return self._repository.get_search_epochs()
+
     def get_links(
         self,
         memory_id: str,
@@ -231,10 +247,15 @@ class MemoryRecordSearchPipeline:
             _MemorySearchPolicyContext(self._repository)
         )
         try:
+            pipeline_filters = {
+                key: value
+                for key, value in active_filters.items()
+                if key not in {"_mcp_memory_signal_context", "_mcp_memory_requested_limit"}
+            }
             outcome = self._pipeline.search(
                 query,
                 limit=limit,
-                filters=active_filters,
+                filters=pipeline_filters,
             )
             if inspect.isawaitable(outcome):
                 return await outcome
@@ -297,6 +318,7 @@ def build_memory_record_pipeline(
                     if embedding_maintenance is not None
                     else None
                 ),
+                repository=cast(MemoryReadPort, repository),
             )
 
     policy = RecordSearchPolicy(
@@ -346,6 +368,7 @@ def build_memory_record_pipeline(
         ),
         policy=policy,
         continue_on_error=None,
+        policy_version=MEMORY_SEARCH_POLICY_VERSION,
     )
     return MemoryRecordSearchPipeline(
         pipeline,
@@ -455,13 +478,13 @@ def _candidate_allowed(
 def _vector_candidate_ids(
     repository: MemoryRepositoryPort,
     keyword_ranking: Sequence[tuple[str, float]],
-    filters: dict[str, object],
+    filters: Mapping[str, object],
     config: Config,
 ) -> Sequence[str] | None:
     if not keyword_ranking:
         return None
-    signal_context = filters.get("_mcp_memory_signal_context")
-    if not isinstance(signal_context, _MemorySearchSignalContext):
+    signal_context = _signal_context()
+    if signal_context is None:
         return None
     keyword_records = [
         record
@@ -478,7 +501,8 @@ def _vector_candidate_ids(
     if strongest_coverage < config.search_ranking.keyword_coverage_floor:
         return None
     requested_limit = filters.get("_mcp_memory_requested_limit")
-    effective_limit = requested_limit if isinstance(requested_limit, int) else 1
+    effective_limit = getattr(filters, "limit", requested_limit)
+    effective_limit = effective_limit if isinstance(effective_limit, int) else 1
     candidate_cap = max(effective_limit * 4, 20)
     return [record_id for record_id, _ in keyword_ranking[:candidate_cap]]
 
@@ -486,7 +510,7 @@ def _vector_candidate_ids(
 def _order_vector_ranking(
     repository: MemoryRepositoryPort,
     ranking: Sequence[tuple[str, float]],
-    filters: dict[str, object],
+    filters: Mapping[str, object],
     config: Config,
 ) -> Sequence[tuple[str, float]]:
     workspace_id = filters.get("_ranking_workspace_id", filters.get("workspace_id"))
@@ -523,6 +547,9 @@ def _result_allowed(
         return False
     signal_context = _signal_context()
     if signal_context is None:
+        return True
+    if "keyword" in result.provenance.strategies:
+        signal_context.keyword_candidates_present = True
         return True
     return (
         signal_context.keyword_candidates_present

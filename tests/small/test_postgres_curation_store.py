@@ -107,7 +107,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 18
+    assert POSTGRES_SCHEMA_VERSION == 19
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"
@@ -129,6 +129,16 @@ def test_postgres_curation_repository_contract() -> None:
     assert_curation_repository_contract(
         lambda: PostgresCurationStore(cast(Any, session_manager))
     )
+
+
+def test_postgres_migration_adds_persistent_search_epochs() -> None:
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 19)
+    assert migration.name == "add_search_mutation_epochs"
+    statements = " ".join(migration.statements)
+    assert "search_epoch_keyword" in statements
+    assert "search_epoch_vector" in statements
+    assert "search_epoch_graph" in statements
+    assert "CREATE TRIGGER embeddings_search_epoch" in statements
 
 
 def test_postgres_json_hydration_accepts_native_jsonb_values() -> None:

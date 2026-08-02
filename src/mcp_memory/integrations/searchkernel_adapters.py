@@ -21,6 +21,7 @@ from searchkernel.ports import (
     AsyncVectorStore,
     CandidateFilterSupport,
     EmbeddingSink,
+    SearchEpochs,
 )
 
 from mcp_memory.core.ports.memory import (
@@ -149,6 +150,9 @@ class MemoryKeywordStore(AsyncKeywordStore):
         self._repository = repository
         self._prefetch = prefetch
 
+    def epochs(self) -> SearchEpochs:
+        return _repository_search_epochs(self._repository)
+
     def index(self, records: list[Record]) -> None:
         """Validate source ownership; relational indexing remains authoritative."""
         if any(record.source_kind != MemoryRecordAdapter.source_kind for record in records):
@@ -216,7 +220,11 @@ class MemoryVectorStore(AsyncVectorStore):
         self.supports_candidate_filtering = isinstance(
             vector_store, CandidateFilterSupport
         )
-        self._epoch = 0
+
+    def epochs(self) -> SearchEpochs:
+        if self._repository is None:
+            raise RuntimeError("MemoryVectorStore requires an authoritative repository epoch source")
+        return _repository_search_epochs(self._repository)
 
     def upsert(self, records: list[Record], model_name: str, dim: int) -> None:
         for record in records:
@@ -237,7 +245,6 @@ class MemoryVectorStore(AsyncVectorStore):
             )
             if accepted is False:
                 continue
-        self._epoch += 1
 
     async def search(
         self,
@@ -320,18 +327,15 @@ class MemoryVectorStore(AsyncVectorStore):
                 source_kind=MemoryRecordAdapter.source_kind,
                 source_id=record_id,
             )
-        if record_ids:
-            self._epoch += 1
-
-    def epoch(self) -> int:
-        return self._epoch
-
 
 class MemoryGraphStore(AsyncGraphStore):
     """Read-only graph view over authoritative memory links."""
 
     def __init__(self, repository: MemoryReadPort) -> None:
         self._repository = repository
+
+    def epochs(self) -> SearchEpochs:
+        return _repository_search_epochs(self._repository)
 
     def upsert_edges(self, edges: list[tuple[str, str, str, float]]) -> None:
         raise NotImplementedError(
@@ -720,6 +724,18 @@ def _memory_status_filter(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value if value in {"active", "stale", "degraded", "archived"} else None
+
+
+def _repository_search_epochs(repository: object) -> SearchEpochs:
+    get_search_epochs = getattr(repository, "get_search_epochs", None)
+    if not callable(get_search_epochs):
+        raise RuntimeError("memory repository does not expose authoritative search epochs")
+    values = get_search_epochs()
+    if isinstance(values, SearchEpochs):
+        return values
+    if isinstance(values, Mapping):
+        return SearchEpochs.from_mapping(values)
+    raise TypeError("memory repository returned an invalid search epoch snapshot")
 
 
 def _string_filter(filters: Mapping[str, Any], key: str) -> str | None:

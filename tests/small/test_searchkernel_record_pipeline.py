@@ -126,6 +126,11 @@ class FakeRepository:
         return MemoryReadContext(record, {"outgoing": self.get_links(memory_id)}, [])
 
 
+class EpochRepository(FakeRepository):
+    def get_search_epochs(self) -> dict[str, int]:
+        return {"keyword": 1, "vector": 1, "graph": 1}
+
+
 class CountingRepository(FakeRepository):
     def __init__(self) -> None:
         super().__init__(keyword_ids=["active"])
@@ -242,6 +247,25 @@ async def test_composition_applies_memory_policy_without_writes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_candidate_cache_requires_authoritative_epochs() -> None:
+    pipeline_without_epochs = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", FakeRepository())
+    )
+    without_epochs = await pipeline_without_epochs.search("query", limit=1)
+    assert any(
+        diagnostic.startswith("candidate_cache:bypass:")
+        for diagnostic in without_epochs.cache_diagnostics
+    )
+
+    pipeline = build_memory_record_pipeline(cast("MemoryRepositoryPort", EpochRepository()))
+    first = await pipeline.search("query", limit=1)
+    second = await pipeline.search("query", limit=1)
+
+    assert "candidate_cache:miss" in first.cache_diagnostics
+    assert "candidate_cache:hit" in second.cache_diagnostics
+
+
+@pytest.mark.asyncio
 async def test_strong_keyword_matches_bound_vector_candidates() -> None:
     repository = FakeRepository(keyword_ids=["active"])
     vector_store = FakeVectorStore()
@@ -258,6 +282,36 @@ async def test_strong_keyword_matches_bound_vector_candidates() -> None:
     )
 
     assert vector_store.search_candidate_ids == [["active"]]
+
+
+@pytest.mark.asyncio
+async def test_near_token_keyword_match_does_not_bound_vector_candidates() -> None:
+    near_token = _memory(
+        "near-token",
+        title="authentication policy",
+        summary="authentication policy",
+        content="Authentication policy details.",
+    )
+    semantic = _memory(
+        "semantic",
+        title="credential controls",
+        summary="credential controls",
+        content="Credential controls for auth.",
+    )
+    repository = FakeRepository(
+        records={near_token.id: near_token, semantic.id: semantic},
+        keyword_ids=[near_token.id],
+    )
+    vector_store = FakeVectorStore([(semantic.id, 0.95)])
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast("MemoryVectorBackend", vector_store),
+        embedder=FakeEmbedder(),
+    )
+
+    await pipeline.search("auth", limit=1)
+
+    assert vector_store.search_candidate_ids == [None]
 
 
 @pytest.mark.asyncio

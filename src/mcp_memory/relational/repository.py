@@ -43,6 +43,22 @@ class RelationalMemoryRepository:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
 
+    def get_search_epochs(self) -> dict[str, int]:
+        rows = self._db.get_connection().execute(
+            "SELECT key, value FROM schema_metadata WHERE key IN (?, ?, ?)",
+            (
+                "search_epoch_keyword",
+                "search_epoch_vector",
+                "search_epoch_graph",
+            ),
+        ).fetchall()
+        values = {str(row[0]): int(row[1]) for row in rows}
+        return {
+            "keyword": values["search_epoch_keyword"],
+            "vector": values["search_epoch_vector"],
+            "graph": values["search_epoch_graph"],
+        }
+
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]:
         tokens: dict[str, str] = {}
         for memory_id in self._normalize_values(memory_ids):

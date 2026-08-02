@@ -307,6 +307,9 @@ def test_ensure_postgres_schema_bootstraps_missing_metadata(monkeypatch: pytest.
             if normalized.startswith("SELECT value FROM schema_metadata"):
                 self._result = None if self.schema_version is None else (self.schema_version,)
                 return
+            if normalized.startswith("INSERT INTO schema_metadata") and params is None:
+                self._result = None
+                return
             if normalized.startswith("INSERT INTO schema_metadata"):
                 assert params is not None
                 assert params[0] == "schema_version"
@@ -409,6 +412,9 @@ def test_ensure_postgres_schema_adds_optional_vector_column_when_extension_is_av
                 return
             if normalized.startswith("SELECT value FROM schema_metadata"):
                 self._result = None if self.schema_version is None else (self.schema_version,)
+                return
+            if normalized.startswith("INSERT INTO schema_metadata") and params is None:
+                self._result = None
                 return
             if normalized.startswith("INSERT INTO schema_metadata"):
                 assert params is not None
@@ -513,6 +519,9 @@ def test_ensure_postgres_schema_skips_optional_vector_column_when_extension_is_u
                 return
             if normalized.startswith("SELECT value FROM schema_metadata"):
                 self._result = None if self.schema_version is None else (self.schema_version,)
+                return
+            if normalized.startswith("INSERT INTO schema_metadata") and params is None:
+                self._result = None
                 return
             if normalized.startswith("INSERT INTO schema_metadata"):
                 assert params is not None

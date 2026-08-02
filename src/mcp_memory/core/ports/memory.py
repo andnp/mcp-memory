@@ -86,6 +86,8 @@ class RankedMemoryCandidate:
 
 @runtime_checkable
 class MemoryReadPort(Protocol):
+    def get_search_epochs(self) -> dict[str, int]: ...
+
     def get_read_cache_validation_tokens(self, memory_ids: list[str]) -> dict[str, str]: ...
 
     def get_searchable_memories(

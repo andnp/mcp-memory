@@ -36,6 +36,25 @@ RelationalMemoryRecord = MemoryRecord
 
 
 class PostgresRelationalMemoryRepository:
+    def get_search_epochs(self) -> dict[str, int]:
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT key, value FROM schema_metadata WHERE key = ANY(%s)",
+                    ([
+                        "search_epoch_keyword",
+                        "search_epoch_vector",
+                        "search_epoch_graph",
+                    ],),
+                )
+                rows = cursor.fetchall()
+        values = {str(row[0]): self._coerce_int(row[1]) for row in rows}
+        return {
+            "keyword": values["search_epoch_keyword"],
+            "vector": values["search_epoch_vector"],
+            "graph": values["search_epoch_graph"],
+        }
+
     def __init__(self, session_manager: SessionManager[DbConnectionLike]) -> None:
         self._sessions = session_manager
         self._last_surfaced_writer = BufferedWriter[tuple[str, str]](

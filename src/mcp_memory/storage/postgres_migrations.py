@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 18
+POSTGRES_SCHEMA_VERSION = 19
 
 
 @dataclass(frozen=True)
@@ -712,6 +712,55 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE memories ALTER COLUMN memory_ref SET DEFAULT nextval('memory_ref_seq')",
             "ALTER TABLE memories ALTER COLUMN memory_ref SET NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_memories_memory_ref ON memories(memory_ref)",
+        ),
+    ),
+    PostgresMigration(
+        version=19,
+        name="add_search_mutation_epochs",
+        statements=(
+            "INSERT INTO schema_metadata(key, value) VALUES ('search_epoch_keyword', '0') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO schema_metadata(key, value) VALUES ('search_epoch_vector', '0') ON CONFLICT (key) DO NOTHING",
+            "INSERT INTO schema_metadata(key, value) VALUES ('search_epoch_graph', '0') ON CONFLICT (key) DO NOTHING",
+            """
+            CREATE OR REPLACE FUNCTION mcp_memory_bump_search_epoch()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                UPDATE schema_metadata
+                SET value = (value::bigint + 1)::text
+                WHERE key = TG_ARGV[0];
+                IF TG_OP = 'DELETE' THEN
+                    RETURN OLD;
+                END IF;
+                RETURN NEW;
+            END;
+            $function$
+            """,
+            "DROP TRIGGER IF EXISTS memories_search_epoch ON memories",
+            """
+            CREATE TRIGGER memories_search_epoch
+            AFTER INSERT OR UPDATE OR DELETE ON memories
+            FOR EACH ROW EXECUTE FUNCTION mcp_memory_bump_search_epoch('search_epoch_keyword')
+            """,
+            "DROP TRIGGER IF EXISTS memory_workspaces_search_epoch ON memory_workspaces",
+            """
+            CREATE TRIGGER memory_workspaces_search_epoch
+            AFTER INSERT OR UPDATE OR DELETE ON memory_workspaces
+            FOR EACH ROW EXECUTE FUNCTION mcp_memory_bump_search_epoch('search_epoch_keyword')
+            """,
+            "DROP TRIGGER IF EXISTS links_search_epoch ON links",
+            """
+            CREATE TRIGGER links_search_epoch
+            AFTER INSERT OR UPDATE OR DELETE ON links
+            FOR EACH ROW EXECUTE FUNCTION mcp_memory_bump_search_epoch('search_epoch_graph')
+            """,
+            "DROP TRIGGER IF EXISTS embeddings_search_epoch ON embeddings",
+            """
+            CREATE TRIGGER embeddings_search_epoch
+            AFTER INSERT OR UPDATE OR DELETE ON embeddings
+            FOR EACH ROW EXECUTE FUNCTION mcp_memory_bump_search_epoch('search_epoch_vector')
+            """,
         ),
     ),
 )

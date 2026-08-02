@@ -11,6 +11,7 @@ from mcp_memory.core.ports.memory import (
     MemoryMutationPort,
     MemoryReadPort,
 )
+from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager, SCHEMA_VERSION
 from mcp_memory.utils.db_schema import create_current_schema, finalize_schema_setup
@@ -89,6 +90,38 @@ def test_current_schema_creation_bootstraps_fresh_db_without_legacy_migration(tm
         assert schema_version == (str(SCHEMA_VERSION),)
     finally:
         conn.close()
+
+
+def test_search_epochs_are_persistent_and_lane_specific(db_manager):
+    repository = RelationalMemoryRepository(db_manager)
+    initial = repository.get_search_epochs()
+
+    record = repository.create_memory(
+        "Epoch title",
+        "Epoch content",
+        ["workspace-1"],
+        memory_id="epoch-memory",
+    )
+    after_memory = repository.get_search_epochs()
+    assert after_memory["keyword"] > initial["keyword"]
+    assert after_memory["vector"] == initial["vector"]
+    assert after_memory["graph"] == initial["graph"]
+
+    repository.add_link("epoch-memory", "epoch-memory", "DEPENDS_ON")
+    after_link = repository.get_search_epochs()
+    assert after_link["graph"] > after_memory["graph"]
+
+    assert record is not None
+    SQLiteVectorStore(db_manager).upsert(
+        source_kind="memory",
+        source_id=record.id,
+        workspace_id="workspace-1",
+        model_name="test-model",
+        embedding=[1.0, 0.0],
+        source_updated_at=record.updated_at,
+    )
+    after_embedding = repository.get_search_epochs()
+    assert after_embedding["vector"] > after_link["vector"]
 
 
 def test_database_manager_migrates_legacy_journal_schema_without_claim_columns(tmp_path: Path) -> None:

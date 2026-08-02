@@ -2,6 +2,7 @@ from typing import cast
 
 import pytest
 from searchkernel.domain import GraphNeighbor, Record, RecordHit, RecordIdentity, RecordStatus
+from searchkernel.ports import SearchEpochs
 
 from mcp_memory.core.ports.memory import (
     MemoryLink,
@@ -94,6 +95,11 @@ class _BatchRepository(_Repository):
     def get_links_many(self, memory_ids: list[str], *, direction: str = "outgoing"):
         self.batch_link_calls.append((memory_ids, direction))
         return {memory_id: self.links.get(memory_id, []) for memory_id in memory_ids}
+
+
+class _EpochRepository(_Repository):
+    def get_search_epochs(self) -> dict[str, int]:
+        return {"keyword": 1, "vector": 2, "graph": 3}
 
 
 class _VectorBackend:
@@ -209,7 +215,26 @@ def test_vector_store_upsert_preserves_version_guard():
     store.upsert([record], "model", 2)
 
     assert backend.upserts[0]["source_updated_at"] == record.updated_at.isoformat()
-    assert store.epoch() == 1
+    assert backend.upserts
+
+
+def test_memory_stores_expose_repository_epochs():
+    repository = _EpochRepository()
+
+    assert MemoryKeywordStore(cast(MemoryReadPort, repository)).epochs() == SearchEpochs(
+        keyword=1,
+        vector=2,
+        graph=3,
+    )
+    assert MemoryVectorStore(
+        _VectorBackend(),
+        repository=cast(MemoryReadPort, repository),
+    ).epochs() == SearchEpochs(keyword=1, vector=2, graph=3)
+    assert MemoryGraphStore(cast(MemoryReadPort, repository)).epochs() == SearchEpochs(
+        keyword=1,
+        vector=2,
+        graph=3,
+    )
 
 
 @pytest.mark.asyncio
