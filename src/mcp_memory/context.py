@@ -51,6 +51,7 @@ class ManagementContext(MemoryPipelineContext, Protocol):
 class TaskRuntimeContext(MemoryPipelineContext, Protocol):
     session_id: str | None
     curation: Any
+    curation_action_store: Any
     ai_json_provider: Any
     ai_agent_provider: Any
     ai_provider_registry: dict[str, Any] | None
@@ -212,6 +213,7 @@ class TaskRuntimeCapabilities:
             embedding_maintenance=self.memory.embedding_maintenance,
             task_queue=self.mutation.task_queue,
             curation=self.mutation.curation,
+            curation_action_store=self.mutation.curation_action_store,
             mutation_history=self.mutation.mutation_history,
             ai_json_provider=self.provider.ai_json_provider,
             ai_agent_provider=self.provider.ai_agent_provider,
@@ -262,6 +264,7 @@ class _TaskRuntimeContextAdapter:
     embedding_maintenance: object | None
     task_queue: object | None
     curation: object | None
+    curation_action_store: object | None
     mutation_history: object | None
     ai_json_provider: JSONTaskProvider | None
     ai_agent_provider: AgenticTaskProvider | None
@@ -338,6 +341,7 @@ _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
     {
         "session_id",
         "curation",
+        "curation_action_store",
         "mutation_history",
         "ai_json_provider",
         "ai_agent_provider",

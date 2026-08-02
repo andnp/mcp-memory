@@ -42,9 +42,11 @@ def test_management_view_exposes_only_management_capabilities() -> None:
 
 def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
     tracker = object()
+    action_store = object()
     ctx = ApplicationContext(
         session_id="session-a",
         task_queue="queue",
+        curation_action_store=action_store,
         ai_json_provider="json",
         ai_agent_provider="agent",
         provider_policy_events="events",
@@ -58,6 +60,7 @@ def test_task_runtime_view_exposes_only_runtime_capabilities() -> None:
     assert view.ai_json_provider == "json"
     assert view.session_id == "session-a"
     assert view.internal_tool_call_tracker is tracker
+    assert view.curation_action_store is action_store
 
     with pytest.raises(AttributeError):
         getattr(view, "read_cache")
@@ -102,11 +105,13 @@ def test_capability_bundles_isolate_concerns() -> None:
 
 
 def test_task_runtime_capabilities_adapt_to_legacy_handler_context() -> None:
+    action_store = object()
     ctx = ApplicationContext(
         workspace_id="workspace-a",
         session_id="session-a",
         repository="repository",
         task_queue="queue",
+        curation_action_store=action_store,
         ai_json_provider="json",
         internal_tool_call_tracker="tracker",
     )
@@ -119,3 +124,4 @@ def test_task_runtime_capabilities_adapt_to_legacy_handler_context() -> None:
     assert adapted.task_queue == "queue"
     assert adapted.ai_json_provider == "json"
     assert adapted.internal_tool_call_tracker == "tracker"
+    assert adapted.curation_action_store is action_store
