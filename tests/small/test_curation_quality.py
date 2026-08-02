@@ -275,6 +275,27 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
         """,
         ("query-1", "maintenance", "search", str(noise_id), "important", 1, 2, (now - timedelta(minutes=1)).isoformat()),
     )
+    connection.executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text, result_rank,
+            result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                f"noise-{index}",
+                "maintenance",
+                "search",
+                str(noise_id),
+                "unrelated",
+                1,
+                1,
+                now.isoformat(),
+            )
+            for index in range(1001)
+        ],
+    )
     connection.execute(
         """
         INSERT INTO memory_record_revisions (
@@ -302,6 +323,90 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     assert evidence[0].after_ranked_memory_ids == [memory_id]
     assert search.calls == ["important"]
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count
+
+
+def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    event_id = uuid4()
+    active_id = uuid4()
+    archived_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.executemany(
+        """
+        INSERT INTO memories (
+            id, title, content, type, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                str(memory_id),
+                "title",
+                "content",
+                "observation",
+                "active",
+                now.isoformat(),
+                now.isoformat(),
+            )
+            for memory_id in (active_id, archived_id)
+        ],
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_mutation_events (
+            id, operation, actor_kind, curation_run_id, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (str(event_id), "merge_memories", "maintenance", str(run.run_id), "applied", now.isoformat()),
+    )
+    connection.executemany(
+        """
+        INSERT INTO memory_record_revisions (
+            event_id, memory_id, role, before_exists, before_snapshot,
+            after_exists, after_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                str(event_id),
+                str(active_id),
+                "target",
+                1,
+                "{}",
+                1,
+                json.dumps({"record": {"status": "active"}}),
+            ),
+            (
+                str(event_id),
+                str(archived_id),
+                "target",
+                1,
+                "{}",
+                1,
+                json.dumps({"record": {"status": "archived"}}),
+            ),
+        ],
+    )
+    connection.commit()
+    receipt = CurationActionReceipt(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        operation="merge_memories",
+        affected_ids=[active_id, archived_id],
+        status=CurationReceiptState.VERIFIED,
+        mutation_event_id=event_id,
+        intent_hash="intent",
+        applied_at=now,
+    )
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    assert sampler._intended_memory_ids(receipt) == [active_id]
 
 
 def test_quality_sampler_skips_non_applied_receipts(db_manager) -> None:

@@ -203,10 +203,15 @@ class CurationQualitySampler:
                     snapshot = json.loads(snapshot)
                 except ValueError:
                     snapshot = None
-            if isinstance(snapshot, Mapping) and snapshot.get("status") == "archived":
-                continue
+            if isinstance(snapshot, Mapping):
+                record_snapshot = snapshot.get("record", snapshot)
+                if (
+                    isinstance(record_snapshot, Mapping)
+                    and record_snapshot.get("status") == "archived"
+                ):
+                    continue
             intended.append(memory_id)
-        return intended or list(receipt.affected_ids)
+        return intended if snapshots else list(receipt.affected_ids)
 
     def _is_sampled(self, run_id: UUID, action_id: UUID) -> bool:
         if self._sample_rate >= 1.0:
@@ -218,24 +223,27 @@ class CurationQualitySampler:
         self,
         receipt: CurationActionReceipt,
     ) -> tuple[str, str, list[str]] | None:
+        target_ids = [str(value) for value in receipt.affected_ids]
+        placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
             self._db_manager,
-            """
+            f"""
             SELECT invocation_id, query_text, memory_id, result_rank, created_at
             FROM memory_tool_events
-            WHERE event_kind = 'search' AND memory_id IS NOT NULL
+            WHERE event_kind = 'search' AND memory_id IN ({placeholders})
             ORDER BY created_at DESC, id DESC
             LIMIT 1000
             """,
+            target_ids,
         )
-        target_ids = {str(value) for value in receipt.affected_ids}
+        target_id_set = set(target_ids)
         cutoff = receipt.applied_at or self._clock()
         grouped: dict[str, list[Any]] = defaultdict(list)
         for row in rows:
             invocation_id, _, memory_id, _, created_at = row
             event_time = _timestamp(created_at)
             if (
-                str(memory_id) in target_ids
+                str(memory_id) in target_id_set
                 and event_time is not None
                 and event_time < cutoff
             ):
