@@ -11,7 +11,7 @@ from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_faca
 from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
-from mcp_memory.mcp.cache_policy import (
+from mcp_memory.application.cache_policy import (
     _CACHE_VALIDATION_TOKENS_FIELD,
     _begin_inflight_search_coalescing,
     _compact_cached_read_payload,
