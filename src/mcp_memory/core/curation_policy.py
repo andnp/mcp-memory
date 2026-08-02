@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import re
 from typing import Mapping
 from uuid import UUID
 
@@ -48,6 +49,7 @@ class RejectionCode(StrEnum):
     MANUAL_REVIEW_REQUIRED = "manual_review_required"
     PINNED_ACTIVE = "pinned_active"
     GENERIC_SUMMARY = "generic_summary"
+    STATUS_SHAPED_CONTENT = "status_shaped_content"
     EMPTY_NORMALIZE = "empty_normalize"
 
 
@@ -141,6 +143,8 @@ def evaluate_curation_action(
         codes.extend(validate_claim_manifest(action.claim_manifest, requires_mapping=isinstance(action, (RewriteMemoryAction, MergeMemoriesAction, SplitMemoryAction))))
         if isinstance(action, (RewriteMemoryAction, MergeMemoriesAction)) and not action.content.strip():
             codes.append(RejectionCode.EMPTY_CONTENT)
+        if isinstance(action, (RewriteMemoryAction, MergeMemoriesAction)) and is_status_shaped_content(action.content):
+            codes.append(RejectionCode.STATUS_SHAPED_CONTENT)
     if isinstance(action, (RemoveLinkAction, CreateLinkAction)):
         if not action.evidence:
             codes.append(RejectionCode.EVIDENCE_REQUIRED)
@@ -185,6 +189,18 @@ def is_generic_summary(summary: str) -> bool:
     """Return whether a summary uses the known non-distinguishing shape."""
     normalized = " ".join(summary.strip().lower().split())
     return normalized.startswith(("covers ", "added "))
+
+
+def is_status_shaped_content(content: str) -> bool:
+    """Return whether content describes a mutation instead of a durable takeaway."""
+    normalized = " ".join(content.strip().lower().split())
+    return bool(
+        re.match(
+            r"^(?:merged|added|updated|rewrote|rewritten|normalized|linked|archived|split)\b"
+            r".*\b(?:into|onto)\b.*\b(?:canonical|memory|record|entry)\b",
+            normalized,
+        )
+    )
 
 
 def _affected_ids(action: object) -> set[UUID]:

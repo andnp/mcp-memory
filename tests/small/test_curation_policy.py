@@ -16,6 +16,7 @@ from mcp_memory.core.curation_policy import (
     RejectionCode,
     evaluate_curation_action,
     is_generic_summary,
+    is_status_shaped_content,
     policy_mode,
 )
 
@@ -44,6 +45,38 @@ def test_generic_summary_predicate_covers_known_boilerplate() -> None:
     assert is_generic_summary("Covers several related findings.")
     assert is_generic_summary("Added several related findings.")
     assert not is_generic_summary("The daemon now reports the Ollama backend.")
+
+
+def test_status_shaped_content_predicate_rejects_merge_receipts() -> None:
+    assert is_status_shaped_content(
+        "Merged restart cleanup into the canonical memory so the details stay discoverable."
+    )
+    assert not is_status_shaped_content(
+        "The daemon unlinks stale triage results before each run and handles cancellation explicitly."
+    )
+
+
+def test_policy_rejects_status_shaped_merge_content() -> None:
+    canonical, source = uuid4(), uuid4()
+    action = MergeMemoriesAction(
+        action_id=uuid4(),
+        canonical_id=canonical,
+        source_ids=[source],
+        confidence=1,
+        rationale="same subject",
+        content="Merged restart cleanup into the canonical memory so the details stay discoverable.",
+        evidence=[EvidenceRef(memory_id=canonical), EvidenceRef(memory_id=source)],
+        claim_manifest=ClaimManifest(
+            preserved_claims=["restart cleanup"],
+            source_mapping=[ClaimMapping(output="restart cleanup", source_memory_ids=[canonical, source])],
+        ),
+    )
+    decision = evaluate_curation_action(
+        action,
+        memory_types={canonical: "observation", source: "observation"},
+    )
+    assert RejectionCode.STATUS_SHAPED_CONTENT in decision.rejection_codes
+    assert not decision.authorized
 
 
 def test_policy_rejects_empty_normalize_even_if_model_validation_is_bypassed() -> None:
