@@ -316,7 +316,8 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         dashboard = app.state.routes.service.load_dashboard_html()
 
         assert health["status"] == "ready"
-        assert health["workspace_root"] == str(workspace)
+        assert health["workspace_root"] is None
+        assert health["daemon_scope"] == "global"
         assert "embeddings" in health
         assert "backend" in health["embeddings"]
         assert health["search"]["semantic_enabled"] is True
