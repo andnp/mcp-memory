@@ -31,7 +31,10 @@ from mcp_memory.mcp.cache_policy import (
     _warm_cached_search_projections,
     build_search_cache_request,
 )
-from mcp_memory.mcp.payloads import build_read_payload, build_search_result_payloads
+from mcp_memory.application.payloads import (
+    build_read_payload,
+    build_search_result_payloads,
+)
 from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
