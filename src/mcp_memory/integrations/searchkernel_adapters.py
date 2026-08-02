@@ -11,7 +11,6 @@ from searchkernel.domain import (
     GraphNeighbor,
     Record,
     RecordHit,
-    RecordHitLike,
     RecordIdentity,
     RecordStatus,
     SearchFilters,
@@ -38,6 +37,8 @@ _GRAPH_EDGE_DISCOUNTS = {
     "AMENDS": 0.6,
     "CONTRADICTS": 0.35,
 }
+
+MemoryBackendHit = RecordHit | tuple[str, float]
 
 
 class MemoryVectorBackend(Protocol):
@@ -165,7 +166,7 @@ class MemoryKeywordStore(AsyncKeywordStore):
         query: str,
         k: int,
         filters: SearchFilters | None = None,
-    ) -> list[RecordHitLike]:
+    ) -> list[RecordHit]:
         filters = filters or {}
         memory_ids = await asyncio.to_thread(
             self._repository.search_keyword_memory_ids,
@@ -256,7 +257,7 @@ class MemoryVectorStore(AsyncVectorStore):
         model_name: str,
         dim: int,
         filters: SearchFilters | None = None,
-    ) -> list[RecordHitLike]:
+    ) -> list[RecordHit]:
         if len(query_vector) != dim:
             raise ValueError(
                 f"Query vector has dimension {len(query_vector)}, expected {dim}"
@@ -285,7 +286,7 @@ class MemoryVectorStore(AsyncVectorStore):
         if workspace_id is not None:
             kwargs["workspace_id"] = workspace_id
         results = cast(
-            list[RecordHitLike],
+            list[MemoryBackendHit],
             await asyncio.to_thread(self._vector_store.search, **kwargs),
         )
         records_by_id = (
@@ -302,7 +303,7 @@ class MemoryVectorStore(AsyncVectorStore):
             if self._repository is not None
             else {}
         )
-        normalized_results = [
+        normalized_results: list[RecordHit] = [
             result
             if isinstance(result, RecordHit)
             else RecordHit(
@@ -321,7 +322,7 @@ class MemoryVectorStore(AsyncVectorStore):
                 for result in normalized_results
             ]
             await asyncio.to_thread(self._prefetch, record_ids)
-        return cast(list[RecordHitLike], normalized_results)
+        return normalized_results
 
     def delete(self, record_ids: list[str]) -> None:
         for record_id in record_ids:
@@ -355,7 +356,7 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str | RecordIdentity,
         edge_types: list[str] | None = None,
         depth: int = 1,
-    ) -> list[GraphNeighbor | tuple[str, str, float]]:
+    ) -> list[GraphNeighbor]:
         return await asyncio.to_thread(
             self._neighbors_sync,
             record_id,
@@ -368,24 +369,21 @@ class MemoryGraphStore(AsyncGraphStore):
         record_id: str | RecordIdentity,
         edge_types: list[str] | None,
         depth: int,
-    ) -> list[GraphNeighbor | tuple[str, str, float]]:
+    ) -> list[GraphNeighbor]:
         identity = _record_identity(record_id)
         results = self._neighbors_many_sync(
             [identity],
             edge_types=edge_types,
             depth=depth,
         )
-        return cast(
-            list[GraphNeighbor | tuple[str, str, float]],
-            next(iter(results.values()), []),
-        )
+        return next(iter(results.values()), [])
 
     async def neighbors_many(
         self,
         identities: Sequence[RecordIdentity],
         *,
         depth: int,
-    ) -> Mapping[str, Sequence[GraphNeighbor | tuple[str, str, float]]]:
+    ) -> Mapping[str, Sequence[GraphNeighbor]]:
         return await asyncio.to_thread(
             self._neighbors_many_sync,
             identities,
