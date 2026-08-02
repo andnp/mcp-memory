@@ -47,11 +47,30 @@ def test_context_is_immutable_bounded_and_attaches_record_and_graph_tokens() -> 
 
     assert packet.seeds[0]["content"] == "seed content"
     assert "content" not in packet.support[0]
+    assert packet.seed_memory_ids == (str(SEED_ID),)
+    assert packet.support_memory_ids == (str(SUPPORT_ID),)
+    assert packet.as_dict()["seed_memory_ids"] == [str(SEED_ID)]
+    assert packet.as_dict()["support_memory_ids"] == [str(SUPPORT_ID)]
     assert str(SEED_ID) in packet.record_tokens
     assert str(SEED_ID) in packet.graph_tokens
     assert packet.context_fingerprint.startswith("v1:")
     with pytest.raises(TypeError):
         packet.seeds[0]["content"] = "changed"  # type: ignore[index]
+
+
+def test_context_canonicalizes_seed_identity_before_disclosure() -> None:
+    record = _record(SEED_ID, "seed content")
+    record["id"] = str(SEED_ID).upper()
+    packet = build_context_packet(
+        family="curator",
+        strategy="recent",
+        seed_reads=[AcceptedMaintenanceRead(record)],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+
+    assert packet.seed_memory_ids == (str(SEED_ID),)
+    assert packet.seeds[0]["memory_id"] == str(SEED_ID)
+    assert packet.as_dict()["seed_memory_ids"] == [str(SEED_ID)]
 
 
 def test_denied_content_is_omitted_before_provider_packet_construction() -> None:

@@ -9,6 +9,7 @@ from mcp_memory.core.curation_models import (
     ClaimManifest,
     CurationAction,
     CurationBudgetUsage,
+    CurationContextPacket,
     CurationPlan,
     CurationRunOutcome,
     CurationRunResult,
@@ -62,6 +63,20 @@ def test_defaults_are_isolated_and_contracts_are_pure() -> None:
     )
     result = CurationRunResult(run_id=uuid4(), outcome=CurationRunOutcome.APPLIED, receipts=[receipt])
     assert result.budget_usage.read_tool_calls == 0
+
+
+def test_context_packet_canonicalizes_visible_ids() -> None:
+    seed = uuid4()
+    support = uuid4()
+
+    context = CurationContextPacket.from_visible_ids(
+        seed_memory_ids=[str(seed).upper()],
+        support_memory_ids=[str(support).upper()],
+        context_fingerprint="context",
+    )
+
+    assert context.seed_memory_ids == [seed]
+    assert context.support_memory_ids == [support]
 
 
 def test_archive_action_is_typed_and_has_no_delete_sibling() -> None:

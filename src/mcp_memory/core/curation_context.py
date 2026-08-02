@@ -212,6 +212,8 @@ class CurationContextPacket:
                 "frontier_fingerprint": self.frontier_fingerprint,
                 "seeds": self.seeds,
                 "support": self.support,
+                "seed_memory_ids": self.seed_memory_ids,
+                "support_memory_ids": self.support_memory_ids,
                 "record_tokens": self.record_tokens,
                 "graph_tokens": self.graph_tokens,
                 "disclosure": self.disclosure,
@@ -454,7 +456,11 @@ def _memory_id(record: Mapping[str, Any]) -> str:
     value = record.get("id", record.get("memory_id"))
     if not isinstance(value, (str, UUID)) or not str(value).strip():
         raise ValueError("accepted maintenance record must contain an id")
-    return str(value).strip()
+    value_text = str(value).strip()
+    try:
+        return str(UUID(value_text))
+    except ValueError:
+        return value_text
 
 
 def _as_uuid(value: str) -> UUID:

@@ -254,7 +254,15 @@ def _context_ids(context: CurationContextPacket | Mapping[str, Any] | None) -> s
 def _context_values(context: CurationContextPacket | Mapping[str, Any], records: str, ids: str) -> list[Any]:
     value = _context_value(context, records)
     if value is not None:
-        return [record["memory_id"] if isinstance(record, Mapping) else record for record in value]
+        values: list[Any] = []
+        for record in value:
+            if isinstance(record, Mapping):
+                memory_id = record.get("memory_id", record.get("id"))
+                if memory_id is not None:
+                    values.append(memory_id)
+            else:
+                values.append(record)
+        return values
     value = _context_value(context, ids)
     return [] if value is None else list(value)
 

@@ -133,6 +133,60 @@ def test_validation_classifies_actions_without_mutating_or_routing_work() -> Non
     assert not result.rejected_actions
 
 
+def test_validation_uses_canonical_disclosed_seed_ids() -> None:
+    run_id, plan_id, seed = uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    result = validate_curation_plan(
+        _plan(seed, run_id, plan_id, "frontier", "context"),
+        request=request,
+        context={
+            "context_fingerprint": "context",
+            "seeds": [{"id": str(seed).upper()}],
+            "support": [],
+        },
+    )
+
+    assert result.valid
+
+
+def test_validation_rejects_support_records_as_seed_ids() -> None:
+    run_id, plan_id, seed, support = uuid4(), uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    plan = _plan(seed, run_id, plan_id, "frontier", "context")
+    plan = plan.model_copy(update={"seed_memory_ids": [support]})
+    result = validate_curation_plan(
+        plan,
+        request=request,
+        context={
+            "context_fingerprint": "context",
+            "seeds": [{"memory_id": str(seed)}],
+            "support": [{"memory_id": str(support)}],
+        },
+    )
+
+    assert not result.valid
+    assert {issue.code for issue in result.issues} == {"seed_set_mismatch"}
+
+
+def test_validation_rejects_hidden_seed_ids() -> None:
+    run_id, plan_id, seed, hidden = uuid4(), uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    plan = _plan(seed, run_id, plan_id, "frontier", "context")
+    plan = plan.model_copy(update={"seed_memory_ids": [hidden]})
+    result = validate_curation_plan(
+        plan,
+        request=request,
+        context={
+            "context_fingerprint": "context",
+            "seeds": [{"memory_id": str(seed)}],
+            "support": [],
+        },
+    )
+
+    assert not result.valid
+    assert {issue.code for issue in result.issues} == {"seed_set_mismatch"}
+
+
 def test_verified_actions_are_only_accepted_for_verified_campaigns() -> None:
     run_id, plan_id = uuid4(), uuid4()
     seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target = (

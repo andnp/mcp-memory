@@ -545,6 +545,7 @@ async def test_context_budget_trims_lowest_priority_trailing_seed(db_manager: Da
     assert result.context.seed_memory_ids == (str(first),)
     assert result.result.context_record_counts["omitted_seed_count"] == 1
     assert result.run.frontier_key == result.context.frontier_fingerprint
+    assert result.validation is not None and result.validation.valid
 
 
 @pytest.mark.asyncio

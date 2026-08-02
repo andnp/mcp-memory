@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -300,6 +300,22 @@ class CurationContextPacket(CurationModel):
     seed_memory_ids: list[UUID] = Field(default_factory=list)
     support_memory_ids: list[UUID] = Field(default_factory=list)
     context_fingerprint: str
+
+    @classmethod
+    def from_visible_ids(
+        cls,
+        *,
+        seed_memory_ids: Iterable[UUID | str],
+        support_memory_ids: Iterable[UUID | str],
+        context_fingerprint: str,
+    ) -> CurationContextPacket:
+        return cls(
+            seed_memory_ids=[value if isinstance(value, UUID) else UUID(str(value)) for value in seed_memory_ids],
+            support_memory_ids=[
+                value if isinstance(value, UUID) else UUID(str(value)) for value in support_memory_ids
+            ],
+            context_fingerprint=context_fingerprint,
+        )
 
 
 class CurationPlanningRequest(CurationModel):
