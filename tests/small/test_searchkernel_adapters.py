@@ -2,7 +2,6 @@ from typing import cast
 
 import pytest
 from searchkernel.domain import GraphNeighbor, Record, RecordHit, RecordIdentity, RecordStatus
-from searchkernel.ports import SearchEpochs
 
 from mcp_memory.core.ports.memory import (
     MemoryLink,
@@ -221,20 +220,13 @@ def test_vector_store_upsert_preserves_version_guard():
 def test_memory_stores_expose_repository_epochs():
     repository = _EpochRepository()
 
-    assert MemoryKeywordStore(cast(MemoryReadPort, repository)).epochs() == SearchEpochs(
-        keyword=1,
-        vector=2,
-        graph=3,
-    )
+    expected = {"keyword": 1, "vector": 2, "graph": 3}
+    assert MemoryKeywordStore(cast(MemoryReadPort, repository)).epochs() == expected
     assert MemoryVectorStore(
         _VectorBackend(),
         repository=cast(MemoryReadPort, repository),
-    ).epochs() == SearchEpochs(keyword=1, vector=2, graph=3)
-    assert MemoryGraphStore(cast(MemoryReadPort, repository)).epochs() == SearchEpochs(
-        keyword=1,
-        vector=2,
-        graph=3,
-    )
+    ).epochs() == expected
+    assert MemoryGraphStore(cast(MemoryReadPort, repository)).epochs() == expected
 
 
 @pytest.mark.asyncio

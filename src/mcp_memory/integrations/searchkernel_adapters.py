@@ -13,7 +13,6 @@ from searchkernel.domain import (
     RecordHit,
     RecordIdentity,
     RecordStatus,
-    SearchFilters,
     Vector,
 )
 from searchkernel.ports import (
@@ -22,7 +21,6 @@ from searchkernel.ports import (
     AsyncVectorStore,
     CandidateFilterSupport,
     EmbeddingSink,
-    SearchEpochs,
 )
 
 from mcp_memory.core.ports.memory import (
@@ -37,6 +35,7 @@ _GRAPH_EDGE_DISCOUNTS = {
     "AMENDS": 0.6,
     "CONTRADICTS": 0.35,
 }
+
 
 MemoryBackendHit = RecordHit | tuple[str, float]
 
@@ -153,7 +152,7 @@ class MemoryKeywordStore(AsyncKeywordStore):
         self._repository = repository
         self._prefetch = prefetch
 
-    def epochs(self) -> SearchEpochs:
+    def epochs(self) -> Mapping[str, int]:
         return _repository_search_epochs(self._repository)
 
     def index(self, records: list[Record]) -> None:
@@ -165,7 +164,7 @@ class MemoryKeywordStore(AsyncKeywordStore):
         self,
         query: str,
         k: int,
-        filters: SearchFilters | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[RecordHit]:
         filters = filters or {}
         memory_ids = await asyncio.to_thread(
@@ -224,7 +223,7 @@ class MemoryVectorStore(AsyncVectorStore):
             vector_store, CandidateFilterSupport
         )
 
-    def epochs(self) -> SearchEpochs:
+    def epochs(self) -> Mapping[str, int]:
         if self._repository is None:
             raise RuntimeError("MemoryVectorStore requires an authoritative repository epoch source")
         return _repository_search_epochs(self._repository)
@@ -256,7 +255,7 @@ class MemoryVectorStore(AsyncVectorStore):
         *,
         model_name: str,
         dim: int,
-        filters: SearchFilters | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[RecordHit]:
         if len(query_vector) != dim:
             raise ValueError(
@@ -337,7 +336,7 @@ class MemoryGraphStore(AsyncGraphStore):
     def __init__(self, repository: MemoryReadPort) -> None:
         self._repository = repository
 
-    def epochs(self) -> SearchEpochs:
+    def epochs(self) -> Mapping[str, int]:
         return _repository_search_epochs(self._repository)
 
     def upsert_edges(self, edges: list[tuple[str, str, str, float]]) -> None:
@@ -726,16 +725,30 @@ def _memory_status_filter(value: object) -> str | None:
     return value if value in {"active", "stale", "degraded", "archived"} else None
 
 
-def _repository_search_epochs(repository: object) -> SearchEpochs:
+def _repository_search_epochs(repository: object) -> dict[str, int]:
     get_search_epochs = getattr(repository, "get_search_epochs", None)
     if not callable(get_search_epochs):
         raise RuntimeError("memory repository does not expose authoritative search epochs")
     values = get_search_epochs()
-    if isinstance(values, SearchEpochs):
-        return values
     if isinstance(values, Mapping):
-        return SearchEpochs.from_mapping(values)
+        return {
+            lane: _epoch_value(values, lane)
+            for lane in ("keyword", "vector", "graph")
+        }
+    epochs = {
+        lane: getattr(values, lane, None)
+        for lane in ("keyword", "vector", "graph")
+    }
+    if all(isinstance(value, int) for value in epochs.values()):
+        return cast(dict[str, int], epochs)
     raise TypeError("memory repository returned an invalid search epoch snapshot")
+
+
+def _epoch_value(values: Mapping[str, object], key: str) -> int:
+    value = values.get(key)
+    if not isinstance(value, int):
+        raise TypeError(f"memory repository returned an invalid {key} search epoch")
+    return value
 
 
 def _string_filter(filters: Mapping[str, Any], key: str) -> str | None:

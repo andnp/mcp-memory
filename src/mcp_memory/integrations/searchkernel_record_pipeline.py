@@ -371,7 +371,11 @@ def build_memory_record_pipeline(
         ),
         policy=policy,
         continue_on_error=None,
-        policy_version=MEMORY_SEARCH_POLICY_VERSION,
+        policy_version=(
+            MEMORY_SEARCH_POLICY_VERSION
+            if callable(getattr(repository, "get_search_epochs", None))
+            else None
+        ),
     )
     return MemoryRecordSearchPipeline(
         pipeline,

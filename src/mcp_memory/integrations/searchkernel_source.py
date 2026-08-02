@@ -10,9 +10,9 @@ supersession graph, ensuring archived and superseded records never surface.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable
 
-from searchkernel.domain import ScoredRef, SearchFilters, canonical_storage_key
+from searchkernel.domain import ScoredRef, canonical_storage_key
 from searchkernel.kernel import SearchKernel
 from searchkernel.search.record_pipeline import RecordSearchResult
 from searchkernel.ports.content_source import SearchableSource
@@ -71,7 +71,7 @@ class MemorySearchableSource:
         self._side_effect_free = side_effect_free
 
     async def search(
-        self, query: str, k: int, filters: SearchFilters | None = None
+        self, query: str, k: int, filters: dict[str, Any] | None = None
     ) -> Iterable[ScoredRef]:
         """Run canonical memory retrieval and return federated references."""
         filters = filters or {}

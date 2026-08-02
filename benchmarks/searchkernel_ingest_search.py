@@ -20,7 +20,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, cast
 
-from searchkernel.domain import Record, RecordHit, SearchFilters
+from searchkernel.domain import Record, RecordHit
 from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
 from searchkernel.ingestion import SemanticRecordIngestor
 from searchkernel.ports.content_source import IngestionReceipt
@@ -398,7 +398,7 @@ class _KeywordIndex:
         self,
         query: str,
         k: int,
-        filters: SearchFilters | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> list[RecordHit]:
         del query, k, filters
         return []
