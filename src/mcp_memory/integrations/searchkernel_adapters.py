@@ -11,8 +11,10 @@ from searchkernel.domain import (
     GraphNeighbor,
     Record,
     RecordHit,
+    RecordHitLike,
     RecordIdentity,
     RecordStatus,
+    SearchFilters,
     Vector,
 )
 from searchkernel.ports import (
@@ -162,8 +164,8 @@ class MemoryKeywordStore(AsyncKeywordStore):
         self,
         query: str,
         k: int,
-        filters: dict[str, Any] | None = None,
-    ) -> list[RecordHit | tuple[str, float]]:
+        filters: SearchFilters | None = None,
+    ) -> list[RecordHitLike]:
         filters = filters or {}
         memory_ids = await asyncio.to_thread(
             self._repository.search_keyword_memory_ids,
@@ -253,8 +255,8 @@ class MemoryVectorStore(AsyncVectorStore):
         *,
         model_name: str,
         dim: int,
-        filters: dict[str, Any] | None = None,
-    ) -> list[RecordHit | tuple[str, float]]:
+        filters: SearchFilters | None = None,
+    ) -> list[RecordHitLike]:
         if len(query_vector) != dim:
             raise ValueError(
                 f"Query vector has dimension {len(query_vector)}, expected {dim}"
@@ -283,7 +285,7 @@ class MemoryVectorStore(AsyncVectorStore):
         if workspace_id is not None:
             kwargs["workspace_id"] = workspace_id
         results = cast(
-            list[RecordHit | tuple[str, float]],
+            list[RecordHitLike],
             await asyncio.to_thread(self._vector_store.search, **kwargs),
         )
         records_by_id = (
@@ -319,7 +321,7 @@ class MemoryVectorStore(AsyncVectorStore):
                 for result in normalized_results
             ]
             await asyncio.to_thread(self._prefetch, record_ids)
-        return cast(list[RecordHit | tuple[str, float]], normalized_results)
+        return cast(list[RecordHitLike], normalized_results)
 
     def delete(self, record_ids: list[str]) -> None:
         for record_id in record_ids:

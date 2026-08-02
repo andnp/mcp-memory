@@ -20,7 +20,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, cast
 
-from searchkernel.domain import Record
+from searchkernel.domain import Record, RecordHitLike, SearchFilters
 from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
 from searchkernel.ingestion import SemanticRecordIngestor
 from searchkernel.ports.content_source import IngestionReceipt
@@ -344,7 +344,7 @@ class _IndexedVectorStore:
         diagnostics: dict[str, object] | None = None,
         workspace_id: str | None = None,
         limit: int = 20,
-    ) -> list[tuple[str, float]]:
+    ) -> list[RecordHitLike]:
         del source_kind, model_name, diagnostics
         self.searches.append(
             VectorSearchObservation(
@@ -398,7 +398,7 @@ class _KeywordIndex:
         self,
         query: str,
         k: int,
-        filters: dict[str, object] | None = None,
+        filters: SearchFilters | None = None,
     ) -> list[tuple[str, float]]:
         del query, k, filters
         return []

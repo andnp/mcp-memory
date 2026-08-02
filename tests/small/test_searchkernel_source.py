@@ -15,7 +15,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from searchkernel.domain import ScoredRef
+from searchkernel.domain import ScoredRef, SearchFilters
 
 from mcp_memory.integrations.searchkernel_source import (
     MemorySearchableSource,
@@ -64,7 +64,7 @@ class ExtraSearchableSource:
     source_kind = "extra"
 
     async def search(
-        self, query: str, k: int, filters: dict[str, Any] | None = None
+        self, query: str, k: int, filters: SearchFilters | None = None
     ) -> list[ScoredRef]:
         return []
 
