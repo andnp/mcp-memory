@@ -72,7 +72,16 @@ async def plan_and_validate(
                 envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
             if attempt == 0:
                 retry_reason = "schema_invalid"
-                feedback = CurationRetryFeedback(reason_code="formatting_only", message=str(error))
+                feedback = CurationRetryFeedback(
+                    reason_code="schema_invalid",
+                    message=_schema_retry_message(error),
+                    fields=tuple(
+                        issue.field for issue in error.validation_issues if issue.field is not None
+                    ),
+                    issue_codes=tuple(issue.code for issue in error.validation_issues),
+                    expected_fields=error.expected_fields,
+                    received_fields=error.received_fields,
+                )
                 continue
             return CurationPlanningOutput(None, None, envelopes, retry_reason, failure)
         except CurationPlannerCancelledError as error:
@@ -106,3 +115,17 @@ async def plan_and_validate(
             continue
         return CurationPlanningOutput(None, validation, envelopes, retry_reason, None)
     return CurationPlanningOutput(None, validation, envelopes, retry_reason, failure)
+
+
+def _schema_retry_message(error: CurationPlannerSchemaError) -> str:
+    details = "; ".join(
+        f"{issue.code} at {issue.field}: {issue.message}"
+        if issue.field is not None
+        else f"{issue.code}: {issue.message}"
+        for issue in error.validation_issues
+    )
+    fields = (
+        f"expected fields={list(error.expected_fields)}; "
+        f"received fields={list(error.received_fields)}"
+    )
+    return f"{str(error)}; {details}; {fields}"[:1000]

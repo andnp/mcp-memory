@@ -62,6 +62,13 @@ class PlannerExecutionEnvelope(Generic[T]):
         return self.plan
 
 
+@dataclass(frozen=True, slots=True)
+class CurationPlannerSchemaIssue:
+    code: str
+    message: str
+    field: str | None = None
+
+
 class CurationPlannerError(Exception):
     """Base class for failures returned by a planner boundary."""
 
@@ -75,10 +82,21 @@ class CurationPlannerSchemaError(CurationPlannerError):
 
     reason_code = "schema_invalid"
 
-    def __init__(self, message: str, *, validation_error: ValidationError | None = None,
-                 envelope: PlannerExecutionEnvelope[None] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        validation_error: ValidationError | None = None,
+        validation_issues: tuple[CurationPlannerSchemaIssue, ...] = (),
+        expected_fields: tuple[str, ...] = (),
+        received_fields: tuple[str, ...] = (),
+        envelope: PlannerExecutionEnvelope[None] | None = None,
+    ) -> None:
         super().__init__(message, envelope=envelope)
         self.validation_error = validation_error
+        self.validation_issues = validation_issues
+        self.expected_fields = expected_fields
+        self.received_fields = received_fields
 
 
 class CurationPlannerProviderError(CurationPlannerError):
@@ -301,15 +319,13 @@ class InstrumentedCurationPlanner:
             raise CurationPlannerCancelledError(envelope=envelope)
         if call.response is None:
             if call.status == "parse_error":
-                envelope = PlannerExecutionEnvelope[None](
-                    plan=None,
-                    status=PlannerExecutionStatus.SCHEMA_FAILED,
-                    reason_code=CurationPlannerSchemaError.reason_code,
-                    **envelope_base,
+                schema_error = _schema_error(
+                    "provider returned invalid JSON for curation planning",
+                    expected_fields=_expected_plan_fields(),
+                    received_fields=(),
+                    envelope_base=envelope_base,
                 )
-                raise CurationPlannerSchemaError(
-                    "provider returned invalid JSON for curation planning", envelope=envelope
-                )
+                raise schema_error
             envelope = PlannerExecutionEnvelope[None](
                 plan=None,
                 status=PlannerExecutionStatus.PROVIDER_FAILED,
@@ -324,16 +340,12 @@ class InstrumentedCurationPlanner:
         try:
             plan = CurationPlan.model_validate(call.response)
         except ValidationError as exc:
-            envelope = PlannerExecutionEnvelope[None](
-                plan=None,
-                status=PlannerExecutionStatus.SCHEMA_FAILED,
-                reason_code=CurationPlannerSchemaError.reason_code,
-                **envelope_base,
-            )
-            raise CurationPlannerSchemaError(
+            raise _schema_error(
                 "provider returned JSON that is not a valid curation plan",
                 validation_error=exc,
-                envelope=envelope,
+                expected_fields=_expected_plan_fields(),
+                received_fields=tuple(sorted(call.response)),
+                envelope_base=envelope_base,
             ) from exc
         return PlannerExecutionEnvelope(plan=plan, **envelope_base)
 
@@ -430,14 +442,13 @@ class FakeCurationPlanner:
         try:
             plan = scenario.plan if isinstance(scenario.plan, CurationPlan) else CurationPlan.model_validate(scenario.plan)
         except ValidationError as exc:
-            envelope = PlannerExecutionEnvelope[None](
-                plan=None,
-                status=PlannerExecutionStatus.SCHEMA_FAILED,
-                reason_code=CurationPlannerSchemaError.reason_code,
-                **cast(Any, base),
-            )
-            raise CurationPlannerSchemaError("fake planner returned an invalid curation plan",
-                                            validation_error=exc, envelope=envelope) from exc
+            raise _schema_error(
+                "fake planner returned an invalid curation plan",
+                validation_error=exc,
+                expected_fields=_expected_plan_fields(),
+                received_fields=tuple(sorted(scenario.plan)) if isinstance(scenario.plan, Mapping) else (),
+                envelope_base=cast(Any, base),
+            ) from exc
         return PlannerExecutionEnvelope(plan=plan, **cast(Any, base))
 
 
@@ -506,6 +517,10 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         payload["retry_feedback"] = {
             "reason_code": str(retry_feedback.reason_code),
             "message": str(retry_feedback.message)[:1000],
+            "fields": list(retry_feedback.fields),
+            "issue_codes": list(retry_feedback.issue_codes),
+            "expected_fields": list(retry_feedback.expected_fields),
+            "received_fields": list(retry_feedback.received_fields),
         }
     return (
         "You are a curation planner. Return exactly one JSON object matching the "
@@ -540,6 +555,59 @@ def _envelope_base(call: ProviderJSONCall) -> dict[str, Any]:
             "raw_response_recorded": call.raw_text is not None,
         },
     }
+
+
+def _expected_plan_fields() -> tuple[str, ...]:
+    return tuple(sorted(CurationPlan.model_fields))
+
+
+def _schema_error(
+    message: str,
+    *,
+    validation_error: ValidationError | None = None,
+    expected_fields: tuple[str, ...],
+    received_fields: tuple[str, ...],
+    envelope_base: Mapping[str, Any],
+) -> CurationPlannerSchemaError:
+    issues = _schema_issues(validation_error)
+    metadata = dict(envelope_base.get("metadata", {}))
+    metadata.update(
+        {
+            "validation_issues": [
+                {"code": issue.code, "message": issue.message, "field": issue.field}
+                for issue in issues
+            ],
+            "expected_fields": list(expected_fields),
+            "received_fields": list(received_fields),
+        }
+    )
+    envelope = PlannerExecutionEnvelope[None](
+        plan=None,
+        status=PlannerExecutionStatus.SCHEMA_FAILED,
+        reason_code=CurationPlannerSchemaError.reason_code,
+        **{**dict(envelope_base), "metadata": metadata},
+    )
+    return CurationPlannerSchemaError(
+        message,
+        validation_error=validation_error,
+        validation_issues=issues,
+        expected_fields=expected_fields,
+        received_fields=received_fields,
+        envelope=envelope,
+    )
+
+
+def _schema_issues(error: ValidationError | None) -> tuple[CurationPlannerSchemaIssue, ...]:
+    if error is None:
+        return (CurationPlannerSchemaIssue("invalid_json", "provider response was not valid JSON"),)
+    return tuple(
+        CurationPlannerSchemaIssue(
+            code=str(item.get("type", "validation_error")),
+            message=str(item.get("msg", "schema validation failed")),
+            field=".".join(str(part) for part in item.get("loc", ())) or None,
+        )
+        for item in error.errors()
+    )
 
 
 def _cancellation_requested(scope: CancellationScope | asyncio.Event | None) -> bool:

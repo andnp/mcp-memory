@@ -105,6 +105,34 @@ def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> N
     assert retry["retry_feedback"]["message"].startswith("fix the JSON")
 
 
+def test_planner_prompt_preserves_schema_retry_diagnostics() -> None:
+    request = _request(uuid4())
+    feedback = CurationRetryFeedback(
+        reason_code="schema_invalid",
+        message="missing required fields",
+        fields=("run_id",),
+        issue_codes=("missing",),
+        expected_fields=("run_id", "plan_id"),
+        received_fields=("schema_version",),
+    )
+
+    payload = json.loads(
+        _build_planner_prompt(
+            request,
+            CurationPlannerTools(context=cast(Any, {}), retry_feedback=feedback),
+        ).split("\n", 1)[1]
+    )
+
+    assert payload["retry_feedback"] == {
+        "reason_code": "schema_invalid",
+        "message": "missing required fields",
+        "fields": ["run_id"],
+        "issue_codes": ["missing"],
+        "expected_fields": ["run_id", "plan_id"],
+        "received_fields": ["schema_version"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_fake_plan_is_deterministic_and_preserves_envelope() -> None:
     seed_id = uuid4()
@@ -133,6 +161,12 @@ async def test_fake_schema_failure_is_typed_and_enveloped() -> None:
     assert raised.value.envelope is not None
     assert raised.value.envelope.status == PlannerExecutionStatus.SCHEMA_FAILED
     assert raised.value.envelope.reason_code == "schema_invalid"
+    assert raised.value.expected_fields
+    assert raised.value.received_fields == ("schema_version",)
+    assert raised.value.validation_issues
+    assert raised.value.envelope.metadata["expected_fields"] == list(raised.value.expected_fields)
+    assert raised.value.envelope.metadata["received_fields"] == ["schema_version"]
+    assert raised.value.envelope.metadata["validation_issues"]
 
 
 @pytest.mark.asyncio

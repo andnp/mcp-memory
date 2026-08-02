@@ -44,9 +44,12 @@ class CurationMutationBudget:
 class CurationRetryFeedback:
     """Bounded feedback suitable for one schema-formatting retry."""
 
-    reason_code: Literal["formatting_only"]
+    reason_code: Literal["formatting_only", "schema_invalid"]
     message: str
     fields: tuple[str, ...] = ()
+    issue_codes: tuple[str, ...] = ()
+    expected_fields: tuple[str, ...] = ()
+    received_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
