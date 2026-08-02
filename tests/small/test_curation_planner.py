@@ -80,6 +80,9 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "visible in context" in contract
     assert "merging never creates a record" in contract
     assert "both endpoints to be visible" in contract
+    assert "exact context.record_tokens value" in contract
+    assert "exact endpoint, type, and context evidence" in contract
+    assert "exact absent-link precondition" in contract
     assert "Only split_memory may introduce child records" in contract
     assert "retention decision instead of inventing an ID" in contract
     assert "fail-closed" in contract

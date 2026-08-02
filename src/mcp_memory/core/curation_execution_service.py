@@ -9,6 +9,7 @@ from mcp_memory.core.curation_context import CurationContextPacket
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
+    CurationAction,
     CreateLinkAction,
     CurationRunOutcome,
     MergeMemoriesAction,
@@ -55,7 +56,7 @@ class CurationExecutionService:
     ) -> tuple[CurationRunOutcome, str, CurationRunState, tuple[CurationActionReceipt, ...]]:
         if self._executor is None or self._verifier is None:
             raise RuntimeError("curation execution requires an executor and verifier")
-        actions = [item.action for item in validation.accepted_actions]
+        actions = [_hydrate_record_tokens(item.action, context) for item in validation.accepted_actions]
         if not actions:
             return CurationRunOutcome.DEFERRED, "unsupported_execution_action", CurationRunState.EXECUTING, ()
         memory_types = dict(self._memory_types or {})
@@ -109,3 +110,29 @@ class CurationExecutionService:
             target = action.target_id
             return executor.execute_archive(action, run_id=run_id, memory_type=memory_types.get(target, ""), protections=protections.get(target, ()))
         raise RuntimeError(f"unsupported curation action: {type(action).__name__}")
+
+
+def _hydrate_record_tokens(
+    action: CurationAction,
+    context: CurationContextPacket,
+) -> CurationAction:
+    """Fill omitted tokens without changing provider-supplied preconditions."""
+    record_tokens = dict(action.preconditions.record_tokens)
+    for memory_id in _action_memory_ids(action):
+        token = context.record_tokens.get(str(memory_id))
+        if token is not None:
+            record_tokens.setdefault(memory_id, token)
+    if record_tokens == action.preconditions.record_tokens:
+        return action
+    preconditions = action.preconditions.model_copy(update={"record_tokens": record_tokens})
+    return action.model_copy(update={"preconditions": preconditions})
+
+
+def _action_memory_ids(action: CurationAction) -> set[UUID]:
+    ids: set[UUID] = set()
+    for attribute in ("target_id", "source_id", "canonical_id"):
+        value = getattr(action, attribute, None)
+        if isinstance(value, UUID):
+            ids.add(value)
+    ids.update(value for value in getattr(action, "source_ids", ()) if isinstance(value, UUID))
+    return ids

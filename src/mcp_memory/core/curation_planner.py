@@ -536,6 +536,8 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "Every target_id, source_id, canonical_id, source_ids entry, and retained memory_id must refer to a memory visible in context.",
             "merge_memories canonical_id must be an existing visible record; merging never creates a record.",
             "create_link and remove_link require both endpoints to be visible in context.",
+            "Every action affecting a visible memory must include its exact context.record_tokens value in preconditions.record_tokens.",
+            "create_link requires exact endpoint, type, and context evidence plus an exact absent-link precondition.",
             "Only split_memory may introduce child records, and only through its typed children surface; never invent child IDs.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
             "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
@@ -558,9 +560,12 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "validation. Every memory ID in an action or retention decision must be copied "
         "from a memory visible in the provided context. A merge canonical_id must be "
         "an existing visible record and merge never creates records; both create-link "
-        "endpoints must be visible. Only split may introduce child records through its "
-        "typed children surface. If no visible canonical is appropriate, retain the "
-        "memory instead of inventing an ID.\n"
+        "endpoints must be visible. Copy exact record tokens from context.record_tokens "
+        "into preconditions.record_tokens for every affected visible memory. A "
+        "create_link action also requires exact endpoint, type, and context evidence "
+        "plus an exact absent-link precondition. Only split may introduce child "
+        "records through its typed children surface. If no visible canonical is "
+        "appropriate, retain the memory instead of inventing an ID.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
 
