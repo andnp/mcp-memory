@@ -440,6 +440,11 @@ class CurationDryRunHarness:
                 validation=validation,
                 context=context,
             )
+            rejection_codes.extend(
+                receipt.error_code
+                for receipt in receipts
+                if receipt.error_code is not None and receipt.error_code not in rejection_codes
+            )
         else:
             receipts = ()
         terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
@@ -589,6 +594,10 @@ class CurationDryRunHarness:
                     disposition = CandidateDisposition.ACTIONED
                     reason = "verified_receipt"
                     escalated = False
+                elif receipt is not None and receipt.status is CurationReceiptState.REJECTED:
+                    disposition = CandidateDisposition.ESCALATED
+                    reason = receipt.error_code or "rejected_receipt"
+                    escalated = True
                 else:
                     disposition = CandidateDisposition.ESCALATED
                     reason = (

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from mcp_memory.core.curation_context import CurationContextPacket
-from mcp_memory.core.curation_executor import CurationExecutor
+from mcp_memory.core.curation_executor import CurationExecutor, CurationPolicyRejection
+from mcp_memory.core.curation_identity import action_intent_token
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
     CurationAction,
@@ -21,11 +23,16 @@ from mcp_memory.core.curation_models import (
 from mcp_memory.core.curation_validation import CurationValidationResult
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.ports.curation import (
+    CurationActionFatalError,
     CurationActionReceipt,
+    CurationReceiptState,
     CurationRepository,
     CurationRun,
     CurationRunState,
 )
+
+_ACTION_FATAL_ERROR_CODE = "action_fatal"
+_POLICY_REJECTION_ERROR_CODE = "policy_rejected"
 
 
 class CurationExecutionService:
@@ -64,23 +71,91 @@ class CurationExecutionService:
             memory_id, memory_type = record.get("memory_id"), record.get("type")
             if memory_id is not None and isinstance(memory_type, str):
                 memory_types[UUID(str(memory_id))] = memory_type
-        receipts = [(self._execute_action(action, run_id, memory_types, context), action) for action in actions]
-        verifying = executing.model_copy(update={"state": CurationRunState.VERIFYING})
+        receipts = [
+            (self._execute_action_or_reject(action, run_id, memory_types, context), action)
+            for action in actions
+        ]
+        rejection_codes = list(executing.rejection_codes)
+        rejection_codes.extend(
+            receipt.error_code
+            for receipt, _ in receipts
+            if receipt.status is CurationReceiptState.REJECTED
+            and receipt.error_code is not None
+            and receipt.error_code not in rejection_codes
+        )
+        verifying = executing.model_copy(
+            update={
+                "state": CurationRunState.VERIFYING,
+                "rejection_codes": rejection_codes,
+            }
+        )
         if self._store.transition_run(run_id, CurationRunState.EXECUTING, verifying) is None:
             raise RuntimeError(f"curation run {run_id} could not enter verification")
         verified: list[CurationActionReceipt] = []
         for receipt, action in receipts:
+            if receipt.status is CurationReceiptState.REJECTED:
+                verified.append(receipt)
+                continue
             result = self._verifier.verify(receipt, action)
             verified.append(result)
             if result.status.value != "verified":
                 return CurationRunOutcome.VERIFICATION_FAILED, "verification_failed", CurationRunState.VERIFYING, tuple(verified)
         route_ids = {item.action_id for item in actions}
-        partial = bool(validation.rejected_actions or any(route.action.action_id not in route_ids for route in validation.specialist_routes))
+        rejected = any(receipt.status is CurationReceiptState.REJECTED for receipt in verified)
+        if rejected and not any(receipt.status is not CurationReceiptState.REJECTED for receipt in verified):
+            return CurationRunOutcome.DEFERRED, "all_actions_rejected", CurationRunState.VERIFYING, tuple(verified)
+        partial = bool(
+            rejected
+            or validation.rejected_actions
+            or any(route.action.action_id not in route_ids for route in validation.specialist_routes)
+        )
         return (
             CurationRunOutcome.PARTIALLY_APPLIED if partial else CurationRunOutcome.APPLIED,
             "partially_applied" if partial else "verified_receipts",
             CurationRunState.VERIFYING,
             tuple(verified),
+        )
+
+    def _execute_action_or_reject(
+        self,
+        action: Any,
+        run_id: UUID,
+        memory_types: dict[UUID, str],
+        context: CurationContextPacket,
+    ) -> CurationActionReceipt:
+        try:
+            return self._execute_action(action, run_id, memory_types, context)
+        except CurationPolicyRejection:
+            return self._rejected_receipt(action, run_id, _POLICY_REJECTION_ERROR_CODE)
+        except CurationActionFatalError:
+            return self._rejected_receipt(action, run_id, _ACTION_FATAL_ERROR_CODE)
+
+    def _rejected_receipt(
+        self,
+        action: Any,
+        run_id: UUID,
+        error_code: str,
+    ) -> CurationActionReceipt:
+        target_ids = sorted((str(value) for value in _action_memory_ids(action)), key=lambda value: value.encode("utf-8"))
+        return self._store.put_receipt(
+            CurationActionReceipt(
+                run_id=run_id,
+                action_id=action.action_id,
+                operation=action.operation,
+                affected_ids=[UUID(value) for value in target_ids],
+                status=CurationReceiptState.REJECTED,
+                intent_hash=action_intent_token(
+                    operation=action.operation,
+                    target_ids=target_ids,
+                    expected_tokens={
+                        str(key): str(value)
+                        for key, value in action.preconditions.record_tokens.items()
+                    },
+                    preconditions=action.preconditions,
+                    payload=action.model_dump(mode="json"),
+                ),
+                error_code=error_code,
+            )
         )
 
     def _execute_action(self, action: Any, run_id: UUID, memory_types: dict[UUID, str], context: CurationContextPacket) -> CurationActionReceipt:
