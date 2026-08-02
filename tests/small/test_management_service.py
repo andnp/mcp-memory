@@ -143,7 +143,7 @@ def test_management_service_injects_storage_specific_nerd_metrics_adapter(db_man
         seen.update(kwargs)
         return NerdMetricsPayload(generated_at=0.0, window_hours=24, bucket_minutes=60)
 
-    monkeypatch.setattr("mcp_memory.management.service.build_nerd_metrics", capture_build_nerd_metrics)
+    monkeypatch.setattr("mcp_memory.management.analytics_service.build_nerd_metrics", capture_build_nerd_metrics)
 
     service.get_nerd_metrics()
 
