@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
@@ -171,7 +171,7 @@ class HashingEmbedder:
 
 
 class SQLiteVectorStore:
-    supports_candidate_filtering = True
+    supports_candidate_filtering: ClassVar[bool] = True
 
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
