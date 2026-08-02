@@ -97,6 +97,7 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                 """,
                 _values(evidence),
             )
+            connection.commit()
         return evidence
 
     def list_quality_evidence(

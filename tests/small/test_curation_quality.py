@@ -3,14 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
+import sqlite3
 from types import SimpleNamespace
+from typing import Any, Self, cast
 from uuid import uuid4
 
 import pytest
 
 from mcp_memory.core.curation_models import CurationRunOutcome
-from mcp_memory.core.curation_quality import CurationQualitySampler
-from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
+from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
+from mcp_memory.curation_quality_store import (
+    PostgresCurationQualityStore,
+    SQLiteCurationQualityStore,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -34,6 +39,84 @@ class _Search:
             self.calls = []
         self.calls.append(query)
         return self.contexts[:limit]
+
+
+class _PostgresQualityCursor:
+    def __init__(self, connection: _PostgresQualityConnection) -> None:
+        self._cursor = connection.database.cursor()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        self._cursor.close()
+        return False
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
+        self._cursor.execute(query.replace("%s::jsonb", "?").replace("%s", "?"), params)
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self._cursor.fetchall()
+
+
+class _PostgresQualityConnection:
+    def __init__(self) -> None:
+        self.database = sqlite3.connect(":memory:")
+        self.database.execute(
+            """
+            CREATE TABLE curation_quality_evidence (
+                run_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                affected_memory_ids_json TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                query_id TEXT,
+                status TEXT NOT NULL,
+                before_ranked_ids_json TEXT NOT NULL,
+                after_ranked_ids_json TEXT NOT NULL,
+                retrieval_regression_count INTEGER,
+                zero_result_change INTEGER,
+                payload_size_change INTEGER,
+                useful_work INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, action_id)
+            )
+            """
+        )
+        self.committed = False
+
+    def cursor(self) -> _PostgresQualityCursor:
+        return _PostgresQualityCursor(self)
+
+    def commit(self) -> None:
+        self.database.commit()
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.database.rollback()
+        self.committed = False
+
+
+class _PostgresQualityLease:
+    def __init__(self, connection: _PostgresQualityConnection) -> None:
+        self.connection = connection
+        self.connection.committed = False
+
+    def __enter__(self) -> _PostgresQualityConnection:
+        return self.connection
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        if not self.connection.committed:
+            self.connection.rollback()
+        return False
+
+
+class _PostgresQualitySession:
+    def __init__(self) -> None:
+        self.connection = _PostgresQualityConnection()
+
+    def open_connection(self) -> _PostgresQualityLease:
+        return _PostgresQualityLease(self.connection)
 
 
 def _run(run_id=None, *, created_at: datetime | None = None) -> CurationRun:
@@ -70,6 +153,26 @@ def _context(memory_id: str, *, content: str = "after") -> object:
             tags=["tag"],
         )
     )
+
+
+def test_postgres_quality_store_commits_evidence() -> None:
+    session = _PostgresQualitySession()
+    store = PostgresCurationQualityStore(cast(Any, session))
+    evidence = CurationQualityEvidence(
+        run_id=uuid4(),
+        action_id=uuid4(),
+        operation="create_link",
+        affected_memory_ids=[uuid4()],
+        policy_version="policy",
+        status="no_query",
+        created_at=datetime.now(UTC),
+    )
+
+    store.put_quality_evidence(evidence)
+
+    stored = store.list_quality_evidence()
+    assert len(stored) == 1
+    assert stored[0].action_id == evidence.action_id
 
 
 def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) -> None:
