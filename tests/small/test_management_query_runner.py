@@ -103,3 +103,23 @@ def test_management_query_runner_accepts_explicit_query_adapter() -> None:
         "query": "SELECT 1",
         "params": ["value"],
     }
+
+
+def test_management_query_runner_uses_explicit_adapter_without_probing_backend() -> None:
+    class ExplicitAdapter:
+        def adapt_query(self, query: str) -> str:
+            return query
+
+        def uses_sqlite_connection_api(self) -> bool:
+            return False
+
+        def fetchall(self, db_manager, query, params=None):
+            raise AssertionError("the adapter should be used by the caller")
+
+    class DbManager:
+        def get_connection(self):
+            raise AssertionError("connection shape should not be probed")
+
+    runner = ManagementQueryRunner(DbManager(), adapter=ExplicitAdapter())
+
+    assert runner.uses_sqlite_connection_api() is False

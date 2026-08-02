@@ -99,6 +99,28 @@ def test_curation_metrics_use_persisted_receipts_and_history_not_provider_claims
     assert metrics.verified_receipt_count == 1
 
 
+def test_curation_metrics_pass_explicit_query_adapter_to_runner() -> None:
+    seen: list[object] = []
+
+    class ExplicitAdapter:
+        def adapt_query(self, query: str) -> str:
+            return query
+
+        def uses_sqlite_connection_api(self) -> bool:
+            return False
+
+        def fetchall(self, db_manager, query, params=None):
+            seen.append(db_manager)
+            return []
+
+    db_manager = object()
+    metrics = build_curation_metrics(db_manager, query_adapter=ExplicitAdapter(), now=0.0)
+
+    assert metrics.run_states == {}
+    assert len(seen) == 7
+    assert all(manager is db_manager for manager in seen)
+
+
 def test_curation_metrics_ignore_provider_reported_mutation_counts(db_manager) -> None:
     now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
     connection = db_manager.get_connection()

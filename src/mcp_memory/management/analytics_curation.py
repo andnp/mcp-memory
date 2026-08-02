@@ -14,7 +14,7 @@ from mcp_memory.management.models import (
     CurationProviderDisclosurePayload,
     CurationSpecialistRouteMetricsPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryRunner
+from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
 
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
@@ -45,11 +45,12 @@ def build_curation_metrics(
     config=None,
     window_hours: int = 24,
     now: float | None = None,
+    query_adapter: ManagementQueryAdapter | None = None,
 ) -> CurationMetricsPayload:
     """Build curation metrics exclusively from durable curation evidence."""
     generated_at = time.time() if now is None else now
     cutoff = generated_at - (max(window_hours, 0) * 3600)
-    runner = ManagementQueryRunner(db_manager)
+    runner = ManagementQueryRunner(db_manager, adapter=query_adapter)
     if not runner.available:
         return CurationMetricsPayload(window_hours=window_hours)
 

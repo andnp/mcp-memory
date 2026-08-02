@@ -15,6 +15,8 @@ from mcp_memory.management.analytics_reporting import is_provenance_process_tag
 from mcp_memory.management.capabilities import ManagementCapabilities
 from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
+from mcp_memory.management.models import NerdMetricsPayload
+from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
 from mcp_memory.management.reporting_rows import extract_copilot_premium_requests
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
@@ -131,6 +133,21 @@ def test_management_service_accepts_structural_management_context(db_manager) ->
 
     assert health.storage_backend == "sqlite"
     assert service.workspace_id == "workspace-a"
+
+
+def test_management_service_injects_storage_specific_nerd_metrics_adapter(db_manager, monkeypatch) -> None:
+    service = _build_management_service(db_manager, workspace_id="workspace-a")
+    seen: dict[str, object] = {}
+
+    def capture_build_nerd_metrics(**kwargs):
+        seen.update(kwargs)
+        return NerdMetricsPayload(generated_at=0.0, window_hours=24, bucket_minutes=60)
+
+    monkeypatch.setattr("mcp_memory.management.service.build_nerd_metrics", capture_build_nerd_metrics)
+
+    service.get_nerd_metrics()
+
+    assert isinstance(seen["query_adapter"], SQLiteManagementQueryAdapter)
 
 
 def test_management_service_exposes_isolated_typed_capabilities(db_manager) -> None:

@@ -41,6 +41,7 @@ from mcp_memory.management.models import (
     QueueSnapshotPayload,
     SearchQualityPayload,
 )
+from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import (
     MaintenanceTaskRunRow,
     MemoryToolEventRow,
@@ -51,6 +52,7 @@ from mcp_memory.management.reporting_rows import (
     TaskResultView,
     TaskRunRow,
     build_queue_diagnostics,
+    fetch_running_task_attempt_rows,
     list_maintenance_task_run_rows_since,
     list_memory_tool_event_rows_since,
     list_provider_policy_event_rows_since,
@@ -87,6 +89,7 @@ def load_nerd_metrics_read_model(
     window_hours: int = 24,
     bucket_minutes: int = 60,
     now: float | None = None,
+    query_adapter: ManagementQueryAdapter | None = None,
 ) -> NerdMetricsReadModel:
     generated_at = time.time() if now is None else now
     bucket_seconds = max(bucket_minutes * 60, 60)
@@ -103,13 +106,14 @@ def load_nerd_metrics_read_model(
         generated_at=generated_at,
         cutoff=cutoff,
         bucket_seconds=bucket_seconds,
-        task_rows=list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id),
-        maintenance_rows=list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id),
-        provider_rows=list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id),
+        task_rows=list_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id, query_adapter=query_adapter),
+        maintenance_rows=list_maintenance_task_run_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id, query_adapter=query_adapter),
+        provider_rows=list_provider_usage_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id, query_adapter=query_adapter),
         provider_policy_event_rows=list_provider_policy_event_rows_since(
             db_manager,
             cutoff=cutoff,
             workspace_id=workspace_id,
+            query_adapter=query_adapter,
         ),
         provider_policy_log_rows=list_runtime_log_rows_since(
             db_manager,
@@ -117,9 +121,10 @@ def load_nerd_metrics_read_model(
             workspace_id=workspace_id,
             logger_name="mcp_memory.core.provider_policy",
             level="WARNING",
+            query_adapter=query_adapter,
         ),
-        memory_rows=list_scoped_memory_rows(db_manager, workspace_id),
-        retrieval_rows=list_memory_tool_event_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id),
+        memory_rows=list_scoped_memory_rows(db_manager, workspace_id, query_adapter=query_adapter),
+        retrieval_rows=list_memory_tool_event_rows_since(db_manager, cutoff=cutoff, workspace_id=workspace_id, query_adapter=query_adapter),
         queue_rows=[]
         if task_queue is None
         else build_queue_diagnostics(task_queue, workspace_id, limit=200, now=generated_at),
@@ -184,6 +189,7 @@ def build_nerd_metrics(
     window_hours: int = 24,
     bucket_minutes: int = 60,
     now: float | None = None,
+    query_adapter: ManagementQueryAdapter | None = None,
 ) -> NerdMetricsPayload:
     read_model = load_nerd_metrics_read_model(
         db_manager=db_manager,
@@ -192,6 +198,7 @@ def build_nerd_metrics(
         window_hours=window_hours,
         bucket_minutes=bucket_minutes,
         now=now,
+        query_adapter=query_adapter,
     )
     generated_at = read_model.generated_at
     cutoff = read_model.cutoff
@@ -228,9 +235,18 @@ def build_nerd_metrics(
         db_manager,
         stale_after_seconds=60.0,
         now=generated_at,
+        fetch_running_attempt_rows=lambda manager: fetch_running_task_attempt_rows(
+            manager,
+            query_adapter=query_adapter,
+        ),
     )
 
-    graph_topology = build_graph_topology(db_manager, workspace_id, memory_rows=memory_rows)
+    graph_topology = build_graph_topology(
+        db_manager,
+        workspace_id,
+        memory_rows=memory_rows,
+        query_adapter=query_adapter,
+    )
     memory_lifecycle = build_memory_lifecycle(db_manager, workspace_id, memory_rows=memory_rows)
     composition = build_composition(memory_rows)
     distributions = build_distributions(memory_rows, generated_at=generated_at)
@@ -305,11 +321,13 @@ def build_nerd_metrics(
         config=config,
         window_hours=window_hours,
         now=generated_at,
+        query_adapter=query_adapter,
     )
     copilot_premium_usage = summarize_copilot_premium_requests(
         db_manager,
         workspace_id=workspace_id,
         now=generated_at,
+        query_adapter=query_adapter,
     )
 
     stats = [
@@ -422,14 +440,20 @@ def build_nerd_metrics(
     )
 
 
-def build_graph_topology(db_manager, workspace_id: str | None, *, memory_rows=None) -> GraphTopologyPayload:
+def build_graph_topology(
+    db_manager,
+    workspace_id: str | None,
+    *,
+    memory_rows=None,
+    query_adapter: ManagementQueryAdapter | None = None,
+) -> GraphTopologyPayload:
     if memory_rows is None:
-        memory_rows = list_scoped_memory_rows(db_manager, workspace_id)
+        memory_rows = list_scoped_memory_rows(db_manager, workspace_id, query_adapter=query_adapter)
     memory_ids = {row.id for row in memory_rows}
     if not memory_ids:
         return GraphTopologyPayload()
 
-    link_rows = list_scoped_link_rows(db_manager, workspace_id, memory_ids)
+    link_rows = list_scoped_link_rows(db_manager, workspace_id, memory_ids, query_adapter=query_adapter)
     degree_by_memory = {memory_id: 0 for memory_id in memory_ids}
     support_by_memory: set[str] = set()
     link_type_counts: dict[str, int] = {}

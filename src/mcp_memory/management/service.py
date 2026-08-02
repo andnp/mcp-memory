@@ -53,6 +53,7 @@ from mcp_memory.management.operator_health_reporting import (
     summarize_provider_policy,
 )
 from mcp_memory.management.overview_reporting import build_overview
+from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.mutation_history import (
     LinkRevision,
@@ -1249,8 +1250,14 @@ class ManagementService:
             scope=scope,
             workspace_id=workspace_id,
         )
+        query_adapter = (
+            PostgresManagementQueryAdapter()
+            if self._storage_backend == "postgres"
+            else SQLiteManagementQueryAdapter()
+        )
         return build_nerd_metrics(
             db_manager=self._db_manager,
+            query_adapter=query_adapter,
             workspace_id=effective_workspace_id,
             task_queue=self._task_queue,
             provider_usage_repo=self._provider_usage,
