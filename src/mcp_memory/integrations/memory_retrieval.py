@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from searchkernel.search.record_pipeline import RecordSearchOutcome
@@ -17,10 +18,22 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class MemorySearchRequest:
+    query: str
+    limit: int = 10
+    adaptive_limit: bool = False
+    workspace_id: str | None = None
+    memory_type: str | None = None
+    status: str | None = None
+    include_superseded: bool = False
+    ranking_workspace_id: str | None = None
+
+
 class MemoryRetrievalPort(Protocol):
     async def search(
         self,
-        query: str,
+        request: MemorySearchRequest | str,
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -33,7 +46,7 @@ class MemoryRetrievalPort(Protocol):
 
     def search_sync(
         self,
-        query: str,
+        request: MemorySearchRequest | str,
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -86,7 +99,7 @@ class MemoryRetrievalFacade:
 
     async def search(
         self,
-        query: str,
+        request: MemorySearchRequest | str,
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -96,25 +109,37 @@ class MemoryRetrievalFacade:
         include_superseded: bool = False,
         filters: dict[str, object] | None = None,
     ) -> RecordSearchOutcome:
-        pipeline = self._resolve_pipeline(adaptive_limit)
+        if isinstance(request, str):
+            request = MemorySearchRequest(
+                query=request,
+                limit=limit,
+                adaptive_limit=adaptive_limit,
+                workspace_id=workspace_id,
+                memory_type=memory_type,
+                status=status,
+                include_superseded=include_superseded,
+            )
+        pipeline = self._resolve_pipeline(request.adaptive_limit)
         active_filters = dict(filters or {})
-        if workspace_id is not None:
-            active_filters["workspace_id"] = workspace_id
-        if memory_type is not None:
-            active_filters["memory_type"] = memory_type
-        if status is not None:
-            active_filters["status"] = status
-        if include_superseded or "include_superseded" not in active_filters:
-            active_filters["include_superseded"] = include_superseded
+        if request.workspace_id is not None:
+            active_filters["workspace_id"] = request.workspace_id
+        if request.memory_type is not None:
+            active_filters["memory_type"] = request.memory_type
+        if request.status is not None:
+            active_filters["status"] = request.status
+        if request.ranking_workspace_id is not None:
+            active_filters["_ranking_workspace_id"] = request.ranking_workspace_id
+        if request.include_superseded or "include_superseded" not in active_filters:
+            active_filters["include_superseded"] = request.include_superseded
         return await pipeline.search(
-            query,
-            limit=limit,
+            request.query,
+            limit=request.limit,
             filters=active_filters,
         )
 
     def search_sync(
         self,
-        query: str,
+        request: MemorySearchRequest | str,
         *,
         limit: int = 10,
         adaptive_limit: bool = False,
@@ -126,7 +151,7 @@ class MemoryRetrievalFacade:
     ) -> RecordSearchOutcome:
         return _run_async_safely(
             lambda: self.search(
-                query,
+                request,
                 limit=limit,
                 adaptive_limit=adaptive_limit,
                 workspace_id=workspace_id,
@@ -208,6 +233,7 @@ def build_memory_retrieval_facade(
 
 __all__ = [
     "MemoryRetrievalFacade",
+    "MemorySearchRequest",
     "MemoryRetrievalPort",
     "build_memory_retrieval_facade",
 ]

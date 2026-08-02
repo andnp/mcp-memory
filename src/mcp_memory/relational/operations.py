@@ -4,7 +4,10 @@ from time import perf_counter
 from typing import Any
 
 from mcp_memory.core.ports.memory import parse_memory_ref
-from mcp_memory.integrations.memory_retrieval import MemoryRetrievalPort
+from mcp_memory.integrations.memory_retrieval import (
+    MemoryRetrievalPort,
+    MemorySearchRequest,
+)
 from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
@@ -29,20 +32,17 @@ class SearchMemoryRecordsOperation:
         debug: bool = False,
     ) -> list[RelationalSearchResult]:
         _ = debug
-        outcome = self._retrieval.search_sync(
-            query,
+        request = MemorySearchRequest(
+            query=query,
             workspace_id=workspace_id,
             limit=limit,
             adaptive_limit=adaptive_limit,
             memory_type=memory_type,
             status=status,
             include_superseded=include_superseded,
-            filters=(
-                {"_ranking_workspace_id": ranking_workspace_id}
-                if ranking_workspace_id is not None
-                else None
-            ),
+            ranking_workspace_id=ranking_workspace_id,
         )
+        outcome = self._retrieval.search_sync(request)
         return [_to_relational_result(result) for result in outcome.results]
 
     def execute_with_diagnostics(
