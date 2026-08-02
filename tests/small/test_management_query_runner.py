@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any
 
 from mcp_memory.management.query_runner import ManagementQueryRunner
 
@@ -67,3 +69,37 @@ def test_management_query_runner_adapts_query_for_postgres_cursor_api() -> None:
     assert rows == [{"count": 5}]
     assert seen["query"] == "SELECT STRING_AGG(DISTINCT workspace_id, ','), CHR(10) FROM tasks WHERE workspace_id = %s"
     assert seen["params"] == ("workspace-a",)
+
+
+def test_management_query_runner_accepts_explicit_query_adapter() -> None:
+    seen: dict[str, object] = {}
+
+    class ExplicitAdapter:
+        def adapt_query(self, query: str) -> str:
+            return f"adapted: {query}"
+
+        def uses_sqlite_connection_api(self) -> bool:
+            return False
+
+        def fetchall(
+            self,
+            db_manager: Any,
+            query: str,
+            params: Sequence[object] | None = None,
+        ) -> list[dict[str, object]]:
+            seen["db_manager"] = db_manager
+            seen["query"] = query
+            seen["params"] = params
+            return [{"value": 7}]
+
+    db_manager = object()
+    adapter = ExplicitAdapter()
+    runner = ManagementQueryRunner(db_manager, adapter=adapter)
+
+    assert runner.adapt_query("SELECT 1") == "adapted: SELECT 1"
+    assert runner.fetchall("SELECT 1", ["value"]) == [{"value": 7}]
+    assert seen == {
+        "db_manager": db_manager,
+        "query": "SELECT 1",
+        "params": ["value"],
+    }
