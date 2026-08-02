@@ -263,6 +263,7 @@ def _curator_decisions(result: Any) -> list[dict[str, Any]]:
             "action_id": str(item.action.action_id),
             "operation": item.action.operation,
             "decision": "accepted",
+            "primary_family": str(item.family),
         }
         for item in validation.accepted_actions
     ]

@@ -459,7 +459,6 @@ class CurationDryRunHarness:
                 memory_types=self._memory_types,
                 contradictory_memory_ids=self._contradictory_memory_ids,
                 protections_by_memory=self._protections_by_memory,
-                allow_verified_actions=self._config.execute_accepted_actions,
             ),
         )
         return result.plan, result.validation, result.envelopes, result.retry_reason, result.failure

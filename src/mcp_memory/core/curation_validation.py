@@ -121,7 +121,6 @@ def validate_curation_plan(
     memory_types: Mapping[UUID, str] | None = None,
     contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset(),
     protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
-    allow_verified_actions: bool = False,
 ) -> CurationValidationResult:
     """Validate one plan and classify actions without storage or mutations."""
 
@@ -196,12 +195,10 @@ def validate_curation_plan(
             rejected.append(RejectedCurationAction(action=action, reason_codes=decision.rejection_codes))
             continue
         family = primary_family_for_operation(action.operation)
-        if allow_verified_actions and not decision.rejection_codes:
+        if decision.authorized:
             accepted.append(AcceptedCurationAction(action=action, family=family))
-        elif family is not MaintenanceFamily.CURATOR or not decision.authorized:
-            routes.append(CurationSpecialistRoute(action=action, family=family))
         else:
-            accepted.append(AcceptedCurationAction(action=action, family=family))
+            routes.append(CurationSpecialistRoute(action=action, family=family))
     return CurationValidationResult(
         plan=normalized_plan,
         accepted_actions=tuple(accepted),

@@ -221,6 +221,8 @@ async def test_default_verified_campaign_reports_authoritative_counts(
         assert result["execution_mode"] == "curation_verified_campaign"
         assert result["curation_outcome"] == "applied"
         assert result["mutations"] == 2
+        assert result["curation_decisions"][0]["primary_family"] == "curator"
+        assert result["curation_decisions"][1]["primary_family"] == "graph_linker"
         assert campaign["mutation_count"] == 2
         assert campaign["verified_action_count"] == 2
         assert campaign["verification_failure_count"] == 0

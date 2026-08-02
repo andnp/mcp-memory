@@ -39,7 +39,6 @@ class CurationPlanningInput:
     memory_types: Mapping[UUID, str] | None = None
     contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset()
     protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None
-    allow_verified_actions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +104,6 @@ async def plan_and_validate(
             memory_types=input.memory_types,
             contradictory_memory_ids=input.contradictory_memory_ids,
             protections_by_memory=input.protections_by_memory,
-            allow_verified_actions=input.allow_verified_actions,
         )
         if validation.valid:
             return CurationPlanningOutput(cast(CurationPlan, validation.plan), validation, envelopes, retry_reason, None)

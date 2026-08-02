@@ -128,8 +128,11 @@ def test_validation_classifies_actions_without_mutating_or_routing_work() -> Non
                  "support": [{"memory_id": str(linked)}]},
         memory_types={seed: "observation", linked: "observation"},
     )
-    assert [item.family for item in result.accepted_actions] == [MaintenanceFamily.CURATOR]
-    assert [item.family for item in result.specialist_routes] == [MaintenanceFamily.GRAPH_LINKER]
+    assert [item.family for item in result.accepted_actions] == [
+        MaintenanceFamily.CURATOR,
+        MaintenanceFamily.GRAPH_LINKER,
+    ]
+    assert not result.specialist_routes
     assert not result.rejected_actions
 
 
@@ -187,7 +190,7 @@ def test_validation_rejects_hidden_seed_ids() -> None:
     assert {issue.code for issue in result.issues} == {"seed_set_mismatch"}
 
 
-def test_verified_actions_are_only_accepted_for_verified_campaigns() -> None:
+def test_validation_accepts_all_policy_authorized_operation_families() -> None:
     run_id, plan_id = uuid4(), uuid4()
     seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target = (
         uuid4(),
@@ -340,24 +343,8 @@ def test_verified_actions_are_only_accepted_for_verified_campaigns() -> None:
         context=context,
         memory_types={value: "observation" for value in (seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target)},
     )
-    verified_result = validate_curation_plan(
-        plan,
-        request=request,
-        context=context,
-        memory_types={value: "observation" for value in (seed, linked, source, target, remove_source, remove_target, canonical, merge_source, split_target, archive_target)},
-        allow_verified_actions=True,
-    )
 
-    assert [item.action.operation for item in default_result.accepted_actions] == ["normalize_memory"]
-    assert {item.action.operation for item in default_result.specialist_routes} == {
-        "rewrite_memory",
-        "create_link",
-        "remove_link",
-        "merge_memories",
-        "split_memory",
-        "archive_memory",
-    }
-    assert [item.action.operation for item in verified_result.accepted_actions] == [
+    assert [item.action.operation for item in default_result.accepted_actions] == [
         "normalize_memory",
         "rewrite_memory",
         "create_link",
@@ -366,7 +353,16 @@ def test_verified_actions_are_only_accepted_for_verified_campaigns() -> None:
         "split_memory",
         "archive_memory",
     ]
-    assert not verified_result.specialist_routes
+    assert [item.family for item in default_result.accepted_actions] == [
+        MaintenanceFamily.CURATOR,
+        MaintenanceFamily.CURATOR,
+        MaintenanceFamily.GRAPH_LINKER,
+        MaintenanceFamily.GRAPH_LINKER,
+        MaintenanceFamily.DEDUPLICATOR,
+        MaintenanceFamily.CURATOR,
+        MaintenanceFamily.CURATOR,
+    ]
+    assert not default_result.specialist_routes
 
 
 def test_validation_returns_typed_policy_reasons_for_protected_actions() -> None:
@@ -384,3 +380,29 @@ def test_validation_returns_typed_policy_reasons_for_protected_actions() -> None
     )
     assert not result.accepted_actions
     assert result.rejected_actions[0].reason_codes == (RejectionCode.NO_AUTONOMOUS_MUTATION,)
+
+
+def test_validation_rejects_invalid_action_without_accepting_it() -> None:
+    run_id, plan_id, seed = uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    action = {
+        "operation": "rewrite_memory",
+        "action_id": uuid4(),
+        "target_id": seed,
+        "confidence": 1,
+        "rationale": "rewrite",
+        "content": "replacement",
+        "claim_manifest": {},
+    }
+    result = validate_curation_plan(
+        _plan(seed, run_id, plan_id, "frontier", "context", actions=[action]),
+        request=request,
+        context=_context(seed, "context"),
+        memory_types={seed: "observation"},
+    )
+
+    assert not result.accepted_actions
+    assert result.rejected_actions[0].reason_codes == (
+        RejectionCode.EVIDENCE_REQUIRED,
+        RejectionCode.CLAIM_MANIFEST_INCOMPLETE,
+    )
