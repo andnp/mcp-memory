@@ -1,1 +1,1 @@
-search_path = [".", "src"]
+search_path = ["src", "."]
