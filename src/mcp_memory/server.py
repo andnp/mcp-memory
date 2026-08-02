@@ -13,8 +13,29 @@ from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, TextContent, Tool
 
-from mcp_memory.daemon import ensure_daemon_started, stop_daemon
-from mcp_memory.daemon_transport import request_daemon_json, remaining_suspend_aware_seconds, suspend_aware_deadline, suspend_aware_now
+from mcp_memory.client_clock import (
+    remaining_suspend_aware_seconds,
+    suspend_aware_deadline,
+    suspend_aware_now,
+)
+
+
+def request_daemon_json(*args, **kwargs):
+    from mcp_memory.daemon_transport import request_daemon_json as _request_daemon_json
+
+    return _request_daemon_json(*args, **kwargs)
+
+
+def ensure_daemon_started(*args, **kwargs):
+    from mcp_memory.daemon import ensure_daemon_started as _ensure_daemon_started
+
+    return _ensure_daemon_started(*args, **kwargs)
+
+
+def stop_daemon(*args, **kwargs):
+    from mcp_memory.daemon import stop_daemon as _stop_daemon
+
+    return _stop_daemon(*args, **kwargs)
 
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")

@@ -8,7 +8,6 @@ import math
 import os
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-import time as time_module
 from time import perf_counter, time
 from types import TracebackType
 from typing import Any, Awaitable, Callable, cast
@@ -16,6 +15,11 @@ from typing import Any, Awaitable, Callable, cast
 import zmq
 import zmq.asyncio
 
+from mcp_memory.client_clock import (
+    remaining_suspend_aware_seconds,
+    suspend_aware_deadline,
+    suspend_aware_now,  # noqa: F401 - preserved as a patchable module export
+)
 from mcp_memory.daemon_dispatch import (
     dispatch_management_request,
     error_payload,
@@ -173,21 +177,6 @@ def _request_zmq_json(
     if not isinstance(response, dict):
         raise ValueError("daemon_response_must_be_object")
     return cast(dict[str, Any], response)
-
-
-def suspend_aware_now() -> float:
-    clock_boottime = getattr(time_module, "CLOCK_BOOTTIME", None)
-    if clock_boottime is None:
-        return time_module.monotonic()
-    return time_module.clock_gettime(clock_boottime)
-
-
-def suspend_aware_deadline(timeout_seconds: float) -> float:
-    return suspend_aware_now() + max(timeout_seconds, 0.0)
-
-
-def remaining_suspend_aware_seconds(deadline: float) -> float:
-    return max(deadline - suspend_aware_now(), 0.0)
 
 
 def _send_zmq_json_before_deadline(socket: zmq.Socket, payload: dict[str, object | None], deadline: float) -> None:
