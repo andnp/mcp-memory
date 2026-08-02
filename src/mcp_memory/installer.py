@@ -85,7 +85,7 @@ def forward_hook_event(payload: dict[str, Any], workspace_root: str | None = Non
     if endpoint is None:
         return {}
 
-    metadata = ensure_daemon_started(workspace_root, None)
+    metadata = ensure_daemon_started()
     request_payload = dict(payload)
     if workspace_root is not None:
         request_payload.setdefault("workspace_root", workspace_root)

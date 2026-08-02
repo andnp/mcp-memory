@@ -59,7 +59,11 @@ from mcp_memory.relational.importer import (
     import_markdown_memory_paths,
     record_markdown_memory_paths_as_thoughts,
 )
-from mcp_memory.runtime_logging import configure_cli_logging, configure_workspace_logging
+from mcp_memory.runtime_logging import (
+    configure_cli_logging,
+    configure_global_daemon_logging,
+    configure_workspace_logging,
+)
 from mcp_memory.server import MCPServer
 from mcp_memory.storage.sqlite_to_postgres_migration import migrate_sqlite_to_postgres
 
@@ -109,19 +113,17 @@ def _run_stdio_proxy(
 
 def _start_daemon(
     debug_enabled: bool,
-    workspace_root: str | None,
     host: str,
     port: int | None,
     internal_preflight_done: bool = False,
 ) -> None:
-    configure_workspace_logging(
+    configure_global_daemon_logging(
         debug_enabled,
-        workspace_root_override=workspace_root,
         console_output=True,
         source="daemon",
     )
     if not internal_preflight_done:
-        existing = prepare_daemon_start(workspace_root, None)
+        existing = prepare_daemon_start()
         if existing is not None:
             console.print(
                 f"[yellow]Global daemon already running:[/] pid={existing.pid} endpoint={existing.transport_endpoint}"
@@ -130,11 +132,10 @@ def _start_daemon(
             sys.exit(1)
     resolved_port = port
     if resolved_port is None:
-        resolved_port = resolve_global_daemon_bootstrap_spec(workspace_root_override=workspace_root).config.daemon.port
+        resolved_port = resolve_global_daemon_bootstrap_spec().config.daemon.port
     if resolved_port == 0:
         resolved_port = find_free_port()
     app = create_daemon_app(
-        workspace_root_override=workspace_root,
         host=host,
         port=resolved_port,
         enable_idle_shutdown=True,
@@ -147,8 +148,8 @@ def _start_daemon(
         return
 
 
-def _print_daemon_status(workspace_root: str | None) -> None:
-    metadata, healthy = inspect_daemon(workspace_root, None)
+def _print_daemon_status() -> None:
+    metadata, healthy = inspect_daemon()
     if metadata is None:
         console.print("[yellow]Global daemon not registered[/]")
         return
@@ -164,8 +165,8 @@ def _print_daemon_status(workspace_root: str | None) -> None:
     console.print(f"[bold]Started:[/] {_format_timestamp(metadata.started_at)}")
 
 
-def _stop_daemon_command(workspace_root: str | None) -> None:
-    stop_result = stop_daemon(workspace_root, None)
+def _stop_daemon_command() -> None:
+    stop_result = stop_daemon()
     if stop_result is None:
         console.print("[yellow]No daemon metadata found.[/]")
         return
@@ -183,9 +184,9 @@ def _stop_daemon_command(workspace_root: str | None) -> None:
         )
 
 
-def _restart_daemon_command(workspace_root: str | None) -> None:
-    stop_result = stop_daemon(workspace_root, None)
-    metadata = ensure_daemon_started(workspace_root, None)
+def _restart_daemon_command() -> None:
+    stop_result = stop_daemon()
+    metadata = ensure_daemon_started()
     if metadata is None:
         return
     if isinstance(stop_result, DaemonStopResult):
@@ -196,8 +197,8 @@ def _restart_daemon_command(workspace_root: str | None) -> None:
     console.print(f"[green]Daemon restarted:[/] {metadata.transport_endpoint} (pid={metadata.pid})")
 
 
-def _print_dashboard_url(workspace_root: str | None, *, open_browser: bool = False) -> None:
-    metadata = ensure_daemon_started(workspace_root, None)
+def _print_dashboard_url(*, open_browser: bool = False) -> None:
+    metadata = ensure_daemon_started()
     if metadata is None:
         return
     dashboard_url = f"{metadata.base_url}/dashboard"
@@ -510,7 +511,7 @@ def _format_ranking_evidence(ranking_debug: object) -> str:
 
 
 def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> None:
-    ensure_daemon_started(workspace_root, None)
+    ensure_daemon_started()
     payload = _with_management_service(
         workspace_root,
         lambda service: service.enqueue_background_task(agent_name, force=force),
@@ -524,7 +525,7 @@ def _enqueue_agent(agent_name: str, workspace_root: str | None, force: bool) -> 
 
 
 def _enqueue_all_agents(workspace_root: str | None, force: bool) -> None:
-    ensure_daemon_started(workspace_root, None)
+    ensure_daemon_started()
     results = _with_management_service(
         workspace_root,
         lambda service: service.enqueue_all_background_tasks(force=force),
@@ -1749,28 +1750,26 @@ main.add_command(internal_run)
 
 def _daemon_start_command_action(
     debug_enabled: bool,
-    workspace_root: str | None,
     host: str,
     port: int | None,
     internal_preflight_done: bool,
 ) -> None:
-    _start_daemon(debug_enabled, workspace_root, host, port, internal_preflight_done)
+    _start_daemon(debug_enabled, host, port, internal_preflight_done)
 
 
-def _daemon_status_command_action(workspace_root: str | None) -> None:
-    _print_daemon_status(workspace_root)
+def _daemon_status_command_action() -> None:
+    _print_daemon_status()
 
 
-def _daemon_stop_command_action(workspace_root: str | None) -> None:
-    _run_or_exit(lambda: _stop_daemon_command(workspace_root))
+def _daemon_stop_command_action() -> None:
+    _run_or_exit(_stop_daemon_command)
 
 
-def _daemon_restart_command_action(workspace_root: str | None) -> None:
-    _run_or_exit(lambda: _restart_daemon_command(workspace_root))
+def _daemon_restart_command_action() -> None:
+    _run_or_exit(_restart_daemon_command)
 
 
 _daemon_command_family = build_daemon_command_family(
-    workspace_root_option,
     start_daemon=_daemon_start_command_action,
     print_daemon_status=_daemon_status_command_action,
     stop_daemon_command=_daemon_stop_command_action,
@@ -2036,7 +2035,7 @@ admin_group.add_command(admin_search_group)
 
 
 def _admin_dashboard_open_command_action(workspace_root: str | None) -> None:
-    _run_or_exit(lambda: _print_dashboard_url(workspace_root, open_browser=True))
+    _run_or_exit(lambda: _print_dashboard_url(open_browser=True))
 
 
 def _admin_dashboard_build_command_action() -> None:

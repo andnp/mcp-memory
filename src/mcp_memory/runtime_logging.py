@@ -6,7 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.logging import RichHandler
 
-from mcp_memory.mcp.runtime import resolve_workspace_runtime_spec
+from mcp_memory.mcp.runtime import resolve_global_daemon_bootstrap_spec, resolve_workspace_runtime_spec
 from mcp_memory.runtime_log_store import RuntimeLogRepository
 from mcp_memory.storage.postgres_runtime_log_store import PostgresStructuredLogHandler
 from mcp_memory.utils.db import DatabaseManager
@@ -91,6 +91,36 @@ def configure_workspace_logging(
             SQLiteStructuredLogHandler(
                 db_path=spec.memory_path / "indices" / "memory.db",
                 workspace_id=spec.workspace_id,
+                source=source,
+            )
+        )
+    _configure_root_logging(debug, handlers=handlers)
+
+
+def configure_global_daemon_logging(
+    debug: bool,
+    *,
+    console_output: bool,
+    source: str,
+):
+    _configure_root_logging(debug, handlers=[logging.NullHandler()])
+    spec = resolve_global_daemon_bootstrap_spec()
+    handlers: list[logging.Handler] = []
+    if console_output:
+        handlers.append(RichHandler(rich_tracebacks=True, console=_LOG_CONSOLE))
+    if spec.config.storage.backend == "postgres" and source == "daemon":
+        handlers.append(
+            PostgresStructuredLogHandler(
+                config=spec.config.storage.postgres,
+                workspace_id=None,
+                source=source,
+            )
+        )
+    else:
+        handlers.append(
+            SQLiteStructuredLogHandler(
+                db_path=spec.memory_path / "indices" / "memory.db",
+                workspace_id=None,
                 source=source,
             )
         )

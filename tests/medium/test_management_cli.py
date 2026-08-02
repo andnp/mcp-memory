@@ -24,7 +24,7 @@ def test_dashboard_command_autostarts_daemon_and_prints_url(monkeypatch) -> None
     class FakeMetadata:
         base_url = "http://127.0.0.1:8123"
 
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda: FakeMetadata())
     monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
     result = runner.invoke(main, ["admin", "dashboard", "open", "--workspace-root", "demo"])
@@ -43,7 +43,7 @@ def test_dashboard_command_can_open_browser(monkeypatch) -> None:
     class FakeMetadata:
         base_url = "http://127.0.0.1:8123"
 
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda: FakeMetadata())
     monkeypatch.setattr("mcp_memory.cli.webbrowser.open", lambda url: opened.append(url) or True)
 
     result = runner.invoke(main, ["admin", "dashboard", "open"])
@@ -67,7 +67,7 @@ def test_daemon_status_command_reports_running_daemon(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "mcp_memory.cli.inspect_daemon",
-        lambda workspace_root, cwd=None: (FakeMetadata(), True),
+        lambda: (FakeMetadata(), True),
     )
 
     result = runner.invoke(main, ["daemon", "status"])
@@ -94,7 +94,7 @@ def test_daemon_stop_command_reports_stopped_daemon(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "mcp_memory.cli.stop_daemon",
-        lambda workspace_root, cwd=None: DaemonStopResult(
+        lambda: DaemonStopResult(
             metadata=metadata,
             stop_reason="owner_stopped_on_stop",
             signal_sequence=("SIGTERM",),
@@ -126,11 +126,11 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
         socket_path="/tmp/mcp-memory.sock",
     )
 
-    stop_calls: list[tuple[str | None, object | None]] = []
-    start_calls: list[tuple[str | None, object | None]] = []
+    stop_calls: list[bool] = []
+    start_calls: list[bool] = []
     monkeypatch.setattr(
         "mcp_memory.cli.stop_daemon",
-        lambda workspace_root, cwd=None: stop_calls.append((workspace_root, cwd)) or DaemonStopResult(
+        lambda: stop_calls.append(True) or DaemonStopResult(
             metadata=metadata,
             stop_reason="owner_stopped_on_stop",
             signal_sequence=("SIGTERM", "SIGKILL"),
@@ -141,14 +141,14 @@ def test_daemon_restart_command_restarts_and_prints_url(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "mcp_memory.cli.ensure_daemon_started",
-        lambda workspace_root, cwd=None: start_calls.append((workspace_root, cwd)) or metadata,
+        lambda: start_calls.append(True) or metadata,
     )
 
-    result = runner.invoke(main, ["daemon", "restart", "--workspace-root", "demo"])
+    result = runner.invoke(main, ["daemon", "restart"])
 
     assert result.exit_code == 0
-    assert stop_calls == [("demo", None)]
-    assert start_calls == [("demo", None)]
+    assert stop_calls == [True]
+    assert start_calls == [True]
     assert "ipc:///tmp/mcp-memory.sock" in result.output
     assert "Previous daemon stop:" in result.output
     assert "escalated=True" in result.output
@@ -700,7 +700,7 @@ def test_agents_run_command_enqueues_background_agent(monkeypatch, tmp_path: Pat
     class FakeMetadata:
         base_url = "http://127.0.0.1:8123"
 
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda: FakeMetadata())
 
     result = runner.invoke(
         main,
@@ -1238,7 +1238,7 @@ def test_stats_command_does_not_require_daemon_start(monkeypatch, tmp_path: Path
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr(
         "mcp_memory.cli.ensure_daemon_started",
-        lambda workspace_root, cwd=None: (_ for _ in ()).throw(AssertionError("stats should not start daemon")),
+        lambda: (_ for _ in ()).throw(AssertionError("stats should not start daemon")),
     )
 
     result = runner.invoke(main, ["admin", "overview", "--workspace-root", str(workspace)])
@@ -1291,7 +1291,7 @@ def test_stats_command_watch_mode_refreshes_without_daemon_start(monkeypatch, tm
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr(
         "mcp_memory.cli.ensure_daemon_started",
-        lambda workspace_root, cwd=None: (_ for _ in ()).throw(AssertionError("stats watch should not start daemon")),
+        lambda: (_ for _ in ()).throw(AssertionError("stats watch should not start daemon")),
     )
 
     sleep_calls: list[float] = []

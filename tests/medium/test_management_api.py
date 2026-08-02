@@ -193,7 +193,7 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
     finally:
         seed_runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     async with app.router.lifespan_context(app):
         metadata = app.state.metadata
 
@@ -552,7 +552,7 @@ async def test_management_api_exposes_quality_cleanup_candidates(monkeypatch, tm
     finally:
         runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     async with app.router.lifespan_context(app):
         payload = await _request_json(
             app.state.metadata,
@@ -584,7 +584,7 @@ async def test_management_api_health_and_overview_include_cache_metrics(monkeypa
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     async with app.router.lifespan_context(app):
         service = app.state.routes.service
         config = Config()
@@ -643,7 +643,7 @@ async def test_daemon_lifespan_attempts_embedding_model_cache(monkeypatch, tmp_p
     runtime.embedder = FakeEmbedder()
     monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
 
     try:
         async with app.router.lifespan_context(app):
@@ -675,7 +675,7 @@ async def test_daemon_lifespan_waits_for_embedding_model_cache_before_ready(monk
     runtime.embedder = FakeEmbedder()
     monkeypatch.setattr("mcp_memory.daemon_app.create_runtime_from_spec", lambda spec: runtime)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     lifespan = app.router.lifespan_context(app)
     enter_task: asyncio.Task[object] | None = None
 
@@ -883,7 +883,7 @@ async def test_management_api_overview_includes_top_read_memories(monkeypatch, t
     finally:
         runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     async with app.router.lifespan_context(app):
         overview = await _request_json(app.state.metadata, "/api/overview")
 
@@ -918,7 +918,7 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     finally:
         runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         root_redirect = client.get("/", follow_redirects=False)
         dashboard = client.get("/dashboard")
@@ -1007,7 +1007,7 @@ def test_http_overview_defaults_to_global_scope_for_dashboard_calls(monkeypatch,
         runtime_a.close()
         runtime_b.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    app = create_daemon_app()
     with TestClient(app) as client:
         global_overview = client.get("/api/overview")
         ignored_scoped_overview = client.get("/api/overview", params={"scope": "workspace", "workspace_id": runtime_b.workspace_id})
@@ -1101,7 +1101,7 @@ def test_http_operator_lists_default_to_global_scope_and_search_uses_explicit_wo
         runtime_a.close()
         runtime_b.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    app = create_daemon_app()
     with TestClient(app) as client:
         global_tasks = client.get("/api/tasks")
         workspace_tasks = client.get(
@@ -1181,7 +1181,7 @@ def test_daemon_lifespan_ensures_dashboard_frontend_is_built(monkeypatch, tmp_pa
     )
     monkeypatch.setattr("mcp_memory.daemon_app._warm_embedding_model", skip_embedding_warmup)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
 
     with TestClient(app):
         pass
@@ -1197,7 +1197,7 @@ def test_management_api_accepts_30_day_nerd_metrics_window(monkeypatch, tmp_path
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         response = client.get(
             "/api/metrics/nerd",
@@ -1313,7 +1313,7 @@ async def test_daemon_zmq_record_thought_tool_fast_path_ignores_saturated_reques
 
     monkeypatch.setattr(daemon_app_module, "_handle_post_tool_use", _blocking_post_tool_use)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     async with app.router.lifespan_context(app):
         metadata = app.state.metadata
         blocking_request = asyncio.create_task(
@@ -1704,7 +1704,7 @@ def test_http_and_zmq_management_dispatch_parity_on_edge_routes(monkeypatch, tmp
     finally:
         runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         metadata = app.state.metadata
 
@@ -1784,7 +1784,7 @@ def test_http_record_thought_allows_workspace_root_override(monkeypatch, tmp_pat
         runtime_a.close()
         runtime_b.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace_a)
+    app = create_daemon_app()
     with TestClient(app) as client:
         response = client.post(
             "/api/record-thought",
@@ -1898,7 +1898,7 @@ def test_http_selector_stats_endpoint_reports_fresh_seeded_and_unknown(monkeypat
     finally:
         runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         response = client.get("/api/selector-stats", params={"window_hours": 24, "now": 110.0, "limit": 3})
 
@@ -1948,7 +1948,7 @@ def test_management_api_rejects_invalid_json_and_non_object_json_body(monkeypatc
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         invalid_json = client.post(
             "/api/memories/search",

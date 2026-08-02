@@ -81,13 +81,11 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
 
     def fake_start_daemon(
         debug_enabled: bool,
-        workspace_root: str | None,
         host: str,
         port: int | None,
         internal_preflight_done: bool,
     ) -> None:
         captured["debug_enabled"] = debug_enabled
-        captured["workspace_root"] = workspace_root
         captured["host"] = host
         captured["port"] = port
         captured["internal_preflight_done"] = internal_preflight_done
@@ -96,13 +94,12 @@ def test_daemon_start_forwards_to_existing_daemon_start_helper(monkeypatch) -> N
 
     result = runner.invoke(
         main,
-        ["--debug", "daemon", "start", "--workspace-root", "/tmp/demo", "--host", "0.0.0.0", "--port", "1234"],
+        ["--debug", "daemon", "start", "--host", "0.0.0.0", "--port", "1234"],
     )
 
     assert result.exit_code == 0, result.output
     assert captured == {
         "debug_enabled": True,
-        "workspace_root": "/tmp/demo",
         "host": "0.0.0.0",
         "port": 1234,
         "internal_preflight_done": False,
@@ -115,13 +112,11 @@ def test_daemon_root_command_forwards_to_existing_daemon_start_helper(monkeypatc
 
     def fake_start_daemon(
         debug_enabled: bool,
-        workspace_root: str | None,
         host: str,
         port: int | None,
         internal_preflight_done: bool,
     ) -> None:
         captured["debug_enabled"] = debug_enabled
-        captured["workspace_root"] = workspace_root
         captured["host"] = host
         captured["port"] = port
         captured["internal_preflight_done"] = internal_preflight_done
@@ -130,13 +125,12 @@ def test_daemon_root_command_forwards_to_existing_daemon_start_helper(monkeypatc
 
     result = runner.invoke(
         main,
-        ["--debug", "daemon", "--workspace-root", "/tmp/demo", "--host", "0.0.0.0", "--port", "1234"],
+        ["--debug", "daemon", "--host", "0.0.0.0", "--port", "1234"],
     )
 
     assert result.exit_code == 0, result.output
     assert captured == {
         "debug_enabled": True,
-        "workspace_root": "/tmp/demo",
         "host": "0.0.0.0",
         "port": 1234,
         "internal_preflight_done": False,
@@ -797,7 +791,7 @@ def test_admin_agent_run_shows_redirected_manual_maintenance_alias(monkeypatch) 
         def enqueue_background_task(self, agent_name: str, force: bool = False) -> dict[str, object]:
             return payload
 
-    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda workspace_root, cwd=None: object())
+    monkeypatch.setattr("mcp_memory.cli.ensure_daemon_started", lambda: object())
     monkeypatch.setattr(
         "mcp_memory.cli._with_management_service",
         lambda workspace_root, action, workspace_id=None: action(FakeService()),
@@ -852,8 +846,7 @@ def test_admin_dashboard_open_forwards_to_existing_dashboard_helper(monkeypatch)
     runner = CliRunner()
     captured: dict[str, object] = {}
 
-    def fake_print_dashboard_url(workspace_root: str | None, *, open_browser: bool = False) -> None:
-        captured["workspace_root"] = workspace_root
+    def fake_print_dashboard_url(*, open_browser: bool = False) -> None:
         captured["open_browser"] = open_browser
 
     monkeypatch.setattr("mcp_memory.cli._print_dashboard_url", fake_print_dashboard_url)
@@ -862,7 +855,6 @@ def test_admin_dashboard_open_forwards_to_existing_dashboard_helper(monkeypatch)
 
     assert result.exit_code == 0, result.output
     assert captured == {
-        "workspace_root": "/tmp/demo",
         "open_browser": True,
     }
 

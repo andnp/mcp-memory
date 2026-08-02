@@ -81,12 +81,12 @@ def test_cli_daemon_restart_replaces_live_process(monkeypatch, tmp_path: Path) -
         assert start_result.exit_code == 0, start_result.output
         first_metadata = read_daemon_metadata(resolve_daemon_metadata_path())
         assert first_metadata is not None
-        initial_metadata, initial_healthy = inspect_daemon(str(workspace), None)
+        initial_metadata, initial_healthy = inspect_daemon()
         assert initial_healthy is True
         assert initial_metadata is not None
         assert initial_metadata.pid == first_metadata.pid
 
-        restart_result = runner.invoke(main, ["daemon", "restart", "--workspace-root", str(workspace)])
+        restart_result = runner.invoke(main, ["daemon", "restart"])
 
         assert restart_result.exit_code == 0, restart_result.output
         assert "Previous daemon stop:" in restart_result.output
@@ -97,9 +97,9 @@ def test_cli_daemon_restart_replaces_live_process(monkeypatch, tmp_path: Path) -
         assert second_metadata.pid != first_metadata.pid
         _wait_for_process_exit(first_metadata.pid)
 
-        restarted_metadata, restarted_healthy = inspect_daemon(str(workspace), None)
+        restarted_metadata, restarted_healthy = inspect_daemon()
         assert restarted_healthy is True
         assert restarted_metadata is not None
         assert restarted_metadata.pid == second_metadata.pid
     finally:
-        stop_daemon(str(workspace), None)
+        stop_daemon()

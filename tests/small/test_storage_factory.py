@@ -196,7 +196,6 @@ def test_create_runtime_from_spec_supports_global_daemon_context_without_workspa
         GlobalDaemonBootstrapSpec(
             memory_path=memory_path,
             config=Config(),
-            workspace_root=tmp_path / "workspace",
             lock_path=tmp_path / "daemon.lock",
         )
     )

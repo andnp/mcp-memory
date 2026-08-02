@@ -129,8 +129,6 @@ def _daemon_lock_acquire_timeout_seconds(timeout_seconds: float) -> float:
 
 
 def prepare_daemon_start(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
 ) -> DaemonMetadata | None:
     """Reclaim the global daemon slot before a caller binds a daemon directly.
 
@@ -144,7 +142,7 @@ def prepare_daemon_start(
     caller should refuse to start a duplicate), or None once orphaned/unhealthy
     daemons have been cleaned up and it is safe to start a new one.
     """
-    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec()
     current_state_dir = _normalize_state_dir(resolve_state_dir())
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock_path = resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY)
@@ -236,10 +234,8 @@ def _reclaim_daemon_slot(
 
 
 def ensure_daemon_started(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
 ) -> DaemonMetadata:
-    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec()
     current_state_dir = _normalize_state_dir(resolve_state_dir())
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     lock = FilesystemLock(resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY))
@@ -268,7 +264,7 @@ def ensure_daemon_started(
         daemon_port = spec.config.daemon.port
         if daemon_port == 0:
             daemon_port = _find_free_port()
-        spawn_details = _spawn_daemon_process(spec.workspace_root, spec.config.daemon.host, daemon_port)
+        spawn_details = _spawn_daemon_process(spec.config.daemon.host, daemon_port)
         poll_interval_seconds = spec.config.daemon.healthcheck_interval_seconds
         try:
             readiness_deadline = time.monotonic() + timeout_seconds
@@ -379,20 +375,16 @@ def _confirm_daemon_health(
 
 
 def inspect_daemon(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
 ) -> tuple[DaemonMetadata | None, bool]:
-    resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    resolve_global_daemon_bootstrap_spec()
     metadata = read_daemon_metadata(resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY))
     healthy = metadata is not None and _is_daemon_healthy(metadata)
     return metadata, healthy
 
 
 def stop_daemon(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
 ) -> DaemonStopResult | None:
-    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec()
     metadata_path = resolve_daemon_metadata_path(GLOBAL_DAEMON_IDENTITY)
     metadata = read_daemon_metadata(metadata_path)
     if metadata is None:
@@ -435,8 +427,8 @@ def stop_daemon(
     )
 
 
-def daemon_url(workspace_root_override: str | None = None, cwd: Path | None = None) -> str:
-    return ensure_daemon_started(workspace_root_override, cwd).base_url
+def daemon_url() -> str:
+    return ensure_daemon_started().base_url
 
 
 __all__ = [

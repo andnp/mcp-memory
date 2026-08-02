@@ -51,7 +51,6 @@ class WorkspaceRuntimeSpec:
 class GlobalDaemonBootstrapSpec:
     memory_path: Path
     config: Config
-    workspace_root: Path
     lock_path: Path
 
 
@@ -96,18 +95,15 @@ def resolve_workspace_runtime_spec(
 
 
 def resolve_global_daemon_bootstrap_spec(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
 ) -> GlobalDaemonBootstrapSpec:
-    config, memory_path, workspace_root, lock_path = _resolve_runtime_bootstrap_fields(
-        workspace_root_override,
-        cwd,
-    )
+    ensure_default_config_exists()
+    config = load_config()
+    memory_path = resolve_memory_path(config)
+    ensure_memory_dirs(memory_path)
     return GlobalDaemonBootstrapSpec(
         config=config,
-        workspace_root=workspace_root,
         memory_path=memory_path,
-        lock_path=lock_path,
+        lock_path=resolve_daemon_lock_path(GLOBAL_DAEMON_IDENTITY),
     )
 
 
@@ -146,6 +142,7 @@ def create_runtime_composition(
     enable_background_repair_queue: bool = False,
 ) -> RuntimeComposition:
     workspace_id = _workspace_id_for_runtime(spec)
+    workspace_root = spec.workspace_root if isinstance(spec, WorkspaceRuntimeSpec) else None
     embedder = build_embedder(spec.config.embeddings)
     internal_tool_call_tracker = InternalToolCallTracker()
     storage = build_storage_runtime_components(
@@ -159,7 +156,7 @@ def create_runtime_composition(
     )
     provider_registry = _build_provider_registry(
         config=spec.config,
-        workspace_root=spec.workspace_root,
+        workspace_root=workspace_root,
         workspace_id=workspace_id,
         storage=storage,
     )
@@ -173,7 +170,7 @@ def create_runtime_composition(
     context = ApplicationContext(
         config=spec.config,
         workspace_id=workspace_id,
-        workspace_root=spec.workspace_root,
+        workspace_root=workspace_root,
         memory_path=spec.memory_path,
         storage_backend=storage.backend,
         db_manager=storage.db_manager,
@@ -225,7 +222,7 @@ def create_runtime(
 def _build_provider_registry(
     *,
     config: Config,
-    workspace_root: Path,
+    workspace_root: Path | None,
     workspace_id: str | None,
     storage: StorageBackendResources,
 ) -> dict[str, dict[str, object]]:

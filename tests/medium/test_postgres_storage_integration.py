@@ -506,7 +506,7 @@ def test_postgres_integration_daemon_app_health_overview_and_search_use_real_run
     finally:
         seed_runtime.close()
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     with TestClient(app) as client:
         health = client.get("/api/health")
         overview = client.get("/api/overview")
@@ -549,7 +549,7 @@ async def test_postgres_integration_daemon_hooks_persist_conversation_state_and_
     workspace.mkdir(parents=True)
     monkeypatch.setattr("mcp_memory.mcp.runtime.build_embedder", lambda _config: None)
 
-    app = create_daemon_app(workspace_root_override=None, cwd=workspace)
+    app = create_daemon_app()
     row: tuple[object, ...] | None = None
     async with app.router.lifespan_context(app):
         metadata = app.state.metadata

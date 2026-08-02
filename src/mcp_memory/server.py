@@ -26,16 +26,16 @@ def request_daemon_json(*args, **kwargs):
     return _request_daemon_json(*args, **kwargs)
 
 
-def ensure_daemon_started(*args, **kwargs):
+def ensure_daemon_started():
     from mcp_memory.daemon import ensure_daemon_started as _ensure_daemon_started
 
-    return _ensure_daemon_started(*args, **kwargs)
+    return _ensure_daemon_started()
 
 
-def stop_daemon(*args, **kwargs):
+def stop_daemon():
     from mcp_memory.daemon import stop_daemon as _stop_daemon
 
-    return _stop_daemon(*args, **kwargs)
+    return _stop_daemon()
 
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -213,8 +213,8 @@ class MCPServer:
                 force_restart = self._daemon_recovery_force_restart_requested
                 self._daemon_recovery_force_restart_requested = False
                 if force_restart:
-                    await asyncio.to_thread(stop_daemon, self.workspace_root, None)
-                self._daemon = await asyncio.to_thread(ensure_daemon_started, self.workspace_root, None)
+                    await asyncio.to_thread(stop_daemon)
+                self._daemon = await asyncio.to_thread(ensure_daemon_started)
                 if not self._daemon_recovery_force_restart_requested:
                     break
         except Exception as exc:  # pragma: no cover - exercised via log assertion paths if needed
@@ -394,7 +394,7 @@ class MCPServer:
                         "error": str(exc),
                     },
                 )
-                self._daemon = ensure_daemon_started(self.workspace_root, None)
+                self._daemon = ensure_daemon_started()
         raise RuntimeError("daemon_request_retries_exhausted")
 
     def _call_request_json(

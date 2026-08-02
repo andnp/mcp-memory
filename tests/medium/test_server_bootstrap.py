@@ -206,7 +206,7 @@ def test_mcp_server_tool_requests_retry_once_after_transport_timeout(monkeypatch
     initial_daemon = object()
     refreshed_daemon = object()
     request_calls: list[tuple[object, str, dict | None]] = []
-    ensure_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
 
     def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
         request_calls.append((metadata, path, payload))
@@ -214,8 +214,8 @@ def test_mcp_server_tool_requests_retry_once_after_transport_timeout(monkeypatch
             raise TimeoutError("daemon_request_timed_out")
         return {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
 
-    def fake_ensure_daemon_started(workspace_root, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return refreshed_daemon
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
@@ -229,7 +229,7 @@ def test_mcp_server_tool_requests_retry_once_after_transport_timeout(monkeypatch
     )
 
     assert payload == {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
-    assert ensure_calls == [("demo-workspace", None)]
+    assert ensure_calls == [True]
     assert request_calls == [
         (
             initial_daemon,
@@ -250,7 +250,7 @@ def test_mcp_server_tool_requests_retry_twice_after_transient_timeouts(monkeypat
     refreshed_daemon_first = object()
     refreshed_daemon_second = object()
     request_calls: list[tuple[object, str, dict | None]] = []
-    ensure_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
     refreshed_daemons = iter((refreshed_daemon_first, refreshed_daemon_second))
 
     def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
@@ -259,8 +259,8 @@ def test_mcp_server_tool_requests_retry_twice_after_transient_timeouts(monkeypat
             raise TimeoutError("daemon_request_timed_out")
         return {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
 
-    def fake_ensure_daemon_started(workspace_root, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return next(refreshed_daemons)
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
@@ -275,8 +275,8 @@ def test_mcp_server_tool_requests_retry_twice_after_transient_timeouts(monkeypat
 
     assert payload == {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
     assert ensure_calls == [
-        ("demo-workspace", None),
-        ("demo-workspace", None),
+        True,
+        True,
     ]
     assert request_calls == [
         (
@@ -301,14 +301,14 @@ def test_mcp_server_request_json_recovers_when_daemon_metadata_is_missing(monkey
     server = MCPServer(workspace_root="demo-workspace")
     refreshed_daemon = object()
     request_calls: list[tuple[object, str, dict | None]] = []
-    ensure_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
 
     def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
         request_calls.append((metadata, path, payload))
         return {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
 
-    def fake_ensure_daemon_started(workspace_root, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return refreshed_daemon
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
@@ -322,7 +322,7 @@ def test_mcp_server_request_json_recovers_when_daemon_metadata_is_missing(monkey
     )
 
     assert payload == {"contents": [{"type": "text", "text": '{"status": "recorded"}'}]}
-    assert ensure_calls == [("demo-workspace", None)]
+    assert ensure_calls == [True]
     assert request_calls == [
         (
             refreshed_daemon,
@@ -338,15 +338,15 @@ def test_mcp_server_tool_requests_raise_after_exhausting_retry_budget(monkeypatc
     refreshed_daemon_first = object()
     refreshed_daemon_second = object()
     request_calls: list[tuple[object, str, dict | None]] = []
-    ensure_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
     refreshed_daemons = iter((refreshed_daemon_first, refreshed_daemon_second))
 
     def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
         request_calls.append((metadata, path, payload))
         raise TimeoutError("daemon_request_timed_out")
 
-    def fake_ensure_daemon_started(workspace_root, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return next(refreshed_daemons)
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
@@ -361,8 +361,8 @@ def test_mcp_server_tool_requests_raise_after_exhausting_retry_budget(monkeypatc
         )
 
     assert ensure_calls == [
-        ("demo-workspace", None),
-        ("demo-workspace", None),
+        True,
+        True,
     ]
     assert request_calls == [
         (
@@ -478,7 +478,7 @@ async def test_mcp_server_client_timeout_clears_cached_daemon_and_schedules_reco
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def blocking_recovery(workspace_root: str | None, cwd=None):
+    def blocking_recovery():
         recovery_started.set()
         allow_recovery.wait(1)
         return object()
@@ -513,7 +513,7 @@ async def test_mcp_server_repeated_client_timeouts_do_not_spawn_duplicate_recove
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def blocking_recovery(workspace_root: str | None, cwd=None):
+    def blocking_recovery():
         nonlocal recovery_call_count
         recovery_call_count += 1
         recovery_started.set()
@@ -554,7 +554,7 @@ async def test_mcp_server_successful_background_recovery_updates_cached_daemon(m
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def successful_recovery(workspace_root: str | None, cwd=None):
+    def successful_recovery():
         return refreshed_daemon
 
     monkeypatch.setattr(
@@ -586,7 +586,7 @@ async def test_mcp_server_successful_request_resets_consecutive_client_timeout_s
             request_stall.wait(0.05)
         return {"tools": []}
 
-    def successful_recovery(workspace_root: str | None, cwd=None):
+    def successful_recovery():
         return recovered_daemon
 
     monkeypatch.setattr(
@@ -633,20 +633,20 @@ async def test_mcp_server_sync_timeout_does_not_count_as_client_timeout(monkeypa
 async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_restart(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     request_stall = threading.Event()
-    ensure_calls: list[tuple[str | None, None]] = []
-    stop_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
+    stop_calls: list[bool] = []
     refreshed_daemons = [object(), object()]
 
     def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def successful_recovery(workspace_root: str | None, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def successful_recovery():
+        ensure_calls.append(True)
         return refreshed_daemons[len(ensure_calls) - 1]
 
-    def successful_stop(workspace_root: str | None, cwd=None):
-        stop_calls.append((workspace_root, cwd))
+    def successful_stop():
+        stop_calls.append(True)
         return None
 
     monkeypatch.setattr(
@@ -663,7 +663,7 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
 
     await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
 
-    assert ensure_calls == [("demo-workspace", None)]
+    assert ensure_calls == [True]
     assert stop_calls == []
 
     server._daemon = object()
@@ -672,10 +672,10 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
 
     await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
 
-    assert stop_calls == [("demo-workspace", None)]
+    assert stop_calls == [True]
     assert ensure_calls == [
-        ("demo-workspace", None),
-        ("demo-workspace", None),
+        True,
+        True,
     ]
     assert server._daemon is refreshed_daemons[-1]
 
@@ -689,16 +689,16 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
     second_recovery_started = threading.Event()
     allow_second_recovery = threading.Event()
     stop_called = threading.Event()
-    ensure_calls: list[tuple[str | None, None]] = []
-    stop_calls: list[tuple[str | None, None]] = []
+    ensure_calls: list[bool] = []
+    stop_calls: list[bool] = []
     recovered_daemons = [object(), object()]
 
     def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def staged_recovery(workspace_root: str | None, cwd=None):
-        ensure_calls.append((workspace_root, cwd))
+    def staged_recovery():
+        ensure_calls.append(True)
         if len(ensure_calls) == 1:
             first_recovery_started.set()
             allow_first_recovery.wait(1)
@@ -707,8 +707,8 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
             allow_second_recovery.wait(1)
         return recovered_daemons[len(ensure_calls) - 1]
 
-    def successful_stop(workspace_root: str | None, cwd=None):
-        stop_calls.append((workspace_root, cwd))
+    def successful_stop():
+        stop_calls.append(True)
         stop_called.set()
         return None
 
@@ -740,10 +740,10 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
     allow_second_recovery.set()
     await asyncio.wait_for(cast(asyncio.Task[None], first_recovery_task), timeout=1)
 
-    assert stop_calls == [("demo-workspace", None)]
+    assert stop_calls == [True]
     assert ensure_calls == [
-        ("demo-workspace", None),
-        ("demo-workspace", None),
+        True,
+        True,
     ]
     assert server._daemon is recovered_daemons[-1]
 
@@ -758,8 +758,8 @@ async def test_mcp_server_failed_background_recovery_logs_warning(monkeypatch, c
         request_stall.wait(0.05)
         return {"tools": []}
 
-    def failing_recovery(workspace_root: str | None, cwd=None):
-        raise RuntimeError(f"recovery failed for {workspace_root}")
+    def failing_recovery():
+        raise RuntimeError("recovery failed for demo-workspace")
 
     monkeypatch.setattr(
         "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
@@ -797,7 +797,7 @@ async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_force_recover
     allow_recovery = threading.Event()
     refreshed_daemon = object()
 
-    def fake_recovery(workspace_root: str | None, cwd=None):
+    def fake_recovery():
         recovery_started.set()
         allow_recovery.wait(2)
         return refreshed_daemon
@@ -849,7 +849,7 @@ async def test_mcp_server_suspend_monitor_does_not_trigger_without_sleep(monkeyp
 
     recovery_started = threading.Event()
 
-    def fake_recovery(workspace_root: str | None, cwd=None):
+    def fake_recovery():
         recovery_started.set()
         return object()
 
@@ -1507,7 +1507,7 @@ async def test_mcp_server_run_autostarts_daemon_and_invokes_stdio(monkeypatch) -
     class FakeMetadata:
         base_url = "http://127.0.0.1:8123"
 
-    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda: FakeMetadata())
     monkeypatch.setattr(
         server,
         "_request_json",
@@ -1543,7 +1543,7 @@ async def test_mcp_server_run_still_sends_session_end_hook_on_failure(monkeypatc
     async def fake_run(*_args) -> None:
         raise RuntimeError("stdio disconnected")
 
-    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda workspace_root, cwd=None: FakeMetadata())
+    monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", lambda: FakeMetadata())
     monkeypatch.setattr(
         server,
         "_request_json",
@@ -1650,7 +1650,7 @@ async def test_mcp_server_health_monitor_clears_daemon_and_starts_recovery_on_pr
     allow_recovery = threading.Event()
     refreshed_daemon = object()
 
-    def fake_recovery(workspace_root: str | None, cwd=None):
+    def fake_recovery():
         recovery_started.set()
         allow_recovery.wait(2)
         return refreshed_daemon
@@ -1686,7 +1686,7 @@ async def test_mcp_server_health_monitor_does_not_trigger_when_probe_succeeds(mo
 
     recovery_started = threading.Event()
 
-    def fake_recovery(workspace_root: str | None, cwd=None):
+    def fake_recovery():
         recovery_started.set()
         return object()
 

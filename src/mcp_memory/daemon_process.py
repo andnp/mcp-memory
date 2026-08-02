@@ -106,14 +106,12 @@ def read_daemon_metadata(metadata_path: Path) -> DaemonMetadata | None:
         return None
 
 
-def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> DaemonSpawnDetails:
+def spawn_daemon_process(host: str, port: int) -> DaemonSpawnDetails:
     command = [
         sys.executable,
         "-m",
         "mcp_memory.cli",
         "daemon",
-        "--workspace-root",
-        str(workspace_root),
         "--host",
         host,
         "--port",
@@ -127,13 +125,12 @@ def spawn_daemon_process(workspace_root: Path, host: str, port: int) -> DaemonSp
         startup_log.write(
             "\n=== daemon spawn "
             f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
-            f"pid=pending host={host} port={port} cwd={workspace_root} ===\n"
+            f"pid=pending host={host} port={port} ===\n"
         )
         startup_log.write(f"command: {' '.join(command)}\n")
         startup_log.flush()
         process = subprocess.Popen(
             command,
-            cwd=str(workspace_root),
             stdout=subprocess.DEVNULL,
             stderr=startup_log,
             stdin=subprocess.DEVNULL,

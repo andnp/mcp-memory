@@ -195,14 +195,12 @@ async def _run_record_thought_writeback_flush_loop(
 
 
 def create_daemon_app(
-    workspace_root_override: str | None = None,
-    cwd: Path | None = None,
     host: str | None = None,
     port: int | None = None,
     *,
     enable_idle_shutdown: bool = False,
 ):
-    spec = resolve_global_daemon_bootstrap_spec(workspace_root_override, cwd)
+    spec = resolve_global_daemon_bootstrap_spec()
     daemon_host = host or spec.config.daemon.host
     if port is None:
         daemon_port = spec.config.daemon.port

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import click
 
 
-type DaemonStartAction = Callable[[bool, str | None, str, int | None, bool], None]
-type DaemonCommandAction = Callable[[str | None], None]
+type DaemonStartAction = Callable[[bool, str, int | None, bool], None]
+type DaemonCommandAction = Callable[[], None]
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,6 @@ class DaemonCommandFamily:
 
 
 def build_daemon_command_family(
-    workspace_root_option,
     *,
     start_daemon: DaemonStartAction,
     print_daemon_status: DaemonCommandAction,
@@ -28,44 +27,39 @@ def build_daemon_command_family(
     restart_daemon_command: DaemonCommandAction,
 ) -> DaemonCommandFamily:
     @click.group(name="daemon", invoke_without_command=True)
-    @workspace_root_option
     @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
     @click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
     @click.option("--internal-preflight-done", is_flag=True, hidden=True, help="Internal: skip the reclaim guard (set by the auto-start spawner).")
     @click.pass_context
-    def daemon_group(ctx: click.Context, workspace_root: str | None, host: str, port: int | None, internal_preflight_done: bool) -> None:
+    def daemon_group(ctx: click.Context, host: str, port: int | None, internal_preflight_done: bool) -> None:
         """Run and manage the global daemon."""
         if ctx.invoked_subcommand is not None:
             return
-        start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port, internal_preflight_done)
+        start_daemon(bool(ctx.obj.get("debug", False)), host, port, internal_preflight_done)
 
     @daemon_group.command(name="start")
-    @workspace_root_option
     @click.option("--host", default="127.0.0.1", show_default=True, help="Daemon bind host")
     @click.option("--port", default=None, show_default="configured", type=int, help="Daemon bind port (use 0 for an ephemeral port)")
     @click.option("--internal-preflight-done", is_flag=True, hidden=True, help="Internal: skip the reclaim guard (set by the auto-start spawner).")
     @click.pass_context
-    def daemon_start(ctx: click.Context, workspace_root: str | None, host: str, port: int | None, internal_preflight_done: bool) -> None:
+    def daemon_start(ctx: click.Context, host: str, port: int | None, internal_preflight_done: bool) -> None:
         """Start the global daemon."""
-        start_daemon(bool(ctx.obj.get("debug", False)), workspace_root, host, port, internal_preflight_done)
+        start_daemon(bool(ctx.obj.get("debug", False)), host, port, internal_preflight_done)
 
     @daemon_group.command(name="status")
-    @workspace_root_option
-    def daemon_status(workspace_root: str | None) -> None:
+    def daemon_status() -> None:
         """Print the current global daemon status."""
-        print_daemon_status(workspace_root)
+        print_daemon_status()
 
     @daemon_group.command(name="stop")
-    @workspace_root_option
-    def daemon_stop(workspace_root: str | None) -> None:
+    def daemon_stop() -> None:
         """Stop the global daemon if it is running."""
-        stop_daemon_command(workspace_root)
+        stop_daemon_command()
 
     @daemon_group.command(name="restart")
-    @workspace_root_option
-    def daemon_restart(workspace_root: str | None) -> None:
+    def daemon_restart() -> None:
         """Restart the global daemon and print the active transport endpoint."""
-        restart_daemon_command(workspace_root)
+        restart_daemon_command()
 
     return DaemonCommandFamily(
         group=daemon_group,

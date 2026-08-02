@@ -492,7 +492,7 @@ def test_mcp_server_request_json_refreshes_daemon_metadata_after_timeout(monkeyp
     server._session_id = "session-123"
 
     request_calls: list[int] = []
-    ensure_calls: list[str | None] = []
+    ensure_calls: list[bool] = []
 
     def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
         del timeout_seconds
@@ -507,9 +507,8 @@ def test_mcp_server_request_json_refreshes_daemon_metadata_after_timeout(monkeyp
             raise TimeoutError("daemon_request_timed_out")
         return {"status": "ok", "metadata_pid": metadata.pid}
 
-    def _fake_ensure_daemon_started(workspace_root, cwd=None):
-        del cwd
-        ensure_calls.append(workspace_root)
+    def _fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return fresh_metadata
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
@@ -519,7 +518,7 @@ def test_mcp_server_request_json_refreshes_daemon_metadata_after_timeout(monkeyp
 
     assert result == {"status": "ok", "metadata_pid": fresh_metadata.pid}
     assert request_calls == [stale_metadata.pid, fresh_metadata.pid]
-    assert ensure_calls == ["demo-workspace"]
+    assert ensure_calls == [True]
     assert server._daemon == fresh_metadata
 
 
@@ -544,16 +543,15 @@ def test_mcp_server_request_json_raises_after_bounded_retries(monkeypatch) -> No
     server._daemon = initial_metadata
 
     request_calls: list[int] = []
-    ensure_calls: list[str | None] = []
+    ensure_calls: list[bool] = []
 
     def _fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
         del path, payload, timeout_seconds
         request_calls.append(metadata.pid)
         raise TimeoutError("daemon_request_timed_out")
 
-    def _fake_ensure_daemon_started(workspace_root, cwd=None):
-        del cwd
-        ensure_calls.append(workspace_root)
+    def _fake_ensure_daemon_started():
+        ensure_calls.append(True)
         return refreshed_metadata
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
@@ -563,7 +561,7 @@ def test_mcp_server_request_json_raises_after_bounded_retries(monkeypatch) -> No
         server._request_json_with_recovery("/internal/tools/search_memory_records", {"query": "auth"})
 
     assert request_calls == [initial_metadata.pid, refreshed_metadata.pid, refreshed_metadata.pid]
-    assert ensure_calls == ["demo-workspace", "demo-workspace"]
+    assert ensure_calls == [True, True]
     assert server._daemon == refreshed_metadata
 
 
@@ -595,8 +593,7 @@ def test_mcp_server_request_json_with_recovery_respects_overall_client_deadline(
         request_timeouts.append(timeout_seconds)
         raise TimeoutError("daemon_request_timed_out")
 
-    def _fake_ensure_daemon_started(workspace_root, cwd=None):
-        del workspace_root, cwd
+    def _fake_ensure_daemon_started():
         return refreshed_metadata
 
     monkeypatch.setattr("mcp_memory.server.request_daemon_json", _fake_request_daemon_json)
@@ -728,18 +725,10 @@ def test_create_daemon_app_uses_global_bootstrap_spec_without_workspace_identity
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
 
-    captured: dict[str, object] = {}
-
-    def _fake_resolve_global_daemon_bootstrap_spec(
-        workspace_root_override: str | None = None,
-        cwd=None,
-    ) -> GlobalDaemonBootstrapSpec:
-        captured["workspace_root_override"] = workspace_root_override
-        captured["cwd"] = cwd
+    def _fake_resolve_global_daemon_bootstrap_spec() -> GlobalDaemonBootstrapSpec:
         return GlobalDaemonBootstrapSpec(
             memory_path=tmp_path / "memories",
             config=Config(),
-            workspace_root=workspace,
             lock_path=tmp_path / "daemon.lock",
         )
 
@@ -748,13 +737,9 @@ def test_create_daemon_app_uses_global_bootstrap_spec_without_workspace_identity
         _fake_resolve_global_daemon_bootstrap_spec,
     )
 
-    app = create_daemon_app(workspace_root_override=str(workspace), host="127.0.0.1", port=4242)
+    app = create_daemon_app(host="127.0.0.1", port=4242)
 
     assert app.title == "mcp-memory daemon"
-    assert captured == {
-        "workspace_root_override": str(workspace),
-        "cwd": None,
-    }
 
 
 @pytest.mark.asyncio
