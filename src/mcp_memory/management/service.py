@@ -7,14 +7,11 @@ import logging
 import os
 from pathlib import Path
 import time
-from time import perf_counter
 from typing import Any, cast
-from uuid import uuid4
 
 from mcp_memory.application.memory_embedding_maintenance import MemoryEmbeddingMaintenance
 from mcp_memory.context import ManagementContext, ManagementRuntimeCapabilities
 from mcp_memory.core import MemoryPipeline
-from mcp_memory.core.journal_operations import RecordThoughtOperation
 from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 from mcp_memory.management.analytics_reporting import build_nerd_metrics
 from mcp_memory.management.context_resources import (
@@ -35,6 +32,14 @@ from mcp_memory.management.mutation_history_service import (
     MutationHistoryService,
     MutationHistoryServiceDependencies,
 )
+from mcp_memory.management.memory_service import (
+    MemoryService,
+    MemoryServiceDependencies,
+    _SLOW_MEMORY_TOOL_WARNING_MS,
+    _USE_SERVICE_WORKSPACE,
+    _resolve_log_workspace_id,
+    _resolve_service_workspace_id,  # noqa: F401 - retained for management helper compatibility
+)
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
 from mcp_memory.management.task_reporting_service import (
@@ -47,19 +52,15 @@ from mcp_memory.management.task_administration import (
 )
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
-from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     AIConversationListPayload,
-    AIConversationPayload,
     CacheHealthPayload,
     CacheMetricsPayload,
     EmbeddingIntegrityEventSnapshotPayload,
     EmbeddingIntegrityEventSummaryPayload,
     HealthPayload,
     MemoryListPayload,
-    MemoryDetailPayload,
-    MemorySearchResultPayload,
     MemorySearchPayload,
     MemoryToolLatencyPayload,
     MutationHistoryDetailPayload,
@@ -89,19 +90,12 @@ from mcp_memory.management.reporting_rows import count_recent_conversation_statu
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
-from mcp_memory.runtime_log_store import _AllWorkspacesSentinel
 from mcp_memory.serialization import (
-    compact_memory_record_payload,
-    link_payload,
-    memory_record_payload,
-    search_result_payload,
     task_payload,
 )
 from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
-_USE_SERVICE_WORKSPACE = object()
-_SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 _LOW_CONVERSION_DEFAULT_MIN_SEARCH_COUNT = 3
 _LOW_CONVERSION_DEFAULT_MAX_RATE = 0.25
 _QUALITY_CLEANUP_CRITERIA: dict[str, tuple[str, str, int]] = {
@@ -160,24 +154,6 @@ _build_default_provider_usage = _context_build_default_provider_usage
 _build_default_embedding_integrity_events = _context_build_default_embedding_integrity_events
 
 
-def _resolve_log_workspace_id(
-    service_workspace_id: str | None,
-    workspace_id: str | None | object,
-) -> str | None | _AllWorkspacesSentinel:
-    if workspace_id is _USE_SERVICE_WORKSPACE:
-        return service_workspace_id
-    return cast(str | None | _AllWorkspacesSentinel, workspace_id)
-
-
-def _resolve_service_workspace_id(
-    service_workspace_id: str | None,
-    workspace_id: str | None | object,
-) -> str | None:
-    if workspace_id is _USE_SERVICE_WORKSPACE:
-        return service_workspace_id
-    return cast(str | None, workspace_id)
-
-
 def _coerce_transport_diagnostics_payload(snapshot: object) -> TransportDiagnosticsPayload:
     if snapshot is None:
         return TransportDiagnosticsPayload()
@@ -209,6 +185,7 @@ class ManagementService:
         self._db_manager = cast(Any, memory.db_manager)
         self._storage_backend = capabilities.storage_backend or "sqlite"
         self._workspace_id = memory.workspace_id
+        self._config = memory.config
         self._runtime_info = pipeline.runtime_info
         self._journal = pipeline.journal
         self._task_queue = pipeline.task_queue
@@ -230,7 +207,7 @@ class ManagementService:
             or getattr(self._relational_search, "_embedding_maintenance", None)
             or MemoryEmbeddingMaintenance.from_context(ctx)
         ))
-        self._retrieval = (
+        retrieval = (
             build_memory_retrieval_facade(
                 self._repository,
                 config=memory.config,
@@ -280,7 +257,23 @@ class ManagementService:
                 action_store=self._action_store,
             )
         )
-        self._config = memory.config
+        self._memory_service = MemoryService(
+            MemoryServiceDependencies(
+                workspace_id=self._workspace_id,
+                journal=self._journal,
+                task_queue=self._task_queue,
+                config=self._config,
+                storage_backend=self._storage_backend,
+                read_cache=self._read_cache,
+                memory_queries=self._memory_queries,
+                repository=self._repository,
+                relational_search=self._relational_search,
+                retrieval=retrieval,
+                provider_usage_repo=self._provider_usage,
+                retrieval_telemetry=self._retrieval_telemetry,
+                runtime_logs=self._runtime_logs,
+            )
+        )
         self._ai_json_provider = provider.ai_json_provider
         self._ai_agent_provider = provider.ai_agent_provider
         self._ai_provider_registry = provider.ai_provider_registry or {}
@@ -521,65 +514,16 @@ class ManagementService:
         status: str | None = None,
         limit: int = 50,
     ) -> AIConversationListPayload:
-        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
-        return AIConversationListPayload(
-            conversations=[
-                AIConversationPayload(
-                    id=record.id,
-                    request_id=record.request_id,
-                    attempt=record.attempt,
-                    workspace_id=record.workspace_id,
-                    task_name=record.task_name,
-                    task_id=record.task_id,
-                    provider_key=record.provider_key,
-                    provider_name=record.provider_name,
-                    model_name=record.model_name,
-                    subprocess_pid=record.subprocess_pid,
-                    prompt_text=record.prompt_text,
-                    response_text=record.response_text,
-                    parsed=record.parsed,
-                    status=record.status,
-                    error_text=record.error_text,
-                    reason_category=record.reason_category,
-                    reason_code=record.reason_code,
-                    retry_delay_seconds=record.retry_delay_seconds,
-                    started_at=record.started_at,
-                    completed_at=record.completed_at,
-                    duration_seconds=record.duration_seconds,
-                )
-                for record in self._provider_usage.list_conversations(
-                    workspace_id=effective_workspace_id,
-                    request_id=request_id,
-                    task_name=task_name,
-                    status=status,
-                    limit=limit,
-                )
-            ]
+        return self._memory_service.list_ai_conversations(
+            workspace_id=workspace_id,
+            request_id=request_id,
+            task_name=task_name,
+            status=status,
+            limit=limit,
         )
 
     def get_memory_detail(self, memory_id: str):
-        if self._memory_queries is None:
-            raise ValueError("repository_not_initialized")
-
-        record = self._memory_queries.get_memory(memory_id)
-        if record is None:
-            raise ValueError("memory_not_found")
-
-        outgoing = self._memory_queries.get_links(memory_id, direction="outgoing")
-        incoming = self._memory_queries.get_links(memory_id, direction="incoming")
-        superseded = [
-            memory_record_payload(target)
-            for target in self._memory_queries.get_superseded_records(memory_id)
-        ]
-
-        return MemoryDetailPayload(
-            record=memory_record_payload(record),
-            relationships={
-                "incoming": [link_payload(link) for link in incoming],
-                "outgoing": [link_payload(link) for link in outgoing],
-            },
-            superseded=superseded,
-        )
+        return self._memory_service.get_memory_detail(memory_id)
 
     def list_mutation_history(
         self,
@@ -667,23 +611,12 @@ class ManagementService:
         link_type: str,
         context: str = "",
     ) -> dict:
-        if self._memory_queries is None:
-            raise ValueError("repository_not_initialized")
-
-        source = self._memory_queries.get_memory(source_id)
-        if source is None:
-            raise ValueError("source_memory_not_found")
-        if not target_id.startswith("ext:") and self._memory_queries.get_memory(target_id) is None:
-            raise ValueError("target_memory_not_found")
-
-        assert self._repository is not None
-        link = self._repository.add_link(
+        return self._memory_service.create_memory_link(
             source_id=source_id,
             target_id=target_id,
             link_type=link_type,
             context=context,
         )
-        return {"status": "created", "link": link_payload(link)}
 
     def delete_memory_link(
         self,
@@ -692,18 +625,11 @@ class ManagementService:
         target_id: str,
         link_type: str,
     ) -> dict:
-        if self._memory_queries is None:
-            raise ValueError("repository_not_initialized")
-
-        assert self._repository is not None
-        deleted = self._repository.remove_link(
+        return self._memory_service.delete_memory_link(
             source_id=source_id,
             target_id=target_id,
             link_type=link_type,
         )
-        if not deleted:
-            raise ValueError("link_not_found")
-        return {"status": "deleted"}
 
     def list_tasks(
         self,
@@ -926,23 +852,7 @@ class ManagementService:
         *,
         workspace_id: str | None | object = _USE_SERVICE_WORKSPACE,
     ) -> dict[str, object]:
-        if self._journal.journal is None:
-            raise ValueError("journal_not_initialized")
-        effective_workspace_id = _resolve_service_workspace_id(self._workspace_id, workspace_id)
-        suppression_config = None if self._config is None else self._config.ingest_suppression
-        cache_state = resolve_shared_mode_cache_state(
-            self._config,
-            storage_backend=self._storage_backend,
-            read_cache=self._read_cache,
-        )
-        return RecordThoughtOperation(
-            self._journal.journal,
-            self._task_queue.task_queue,
-            effective_workspace_id,
-            suppression_config,
-            writeback_cache=cache_state.writeback_cache,
-            max_outbox_entries=cache_state.max_outbox_entries,
-        ).execute(content)
+        return self._memory_service.record_thought(content, workspace_id=workspace_id)
 
     def list_memories(
         self,
@@ -951,16 +861,11 @@ class ManagementService:
         status: str | None = None,
         limit: int = 20,
     ) -> MemoryListPayload:
-        if self._memory_queries is None:
-            return MemoryListPayload()
-        records = self._memory_queries.list_memories(
+        return self._memory_service.list_memories(
             workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,
             limit=limit,
-        )
-        return MemoryListPayload(
-            records=[compact_memory_record_payload(record) for record in records]
         )
 
     def search_memories(
@@ -974,54 +879,14 @@ class ManagementService:
         limit: int = 10,
         debug: bool = False,
     ) -> MemorySearchPayload:
-        if self._relational_search is None:
-            return MemorySearchPayload()
-        if self._retrieval is None:
-            return MemorySearchPayload()
-        started_at = perf_counter()
-        results = SearchMemoryRecordsOperation(self._retrieval).execute(
+        return self._memory_service.search_memories(
             query=query,
-            # Management search is global; workspace context must not filter results.
-            workspace_id=None,
-            limit=limit,
-            adaptive_limit=False,
-            ranking_workspace_id=workspace_id,
+            workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,
             include_superseded=include_superseded,
+            limit=limit,
             debug=debug,
-        )
-        surfaced_memory_ids = [result.memory_id for result in results]
-        touch_last_surfaced = getattr(self._repository, "touch_last_surfaced", None)
-        if surfaced_memory_ids and callable(touch_last_surfaced):
-            touch_last_surfaced(
-                surfaced_memory_ids,
-                datetime.now(UTC).isoformat(),
-                best_effort=True,
-            )
-        duration_ms = (perf_counter() - started_at) * 1000.0
-        self._retrieval_telemetry.record_search(
-            invocation_id=str(uuid4()),
-            caller_kind="operator",
-            query=query,
-            surfaced_memory_ids=[result.memory_id for result in results],
-            duration_ms=duration_ms,
-        )
-        self._log_slow_memory_tool_operation(
-            tool_name="management.search_memories",
-            duration_ms=duration_ms,
-            data={
-                "query": query,
-                "result_count": len(results),
-                "storage_backend": self._storage_backend,
-                "workspace_id": workspace_id,
-            },
-        )
-        return MemorySearchPayload(
-            results=[
-                MemorySearchResultPayload(**search_result_payload(result))
-                for result in results
-            ]
         )
 
     def _summarize_memory_tool_latency(self, *, window_minutes: int) -> MemoryToolLatencyPayload:
@@ -1030,24 +895,6 @@ class ManagementService:
             workspace_id=self._workspace_id,
             window_minutes=window_minutes,
             slow_threshold_ms=_SLOW_MEMORY_TOOL_WARNING_MS,
-        )
-
-    def _log_slow_memory_tool_operation(
-        self,
-        *,
-        tool_name: str,
-        duration_ms: float,
-        data: dict[str, object],
-    ) -> None:
-        if duration_ms < _SLOW_MEMORY_TOOL_WARNING_MS:
-            return
-        self._runtime_logs.write_log(
-            source="memory-tool",
-            logger_name=__name__,
-            level="WARNING",
-            message=f"Slow {tool_name} operation",
-            created_at=time.time(),
-            data={"tool_name": tool_name, "duration_ms": round(duration_ms, 3)} | data,
         )
 
     def list_logs(
