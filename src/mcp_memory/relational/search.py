@@ -83,6 +83,12 @@ class SearchExecutionDiagnostics:
     semantic_candidate_count: int = 0
     semantic_candidate_strategy: str = "kernel"
     vector_search: dict[str, object] | None = None
+    kernel_diagnostics: list[str] = field(default_factory=list)
+    cache_diagnostics: list[str] = field(default_factory=list)
+    failure_count: int = 0
+    missing_record_count: int = 0
+    degraded: bool = False
+    trace: dict[str, object] | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -93,6 +99,12 @@ class SearchExecutionDiagnostics:
             "vector_search": (
                 None if self.vector_search is None else dict(self.vector_search)
             ),
+            "kernel_diagnostics": list(self.kernel_diagnostics),
+            "cache_diagnostics": list(self.cache_diagnostics),
+            "failure_count": self.failure_count,
+            "missing_record_count": self.missing_record_count,
+            "degraded": self.degraded,
+            "trace": None if self.trace is None else dict(self.trace),
         }
 
 
@@ -253,7 +265,6 @@ class RelationalMemorySearchService:
         side_effect_free: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
         """Delegate retrieval to searchkernel while preserving the legacy payload."""
-        _ = debug, side_effect_free
         started_at = time.perf_counter()
         outcome = self._retrieval_facade.search_sync(
             query,
@@ -274,7 +285,17 @@ class RelationalMemorySearchService:
         diagnostics = SearchExecutionDiagnostics(
             timing_ms={
                 "total": round((time.perf_counter() - started_at) * 1000.0, 3)
-            }
+            },
+            kernel_diagnostics=list(outcome.diagnostics),
+            cache_diagnostics=list(outcome.cache_diagnostics),
+            failure_count=len(outcome.failures),
+            missing_record_count=len(outcome.missing_record_ids),
+            degraded=outcome.degraded,
+            trace=(
+                outcome.trace.to_dict()
+                if debug and outcome.trace is not None
+                else None
+            ),
         )
         return results, diagnostics
 

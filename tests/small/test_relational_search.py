@@ -253,6 +253,32 @@ def test_service_search_diagnostics_are_kernel_compatible_total_only(db_manager)
     assert set(diagnostics.timing_ms) == {"total"}
 
 
+def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    repository.create_memory(
+        title="Kernel diagnostics note",
+        content="A diagnostic result should preserve kernel cache and failure details.",
+        memory_type="fact",
+        workspace_ids=["workspace-a"],
+    )
+    service = RelationalMemorySearchService(repository, Config())
+
+    outcome = service._retrieval_facade.search_sync("diagnostic result")
+    results, diagnostics = service.search_memories_with_diagnostics(
+        "diagnostic result",
+        workspace_id="workspace-a",
+        debug=True,
+    )
+
+    assert results
+    assert diagnostics.kernel_diagnostics == list(outcome.diagnostics)
+    assert diagnostics.cache_diagnostics == list(outcome.cache_diagnostics)
+    assert diagnostics.failure_count == len(outcome.failures)
+    assert diagnostics.missing_record_count == len(outcome.missing_record_ids)
+    assert diagnostics.degraded is outcome.degraded
+    assert diagnostics.to_payload()["kernel_diagnostics"] == list(outcome.diagnostics)
+
+
 def test_read_memory_preserves_access_and_superseded_breadcrumbs(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
