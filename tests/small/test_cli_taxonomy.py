@@ -782,7 +782,7 @@ def test_admin_agent_run_forwards_to_existing_single_agent_helper(monkeypatch) -
 def test_admin_agent_run_shows_redirected_manual_maintenance_alias(monkeypatch) -> None:
     runner = CliRunner()
 
-    payload = {
+    payload: dict[str, object] = {
         "status": "enqueued",
         "created": True,
         "task": {
