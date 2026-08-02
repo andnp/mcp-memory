@@ -1,10 +1,94 @@
-from pathlib import Path
+import ast
 import importlib
+from pathlib import Path
 
 import pytest
 
 
 pytestmark = pytest.mark.small
+
+
+FORBIDDEN_CORE_IMPORT_ROOTS = (
+    "mcp_memory.application",
+    "mcp_memory.management",
+    "mcp_memory.mcp",
+    "mcp_memory.storage",
+)
+
+# These are narrow migration exceptions for known transitional edges. Keep
+# them file-and-module specific: they are debt to remove, not package-wide
+# exemptions for future core imports.
+ALLOWED_TRANSITIONAL_CORE_IMPORTS = {
+    ("ingest_claim_lifecycle.py", "mcp_memory.mcp.internal_ingest_keys"),
+    ("journal_operations.py", "mcp_memory.storage.shared_read_cache"),
+    (
+        "task_handlers/embedding_repair.py",
+        "mcp_memory.application.memory_embedding_maintenance",
+    ),
+    ("task_handlers/ingest.py", "mcp_memory.mcp.validation"),
+    ("task_handlers/maintenance_framework.py", "mcp_memory.management.agent_run_reporting"),
+    ("task_handlers/maintenance_framework.py", "mcp_memory.management.task_sampling_summary"),
+    ("task_handlers/maintenance_housekeeping.py", "mcp_memory.storage.session"),
+    ("task_handlers/maintenance_work_items.py", "mcp_memory.management.models"),
+    ("task_handlers/tool_loop.py", "mcp_memory.mcp.internal_tools"),
+    ("task_handlers/tool_loop.py", "mcp_memory.mcp.transport"),
+    ("tasks.py", "mcp_memory.storage.sqlite_task_queue"),
+}
+
+
+def test_core_import_direction_allows_only_documented_transitional_edges() -> None:
+    core_root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
+    violations = []
+    for file_path in sorted(core_root.rglob("*.py")):
+        violations.extend(_find_core_import_violations(file_path, ast.parse(file_path.read_text())))
+
+    assert violations == []
+
+
+def test_core_import_direction_detects_unallowlisted_imports() -> None:
+    core_root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
+    path = core_root / "new_module.py"
+    tree = ast.parse("from mcp_memory.management import models\n")
+
+    assert _find_core_import_violations(path, tree) == [
+        "new_module.py: mcp_memory.management",
+    ]
+
+
+def _find_core_import_violations(path: Path, tree: ast.AST) -> list[str]:
+    core_root = Path(__file__).resolve().parents[2] / "src" / "mcp_memory" / "core"
+    relative_path = path.relative_to(core_root).as_posix()
+    violations = []
+    for node in ast.walk(tree):
+        imported_modules = _imported_modules(node)
+        for imported_module in imported_modules:
+            if not _is_forbidden_core_import(imported_module):
+                continue
+            if (relative_path, imported_module) not in ALLOWED_TRANSITIONAL_CORE_IMPORTS:
+                violations.append(f"{relative_path}: {imported_module}")
+    return violations
+
+
+def _imported_modules(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    if not isinstance(node, ast.ImportFrom) or node.module is None:
+        return []
+
+    if _is_forbidden_core_import(node.module):
+        return [node.module]
+    return [
+        f"{node.module}.{alias.name}"
+        for alias in node.names
+        if _is_forbidden_core_import(f"{node.module}.{alias.name}")
+    ]
+
+
+def _is_forbidden_core_import(module: str) -> bool:
+    return any(
+        module == root or module.startswith(f"{root}.")
+        for root in FORBIDDEN_CORE_IMPORT_ROOTS
+    )
 
 
 def test_source_tree_contains_no_legacy_src_imports() -> None:
