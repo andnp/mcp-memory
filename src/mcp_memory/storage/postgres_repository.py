@@ -1670,7 +1670,8 @@ class PostgresRelationalMemoryRepository:
                 [],
             ),
             "generic_summary_count": (
-                "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %'",
+                "(LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %' OR "
+                "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'added %')",
                 [],
             ),
             "untagged_observation_count": (

@@ -487,7 +487,25 @@ def _identity_record(record: Mapping[str, Any]) -> dict[str, Any]:
 def _seed_fields(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(
         field
-        for field in ("title", "content", "summary", "type", "status", "tags", "workspace_ids", "metadata")
+        for field in (
+            "title",
+            "content",
+            "summary",
+            "type",
+            "status",
+            "tags",
+            "workspace_ids",
+            "metadata",
+            "read_count",
+            "last_surfaced_at",
+            "content_size_chars",
+            "size_band",
+            "oversized_for_curator",
+            "retrieval_friction_flags",
+            "selection_reason",
+            "selection_signals",
+            "selection_scores",
+        )
         if field in record
     )
 

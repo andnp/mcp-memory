@@ -14,6 +14,7 @@ from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFron
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
+from mcp_memory.core.task_handlers.curator_support import curator_seed_payload_item
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.mutation_history import ProtectionMode, is_protection_active
@@ -63,7 +64,15 @@ async def run_curator_verified_campaign(
     frontier_args = {
         "family": "curator",
         "strategy": seed_batch.strategy_used,
-        "seed_reads": (_record_read(record) for record in sampled_records),
+        "seed_reads": (
+            _record_read(
+                record,
+                selection_reason=seed_batch.strategy_selection_reason,
+                selection_signals=_strategy_signals(seed_batch),
+                selection_scores=seed_batch.strategy_selection_scores,
+            )
+            for record in sampled_records
+        ),
         "support_reads": (_record_read(record) for record in support_records),
         "task_id": _task_uuid(task.id),
     }
@@ -231,7 +240,19 @@ def _disclosure_context(
     return provider_trust, protections, sensitive_fields, True
 
 
-def _record_read(record: Any) -> AcceptedMaintenanceRead:
+def _record_read(
+    record: Any,
+    *,
+    selection_reason: str | None = None,
+    selection_signals: dict[str, float] | None = None,
+    selection_scores: dict[str, float] | None = None,
+) -> AcceptedMaintenanceRead:
+    selection = curator_seed_payload_item(
+        record,
+        selection_reason=selection_reason,
+        selection_signals=selection_signals,
+        selection_scores=selection_scores,
+    )
     return AcceptedMaintenanceRead(
         record={
             "id": record.id,
@@ -243,8 +264,30 @@ def _record_read(record: Any) -> AcceptedMaintenanceRead:
             "tags": list(record.tags),
             "workspace_ids": list(getattr(record, "workspace_ids", ())),
             "metadata": dict(getattr(record, "metadata", {})),
+            **{
+                key: selection[key]
+                for key in (
+                    "read_count",
+                    "last_surfaced_at",
+                    "content_size_chars",
+                    "size_band",
+                    "oversized_for_curator",
+                    "retrieval_friction_flags",
+                    "selection_reason",
+                    "selection_signals",
+                    "selection_scores",
+                )
+            },
         }
     )
+
+
+def _strategy_signals(seed_batch: Any) -> dict[str, float]:
+    snapshot = getattr(seed_batch, "selector_feature_snapshot", None)
+    if not isinstance(snapshot, dict):
+        return {}
+    signals = snapshot.get("strategy_signals")
+    return dict(signals) if isinstance(signals, dict) else {}
 
 
 def _task_uuid(task_id: str) -> UUID | None:

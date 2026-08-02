@@ -9,6 +9,7 @@ from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
+    retrieval_friction_flags,
     select_curator_seed_batch,
     select_curator_support_records,
 )
@@ -19,12 +20,18 @@ from mcp_memory.relational.repository import RelationalMemoryRecord
 pytestmark = pytest.mark.small
 
 
-def _record(memory_id: str, *, updated_at: str, tags: list[str] | None = None) -> RelationalMemoryRecord:
+def _record(
+    memory_id: str,
+    *,
+    updated_at: str,
+    tags: list[str] | None = None,
+    summary: str | None = None,
+) -> RelationalMemoryRecord:
     return RelationalMemoryRecord(
         id=memory_id,
         title=memory_id,
         content=f"Durable content for {memory_id}.",
-        summary=f"Summary for {memory_id}.",
+        summary=summary or f"Summary for {memory_id}.",
         type="fact",
         status="active",
         created_at=updated_at,
@@ -95,6 +102,7 @@ def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> Non
         "never-surfaced": [],
         "oversized/thin": [],
         "orphan/low-support": [],
+        "quality-signal": [],
         "seeded-random": [],
     })
     ctx: Any = SimpleNamespace(
@@ -112,11 +120,28 @@ def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> Non
         "never-surfaced",
         "oversized/thin",
         "orphan/low-support",
+        "quality-signal",
         "seeded-random",
     }
     assert all("workspace_id" not in call for call in repository.calls)
     assert all(call["seed"] == "curator-whole-corpus-task" for call in repository.calls)
     assert batch.records[0].workspace_ids == ["workspace-other"]
+
+
+def test_retrieval_friction_flags_match_generic_summary_forms() -> None:
+    covers = _record(
+        "covers-summary",
+        updated_at="2026-01-01T00:00:00+00:00",
+        summary="Covers a broad thing.",
+    )
+    added = _record(
+        "added-summary",
+        updated_at="2026-01-01T00:00:00+00:00",
+        summary="Added a broad thing.",
+    )
+
+    assert "generic_summary" in retrieval_friction_flags(covers)
+    assert "generic_summary" in retrieval_friction_flags(added)
 
 
 def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:
@@ -128,6 +153,7 @@ def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:
         "never-surfaced": [],
         "oversized/thin": [],
         "orphan/low-support": [],
+        "quality-signal": [],
         "seeded-random": [],
     })
     repository.by_id[adjacent.id] = adjacent
@@ -158,6 +184,7 @@ def test_semantic_candidates_use_global_search_seam() -> None:
         "never-surfaced": [],
         "oversized/thin": [],
         "orphan/low-support": [],
+        "quality-signal": [],
         "seeded-random": [anchor],
     })
     repository.by_id[neighbor.id] = neighbor
@@ -195,6 +222,7 @@ def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions()
         "never-surfaced": [],
         "oversized/thin": [],
         "orphan/low-support": [],
+        "quality-signal": [],
         "seeded-random": [],
     })
     ctx: Any = SimpleNamespace(
@@ -229,8 +257,8 @@ def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions()
     assert direct.records[0].id == second.id
     assert direct.candidate_count == 1
     assert direct.candidate_count == len(direct.records)
-    assert {call["limit"] for call in repository.calls[:5]} == {2}
-    assert {call["limit"] for call in repository.calls[5:]} == {50}
+    assert {call["limit"] for call in repository.calls[:6]} == {2}
+    assert {call["limit"] for call in repository.calls[6:]} == {50}
 
 
 def test_legacy_task_record_handles_large_candidate_pool_without_oversized_records() -> None:
@@ -243,6 +271,7 @@ def test_legacy_task_record_handles_large_candidate_pool_without_oversized_recor
         "never-surfaced": [],
         "oversized/thin": [],
         "orphan/low-support": [],
+        "quality-signal": [],
         "seeded-random": [],
     })
     ctx: Any = SimpleNamespace(

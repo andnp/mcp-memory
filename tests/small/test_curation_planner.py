@@ -12,6 +12,8 @@ from mcp_memory.core.curation_models import (
     RetentionDecision,
     RetentionReason,
 )
+from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
+from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_validation import CurationRetryFeedback
 from mcp_memory.core.curation_harness import CurationPlannerTools
 from mcp_memory.core.curation_planner import (
@@ -103,6 +105,55 @@ def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> N
     assert retry["retry_feedback"]["reason_code"] == "formatting_only"
     assert len(retry["retry_feedback"]["message"]) == 1000
     assert retry["retry_feedback"]["message"].startswith("fix the JSON")
+
+
+def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
+    memory_id = uuid4()
+    context = build_context_packet(
+        family="curator",
+        strategy="quality-signal",
+        seed_reads=[
+            AcceptedMaintenanceRead(
+                {
+                    "id": memory_id,
+                    "title": "A focused memory",
+                    "content": "Authoritative content",
+                    "summary": "Added a focused memory.",
+                    "type": "observation",
+                    "status": "active",
+                    "tags": [],
+                    "workspace_ids": [],
+                    "read_count": 2,
+                    "last_surfaced_at": "2026-01-01T00:00:00+00:00",
+                    "content_size_chars": 22,
+                    "size_band": "target",
+                    "retrieval_friction_flags": ["generic_summary", "untagged_observation"],
+                    "selection_reason": "selected=quality-signal",
+                    "selection_signals": {"quality_signal_share": 0.5},
+                    "selection_scores": {"quality-signal": 0.7},
+                }
+            )
+        ],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+
+    payload = json.loads(
+        _build_planner_prompt(
+            _request(memory_id),
+            CurationPlannerTools(context=context),
+        ).split("\n", 1)[1]
+    )
+    seed = payload["context"]["seeds"][0]
+
+    assert seed["retrieval_friction_flags"] == ["generic_summary", "untagged_observation"]
+    assert seed["read_count"] == 2
+    assert seed["last_surfaced_at"] == "2026-01-01T00:00:00+00:00"
+    assert seed["content_size_chars"] == 22
+    assert seed["size_band"] == "target"
+    assert seed["selection_reason"] == "selected=quality-signal"
+    assert seed["selection_signals"] == {"quality_signal_share": 0.5}
+    assert seed["selection_scores"] == {"quality-signal": 0.7}
+    assert seed["content"] == "Authoritative content"
 
 
 def test_planner_prompt_preserves_schema_retry_diagnostics() -> None:

@@ -16,6 +16,7 @@ from mcp_memory.core.sampling import (
     COLD_STORAGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
+    QUALITY_SIGNAL_STRATEGY,
     SEMANTIC_STRATEGY,
     SamplingBatch,
 )
@@ -55,6 +56,7 @@ CURATOR_ALLOWED_STRATEGIES = (
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
+    QUALITY_SIGNAL_STRATEGY,
 )
 CURATOR_STRATEGY_WEIGHTS = {
     SEMANTIC_STRATEGY: 2,
@@ -63,12 +65,14 @@ CURATOR_STRATEGY_WEIGHTS = {
     NEVER_SURFACED_STRATEGY: 2,
     ORPHAN_LOW_SUPPORT_STRATEGY: 2,
     BOUNDED_NOISE_STRATEGY: 1,
+    QUALITY_SIGNAL_STRATEGY: 2,
 }
 _CURATOR_BACKEND_STRATEGIES = (
     "oversized/thin",
     COLD_STORAGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     "orphan/low-support",
+    QUALITY_SIGNAL_STRATEGY,
     "seeded-random",
 )
 
@@ -284,7 +288,13 @@ def _select_curator_seed_batch(
     )
 
 
-def curator_seed_payload_item(record) -> dict[str, Any]:
+def curator_seed_payload_item(
+    record,
+    *,
+    selection_reason: str | None = None,
+    selection_signals: dict[str, float] | None = None,
+    selection_scores: dict[str, float] | None = None,
+) -> dict[str, Any]:
     summary_source = record.summary or record.content
     retrieval_flags = retrieval_friction_flags(record)
     content_size_chars = len(record.content.strip())
@@ -298,6 +308,9 @@ def curator_seed_payload_item(record) -> dict[str, Any]:
         "size_band": curator_size_band_for_char_count(content_size_chars),
         "oversized_for_curator": is_oversized_curator_memory(record),
         "retrieval_friction_flags": retrieval_flags,
+        "selection_reason": selection_reason,
+        "selection_signals": dict(selection_signals or {}),
+        "selection_scores": dict(selection_scores or {}),
         "title": truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
         "summary": truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
@@ -442,14 +455,15 @@ def curator_size_band_for_char_count(content_size_chars: int) -> str:
 
 def retrieval_friction_flags(record) -> list[str]:
     flags: list[str] = []
-    normalized_summary = _normalize_curator_text(record.summary)
-    if normalized_summary.startswith("covers ") or normalized_summary.startswith("added "):
+    normalized_summary = _normalize_curator_text(getattr(record, "summary", None))
+    if normalized_summary.startswith(("covers ", "added ")):
         flags.append("generic_summary")
     if record.type == "observation" and not record.tags:
         flags.append("untagged_observation")
     if getattr(record, "last_surfaced_at", None) and record.read_count <= CURATOR_LOW_READ_REVIEW_THRESHOLD:
         flags.append("surfaced_low_read")
-    if record.metadata.get("split_from_memory_id") and len(record.content.strip()) <= CURATOR_THIN_SPLIT_CHILD_MAX_CHARS:
+    metadata = getattr(record, "metadata", {})
+    if isinstance(metadata, dict) and metadata.get("split_from_memory_id") and len(record.content.strip()) <= CURATOR_THIN_SPLIT_CHILD_MAX_CHARS:
         flags.append("thin_split_child")
     if is_oversized_curator_memory(record):
         flags.append("oversized_blob")

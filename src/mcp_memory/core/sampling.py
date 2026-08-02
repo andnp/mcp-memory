@@ -41,6 +41,7 @@ COLD_STORAGE_STRATEGY = "cold-storage"
 NEVER_SURFACED_STRATEGY = "never-surfaced"
 ANOMALY_STRATEGY = "anomaly"
 BOUNDED_NOISE_STRATEGY = "bounded-noise"
+QUALITY_SIGNAL_STRATEGY = "quality-signal"
 GRAPH_BRIDGE_STRATEGY = "graph-bridge"
 ORPHAN_LOW_SUPPORT_STRATEGY = "orphan/low-support"
 COOLDOWN_ESCAPE_STRATEGY = "cooldown-escape"
@@ -52,6 +53,7 @@ ALL_STRATEGIES = (
     NEVER_SURFACED_STRATEGY,
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
+    QUALITY_SIGNAL_STRATEGY,
     GRAPH_BRIDGE_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
@@ -472,6 +474,11 @@ class RouletteProvider(Generic[T]):
             for item in self._candidates
             if item.last_surfaced_at is not None and item.read_count <= CURATOR_LOW_READ_THRESHOLD
         )
+        from mcp_memory.core.task_handlers.curator_support import retrieval_friction_flags
+
+        quality_signal_share = self._share(
+            1 for item in self._candidates if retrieval_friction_flags(item)
+        )
         semantic_cluster_share = self._semantic_cluster_share() if candidate_count > 1 else 0.0
 
         signals = {
@@ -482,6 +489,7 @@ class RouletteProvider(Generic[T]):
             "oversized_share": oversized_share,
             "length_outlier_share": length_outlier_share,
             "retrieval_friction_share": retrieval_friction_share,
+            "quality_signal_share": quality_signal_share,
             "semantic_cluster_share": semantic_cluster_share,
         }
 
@@ -516,6 +524,12 @@ class RouletteProvider(Generic[T]):
                 )
             elif strategy == BOUNDED_NOISE_STRATEGY:
                 scores[strategy] = 0.08 + 0.22 * (1.0 - dominant_signal)
+            elif strategy == QUALITY_SIGNAL_STRATEGY:
+                scores[strategy] = (
+                    0.70 * quality_signal_share
+                    + 0.20 * retrieval_friction_share
+                    + 0.10 * oversized_share
+                )
             else:
                 scores[strategy] = 0.0
         applied_utility_priors = {
@@ -789,6 +803,21 @@ class RouletteProvider(Generic[T]):
             return self._anomaly_candidates()
         if strategy == BOUNDED_NOISE_STRATEGY:
             return self._bounded_noise_candidates()
+        if strategy == QUALITY_SIGNAL_STRATEGY:
+            from mcp_memory.core.task_handlers.curator_support import retrieval_friction_flags
+
+            return sorted(
+                self._candidates,
+                key=lambda item: (
+                    len(retrieval_friction_flags(item)),
+                    item.last_surfaced_at is not None,
+                    -item.read_count,
+                    len(item.content.strip()),
+                    item.updated_at,
+                    item.id,
+                ),
+                reverse=True,
+            )
         if strategy == GRAPH_BRIDGE_STRATEGY:
             return self._graph_bridge_candidates()
         if strategy == ORPHAN_LOW_SUPPORT_STRATEGY:
