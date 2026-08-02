@@ -75,6 +75,7 @@ from mcp_memory.management.models import (
 from mcp_memory.process_termination import send_process_signal as _send_process_signal
 from mcp_memory.process_termination import terminate_process as _terminate_process_with_scope
 from mcp_memory.process_termination import wait_for_process_exit as _wait_for_process_exit
+from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.serialization import (
     task_payload,
 )
@@ -104,6 +105,11 @@ class ManagementService:
         self._controller = controller
         self._db_manager = cast(Any, memory.db_manager)
         self._storage_backend = capabilities.storage_backend or "sqlite"
+        query_adapter = (
+            PostgresManagementQueryAdapter()
+            if self._storage_backend == "postgres"
+            else SQLiteManagementQueryAdapter()
+        )
         self._workspace_id = memory.workspace_id
         self._config = memory.config
         self._runtime_info = pipeline.runtime_info
@@ -153,6 +159,7 @@ class ManagementService:
             TaskReportingServiceDependencies(
                 db_manager=self._db_manager,
                 workspace_id=self._workspace_id,
+                query_adapter=query_adapter,
             )
         )
         self._ai_json_provider = provider.ai_json_provider

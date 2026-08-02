@@ -1,5 +1,6 @@
 from mcp_memory.management.agent_run_reporting import (
     build_agent_run_history_payload,
+    build_recent_agent_runs,
     classify_curator_run,
     CURATOR_NARRATIVE_ONLY,
     CURATOR_OBSERVED_MUTATION,
@@ -12,8 +13,31 @@ from mcp_memory.management.agent_run_reporting import (
 )
 from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
+from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import coerce_task_result_view
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
+
+
+def test_build_recent_agent_runs_uses_explicit_query_adapter() -> None:
+    seen: dict[str, object] = {}
+
+    class ExplicitAdapter:
+        def adapt_query(self, query: str) -> str:
+            return query
+
+        def uses_sqlite_connection_api(self) -> bool:
+            return False
+
+        def fetchall(self, db_manager: object, query: str, params=None) -> list[dict[str, object]]:
+            seen.update(db_manager=db_manager, query=query, params=params)
+            return []
+
+    db_manager = object()
+    adapter: ManagementQueryAdapter = ExplicitAdapter()
+    build_recent_agent_runs(db_manager, None, query_adapter=adapter)
+
+    assert seen["db_manager"] is db_manager
+    assert "FROM task_runs" in str(seen["query"])
 
 
 def test_classify_curator_run_uses_persisted_outcomes_not_provider_narrative() -> None:

@@ -11,7 +11,7 @@ from mcp_memory.management.models import (
     IngestAuditPayload,
     RunResultMetadataPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryRunner
+from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
 from mcp_memory.management.reporting_rows import AgentRunHistoryRow, adapt_agent_run_history_row
 from mcp_memory.management.reporting_rows import (
     JsonObject,
@@ -98,8 +98,18 @@ def build_recent_agent_runs(
     limit: int = 20,
     *,
     detail_level: str = "compact",
+    query_adapter: ManagementQueryAdapter | None = None,
 ) -> list[AgentRunHistoryPayload]:
-    rows = [] if db_manager is None else _fetch_recent_agent_run_rows(db_manager, workspace_id=workspace_id, limit=limit)
+    rows = (
+        []
+        if db_manager is None
+        else _fetch_recent_agent_run_rows(
+            db_manager,
+            workspace_id=workspace_id,
+            limit=limit,
+            query_adapter=query_adapter,
+        )
+    )
     payloads: list[AgentRunHistoryPayload] = []
     for row in rows:
         payloads.append(
@@ -118,7 +128,13 @@ def build_recent_agent_runs(
     return payloads
 
 
-def _fetch_recent_agent_run_rows(db_manager, *, workspace_id: str | None, limit: int) -> list[AgentRunHistoryRow]:
+def _fetch_recent_agent_run_rows(
+    db_manager,
+    *,
+    workspace_id: str | None,
+    limit: int,
+    query_adapter: ManagementQueryAdapter | None = None,
+) -> list[AgentRunHistoryRow]:
     placeholders = ",".join("?" for _ in TRIGGERABLE_BACKGROUND_TASK_NAMES)
     query = (
         f"SELECT * FROM task_runs WHERE task_name IN ({placeholders})"
@@ -130,7 +146,7 @@ def _fetch_recent_agent_run_rows(db_manager, *, workspace_id: str | None, limit:
         *([workspace_id] if workspace_id is not None else []),
         limit,
     ]
-    rows = ManagementQueryRunner(db_manager).fetchall(query, params)
+    rows = ManagementQueryRunner(db_manager, adapter=query_adapter).fetchall(query, params)
     return [adapt_agent_run_history_row(row) for row in rows]
 
 

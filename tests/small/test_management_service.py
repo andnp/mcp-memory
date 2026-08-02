@@ -150,6 +150,12 @@ def test_management_service_injects_storage_specific_nerd_metrics_adapter(db_man
     assert isinstance(seen["query_adapter"], SQLiteManagementQueryAdapter)
 
 
+def test_management_service_injects_storage_specific_task_reporting_adapter(db_manager) -> None:
+    service = _build_management_service(db_manager, workspace_id="workspace-a")
+
+    assert isinstance(service._task_reporting_service._dependencies.query_adapter, SQLiteManagementQueryAdapter)
+
+
 def test_management_service_exposes_isolated_typed_capabilities(db_manager) -> None:
     service = _build_management_service(
         db_manager,

@@ -1,6 +1,7 @@
 import pytest
 
 from mcp_memory.management.models import AgentRunHistoryListPayload, AgentRunHistoryPayload
+from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
 from mcp_memory.management.task_reporting_service import (
     TaskReportingService,
     TaskReportingServiceDependencies,
@@ -22,12 +23,15 @@ def test_list_recent_agent_runs_passes_explicit_dependencies_and_arguments(monke
     ]
     seen: dict[str, object] = {}
 
-    def fake_build_recent_agent_runs(db_manager, workspace_id, *, limit, detail_level):
+    query_adapter = SQLiteManagementQueryAdapter()
+
+    def fake_build_recent_agent_runs(db_manager, workspace_id, *, limit, detail_level, query_adapter):
         seen.update(
             db_manager=db_manager,
             workspace_id=workspace_id,
             limit=limit,
             detail_level=detail_level,
+            query_adapter=query_adapter,
         )
         return expected_runs
 
@@ -37,7 +41,11 @@ def test_list_recent_agent_runs_passes_explicit_dependencies_and_arguments(monke
     )
     db_manager = object()
     service = TaskReportingService(
-        TaskReportingServiceDependencies(db_manager=db_manager, workspace_id="workspace-a")
+        TaskReportingServiceDependencies(
+            db_manager=db_manager,
+            workspace_id="workspace-a",
+            query_adapter=query_adapter,
+        )
     )
 
     payload = service.list_recent_agent_runs(limit=7, detail_level="full")
@@ -49,6 +57,7 @@ def test_list_recent_agent_runs_passes_explicit_dependencies_and_arguments(monke
         "workspace_id": "workspace-a",
         "limit": 7,
         "detail_level": "full",
+        "query_adapter": query_adapter,
     }
 
 

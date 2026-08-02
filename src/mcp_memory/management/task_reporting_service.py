@@ -8,6 +8,7 @@ from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     TaskSamplingSummaryPayload,
 )
+from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 
 
@@ -15,6 +16,7 @@ from mcp_memory.management.task_sampling_summary import build_task_sampling_summ
 class TaskReportingServiceDependencies:
     db_manager: Any
     workspace_id: str | None
+    query_adapter: ManagementQueryAdapter | None = None
 
 
 class TaskReportingService:
@@ -34,6 +36,7 @@ class TaskReportingService:
                 dependencies.workspace_id,
                 limit=limit,
                 detail_level=detail_level,
+                query_adapter=dependencies.query_adapter,
             )
         )
 
