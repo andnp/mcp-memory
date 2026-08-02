@@ -856,7 +856,7 @@ def test_management_service_uses_postgres_runtime_log_repository_for_postgres_ba
             return 0
 
     monkeypatch.setattr(
-        "mcp_memory.management.service.build_execution_attempt_health",
+        "mcp_memory.management.runtime_health_service.build_execution_attempt_health",
         lambda db_manager: ExecutionAttemptHealthPayload(),
     )
 
