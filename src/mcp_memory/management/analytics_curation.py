@@ -12,6 +12,7 @@ from mcp_memory.management.models import (
     CurationHistoryMetricsPayload,
     CurationMetricsPayload,
     CurationProviderDisclosurePayload,
+    CurationQualityMetricsPayload,
     CurationSpecialistRouteMetricsPayload,
 )
 from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
@@ -70,6 +71,23 @@ def build_curation_metrics(
         FROM curation_action_receipts
         """
     )
+    quality_rows = (
+        runner.fetchall(
+            """
+            SELECT run_id, status, retrieval_regression_count, zero_result_change,
+                   payload_size_change, useful_work, created_at
+            FROM curation_quality_evidence
+            """
+        )
+        if run_ids
+        else []
+    )
+    quality = [
+        row
+        for row in quality_rows
+        if str(row.get("run_id")) in run_ids
+        and _in_window(row.get("created_at"), cutoff)
+    ]
     receipts = [
         row
         for row in receipt_rows
@@ -179,6 +197,8 @@ def build_curation_metrics(
         _mutation_category(_text(row.get("operation"), "unknown"))
         for row in receipts
     )
+    evaluated_quality = [row for row in quality if row.get("status") == "evaluated"]
+    useful_work_count = sum(1 for row in evaluated_quality if row.get("useful_work") in (1, True))
 
     history_event_count = len(events)
     restorable_event_count = sum(
@@ -223,6 +243,18 @@ def build_curation_metrics(
                 sorted(Counter(_text(row.get("status"), "unknown") for row in restores).items())
             ),
             restore_available=restorable_event_count > 0,
+        ),
+        retrieval_quality=CurationQualityMetricsPayload(
+            sampled_action_count=len(quality),
+            evaluated_action_count=len(evaluated_quality),
+            no_query_action_count=sum(1 for row in quality if row.get("status") == "no_query"),
+            retrieval_regression_count=sum(
+                _integer(row.get("retrieval_regression_count")) for row in evaluated_quality
+            ),
+            zero_result_change=sum(_integer(row.get("zero_result_change")) for row in evaluated_quality),
+            payload_size_change=sum(_integer(row.get("payload_size_change")) for row in evaluated_quality),
+            useful_work_count=useful_work_count,
+            useful_work_rate=_ratio(useful_work_count, len(evaluated_quality)),
         ),
         verified_yield=verified_yield,
         verified_receipt_count=verified_receipts,
@@ -317,7 +349,7 @@ def _timestamp(value: object) -> float | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
         return parsed.timestamp()

@@ -763,6 +763,33 @@ POSTGRES_MIGRATIONS = (
             """,
         ),
     ),
+    PostgresMigration(
+        version=20,
+        name="add_curation_quality_evidence",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS curation_quality_evidence (
+                run_id TEXT NOT NULL,
+                action_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                affected_memory_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                policy_version TEXT NOT NULL,
+                query_id TEXT,
+                status TEXT NOT NULL,
+                before_ranked_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                after_ranked_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                retrieval_regression_count INTEGER,
+                zero_result_change INTEGER,
+                payload_size_change INTEGER,
+                useful_work INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, action_id),
+                FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_curation_quality_evidence_created_at ON curation_quality_evidence(created_at DESC, run_id, action_id)",
+        ),
+    ),
 )
 
 

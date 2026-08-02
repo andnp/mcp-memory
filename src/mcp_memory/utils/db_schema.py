@@ -613,6 +613,25 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             escalation_count INTEGER NOT NULL DEFAULT 0,
             last_escalated_strategy TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS curation_quality_evidence (
+            run_id TEXT NOT NULL,
+            action_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            affected_memory_ids_json TEXT NOT NULL DEFAULT '[]',
+            policy_version TEXT NOT NULL,
+            query_id TEXT,
+            status TEXT NOT NULL,
+            before_ranked_ids_json TEXT NOT NULL DEFAULT '[]',
+            after_ranked_ids_json TEXT NOT NULL DEFAULT '[]',
+            retrieval_regression_count INTEGER,
+            zero_result_change INTEGER,
+            payload_size_change INTEGER,
+            useful_work INTEGER,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, action_id),
+            FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
+        );
         """
     )
     ensure_column(conn, "curation_runs", "disclosure_audit_json", "TEXT NOT NULL DEFAULT '{}'")
@@ -839,6 +858,8 @@ def finalize_schema_setup(conn: sqlite3.Connection) -> None:
              ON curation_action_receipts(run_id, status, action_id);
          CREATE INDEX IF NOT EXISTS idx_curation_action_receipts_mutation_event
              ON curation_action_receipts(mutation_event_id);
+         CREATE INDEX IF NOT EXISTS idx_curation_quality_evidence_created_at
+             ON curation_quality_evidence(created_at DESC, run_id, action_id);
          CREATE INDEX IF NOT EXISTS idx_curation_candidate_state_cooldown
              ON curation_candidate_state(cooldown_until, disposition, memory_id);
          """

@@ -12,12 +12,17 @@ from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClas
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
+from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import curator_seed_payload_item
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.mutation_history import ProtectionMode, is_protection_active
+from mcp_memory.curation_quality_store import (
+    PostgresCurationQualityStore,
+    SQLiteCurationQualityStore,
+)
 
 
 async def run_curator_verified_campaign(
@@ -97,6 +102,19 @@ async def run_curator_verified_campaign(
         sensitive_fields_by_memory=sensitive_fields,
         executor=CurationExecutor(action_store),
         verifier=CurationVerifier(ctx.curation, ctx.relational_search),
+        quality_sampler=(
+            None
+            if ctx.db_manager is None
+            else CurationQualitySampler(
+                db_manager=ctx.db_manager,
+                search=ctx.relational_search,
+                repository=(
+                    SQLiteCurationQualityStore(ctx.db_manager)
+                    if hasattr(ctx.db_manager, "get_connection")
+                    else PostgresCurationQualityStore(ctx.db_manager)
+                ),
+            )
+        ),
     )
     try:
         result = await harness.run(frontier)

@@ -44,6 +44,7 @@ from mcp_memory.core.curation_planning_service import (
     CurationPlanningInput,
     plan_and_validate,
 )
+from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_run_outcomes import (
     build_run_result,
     budget_usage as project_budget_usage,
@@ -284,6 +285,7 @@ class CurationDryRunHarness:
         executor: CurationExecutor | None = None,
         verifier: CurationVerifier | None = None,
         work_item_service: CurationWorkItemService | None = None,
+        quality_sampler: CurationQualitySampler | None = None,
     ) -> None:
         self._curation_store = curation_store
         self._planner = planner
@@ -296,6 +298,7 @@ class CurationDryRunHarness:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._executor = executor
         self._verifier = verifier
+        self._quality_sampler = quality_sampler
         self._execution_service = CurationExecutionService(
             curation_store=curation_store,
             executor=executor,
@@ -445,6 +448,12 @@ class CurationDryRunHarness:
         if terminal is None:
             raise RuntimeError(f"curation run {run_id} was not persisted")
 
+        quality_evidence = (
+            ()
+            if self._quality_sampler is None
+            else self._quality_sampler.evaluate(run=terminal, receipts=receipts)
+        )
+
         self._persist_candidate_outcomes(
             plan=plan,
             validation=validation,
@@ -481,6 +490,9 @@ class CurationDryRunHarness:
             context_record_counts=context_record_counts,
             failure=failure,
             envelopes=envelopes,
+            quality_evidence=[
+                evidence.model_dump(mode="json") for evidence in quality_evidence
+            ],
         )
         return CurationDryRunResult(
             run=terminal,

@@ -1107,6 +1107,17 @@ class CurationHistoryMetricsPayload(BaseModel):
     restore_available: bool = False
 
 
+class CurationQualityMetricsPayload(BaseModel):
+    sampled_action_count: int = 0
+    evaluated_action_count: int = 0
+    no_query_action_count: int = 0
+    retrieval_regression_count: int = 0
+    zero_result_change: int = 0
+    payload_size_change: int = 0
+    useful_work_count: int = 0
+    useful_work_rate: float = 0.0
+
+
 class CurationMetricsPayload(BaseModel):
     window_hours: int = 24
     run_states: dict[str, int] = Field(default_factory=dict)
@@ -1119,6 +1130,7 @@ class CurationMetricsPayload(BaseModel):
     specialist_routes: CurationSpecialistRouteMetricsPayload = Field(default_factory=CurationSpecialistRouteMetricsPayload)
     provider_disclosure: CurationProviderDisclosurePayload = Field(default_factory=CurationProviderDisclosurePayload)
     history: CurationHistoryMetricsPayload = Field(default_factory=CurationHistoryMetricsPayload)
+    retrieval_quality: CurationQualityMetricsPayload = Field(default_factory=CurationQualityMetricsPayload)
     verified_yield: float = 0.0
     verified_receipt_count: int = 0
     terminal_receipt_count: int = 0

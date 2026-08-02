@@ -79,6 +79,12 @@ class ReplayCaseReport:
         return self.intended_rank_after - self.intended_rank_before
 
     @property
+    def retrieval_regression(self) -> bool:
+        if self.intended_rank_before is None:
+            return False
+        return self.intended_rank_after is None or self.intended_rank_after > self.intended_rank_before
+
+    @property
     def zero_result_change(self) -> int:
         return int(self.zero_results_after) - int(self.zero_results_before)
 
@@ -98,6 +104,22 @@ class ReplayEvaluationReport:
     @property
     def zero_result_change(self) -> int:
         return self.zero_results_after - self.zero_results_before
+
+    @property
+    def retrieval_regression_count(self) -> int:
+        return sum(case.retrieval_regression for case in self.cases)
+
+    @property
+    def useful_work_count(self) -> int:
+        return sum(
+            (
+                case.intended_rank_change is not None
+                and case.intended_rank_change < 0
+            )
+            or case.irrelevant_top_results_after < case.irrelevant_top_results_before
+            or case.zero_result_change < 0
+            for case in self.cases
+        )
 
     @property
     def payload_size_change(self) -> int:

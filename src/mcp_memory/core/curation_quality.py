@@ -1,0 +1,304 @@
+"""Sampled, non-instrumenting retrieval quality evidence for curation."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+import hashlib
+import json
+from typing import Any, Protocol
+from uuid import UUID
+
+from pydantic import Field
+
+from mcp_memory.core.curation_evaluation import ReplayCase, ReplayResult, ReplaySnapshot, evaluate_query_replay
+from mcp_memory.core.curation_models import CurationModel
+from mcp_memory.core.ports.curation import CurationActionReceipt, CurationReceiptState, CurationRun
+
+
+class CurationQualityEvidence(CurationModel):
+    run_id: UUID
+    action_id: UUID
+    operation: str
+    affected_memory_ids: list[UUID] = Field(default_factory=list)
+    policy_version: str
+    query_id: str | None = None
+    status: str
+    before_ranked_memory_ids: list[UUID] = Field(default_factory=list)
+    after_ranked_memory_ids: list[UUID] = Field(default_factory=list)
+    retrieval_regression_count: int | None = None
+    zero_result_change: int | None = None
+    payload_size_change: int | None = None
+    useful_work: bool | None = None
+    created_at: datetime
+
+
+class CurationQualityRepository(Protocol):
+    def put_quality_evidence(self, evidence: CurationQualityEvidence) -> CurationQualityEvidence: ...
+
+    def list_quality_evidence(
+        self,
+        *,
+        run_id: UUID | None = None,
+        limit: int = 100,
+    ) -> Sequence[CurationQualityEvidence]: ...
+
+
+class CurationQualitySearch(Protocol):
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+    ) -> Sequence[Any]: ...
+
+
+class CurationQualitySampler:
+    """Capture one replay case per sampled, genuinely applied action."""
+
+    def __init__(
+        self,
+        *,
+        db_manager: Any,
+        search: CurationQualitySearch,
+        repository: CurationQualityRepository,
+        sample_rate: float = 0.25,
+        max_actions: int = 8,
+        top_k: int = 5,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if not 0.0 <= sample_rate <= 1.0:
+            raise ValueError("sample_rate must be between 0 and 1")
+        if max_actions < 1:
+            raise ValueError("max_actions must be positive")
+        self._db_manager = db_manager
+        self._search = search
+        self._repository = repository
+        self._sample_rate = sample_rate
+        self._max_actions = max_actions
+        self._top_k = top_k
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def evaluate(
+        self,
+        *,
+        run: CurationRun,
+        receipts: Sequence[CurationActionReceipt],
+    ) -> tuple[CurationQualityEvidence, ...]:
+        selected = [
+            receipt
+            for receipt in receipts
+            if receipt.status is CurationReceiptState.VERIFIED
+            and receipt.mutation_event_id is not None
+            and receipt.affected_ids
+            and self._is_sampled(run.run_id, receipt.action_id)
+        ][: self._max_actions]
+        evidence = tuple(self._evaluate_action(run, receipt) for receipt in selected)
+        for item in evidence:
+            self._repository.put_quality_evidence(item)
+        return evidence
+
+    def _evaluate_action(
+        self,
+        run: CurationRun,
+        receipt: CurationActionReceipt,
+    ) -> CurationQualityEvidence:
+        query = self._find_historical_query(receipt)
+        common = {
+            "run_id": run.run_id,
+            "action_id": receipt.action_id,
+            "operation": receipt.operation,
+            "affected_memory_ids": list(receipt.affected_ids),
+            "policy_version": run.policy_version,
+            "created_at": self._clock(),
+        }
+        if query is None:
+            return CurationQualityEvidence(status="no_query", **common)
+
+        query_id, query_text, before_ids = query
+        after_contexts = self._search.search_memories_for_maintenance(
+            query_text,
+            limit=self._top_k,
+        )
+        after_results = tuple(
+            ReplayResult(
+                _context_memory_id(context),
+                payload_size=_context_payload_size(context),
+            )
+            for context in after_contexts
+        )
+        after_sizes = {result.memory_id: result.size() for result in after_results}
+        before_results = tuple(
+            ReplayResult(
+                memory_id,
+                payload_size=self._historical_payload_size(
+                    receipt.mutation_event_id,
+                    memory_id,
+                    fallback_size=after_sizes.get(memory_id, 0),
+                ),
+            )
+            for memory_id in before_ids[: self._top_k]
+        )
+        report = evaluate_query_replay(
+            [
+                ReplayCase(
+                    query_id=query_id,
+                    intended_memory_ids=tuple(str(value) for value in receipt.affected_ids),
+                    before=ReplaySnapshot(before_results),
+                    after=ReplaySnapshot(after_results),
+                    top_k=self._top_k,
+                )
+            ]
+        )
+        return CurationQualityEvidence(
+            status="evaluated",
+            query_id=query_id,
+            before_ranked_memory_ids=[UUID(value) for value in before_ids[: self._top_k]],
+            after_ranked_memory_ids=[
+                UUID(result.memory_id) for result in after_results[: self._top_k]
+            ],
+            retrieval_regression_count=report.retrieval_regression_count,
+            zero_result_change=report.zero_result_change,
+            payload_size_change=report.payload_size_change,
+            useful_work=report.useful_work_count > 0,
+            **common,
+        )
+
+    def _is_sampled(self, run_id: UUID, action_id: UUID) -> bool:
+        if self._sample_rate >= 1.0:
+            return True
+        digest = hashlib.sha256(f"{run_id}:{action_id}".encode("ascii")).digest()
+        return int.from_bytes(digest[:8], "big") / 2**64 < self._sample_rate
+
+    def _find_historical_query(
+        self,
+        receipt: CurationActionReceipt,
+    ) -> tuple[str, str, list[str]] | None:
+        rows = _fetch_rows(
+            self._db_manager,
+            """
+            SELECT invocation_id, query_text, memory_id, result_rank, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search' AND memory_id IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+        )
+        target_ids = {str(value) for value in receipt.affected_ids}
+        cutoff = receipt.applied_at or self._clock()
+        grouped: dict[str, list[Any]] = defaultdict(list)
+        for row in rows:
+            invocation_id, _, memory_id, _, created_at = row
+            event_time = _timestamp(created_at)
+            if (
+                str(memory_id) in target_ids
+                and event_time is not None
+                and event_time < cutoff
+            ):
+                grouped[str(invocation_id)].append(row)
+        if not grouped:
+            return None
+        invocation_id = next(iter(grouped))
+        rows = _fetch_rows(
+            self._db_manager,
+            """
+            SELECT invocation_id, query_text, memory_id, result_rank
+            FROM memory_tool_events
+            WHERE event_kind = 'search' AND invocation_id = ?
+            ORDER BY result_rank ASC
+            LIMIT 50
+            """,
+            (invocation_id,),
+        )
+        if not rows:
+            return None
+        return (
+            invocation_id,
+            str(rows[0][1] or ""),
+            [str(row[2]) for row in rows if row[2] is not None],
+        )
+
+    def _historical_payload_size(
+        self,
+        event_id: UUID | None,
+        memory_id: str,
+        *,
+        fallback_size: int,
+    ) -> int:
+        if event_id is not None:
+            rows = _fetch_rows(
+                self._db_manager,
+                """
+                SELECT before_snapshot
+                FROM memory_record_revisions
+                WHERE event_id = ? AND memory_id = ?
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (str(event_id), memory_id),
+            )
+            row = rows[0] if rows else None
+            if row is not None and row[0] is not None:
+                return _snapshot_payload_size(row[0])
+        return fallback_size
+
+
+def _fetch_rows(
+    db_manager: Any,
+    query: str,
+    params: Sequence[object] = (),
+) -> list[tuple[object, ...]]:
+    if hasattr(db_manager, "get_connection"):
+        connection = db_manager.get_connection()
+        return [tuple(row) for row in connection.execute(query, list(params)).fetchall()]
+    if hasattr(db_manager, "open_connection"):
+        with db_manager.open_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(query.replace("?", "%s"), tuple(params))
+            return [tuple(row) for row in cursor.fetchall()]
+    raise TypeError("quality sampling requires a supported database manager")
+
+
+def _timestamp(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _context_memory_id(context: Any) -> str:
+    return str(context.record.id)
+
+
+def _context_payload_size(context: Any) -> int:
+    record = context.record
+    return _payload_size(
+        {
+            "title": record.title,
+            "summary": record.summary,
+            "content": record.content,
+            "tags": record.tags,
+        }
+    )
+
+
+def _snapshot_payload_size(value: object) -> int:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return 0
+    return _payload_size(value)
+
+
+def _payload_size(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
