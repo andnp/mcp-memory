@@ -14,7 +14,7 @@ import asyncio
 import json
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -398,7 +398,7 @@ class _KeywordIndex:
         self,
         query: str,
         k: int,
-        filters: dict[str, Any] | None = None,
+        filters: Mapping[str, Any] | None = None,
     ) -> list[RecordHit]:
         del query, k, filters
         return []

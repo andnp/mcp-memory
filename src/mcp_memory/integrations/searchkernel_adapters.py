@@ -160,11 +160,14 @@ class MemoryKeywordStore(AsyncKeywordStore):
         if any(record.source_kind != MemoryRecordAdapter.source_kind for record in records):
             raise ValueError("MemoryKeywordStore only accepts memory records")
 
+    def keyword_epoch(self) -> int:
+        return _repository_search_epochs(self._repository)["keyword"]
+
     async def search(
         self,
         query: str,
         k: int,
-        filters: dict[str, Any] | None = None,
+        filters: Mapping[str, Any] | None = None,
     ) -> list[RecordHit]:
         filters = filters or {}
         memory_ids = await asyncio.to_thread(
@@ -248,6 +251,9 @@ class MemoryVectorStore(AsyncVectorStore):
             if accepted is False:
                 continue
 
+    def vector_epoch(self) -> int:
+        return _repository_search_epochs(self._repository)["vector"]
+
     async def search(
         self,
         query_vector: Vector,
@@ -255,7 +261,7 @@ class MemoryVectorStore(AsyncVectorStore):
         *,
         model_name: str,
         dim: int,
-        filters: dict[str, Any] | None = None,
+        filters: Mapping[str, Any] | None = None,
     ) -> list[RecordHit]:
         if len(query_vector) != dim:
             raise ValueError(
@@ -338,6 +344,9 @@ class MemoryGraphStore(AsyncGraphStore):
 
     def epochs(self) -> Mapping[str, int]:
         return _repository_search_epochs(self._repository)
+
+    def graph_epoch(self) -> int:
+        return _repository_search_epochs(self._repository)["graph"]
 
     def upsert_edges(self, edges: list[tuple[str, str, str, float]]) -> None:
         raise NotImplementedError(

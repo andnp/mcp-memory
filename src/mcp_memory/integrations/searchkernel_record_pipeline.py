@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
-from searchkernel.domain import Vector
+from searchkernel.domain import RecordHit, Vector
 from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding
 from searchkernel.search.record_pipeline import (
@@ -484,7 +484,7 @@ def _candidate_allowed(
 
 def _vector_candidate_ids(
     repository: MemoryRepositoryPort,
-    keyword_ranking: Sequence[tuple[str, float]],
+    keyword_ranking: Sequence[RecordHit],
     filters: Mapping[str, object],
     config: Config,
 ) -> Sequence[str] | None:
@@ -495,8 +495,8 @@ def _vector_candidate_ids(
         return None
     keyword_records = [
         record
-        for record_id, _ in keyword_ranking
-        if (record := _cached_memory(repository, record_id)) is not None
+        for hit in keyword_ranking
+        if (record := _cached_memory(repository, hit.source_id)) is not None
     ]
     strongest_coverage = max(
         (
@@ -511,22 +511,21 @@ def _vector_candidate_ids(
     effective_limit = getattr(filters, "limit", requested_limit)
     effective_limit = effective_limit if isinstance(effective_limit, int) else 1
     candidate_cap = max(effective_limit * 4, 20)
-    return [record_id for record_id, _ in keyword_ranking[:candidate_cap]]
+    return [hit.source_id for hit in keyword_ranking[:candidate_cap]]
 
 
 def _order_vector_ranking(
     repository: MemoryRepositoryPort,
-    ranking: Sequence[tuple[str, float]],
+    ranking: Sequence[RecordHit],
     filters: Mapping[str, object],
     config: Config,
-) -> Sequence[tuple[str, float]]:
+) -> Sequence[RecordHit]:
     workspace_id = filters.get("_ranking_workspace_id", filters.get("workspace_id"))
     workspace = workspace_id if isinstance(workspace_id, str) else None
 
-    def rank_key(item: tuple[str, float]) -> tuple[float, float, str, str]:
-        record_id, score = item
-        record = _cached_memory(repository, record_id)
-        semantic_score = max(min((score + 1.0) / 2.0, 1.0), 0.0)
+    def rank_key(item: RecordHit) -> tuple[float, float, str, str]:
+        record = _cached_memory(repository, item.source_id)
+        semantic_score = max(min((item.score + 1.0) / 2.0, 1.0), 0.0)
         workspace_boost = (
             config.search_ranking.workspace_multiplier
             if record is not None
@@ -539,7 +538,7 @@ def _order_vector_ranking(
             semantic_score * workspace_boost,
             semantic_score,
             updated_at,
-            record_id,
+            item.source_id,
         )
 
     return sorted(ranking, key=rank_key, reverse=True)
