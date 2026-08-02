@@ -8,24 +8,16 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from hashlib import blake2b, sha256
+from hashlib import blake2b
 from pathlib import Path
 from typing import Any, Callable, ClassVar, cast
 
 from mcp_memory.config import EmbeddingsConfig
 from mcp_memory.utils.db import DatabaseManager
+from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
+from searchkernel.indexing.semantic import embedding_identity
 from searchkernel.ports import EmbeddingBatchProvider
 from searchkernel.utils.similarity import cosine_similarity_lists
-
-try:
-    from searchkernel.indexing.embedding_cache import SQLiteEmbeddingCache
-except ImportError:  # pragma: no cover - compatibility with older searchkernel releases
-    SQLiteEmbeddingCache = None  # type: ignore[assignment,misc]
-
-try:
-    from searchkernel.indexing.semantic import embedding_identity
-except ImportError:  # pragma: no cover - compatibility with older searchkernel releases
-    embedding_identity = None  # type: ignore[assignment]
 
 
 logger = logging.getLogger(__name__)
@@ -333,7 +325,7 @@ class SQLiteCachedEmbeddingProvider:
         return describe_embedder(self._provider)
 
     def _get_cache(self) -> Any | None:
-        if self._cache_disabled or SQLiteEmbeddingCache is None:
+        if self._cache_disabled:
             return None
         namespace = self.encoder_namespace
         if self._cache is not None and self._cache_namespace == namespace:
@@ -397,10 +389,7 @@ def with_local_embedding_cache(
 
 
 def _embedding_content_hash(text: str, encoder_namespace: str) -> str:
-    if embedding_identity is not None:
-        return embedding_identity(text, encoder_namespace)
-    payload = f"{encoder_namespace}\x00{text}".encode("utf-8")
-    return sha256(payload).hexdigest()
+    return embedding_identity(text, encoder_namespace)
 
 
 class SQLiteVectorStore:
