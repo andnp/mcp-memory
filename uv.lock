@@ -9,18 +9,52 @@ resolution-markers = [
 [[package]]
 name = "andnp-searchkernel"
 version = "0.5.0"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../andnp-searchkernel" }
 dependencies = [
     { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/88/82/ece766b739cbd2c2a9d6c42a1e4ebec9d8e5821c2ff05d04e399e34e3a5c/andnp_searchkernel-0.5.0.tar.gz", hash = "sha256:6e46233629a0d1b3fef619e8a90aa338954a550e6cde0a7637f9fd20a27c569f", size = 520089, upload-time = "2026-08-02T00:53:43.224Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/1f/8dbafb42e54beeea08bb1d82cad08c177306327bcf85fa8ae0d6b6558bba/andnp_searchkernel-0.5.0-py3-none-any.whl", hash = "sha256:7519cb0cff0a65f1342b18fb1b14ac4459f551b51bd2d21d0d5c7d11e7e40b23", size = 247614, upload-time = "2026-08-02T00:53:41.323Z" },
 ]
 
 [package.optional-dependencies]
 ollama = [
     { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "faiss-cpu", marker = "extra == 'faiss'", specifier = ">=1.9.0" },
+    { name = "httpx", marker = "extra == 'ollama'", specifier = ">=0.28.0" },
+    { name = "llama-index-core", marker = "extra == 'faiss'", specifier = ">=0.12.0" },
+    { name = "llama-index-embeddings-huggingface", marker = "extra == 'huggingface'", specifier = ">=0.4.0" },
+    { name = "llama-index-vector-stores-faiss", marker = "extra == 'faiss'", specifier = ">=0.3.0" },
+    { name = "numpy", specifier = ">=2.0.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'pgvector-psycopg3'", specifier = ">=3.1.0" },
+    { name = "psycopg-pool", marker = "extra == 'pgvector-psycopg3'", specifier = ">=3.2.0" },
+    { name = "psycopg2-binary", marker = "extra == 'pgvector'", specifier = ">=2.9.0" },
+    { name = "sentence-transformers", marker = "extra == 'huggingface'", specifier = ">=3.0.0" },
+    { name = "tree-sitter", marker = "extra == 'markdown'", specifier = ">=0.23.0" },
+    { name = "tree-sitter-markdown", marker = "extra == 'markdown'", specifier = ">=0.3.2" },
+]
+provides-extras = ["faiss", "pgvector", "pgvector-psycopg3", "huggingface", "ollama", "markdown"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "docker", specifier = ">=7.1.0" },
+    { name = "faiss-cpu", specifier = ">=1.9.0" },
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "import-linter", specifier = ">=2.0" },
+    { name = "llama-index-core", specifier = ">=0.12.0" },
+    { name = "llama-index-embeddings-huggingface", specifier = ">=0.4.0" },
+    { name = "llama-index-vector-stores-faiss", specifier = ">=0.3.0" },
+    { name = "psycopg2-binary", specifier = ">=2.9.0" },
+    { name = "pyrefly", specifier = ">=0.60.0" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=6.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "ruff", specifier = ">=0.14.10" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "tree-sitter", specifier = ">=0.23.0" },
+    { name = "tree-sitter-markdown", specifier = ">=0.3.2" },
 ]
 
 [[package]]
@@ -723,7 +757,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "andnp-searchkernel", extras = ["ollama"], specifier = ">=0.5.0" },
+    { name = "andnp-searchkernel", extras = ["ollama"], editable = "../andnp-searchkernel" },
     { name = "click", specifier = ">=8.1.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "github-copilot-sdk", specifier = ">=1.0.1" },

@@ -43,6 +43,9 @@ dev = [
 [tool.uv]
 package = true
 
+[tool.uv.sources]
+andnp-searchkernel = { path = "../andnp-searchkernel", editable = true }
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

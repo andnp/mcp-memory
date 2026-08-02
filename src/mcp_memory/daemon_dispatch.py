@@ -5,7 +5,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from mcp_memory.config import resolve_workspace_id
+from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.scope_policy import resolve_workspace_id_for_policy, scope_policy_for_endpoint
+from searchkernel.ports.federation import SearchRequest
 
 
 _DEFAULT_LIST_LIMIT = 20
@@ -231,12 +233,47 @@ def dispatch_management_request(routes, metadata, path: str, payload: dict[str, 
     return {"status": "error", "error": "unknown_transport_path", "path": path}
 
 
+async def dispatch_federation_request(routes, path: str, payload: dict[str, object]) -> dict:
+    """Dispatch the versioned source contract without changing legacy routes."""
+    source = _federation_source(routes)
+    if path == "/v1/search/capabilities":
+        return source.capabilities().to_dict()
+    if path == "/v1/health":
+        return source.health()
+    if path == "/v1/search":
+        request = SearchRequest.from_dict(payload)
+        return (await source.search(request)).to_dict()
+    return {"status": "error", "error": "unknown_transport_path", "path": path}
+
+
 def _management_service(routes) -> Any:
     management = getattr(routes, "management", None)
     if management is not None:
         return management
     service = getattr(routes, "service", None)
     return getattr(service, "capabilities", service)
+
+
+def _federation_source(routes) -> MemoryFederationSource:
+    service = getattr(routes, "service", None) or _management_service(routes)
+    source = getattr(service, "_federation_source", None)
+    if isinstance(source, MemoryFederationSource):
+        return source
+    retrieval = getattr(service, "_retrieval", None)
+    repository = getattr(service, "_repository", None)
+    health_provider = getattr(service, "_relational_search", None)
+    if retrieval is None:
+        raise ValueError("memory_federation_unavailable")
+    source = MemoryFederationSource(
+        retrieval,
+        repository,
+        health_provider=health_provider,
+    )
+    try:
+        setattr(service, "_federation_source", source)
+    except AttributeError:
+        pass
+    return source
 
 
 def serialize_tool(tool) -> dict[str, object]:

@@ -16,7 +16,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from mcp_memory.config import resolve_workspace_id, resolve_workspace_root
-from mcp_memory.daemon_dispatch import dispatch_management_request, error_payload
+from mcp_memory.daemon_dispatch import (
+    dispatch_federation_request,
+    dispatch_management_request,
+    error_payload,
+)
 from mcp_memory.daemon_background import (
     RECORD_THOUGHT_WRITEBACK_FLUSH_INTERVAL_SECONDS,
     flush_record_thought_writeback_once as _background_flush_record_thought_writeback_once,
@@ -307,6 +311,24 @@ def create_daemon_app(
             )
         except ValueError as exc:
             result = error_payload(exc)
+        if result.get("status") == "error" and result.get("error") == "unknown_transport_path":
+            raise HTTPException(status_code=404, detail=str(result.get("error")))
+        if result.get("status") == "error":
+            return JSONResponse(result, status_code=400)
+        return JSONResponse(result)
+
+    @app.api_route("/v1/{v1_path:path}", methods=["GET", "POST"])
+    async def federation_api(v1_path: str, request: Request):
+        await _record_http_activity(app)
+        payload = await _payload_from_http_request(request)
+        try:
+            result = await dispatch_federation_request(
+                app.state.routes,
+                f"/v1/{v1_path}",
+                payload,
+            )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
         if result.get("status") == "error" and result.get("error") == "unknown_transport_path":
             raise HTTPException(status_code=404, detail=str(result.get("error")))
         if result.get("status") == "error":
