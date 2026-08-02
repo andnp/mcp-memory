@@ -399,7 +399,7 @@ class _KeywordIndex:
         query: str,
         k: int,
         filters: SearchFilters | None = None,
-    ) -> list[tuple[str, float]]:
+    ) -> list[RecordHitLike]:
         del query, k, filters
         return []
 
