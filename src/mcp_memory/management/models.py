@@ -904,6 +904,15 @@ class NerdMaintenanceSummaryRowPayload(BaseModel):
     mutation_count: int = 0
     lines_compressed: int = 0
     delta_total: int = 0
+    valid_plan_count: int = 0
+    no_op_count: int = 0
+    accepted_mutation_count: int = 0
+    verification_failure_count: int = 0
+    provider_failure_count: int = 0
+    retry_count: int = 0
+    valid_plan_rate: float = 0.0
+    no_op_rate: float = 0.0
+    mutation_categories: dict[str, int] = Field(default_factory=dict)
 
 
 class NerdMaintenanceAgentYieldPayload(NerdMaintenanceSummaryRowPayload):
@@ -925,6 +934,12 @@ class NerdMaintenanceDeltaBucketPayload(BaseModel):
     meaningful_actions: int = 0
     mutation_count: int = 0
     lines_compressed: int = 0
+    valid_plan_count: int = 0
+    no_op_count: int = 0
+    accepted_mutation_count: int = 0
+    verification_failure_count: int = 0
+    provider_failure_count: int = 0
+    retry_count: int = 0
 
 
 class NerdMaintenanceDeltaSeriesPayload(BaseModel):
@@ -1107,6 +1122,14 @@ class CurationMetricsPayload(BaseModel):
     verified_yield: float = 0.0
     verified_receipt_count: int = 0
     terminal_receipt_count: int = 0
+    valid_plan_count: int = 0
+    valid_plan_rate: float = 0.0
+    no_op_rate: float = 0.0
+    accepted_mutation_count: int = 0
+    verification_failure_count: int = 0
+    provider_failure_count: int = 0
+    retry_count: int = 0
+    mutation_categories: dict[str, int] = Field(default_factory=dict)
 
 
 class MutationHistoryListPayload(BaseModel):

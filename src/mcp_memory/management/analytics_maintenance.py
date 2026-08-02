@@ -34,6 +34,12 @@ _RUN_REPORTED_DELTA_KEYS: tuple[tuple[str, str], ...] = (
     ("meaningful_actions", "meaningful_actions"),
     ("mutation_count", "mutation_count"),
     ("lines_compressed", "lines_compressed"),
+    ("valid_plan_count", "valid_plan_count"),
+    ("no_op_count", "no_op_count"),
+    ("accepted_mutation_count", "accepted_mutation_count"),
+    ("verification_failure_count", "verification_failure_count"),
+    ("provider_failure_count", "provider_failure_count"),
+    ("retry_count", "retry_count"),
 )
 
 _MAINTENANCE_FAMILY_DEFS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -82,6 +88,14 @@ class _MaintenanceSummaryAccumulator:
     meaningful_actions: int = 0
     mutation_count: int = 0
     lines_compressed: int = 0
+    valid_plan_count: int = 0
+    no_op_count: int = 0
+    accepted_mutation_count: int = 0
+    verification_failure_count: int = 0
+    provider_failure_count: int = 0
+    retry_count: int = 0
+    mutation_categories: dict[str, int] = field(default_factory=dict)
+    curation_runs: int = 0
 
     @property
     def structured_delta_total(self) -> int:
@@ -142,8 +156,20 @@ def build_maintenance_summary(
         agent_families[task_name] = (family_key, family_label)
 
         deltas = _run_reported_delta_counts(row.result)
-        _update_maintenance_summary_accumulator(family_acc, task_name=task_name, status=row.status, deltas=deltas)
-        _update_maintenance_summary_accumulator(agent_acc, task_name=task_name, status=row.status, deltas=deltas)
+        _update_maintenance_summary_accumulator(
+            family_acc,
+            task_name=task_name,
+            status=row.status,
+            deltas=deltas,
+            result=row.result,
+        )
+        _update_maintenance_summary_accumulator(
+            agent_acc,
+            task_name=task_name,
+            status=row.status,
+            deltas=deltas,
+            result=row.result,
+        )
 
         bucket_start = int(completed_at // bucket_seconds) * bucket_seconds
         family_bucket = family_bucket_totals.setdefault(family_key, {}).setdefault(
@@ -172,6 +198,15 @@ def build_maintenance_summary(
             mutation_count=accumulator.mutation_count,
             lines_compressed=accumulator.lines_compressed,
             delta_total=accumulator.delta_total,
+            valid_plan_count=accumulator.valid_plan_count,
+            no_op_count=accumulator.no_op_count,
+            accepted_mutation_count=accumulator.accepted_mutation_count,
+            verification_failure_count=accumulator.verification_failure_count,
+            provider_failure_count=accumulator.provider_failure_count,
+            retry_count=accumulator.retry_count,
+            valid_plan_rate=_ratio(accumulator.valid_plan_count, accumulator.curation_runs),
+            no_op_rate=_ratio(accumulator.no_op_count, accumulator.curation_runs),
+            mutation_categories=dict(sorted(accumulator.mutation_categories.items())),
         )
         for family_key, family_label, _task_names in _MAINTENANCE_FAMILY_DEFS
         if (accumulator := family_accumulators.get(family_key)) is not None
@@ -236,6 +271,12 @@ def _run_reported_delta_counts(result: TaskResultView) -> dict[str, int]:
         "meaningful_actions": result.meaningful_actions,
         "mutation_count": result.mutation_count,
         "lines_compressed": result.lines_compressed,
+        "valid_plan_count": int(_curation_valid_plan(result)),
+        "no_op_count": int(result.curation_outcome == "no_op"),
+        "accepted_mutation_count": result.curation_accepted_mutation_count,
+        "verification_failure_count": result.curation_verification_failure_count,
+        "provider_failure_count": result.curation_provider_failure_count,
+        "retry_count": result.curation_retry_count,
     }
     return {
         attribute_name: max(value_by_result_key[result_key] or 0, 0)
@@ -249,6 +290,7 @@ def _update_maintenance_summary_accumulator(
     task_name: str,
     status: str,
     deltas: dict[str, int],
+    result: TaskResultView,
 ) -> None:
     accumulator.task_names.add(task_name)
     accumulator.total_runs += 1
@@ -260,6 +302,27 @@ def _update_maintenance_summary_accumulator(
         accumulator.retry_runs += 1
     for attribute_name, value in deltas.items():
         setattr(accumulator, attribute_name, getattr(accumulator, attribute_name) + value)
+    if result.curation_outcome is not None:
+        accumulator.curation_runs += 1
+        for category, value in result.curation_mutation_categories.items():
+            accumulator.mutation_categories[category] = accumulator.mutation_categories.get(category, 0) + value
+
+
+def _curation_valid_plan(result: TaskResultView) -> bool:
+    if result.curation_valid_plan is not None:
+        return result.curation_valid_plan
+    return result.curation_outcome in {
+        "applied",
+        "partially_applied",
+        "no_op",
+        "stale_plan",
+        "verification_failed",
+        "deferred",
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    return 0.0 if denominator <= 0 else round(numerator / denominator, 4)
 
 
 def _build_agent_yield_payload(
@@ -291,6 +354,15 @@ def _build_agent_yield_payload(
         mutation_count=accumulator.mutation_count,
         lines_compressed=accumulator.lines_compressed,
         delta_total=accumulator.delta_total,
+        valid_plan_count=accumulator.valid_plan_count,
+        no_op_count=accumulator.no_op_count,
+        accepted_mutation_count=accumulator.accepted_mutation_count,
+        verification_failure_count=accumulator.verification_failure_count,
+        provider_failure_count=accumulator.provider_failure_count,
+        retry_count=accumulator.retry_count,
+        valid_plan_rate=_ratio(accumulator.valid_plan_count, accumulator.curation_runs),
+        no_op_rate=_ratio(accumulator.no_op_count, accumulator.curation_runs),
+        mutation_categories=dict(sorted(accumulator.mutation_categories.items())),
         actions_per_completed_run=0.0 if denominator == 0 else round(accumulator.action_total / denominator, 4),
         lines_per_completed_run=0.0 if denominator == 0 else round(accumulator.lines_compressed / denominator, 4),
         delta_per_completed_run=0.0 if denominator == 0 else round(accumulator.delta_total / denominator, 4),

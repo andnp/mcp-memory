@@ -18,6 +18,25 @@ from mcp_memory.management.query_runner import ManagementQueryRunner
 
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
+_VALID_PLAN_OUTCOMES = frozenset(
+    {
+        "applied",
+        "partially_applied",
+        "no_op",
+        "stale_plan",
+        "verification_failed",
+        "deferred",
+    }
+)
+_MUTATION_CATEGORY_BY_OPERATION = {
+    "create_link": "structural_link",
+    "remove_link": "structural_link",
+    "merge_memories": "structural_link",
+    "split_memory": "structural_link",
+    "normalize_memory": "content_tag",
+    "rewrite_memory": "content_tag",
+    "archive_memory": "retention",
+}
 
 
 def build_curation_metrics(
@@ -36,7 +55,8 @@ def build_curation_metrics(
 
     run_rows = runner.fetchall(
         """
-        SELECT run_id, state, outcome, rejection_codes_json, created_at
+        SELECT run_id, state, outcome, rejection_codes_json, retry_reason,
+               budget_usage_json, created_at
         FROM curation_runs
         """
     )
@@ -134,12 +154,30 @@ def build_curation_metrics(
     rejection_reasons.update(receipt_rejection_reasons)
 
     verified_receipts = sum(1 for row in receipts if row.get("status") == "verified")
+    verification_failure_count = sum(
+        1 for row in receipts if row.get("status") == "verification_failed"
+    )
     terminal_receipts = sum(
         1
         for row in receipts
         if row.get("status") in {"verified", "verification_failed", "rejected", "stale", "failed"}
     )
     verified_yield = _ratio(verified_receipts, len(receipts))
+    valid_plan_count = sum(
+        1 for row in runs if _text(row.get("outcome"), "") in _VALID_PLAN_OUTCOMES
+    )
+    accepted_mutation_count = sum(
+        _json_non_negative_int(_json_mapping(row.get("budget_usage_json")).get("accepted_mutations"))
+        for row in runs
+    )
+    provider_failure_count = sum(
+        1 for row in runs if row.get("outcome") == "provider_failed"
+    )
+    retry_count = sum(_retry_count(row) for row in runs)
+    mutation_categories = Counter(
+        _mutation_category(_text(row.get("operation"), "unknown"))
+        for row in receipts
+    )
 
     history_event_count = len(events)
     restorable_event_count = sum(
@@ -188,6 +226,14 @@ def build_curation_metrics(
         verified_yield=verified_yield,
         verified_receipt_count=verified_receipts,
         terminal_receipt_count=terminal_receipts,
+        valid_plan_count=valid_plan_count,
+        valid_plan_rate=_ratio(valid_plan_count, len(runs)),
+        no_op_rate=_ratio(run_outcomes.get("no_op", 0), len(runs)),
+        accepted_mutation_count=accepted_mutation_count,
+        verification_failure_count=verification_failure_count,
+        provider_failure_count=provider_failure_count,
+        retry_count=retry_count,
+        mutation_categories=dict(sorted(mutation_categories.items())),
     )
 
 
@@ -212,6 +258,18 @@ def _build_specialist_routes(rows: Sequence[Mapping[str, object]]) -> CurationSp
 
 def _is_specialist_route(value: object) -> bool:
     return _json_mapping(value).get("route_kind") == "specialist_route"
+
+
+def _mutation_category(operation: str) -> str:
+    return _MUTATION_CATEGORY_BY_OPERATION.get(operation, "other")
+
+
+def _retry_count(row: Mapping[str, object]) -> int:
+    usage = _json_mapping(row.get("budget_usage_json"))
+    attempts = _json_non_negative_int(usage.get("planner_attempts"))
+    if attempts > 1:
+        return attempts - 1
+    return 1 if row.get("retry_reason") else 0
 
 
 def _json_mapping(value: object) -> dict[str, Any]:
@@ -279,6 +337,11 @@ def _integer(value: object) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _json_non_negative_int(value: object) -> int:
+    result = _integer(value)
+    return max(result, 0)
 
 
 def _ratio(numerator: int, denominator: int) -> float:

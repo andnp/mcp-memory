@@ -34,6 +34,15 @@ _MUTATION_OUTCOME_KEYS: tuple[str, ...] = (
     "degraded",
     "restored",
 )
+_CURATION_MUTATION_CATEGORY_BY_OPERATION = {
+    "create_link": "structural_link",
+    "remove_link": "structural_link",
+    "merge_memories": "structural_link",
+    "split_memory": "structural_link",
+    "normalize_memory": "content_tag",
+    "rewrite_memory": "content_tag",
+    "archive_memory": "retention",
+}
 _UNSUPPORTED_JSON_VALUE = object()
 
 
@@ -75,6 +84,64 @@ class TaskResultView(BaseModel):
     @property
     def restored(self) -> int | None:
         return self.mutation_outcome.restored
+
+    @property
+    def curation_outcome(self) -> str | None:
+        return _coerce_str(self.raw_payload.get("curation_outcome"))
+
+    @property
+    def curation_valid_plan(self) -> bool | None:
+        value = self.raw_payload.get("curation_valid_plan")
+        return value if isinstance(value, bool) else None
+
+    @property
+    def curation_no_op_count(self) -> int:
+        return _curation_campaign_int(self.raw_payload, "no_op_count")
+
+    @property
+    def curation_accepted_mutation_count(self) -> int:
+        return _curation_campaign_int(self.raw_payload, "budget_usage", "accepted_mutations")
+
+    @property
+    def curation_verification_failure_count(self) -> int:
+        return _curation_campaign_int(self.raw_payload, "verification_failure_count")
+
+    @property
+    def curation_provider_failure_count(self) -> int:
+        return int(self.curation_outcome == "provider_failed")
+
+    @property
+    def curation_retry_count(self) -> int:
+        retries = _curation_campaign_int(self.raw_payload, "budget_usage", "planner_attempts")
+        if retries > 1:
+            return retries - 1
+        return int(bool(_curation_campaign_value(self.raw_payload, "retry_reason")))
+
+    @property
+    def curation_mutation_categories(self) -> dict[str, int]:
+        campaign = _curation_campaign_mapping(self.raw_payload)
+        categories = campaign.get("mutation_categories")
+        if isinstance(categories, Mapping):
+            normalized = {
+                str(key): value
+                for key, raw_value in categories.items()
+                if (value := _coerce_int(raw_value)) is not None and value >= 0
+            }
+            if normalized:
+                return dict(sorted(normalized.items()))
+        receipts = campaign.get("receipts")
+        if not isinstance(receipts, list):
+            return {}
+        derived: dict[str, int] = {}
+        for receipt in receipts:
+            if not isinstance(receipt, Mapping):
+                continue
+            operation = receipt.get("operation")
+            if not isinstance(operation, str):
+                continue
+            category = _CURATION_MUTATION_CATEGORY_BY_OPERATION.get(operation, "other")
+            derived[category] = derived.get(category, 0) + 1
+        return dict(sorted(derived.items()))
 
     def metadata_copy(self) -> RunResultMetadataPayload:
         return self.metadata.model_copy(deep=True)
@@ -246,6 +313,25 @@ def _coerce_str(value: JsonValue | object) -> str | None:
 
 def _extract_mutation_outcome(result: JsonObject) -> MutationOutcomePayload:
     return MutationOutcomePayload(**{key: _coerce_int(result.get(key)) for key in _MUTATION_OUTCOME_KEYS})
+
+
+def _curation_campaign_mapping(payload: Mapping[str, object]) -> Mapping[str, object]:
+    campaign = payload.get("curation_campaign_result")
+    return campaign if isinstance(campaign, Mapping) else {}
+
+
+def _curation_campaign_value(payload: Mapping[str, object], *keys: str) -> object:
+    value: object = _curation_campaign_mapping(payload)
+    for key in keys:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _curation_campaign_int(payload: Mapping[str, object], *keys: str) -> int:
+    value = _coerce_int(_curation_campaign_value(payload, *keys))
+    return max(value or 0, 0)
 
 
 def _sum_mutation_outcome(mutation_outcome: MutationOutcomePayload) -> int | None:
