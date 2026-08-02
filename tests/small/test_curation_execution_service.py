@@ -6,25 +6,44 @@ from uuid import UUID
 
 import pytest
 
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
+from mcp_memory.core.curation_context import (
+    AcceptedMaintenanceRead,
+    build_context_packet,
+)
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
-from mcp_memory.core.curation_execution_service import CurationExecutionService, _hydrate_record_tokens
+from mcp_memory.core.curation_execution_service import (
+    CurationExecutionService,
+    _hydrate_record_tokens,
+)
 from mcp_memory.core.curation_executor import CurationPolicyRejection
-from mcp_memory.core.curation_models import CurationRunOutcome
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ClaimManifest,
     CreateLinkAction,
+    CurationRunOutcome,
+    EvidenceRef,
     LinkAssertion,
     MergeMemoriesAction,
     NormalizeMemoryAction,
 )
-from mcp_memory.core.curation_policy import OperationRisk, PolicyDecision, PolicyMode, RejectionCode
+from mcp_memory.core.curation_policy import (
+    OperationRisk,
+    PolicyDecision,
+    PolicyMode,
+    RejectionCode,
+)
 from mcp_memory.core.curation_routing import MaintenanceFamily
-from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState, CurationRun, CurationRunState
-from mcp_memory.core.curation_validation import AcceptedCurationAction, CurationValidationResult
+from mcp_memory.core.curation_validation import (
+    AcceptedCurationAction,
+    CurationValidationResult,
+)
 from mcp_memory.core.ports.curation import CurationActionFatalError
-
+from mcp_memory.curation_store import (
+    CurationActionReceipt,
+    CurationReceiptState,
+    CurationRun,
+    CurationRunState,
+)
 
 pytestmark = pytest.mark.small
 
@@ -216,6 +235,16 @@ def test_hydrates_omitted_create_link_context_for_matching_absent_link() -> None
         rationale="connect related records",
         link_type="RELATED",
         context="The records cover the same operational area.",
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=CANONICAL_ID,
+                    target_id=SOURCE_ID,
+                    link_type="RELATED",
+                    context="The records cover the same operational area.",
+                )
+            )
+        ],
         preconditions=ActionPreconditions(
             absent_links=[
                 LinkAssertion(
@@ -243,6 +272,16 @@ def test_preserves_conflicting_create_link_context() -> None:
         rationale="connect related records",
         link_type="RELATED",
         context="The records cover the same operational area.",
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=CANONICAL_ID,
+                    target_id=SOURCE_ID,
+                    link_type="RELATED",
+                    context="The records cover the same operational area.",
+                )
+            )
+        ],
         preconditions=ActionPreconditions(
             absent_links=[
                 LinkAssertion(

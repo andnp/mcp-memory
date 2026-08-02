@@ -6,16 +6,18 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from mcp_memory.core.curation_context import (
+    AcceptedMaintenanceRead,
+    build_context_packet,
+)
+from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
+from mcp_memory.core.curation_harness import CurationPlannerTools
 from mcp_memory.core.curation_models import (
     CurationPlan,
     CurationPlanningRequest,
     RetentionDecision,
     RetentionReason,
 )
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
-from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
-from mcp_memory.core.curation_validation import CurationRetryFeedback
-from mcp_memory.core.curation_harness import CurationPlannerTools
 from mcp_memory.core.curation_planner import (
     CurationPlannerCancelledError,
     CurationPlannerProviderError,
@@ -26,6 +28,7 @@ from mcp_memory.core.curation_planner import (
     PlannerExecutionStatus,
     _build_planner_prompt,
 )
+from mcp_memory.core.curation_validation import CurationRetryFeedback
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
 
@@ -81,7 +84,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "merging never creates a record" in contract
     assert "both endpoints to be visible" in contract
     assert "exact context.record_tokens value" in contract
-    assert "exact endpoint, type, and context evidence" in contract
+    assert "non-empty relationship context" in contract
+    assert "memory excerpts alone are not link evidence" in contract
     assert "exact absent-link precondition" in contract
     assert "Only split_memory may introduce child records" in contract
     assert "content is the final persisted durable memory body" in contract
@@ -101,6 +105,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "Every memory ID in an action or retention decision must be copied" in prompt
     assert "content is the final persisted durable memory body" in prompt
     assert "do not write status prose" in prompt
+    assert "evidence.link matching the exact endpoints" in prompt
     assert "Give every seed exactly one disposition" in prompt
     assert "If no visible canonical is appropriate, retain the memory" in prompt
 

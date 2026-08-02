@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from collections.abc import Mapping as MappingABC
 from typing import Any, Callable, Generic, Mapping, Protocol, TypeVar, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
+from mcp_memory.core.curation_context import (
+    CurationContextPacket as ImmutableCurationContextPacket,
+)
+from mcp_memory.core.curation_models import (
+    CurationContextPacket,
+    CurationPlan,
+    CurationPlanningRequest,
+)
 from mcp_memory.core.provider_admission import classify_provider_failure
-from mcp_memory.core.curation_models import CurationContextPacket
-from mcp_memory.core.curation_models import CurationPlan, CurationPlanningRequest
-from mcp_memory.core.curation_context import CurationContextPacket as ImmutableCurationContextPacket
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
 
@@ -537,7 +542,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "merge_memories canonical_id must be an existing visible record; merging never creates a record.",
             "create_link and remove_link require both endpoints to be visible in context.",
             "Every action affecting a visible memory must include its exact context.record_tokens value in preconditions.record_tokens.",
-            "create_link requires exact endpoint, type, and context evidence plus an exact absent-link precondition.",
+            "create_link requires a non-empty relationship context, exact endpoint/type/context link evidence, and an exact absent-link precondition; memory excerpts alone are not link evidence.",
             "Only split_memory may introduce child records, and only through its typed children surface; never invent child IDs.",
             "For rewrite_memory and merge_memories, content is the final persisted durable memory body, not a description of the mutation.",
             "For merge_memories, canonical_id is the retained base; preserve its supported claims, integrate justified source claims, and make content stand alone after sources are archived.",
@@ -569,8 +574,10 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "an existing visible record and merge never creates records; both create-link "
         "endpoints must be visible. Copy exact record tokens from context.record_tokens "
         "into preconditions.record_tokens for every affected visible memory. A "
-        "create_link action also requires exact endpoint, type, and context evidence "
-        "plus an exact absent-link precondition. Only split may introduce child "
+        "create_link requires a non-empty relationship context, an evidence.link "
+        "matching the exact endpoints, link type, and context, plus an exact "
+        "absent-link precondition; memory excerpts alone are not link evidence. "
+        "Only split may introduce child "
         "records through its typed children surface. For rewrite and merge actions, "
         "content is the final persisted durable memory body, not a description of the "
         "mutation: preserve the canonical's supported claims, integrate justified "

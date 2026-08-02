@@ -5,15 +5,25 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead, build_context_packet
-from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier
-from mcp_memory.core.curation_models import CurationPlan, CreateLinkAction, EvidenceRef
+from mcp_memory.core.curation_context import (
+    AcceptedMaintenanceRead,
+    build_context_packet,
+)
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
+from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier
+from mcp_memory.core.curation_models import (
+    CreateLinkAction,
+    CurationPlan,
+    EvidenceRef,
+    LinkAssertion,
+)
 from mcp_memory.core.curation_planner import FakeCurationPlanner, FakePlannerScenario
 from mcp_memory.curation_store import SQLiteCurationStore
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.work_item_store import SQLiteWorkItemRepository, WORK_FAMILY_GRAPH_LINK_REVIEW
-
+from mcp_memory.work_item_store import (
+    WORK_FAMILY_GRAPH_LINK_REVIEW,
+    SQLiteWorkItemRepository,
+)
 
 pytestmark = pytest.mark.medium
 
@@ -48,9 +58,20 @@ class _RequestBoundPlanner:
                     source_id=source_id,
                     target_id=target_id,
                     link_type="DEPENDS_ON",
+                    context="The source depends on the target.",
                     confidence=0.9,
                     rationale="the graph specialist owns this relationship",
-                    evidence=[EvidenceRef(memory_id=source_id, revision_token="evidence-1")],
+                    evidence=[
+                        EvidenceRef(
+                            link=LinkAssertion(
+                                source_id=source_id,
+                                target_id=target_id,
+                                link_type="DEPENDS_ON",
+                                context="The source depends on the target.",
+                            ),
+                            revision_token="evidence-1",
+                        )
+                    ],
                 )
             ],
         )
@@ -67,7 +88,7 @@ def _harness(db_manager: DatabaseManager) -> CurationDryRunHarness:
 
 
 @pytest.mark.asyncio
-async def test_harness_enqueues_specialist_route_without_executing_it(db_manager: DatabaseManager) -> None:
+async def test_harness_defers_accepted_link_without_executor(db_manager: DatabaseManager) -> None:
     source_id = uuid4()
     target_id = uuid4()
     context = build_context_packet(
@@ -86,7 +107,7 @@ async def test_harness_enqueues_specialist_route_without_executing_it(db_manager
     result = await _harness(db_manager).run(frontier)
     work_items = SQLiteWorkItemRepository(db_manager)
 
-    assert result.specialist_work_items
+    assert not result.specialist_work_items
     assert result.outcome.value == "deferred"
-    assert len(work_items.list_items(family_key=WORK_FAMILY_GRAPH_LINK_REVIEW)) == 1
+    assert not work_items.list_items(family_key=WORK_FAMILY_GRAPH_LINK_REVIEW)
     assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0

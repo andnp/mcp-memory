@@ -4,7 +4,12 @@ from uuid import uuid4
 
 import pytest
 
-from mcp_memory.core.curation_models import ActionPreconditions, CreateLinkAction, EvidenceRef
+from mcp_memory.core.curation_models import (
+    ActionPreconditions,
+    CreateLinkAction,
+    EvidenceRef,
+    LinkAssertion,
+)
 from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import CurationSpecialistRoute
 from mcp_memory.core.task_handlers.maintenance_work_items import (
@@ -13,11 +18,10 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
 )
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
-    SQLiteWorkItemRepository,
     WORK_FAMILY_GRAPH_LINK_REVIEW,
     WORK_FAMILY_OPERATOR_REVIEW,
+    SQLiteWorkItemRepository,
 )
-
 
 pytestmark = pytest.mark.small
 
@@ -30,7 +34,7 @@ def _route(
     target_id=None,
     action_id=None,
     link_type: str = "DEPENDS_ON",
-    context: str | None = None,
+    context: str = "The source depends on the target.",
 ):
     source_id = source_id or uuid4()
     target_id = target_id or uuid4()
@@ -42,7 +46,17 @@ def _route(
         context=context,
         confidence=0.9,
         rationale="route the relationship to its owning specialist",
-        evidence=[EvidenceRef(memory_id=source_id, revision_token=revision_token)],
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=source_id,
+                    target_id=target_id,
+                    link_type=link_type,
+                    context=context,
+                ),
+                revision_token=revision_token,
+            )
+        ],
         preconditions=ActionPreconditions(record_tokens={source_id: revision_token}),
     )
     return CurationSpecialistRoute(action=action, family=family)

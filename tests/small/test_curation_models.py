@@ -6,26 +6,26 @@ from pydantic import TypeAdapter, ValidationError
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ArchiveMemoryAction,
-    ClaimMapping,
     ClaimManifest,
+    ClaimMapping,
+    CreateLinkAction,
     CurationAction,
     CurationBudgetUsage,
     CurationContextPacket,
     CurationPlan,
     CurationRunOutcome,
     CurationRunResult,
-    CreateLinkAction,
     EvidenceRef,
     LinkAssertion,
     MergeMemoriesAction,
     MutationReceipt,
     NormalizeMemoryAction,
-    RemoveLinkAction,
     ReceiptStatus,
-    SplitMemoryAction,
-    RewriteMemoryAction,
+    RemoveLinkAction,
     RetentionDecision,
     RetentionReason,
+    RewriteMemoryAction,
+    SplitMemoryAction,
 )
 
 
@@ -144,13 +144,26 @@ def test_link_actions_require_canonical_link_type(
 
 
 def test_link_actions_allow_project_defined_canonical_link_type() -> None:
+    source_id = uuid4()
+    target_id = uuid4()
     action = CreateLinkAction(
         action_id=uuid4(),
-        source_id=uuid4(),
-        target_id=uuid4(),
+        source_id=source_id,
+        target_id=target_id,
         link_type="PROJECT_CAUSES_V2",
         confidence=1,
         rationale="link memories",
+        context="The source causes the target.",
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=source_id,
+                    target_id=target_id,
+                    link_type="PROJECT_CAUSES_V2",
+                    context="The source causes the target.",
+                )
+            )
+        ],
     )
     assert action.link_type == "PROJECT_CAUSES_V2"
 
@@ -183,7 +196,17 @@ def test_action_union_accepts_all_current_operations() -> None:
             link_type="DEPENDS_ON",
             confidence=1,
             rationale="link",
-            evidence=[EvidenceRef(link=LinkAssertion(source_id=source_id, target_id=target_id, link_type="DEPENDS_ON"))],
+            context="The source depends on the target.",
+            evidence=[
+                EvidenceRef(
+                    link=LinkAssertion(
+                        source_id=source_id,
+                        target_id=target_id,
+                        link_type="DEPENDS_ON",
+                        context="The source depends on the target.",
+                    )
+                )
+            ],
         ),
         RemoveLinkAction(
             action_id=uuid4(),

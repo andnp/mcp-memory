@@ -7,12 +7,16 @@ from uuid import UUID, uuid4
 import pytest
 
 from mcp_memory.core.curation_executor import CurationExecutor, CurationPolicyRejection
-from mcp_memory.core.curation_identity import canonical_token, record_snapshot, record_token
+from mcp_memory.core.curation_identity import (
+    canonical_token,
+    record_snapshot,
+    record_token,
+)
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ArchiveMemoryAction,
-    ClaimMapping,
     ClaimManifest,
+    ClaimMapping,
     CreateLinkAction,
     EvidenceRef,
     LinkAssertion,
@@ -29,11 +33,16 @@ from mcp_memory.curation_action_store import (
     MutationResult,
     SQLiteCurationActionStore,
 )
-from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
+from mcp_memory.curation_store import (
+    CurationActionReceipt,
+    CurationReceiptState,
+    CurationRun,
+    CurationRunState,
+    SQLiteCurationStore,
+)
 from mcp_memory.mutation_history import ProtectionMode
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.utils.db import DatabaseManager
-
 
 pytestmark = pytest.mark.small
 
@@ -471,15 +480,24 @@ def test_create_link_rejects_generic_vocabulary_without_exact_evidence_or_precon
         target_id=target_id,
         confidence=1,
         rationale="architecture and testing are related",
-        evidence=[EvidenceRef(memory_id=source_id), EvidenceRef(memory_id=target_id)],
+        evidence=[
+            EvidenceRef(
+                link=LinkAssertion(
+                    source_id=source_id,
+                    target_id=target_id,
+                    link_type="SUPPORTS",
+                    context="The source supports the target.",
+                )
+            )
+        ],
         link_type="SUPPORTS",
-        context="",
+        context="The source supports the target.",
         preconditions=ActionPreconditions(
             record_tokens={source_id: record_token(source), target_id: record_token(target)}
         ),
     )
 
-    with pytest.raises(CurationActionFatalError, match="exact endpoint"):
+    with pytest.raises(CurationActionFatalError, match="absent-link"):
         CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
             action,
             run_id=run.run_id,

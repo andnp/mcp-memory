@@ -159,6 +159,12 @@ def test_management_service_exposes_isolated_typed_capabilities(db_manager) -> N
     )
 
     assert isinstance(service.capabilities, ManagementCapabilities)
+    assert service.capabilities.reporting.health is service._runtime_health_service
+    assert service.capabilities.reporting.analytics is service._analytics_service
+    assert service.capabilities.maintenance.administration is service._task_administration_service
+    assert service.capabilities.mutation.service is service._mutation_history_service
+    assert service.capabilities.runtime.logs is service._runtime_log_service
+    assert service.capabilities.memory.service is service._memory_service
     assert service.capabilities.reporting.get_health() == service.get_health()
     assert service.capabilities.maintenance.list_tasks() == service.list_tasks()
     assert service.capabilities.mutation.list_mutation_history().events == []

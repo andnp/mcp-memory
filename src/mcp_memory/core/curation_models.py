@@ -8,7 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-
 CanonicalLinkType = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
 
 
@@ -126,6 +125,22 @@ class CreateLinkAction(ActionEnvelope):
     target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
     link_type: CanonicalLinkType
     context: str | None = None
+
+    @model_validator(mode="after")
+    def requires_exact_evidence(self) -> CreateLinkAction:
+        context = (self.context or "").strip()
+        if not context:
+            raise ValueError("create_link requires non-empty relationship context")
+        if not any(
+            evidence.link is not None
+            and evidence.link.source_id == self.source_id
+            and evidence.link.target_id == self.target_id
+            and evidence.link.link_type.strip() == self.link_type.strip()
+            and (evidence.link.context or "").strip() == context
+            for evidence in self.evidence
+        ):
+            raise ValueError("create_link requires exact link evidence")
+        return self
 
 
 class RemoveLinkAction(ActionEnvelope):

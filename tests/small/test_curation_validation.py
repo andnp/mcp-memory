@@ -11,7 +11,10 @@ from mcp_memory.core.curation_models import (
 )
 from mcp_memory.core.curation_policy import RejectionCode
 from mcp_memory.core.curation_routing import MaintenanceFamily
-from mcp_memory.core.curation_validation import CurationMutationBudget, validate_curation_plan
+from mcp_memory.core.curation_validation import (
+    CurationMutationBudget,
+    validate_curation_plan,
+)
 from mcp_memory.mutation_history import ProtectionMode
 
 
@@ -57,6 +60,15 @@ def test_validation_rejects_hidden_targets_and_budgets() -> None:
     action = {
         "operation": "create_link", "action_id": uuid4(), "source_id": seed, "target_id": hidden,
         "link_type": "RELATED", "confidence": 1, "rationale": "link",
+        "context": "The source and target are related.",
+        "evidence": [{
+            "link": {
+                "source_id": seed,
+                "target_id": hidden,
+                "link_type": "RELATED",
+                "context": "The source and target are related.",
+            }
+        }],
     }
     plan = _plan(seed, run_id, plan_id, "frontier", "context", actions=[action])
     result = validate_curation_plan(
@@ -118,7 +130,15 @@ def test_validation_classifies_actions_without_mutating_or_routing_work() -> Non
     create_link = {
         "operation": "create_link", "action_id": uuid4(), "source_id": seed, "target_id": linked,
         "link_type": "RELATED", "confidence": 1, "rationale": "evidence",
-        "evidence": [{"memory_id": seed}],
+        "context": "The source and target cover related operational guidance.",
+        "evidence": [{
+            "link": {
+                "source_id": seed,
+                "target_id": linked,
+                "link_type": "RELATED",
+                "context": "The source and target cover related operational guidance.",
+            }
+        }],
     }
     result = validate_curation_plan(
         _plan(seed, run_id, plan_id, "frontier", _context(seed, "context").context_fingerprint,
@@ -229,7 +249,15 @@ def test_validation_accepts_all_policy_authorized_operation_families() -> None:
             "link_type": "RELATED",
             "confidence": 1,
             "rationale": "link",
-            "evidence": [{"link": {"source_id": source, "target_id": target, "link_type": "RELATED"}}],
+            "context": "The source and target are related.",
+            "evidence": [{
+                "link": {
+                    "source_id": source,
+                    "target_id": target,
+                    "link_type": "RELATED",
+                    "context": "The source and target are related.",
+                }
+            }],
             "preconditions": {
                 "record_tokens": {source: "tok-source", target: "tok-target"},
                 "absent_links": [{"source_id": source, "target_id": target, "link_type": "RELATED"}],
