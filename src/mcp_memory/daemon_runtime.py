@@ -208,7 +208,7 @@ class DaemonRuntimeSession:
             await self.worker.stop(self.spec.config.daemon.shutdown_grace_seconds)
             self.worker = None
         if self.composition is not None:
-            self.composition.context.close()
+            self.composition.close()
             self.composition = None
         remove_metadata(self.metadata_path, expected_pid=os.getpid())
         self.runtime_lock.release()

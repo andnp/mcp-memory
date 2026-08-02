@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -405,6 +405,7 @@ class ApplicationContext:
     curation_action_store: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None
+    _auxiliary_resources_closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.provider_usage is not None:
@@ -450,6 +451,18 @@ class ApplicationContext:
 
     def background_task_bootstrap_view(self) -> BackgroundTaskBootstrapContext:
         return cast(BackgroundTaskBootstrapContext, _ApplicationContextView(self, _BACKGROUND_TASK_BOOTSTRAP_FIELDS))
+
+    def close_auxiliary_resources(self, *, excluded_resources: tuple[Any, ...] = ()) -> None:
+        """Close context-owned runtime resources not owned by the storage group."""
+        if self._auxiliary_resources_closed:
+            return
+        self._auxiliary_resources_closed = True
+        retrieval_telemetry = self.retrieval_telemetry
+        if any(retrieval_telemetry is resource for resource in excluded_resources):
+            return
+        close_method = getattr(retrieval_telemetry, "close", None)
+        if callable(close_method):
+            close_method()
 
     def close(self) -> None:
         for resource in (

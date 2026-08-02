@@ -78,6 +78,24 @@ class RuntimeResources:
     embedder: EmbeddingBatchProvider | None
     provider_registry: dict[str, dict[str, object]]
     internal_tool_call_tracker: InternalToolCallTracker
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def _storage_closeables(self) -> tuple[object, ...]:
+        return (
+            self.storage.read_cache,
+            self.storage.runtime_logs,
+            self.storage.embedding_integrity_events,
+            self.storage.repository,
+            self.storage.db_manager,
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        object.__setattr__(self, "_closed", True)
+        closed_resource_ids: set[int] = set()
+        for resource in self._storage_closeables():
+            _close_resource_once(resource, closed_resource_ids)
 
 
 @dataclass(frozen=True)
@@ -85,10 +103,22 @@ class RuntimeComposition:
     context: ApplicationContext
     capabilities: RuntimeCapabilityBundles
     resources: RuntimeResources = field(default_factory=lambda: cast(RuntimeResources, None))
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.resources is None:
             object.__setattr__(self, "resources", _runtime_resources_from_context(self.context))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        object.__setattr__(self, "_closed", True)
+        try:
+            self.context.close_auxiliary_resources(
+                excluded_resources=self.resources._storage_closeables(),
+            )
+        finally:
+            self.resources.close()
 
 
 def resolve_workspace_runtime_spec(
@@ -270,6 +300,15 @@ def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResou
         provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),
         internal_tool_call_tracker=cast(InternalToolCallTracker, context.internal_tool_call_tracker),
     )
+
+
+def _close_resource_once(resource: object, closed_resource_ids: set[int]) -> None:
+    if resource is None or id(resource) in closed_resource_ids:
+        return
+    closed_resource_ids.add(id(resource))
+    close_method = getattr(resource, "close", None)
+    if callable(close_method):
+        close_method()
 
 
 def _build_provider_registry(
