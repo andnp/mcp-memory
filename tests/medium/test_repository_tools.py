@@ -22,10 +22,11 @@ async def test_search_and_read_tools_work_with_seeded_repository_records(
 
     try:
         assert runtime.repository is not None
+        assert runtime.workspace_id is not None
         record = runtime.repository.create_memory(
             title="Relational bootstrap",
             content="Wire repository-backed memory tools.",
-            workspace_ids=["workspace-a"],
+            workspace_ids=[runtime.workspace_id],
             tags=["testing", "sqlite"],
             summary="Repository-backed tool smoke test.",
             memory_type="plan",
@@ -41,14 +42,17 @@ async def test_search_and_read_tools_work_with_seeded_repository_records(
         search_result = await call_memory_tool(
             runtime,
             "search_memory_records",
-            {"workspace_id": "workspace-a", "query": "relational bootstrap"},
+            {"query": "relational bootstrap"},
         )
         read_payload = json.loads(read_result[0].text)
         search_payload = json.loads(search_result[0].text)
 
         assert read_payload["record"]["title"] == "Relational bootstrap"
         assert "metadata" not in read_payload["record"]
-        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
+        assert record.memory_ref is not None
+        assert [result["memory_ref"] for result in search_payload["results"]] == [
+            f"mem-{record.memory_ref}"
+        ]
     finally:
         runtime.close()
 
@@ -92,6 +96,9 @@ async def test_search_and_read_tools_persist_across_runtime_recreation(
         search_payload = json.loads(search_result[0].text)
 
         assert read_payload["record"]["title"] == "Persistent fact"
-        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
+        assert record.memory_ref is not None
+        assert [result["memory_ref"] for result in search_payload["results"]] == [
+            f"mem-{record.memory_ref}"
+        ]
     finally:
         second_runtime.close()
