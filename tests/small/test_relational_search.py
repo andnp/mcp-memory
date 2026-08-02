@@ -1,12 +1,14 @@
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from mcp_memory.config import Config
 from mcp_memory.core.search_ranking import RankingEngine, ScoringWeights
 from mcp_memory.embeddings import SQLiteVectorStore
+from mcp_memory.integrations.memory_retrieval import MemoryRetrievalPort
 from mcp_memory.relational.repository import RelationalMemoryRepository
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.relational.search import (
@@ -14,6 +16,7 @@ from mcp_memory.relational.search import (
     _to_relational_search_result,
 )
 from searchkernel.runtime import clear_query_embedding_cache
+from searchkernel.search.record_pipeline import RecordSearchResult
 from tests.small.maintenance_read_repository_contract import (
     assert_maintenance_read_preserves_telemetry,
 )
@@ -222,8 +225,8 @@ def test_search_operation_reuses_canonical_result_mapping() -> None:
         def search_sync(self, request):
             return SimpleNamespace(results=[search_result])
 
-    expected = _to_relational_search_result(search_result)
-    actual = SearchMemoryRecordsOperation(_Retrieval()).execute(
+    expected = _to_relational_search_result(cast(RecordSearchResult, search_result))
+    actual = SearchMemoryRecordsOperation(cast(MemoryRetrievalPort, _Retrieval())).execute(
         query="mapped result",
         workspace_id=None,
         limit=5,
