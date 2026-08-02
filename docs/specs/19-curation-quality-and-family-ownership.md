@@ -125,7 +125,7 @@ Until richer temporal fact semantics exist, apparently obsolete facts should be 
 - Preserve every durable claim or identify an allowed omission reason.
 - Preserve provenance, lineage metadata, workspace associations, and intentional links.
 - Reject rewrites whose primary effect is stylistic churn.
-- Keep automatic content rewriting in shadow mode until semantic-preservation evaluation passes.
+- Keep automatic content rewriting behind evidence, claim-manifest, protection, and verification gates.
 
 ### 7.3 Create or remove a link
 
@@ -258,7 +258,7 @@ Use persisted retrieval analytics as evidence, not as an automatic deletion rule
 
 ### 11.2 Before/after evaluation
 
-For shadow and sampled production runs, capture relevant historical or golden queries and compare:
+For sampled production runs, capture relevant historical or golden queries and compare:
 
 - rank of intended memories
 - irrelevant top-result rate
@@ -320,8 +320,7 @@ Required measurements by operation class:
 
 Initial rollout rules:
 
-- normalization and strongly evidenced link creation may graduate first
-- rewrite, link removal, split, merge, and archive require shadow evaluation by class
+- all supported operation classes run through the verified curator campaign
 - destructive false positives block rollout even when aggregate precision appears high
 - delete remains disabled until the mutation-history/restore specification's gates pass
 

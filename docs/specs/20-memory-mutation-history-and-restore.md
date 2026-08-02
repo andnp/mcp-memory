@@ -167,7 +167,7 @@ Protection is checked before provider disclosure, planning authorization, and ex
 | --- | --- |
 | `no_autonomous_mutation` | autonomous plans may inspect only if disclosure policy allows; every mutation is rejected |
 | `no_autonomous_destructive_change` | normalization/link creation may be allowed; rewrite, link removal, merge, split, archive, and delete require review |
-| `manual_review_required` | plans may be generated in shadow mode but cannot auto-apply |
+| `manual_review_required` | plans may be generated but cannot auto-apply |
 | `local_provider_only` | context may be sent only to an eligible local provider |
 | `no_external_provider_disclosure` | external planner context excludes the record entirely |
 | `pinned_active` | autonomous archive/delete is rejected; other mutation modes still apply |

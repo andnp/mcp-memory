@@ -1,4 +1,4 @@
-"""Curator rollout routing through the planning-only curation harness."""
+"""Curator rollout routing through the verified curation campaign."""
 
 from __future__ import annotations
 

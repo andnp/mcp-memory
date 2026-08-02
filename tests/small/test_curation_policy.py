@@ -16,15 +16,28 @@ from mcp_memory.core.curation_policy import (
     RejectionCode,
     evaluate_curation_action,
     is_generic_summary,
+    policy_mode,
 )
 
 
-def test_initial_policy_enables_only_low_risk_operations() -> None:
+def test_policy_enables_all_supported_operations() -> None:
     action = NormalizeMemoryAction(action_id=uuid4(), target_id=uuid4(), confidence=1, rationale="specific", summary="specific")
     decision = evaluate_curation_action(action, memory_types={action.target_id: "observation"})
     assert decision.risk is OperationRisk.LOW
     assert decision.mode is PolicyMode.ENABLED
     assert decision.authorized
+    assert all(
+        policy_mode(operation) is PolicyMode.ENABLED
+        for operation in (
+            "normalize_memory",
+            "create_link",
+            "rewrite_memory",
+            "remove_link",
+            "merge_memories",
+            "split_memory",
+            "archive_memory",
+        )
+    )
 
 
 def test_generic_summary_predicate_covers_known_boilerplate() -> None:
@@ -48,7 +61,7 @@ def test_risky_action_requires_evidence_and_complete_manifest() -> None:
         content="claim", claim_manifest=ClaimManifest(),
     )
     decision = evaluate_curation_action(action, memory_types={action.canonical_id: "observation", action.source_ids[0]: "observation"})
-    assert decision.mode is PolicyMode.SHADOW
+    assert decision.mode is PolicyMode.ENABLED
     assert RejectionCode.EVIDENCE_REQUIRED in decision.rejection_codes
     assert RejectionCode.CLAIM_MANIFEST_INCOMPLETE in decision.rejection_codes
     assert not decision.authorized

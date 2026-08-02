@@ -31,7 +31,6 @@ class OperationRisk(StrEnum):
 
 class PolicyMode(StrEnum):
     ENABLED = "enabled"
-    SHADOW = "shadow"
     DISABLED = "disabled"
 
 
@@ -64,7 +63,9 @@ class PolicyDecision:
         return self.mode == PolicyMode.ENABLED and not self.rejection_codes
 
 
-_SHADOW_OPERATIONS = {
+_SUPPORTED_OPERATIONS = {
+    "normalize_memory",
+    "create_link",
     "rewrite_memory",
     "remove_link",
     "merge_memories",
@@ -79,7 +80,7 @@ def classify_operation_risk(operation: str) -> OperationRisk:
         return OperationRisk.LOW
     if operation == "create_link":
         return OperationRisk.MODERATE
-    if operation in _SHADOW_OPERATIONS:
+    if operation in _SUPPORTED_OPERATIONS:
         return OperationRisk.HIGH
     if operation == "delete_memory":
         return OperationRisk.DISABLED
@@ -87,10 +88,8 @@ def classify_operation_risk(operation: str) -> OperationRisk:
 
 
 def policy_mode(operation: str) -> PolicyMode:
-    if operation in {"normalize_memory", "create_link"}:
+    if operation in _SUPPORTED_OPERATIONS:
         return PolicyMode.ENABLED
-    if operation in _SHADOW_OPERATIONS:
-        return PolicyMode.SHADOW
     return PolicyMode.DISABLED
 
 
