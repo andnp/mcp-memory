@@ -209,7 +209,8 @@ def _force_quality_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
     real_sampler = CurationQualitySampler
 
     def factory(**kwargs: Any) -> CurationQualitySampler:
-        return real_sampler(**kwargs, sample_rate=1.0)
+        kwargs["sample_rate"] = 1.0
+        return real_sampler(**kwargs)
 
     monkeypatch.setattr(curation_shadow, "CurationQualitySampler", factory)
 
