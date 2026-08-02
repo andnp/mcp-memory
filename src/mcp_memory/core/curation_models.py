@@ -129,8 +129,8 @@ class CreateLinkAction(ActionEnvelope):
     @model_validator(mode="after")
     def requires_exact_evidence(self) -> CreateLinkAction:
         context = (self.context or "").strip()
-        if not context:
-            raise ValueError("create_link requires non-empty relationship context")
+        if len(context.split()) < 2:
+            raise ValueError("create_link requires descriptive relationship context")
         if not any(
             evidence.link is not None
             and evidence.link.source_id == self.source_id

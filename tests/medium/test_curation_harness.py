@@ -7,7 +7,19 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead, CurationReadBudget, build_context_packet
+from mcp_memory.core.curation_context import (
+    AcceptedMaintenanceRead,
+    CurationReadBudget,
+    build_context_packet,
+)
+from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
+from mcp_memory.core.curation_harness import (
+    CurationDryRunHarness,
+    CurationFrontier,
+    CurationHarnessConfig,
+    WorkItemAction,
+)
+from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ArchiveMemoryAction,
@@ -26,30 +38,30 @@ from mcp_memory.core.curation_models import (
     RewriteMemoryAction,
     SplitMemoryAction,
 )
-from mcp_memory.core.curation_identity import record_token
-from mcp_memory.core.curation_harness import (
-    CurationDryRunHarness,
-    CurationFrontier,
-    CurationHarnessConfig,
-    WorkItemAction,
-)
 from mcp_memory.core.curation_planner import (
     CurationPlannerCancelledError,
     CurationPlannerProviderError,
     FakeCurationPlanner,
     FakePlannerScenario,
 )
-from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import (
     AcceptedCurationAction,
     CurationSpecialistRoute,
     CurationValidationResult,
 )
-from mcp_memory.curation_store import CurationActionReceipt, CurationReceiptState, CurationRun, CurationRunState, SQLiteCurationStore
+from mcp_memory.curation_store import (
+    CurationActionReceipt,
+    CurationReceiptState,
+    CurationRun,
+    CurationRunState,
+    SQLiteCurationStore,
+)
 from mcp_memory.utils.db import DatabaseManager
-from mcp_memory.work_item_store import SQLiteWorkItemRepository, WORK_ITEM_STATUS_DEFERRED
-
+from mcp_memory.work_item_store import (
+    WORK_ITEM_STATUS_DEFERRED,
+    SQLiteWorkItemRepository,
+)
 
 pytestmark = pytest.mark.medium
 
@@ -138,13 +150,18 @@ def _rewrite_action(record: dict[str, object]) -> RewriteMemoryAction:
 def _create_link_action(source: dict[str, object], target: dict[str, object]) -> CreateLinkAction:
     source_id = cast(UUID, source["id"])
     target_id = cast(UUID, target["id"])
-    link = LinkAssertion(source_id=source_id, target_id=target_id, link_type="SUPPORTS", context="supports")
+    link = LinkAssertion(
+        source_id=source_id,
+        target_id=target_id,
+        link_type="SUPPORTS",
+        context="The source supports the target.",
+    )
     return CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,
         target_id=target_id,
         link_type="SUPPORTS",
-        context="supports",
+        context="The source supports the target.",
         confidence=1.0,
         rationale="link",
         evidence=[EvidenceRef(link=link)],

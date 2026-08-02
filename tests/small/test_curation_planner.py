@@ -86,8 +86,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "merging never creates a record" in contract
     assert "both endpoints to be visible" in contract
     assert "exact context.record_tokens value" in contract
-    assert "non-empty relationship context" in contract
-    assert "memory excerpts alone are not link evidence" in contract
+    assert "descriptive relationship context" in contract
+    assert "labels and memory excerpts alone are not link evidence" in contract
     assert "exact absent-link precondition" in contract
     assert "Only split_memory may introduce child records" in contract
     assert "content is the final persisted durable memory body" in contract

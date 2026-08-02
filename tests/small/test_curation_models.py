@@ -168,6 +168,32 @@ def test_link_actions_allow_project_defined_canonical_link_type() -> None:
     assert action.link_type == "PROJECT_CAUSES_V2"
 
 
+def test_create_link_rejects_label_only_context() -> None:
+    source_id = uuid4()
+    target_id = uuid4()
+
+    with pytest.raises(ValidationError, match="descriptive relationship context"):
+        CreateLinkAction(
+            action_id=uuid4(),
+            source_id=source_id,
+            target_id=target_id,
+            link_type="RELATED",
+            confidence=1,
+            rationale="link memories",
+            context="workflow-policy",
+            evidence=[
+                EvidenceRef(
+                    link=LinkAssertion(
+                        source_id=source_id,
+                        target_id=target_id,
+                        link_type="RELATED",
+                        context="workflow-policy",
+                    )
+                )
+            ],
+        )
+
+
 def test_action_union_accepts_all_current_operations() -> None:
     target_id = uuid4()
     source_id = uuid4()
