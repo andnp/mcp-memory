@@ -116,6 +116,7 @@ def _build_default_retrieval_telemetry(ctx: ManagementRuntimeCapabilities):
     return RetrievalTelemetryRepository(
         cast(Any, ctx.memory.db_manager),
         workspace_id=ctx.memory.workspace_id,
+        storage_backend=ctx.storage_backend,
     )
 
 
@@ -137,6 +138,7 @@ def ensure_management_context_resources(
         retrieval_telemetry = RetrievalTelemetryRepository(
             cast(Any, capabilities.memory.db_manager),
             workspace_id=capabilities.memory.workspace_id,
+            storage_backend=capabilities.storage_backend,
         )
     mutation_history = capabilities.mutation.mutation_history or _build_default_mutation_history(capabilities)
 

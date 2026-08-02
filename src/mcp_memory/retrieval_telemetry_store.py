@@ -10,15 +10,23 @@ from mcp_memory.storage.buffered_writer import BufferedWriter
 
 logger = logging.getLogger(__name__)
 _NONCRITICAL_WRITE_TIMEOUT_SECONDS = 0.1
+_STORAGE_BACKEND_UNSET = object()
 
 
 type _TelemetryRow = tuple[object, ...]
 
 
 class RetrievalTelemetryRepository:
-    def __init__(self, db_manager: Any = None, *, workspace_id: str | None) -> None:
+    def __init__(
+        self,
+        db_manager: Any = None,
+        *,
+        workspace_id: str | None,
+        storage_backend: str | None | object = _STORAGE_BACKEND_UNSET,
+    ) -> None:
         self._db_manager = db_manager
         self._workspace_id = workspace_id
+        self._storage_backend = storage_backend
         self._writer = (
             None
             if not self._supports_buffered_writes()
@@ -129,6 +137,8 @@ class RetrievalTelemetryRepository:
         return bool(self._db_manager is not None and hasattr(self._db_manager, "open_connection"))
 
     def _uses_postgres_sessions(self) -> bool:
+        if self._storage_backend is not _STORAGE_BACKEND_UNSET:
+            return self._storage_backend == "postgres"
         return bool(
             self._db_manager is not None
             and hasattr(self._db_manager, "open_connection")

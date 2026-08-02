@@ -17,7 +17,9 @@ def _retrieval_telemetry_repository(
     repository = ctx.retrieval_telemetry
     if repository is None:
         repository = RetrievalTelemetryRepository(
-            ctx.db_manager, workspace_id=ctx.workspace_id
+            ctx.db_manager,
+            workspace_id=ctx.workspace_id,
+            storage_backend=ctx.storage_backend,
         )
         ctx.retrieval_telemetry = repository
     return repository
