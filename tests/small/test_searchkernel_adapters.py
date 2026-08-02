@@ -1,7 +1,7 @@
 from typing import cast
 
 import pytest
-from searchkernel.domain import Record, RecordStatus
+from searchkernel.domain import GraphNeighbor, Record, RecordHit, RecordIdentity, RecordStatus
 
 from mcp_memory.core.ports.memory import (
     MemoryLink,
@@ -72,6 +72,30 @@ class _Repository:
         return MemoryReadContext(_memory_record(), {"outgoing": self.links["memory-1"]}, [])
 
 
+class _BatchRepository(_Repository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_memory_calls: list[tuple[list[str], str | None, bool]] = []
+        self.batch_link_calls: list[tuple[list[str], str]] = []
+
+    def get_searchable_memories(
+        self,
+        memory_ids: list[str],
+        *,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[MemoryRecord]:
+        self.batch_memory_calls.append((memory_ids, status, include_superseded))
+        return [
+            _memory_record(memory_id=memory_id, workspace_ids=["workspace-1"])
+            for memory_id in memory_ids
+        ]
+
+    def get_links_many(self, memory_ids: list[str], *, direction: str = "outgoing"):
+        self.batch_link_calls.append((memory_ids, direction))
+        return {memory_id: self.links.get(memory_id, []) for memory_id in memory_ids}
+
+
 class _VectorBackend:
     supports_candidate_filtering = True
 
@@ -120,9 +144,14 @@ async def test_keyword_store_delegates_relational_policy():
     store = MemoryKeywordStore(cast(MemoryReadPort, repository))
 
     assert callable(store.search)
-    assert await store.search("query", 2, {"workspace_id": "workspace-1"}) == [
-        ("memory-1", 1.0),
-        ("memory-2", 0.5),
+    hits = await store.search("query", 2, {"workspace_id": "workspace-1"})
+
+    assert [
+        (hit.identity, hit.score)
+        for hit in cast(list[RecordHit], hits)
+    ] == [
+        (RecordIdentity("workspace-1", "memory", "memory-1"), 1.0),
+        (RecordIdentity("workspace-1", "memory", "memory-2"), 0.5),
     ]
     assert repository.keyword_kwargs["workspace_id"] == "workspace-1"
 
@@ -133,15 +162,42 @@ async def test_vector_store_uses_formal_candidate_filter_capability():
     store = MemoryVectorStore(backend)
 
     assert callable(store.search)
-    assert await store.search(
+    hits = await store.search(
         [1.0, 0.0],
         3,
         model_name="model",
         dim=2,
         filters={"candidate_ids": ["memory-1"]},
-    ) == [("memory-1", 0.9)]
+    )
+    assert hits == [
+        RecordHit(RecordIdentity(None, "memory", "memory-1"), 0.9)
+    ]
     assert backend.search_kwargs is not None
     assert backend.search_kwargs["candidate_ids"] == ["memory-1"]
+
+
+@pytest.mark.asyncio
+async def test_vector_store_hydrates_canonical_workspace_identity_when_available():
+    backend = _VectorBackend()
+    repository = _BatchRepository()
+    store = MemoryVectorStore(
+        backend,
+        repository=cast(MemoryReadPort, repository),
+    )
+
+    hits = await store.search(
+        [1.0, 0.0],
+        1,
+        model_name="model",
+        dim=2,
+    )
+
+    assert hits == [
+        RecordHit(RecordIdentity("workspace-1", "memory", "memory-1"), 0.9)
+    ]
+    assert repository.batch_memory_calls == [
+        (["memory-1"], None, True)
+    ]
 
 
 def test_vector_store_upsert_preserves_version_guard():
@@ -162,7 +218,13 @@ async def test_graph_store_reads_links_without_writing_memory_schema():
     store = MemoryGraphStore(cast(MemoryReadPort, repository))
 
     assert callable(store.neighbors)
-    assert await store.neighbors("memory-1") == [("memory-2", "DEPENDS_ON", 0.7)]
+    assert await store.neighbors("memory-1") == [
+        GraphNeighbor(
+            RecordIdentity("workspace-1", "memory", "memory-2"),
+            "DEPENDS_ON",
+            0.7,
+        )
+    ]
     with pytest.raises(NotImplementedError):
         store.upsert_edges([("memory-1", "memory-2", "DEPENDS_ON", 1.0)])
 
@@ -176,6 +238,56 @@ async def test_hydrator_returns_kernel_record_without_access_telemetry():
     assert isinstance(record, Record)
     assert record.source_id == "memory-1"
     assert record.body == "Body"
+
+
+@pytest.mark.asyncio
+async def test_hydrator_preserves_requested_workspace_identity():
+    hydrator = MemoryHydrator(cast(MemoryReadPort, _Repository()))
+    identity = RecordIdentity("workspace-2", "memory", "memory-1")
+
+    record = await hydrator.hydrate_record(identity)
+
+    assert record is not None
+    assert record.storage_key == identity.storage_key
+    assert record.metadata["canonical_id"] == identity.storage_key
+
+
+@pytest.mark.asyncio
+async def test_hydrator_uses_batch_repository_api_for_canonical_keys():
+    repository = _BatchRepository()
+    hydrator = MemoryHydrator(cast(MemoryReadPort, repository))
+    identities = [
+        RecordIdentity("workspace-1", "memory", "memory-1"),
+        RecordIdentity("workspace-1", "memory", "memory-2"),
+    ]
+
+    records = await hydrator.hydrate_records(identities)
+
+    assert list(records) == [identity.storage_key for identity in identities]
+    assert all(records[identity.storage_key] is not None for identity in identities)
+    assert repository.batch_memory_calls == [
+        (["memory-1", "memory-2"], None, True)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_store_uses_batch_links_and_preserves_seed_workspace():
+    repository = _BatchRepository()
+    store = MemoryGraphStore(cast(MemoryReadPort, repository))
+    identity = RecordIdentity("workspace-1", "memory", "memory-1")
+
+    neighbors = await store.neighbors_many([identity], depth=1)
+
+    assert neighbors[identity.storage_key] == [
+        GraphNeighbor(
+            RecordIdentity("workspace-1", "memory", "memory-2"),
+            "DEPENDS_ON",
+            0.7,
+        )
+    ]
+    assert repository.batch_link_calls == [
+        (["memory-1"], "outgoing")
+    ]
 
 
 def test_embedding_sink_restricts_source_namespace():

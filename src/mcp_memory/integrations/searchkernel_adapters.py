@@ -14,7 +14,6 @@ from searchkernel.domain import (
     RecordIdentity,
     RecordStatus,
     Vector,
-    canonical_storage_key,
 )
 from searchkernel.ports import (
     AsyncGraphStore,
@@ -79,9 +78,39 @@ class MemoryRecordAdapter:
     source_kind = "memory"
 
     @classmethod
-    def to_record(cls, memory: MemoryRecord) -> Record:
+    def identity(
+        cls,
+        memory: MemoryRecord,
+        *,
+        workspace_id: str | None = None,
+    ) -> RecordIdentity:
+        return RecordIdentity(
+            workspace_id
+            if workspace_id is not None
+            else _first_workspace_id(memory.workspace_ids),
+            cls.source_kind,
+            memory.id,
+        )
+
+    @classmethod
+    def to_record(
+        cls,
+        memory: MemoryRecord,
+        *,
+        identity: RecordIdentity | None = None,
+    ) -> Record:
+        if identity is not None and (
+            identity.source_kind != cls.source_kind
+            or identity.source_id != memory.id
+        ):
+            raise ValueError(
+                "MemoryRecord identity does not match the requested memory"
+            )
+        record_identity = cls.identity(
+            memory,
+            workspace_id=(identity.workspace_id if identity is not None else None),
+        )
         metadata = dict(memory.metadata)
-        workspace_id = _first_workspace_id(memory.workspace_ids)
         metadata.update(
             {
                 "memory_type": memory.type,
@@ -92,9 +121,7 @@ class MemoryRecordAdapter:
                 "tags": list(memory.tags),
                 "read_count": memory.read_count,
                 "access_score": memory.access_score,
-                "canonical_id": canonical_storage_key(
-                    workspace_id, cls.source_kind, memory.id
-                ),
+                "canonical_id": record_identity.storage_key,
             }
         )
         return Record(
@@ -106,7 +133,7 @@ class MemoryRecordAdapter:
             updated_at=_parse_timestamp(memory.updated_at),
             metadata=metadata,
             status=_kernel_status(memory.status),
-            workspace_id=workspace_id,
+            workspace_id=record_identity.workspace_id,
         )
 
 
@@ -143,13 +170,29 @@ class MemoryKeywordStore(AsyncKeywordStore):
             include_superseded=bool(filters.get("include_superseded", False)),
             limit=k,
         )
+        workspace_id = _string_filter(filters, "workspace_id")
+        records_by_id = await asyncio.to_thread(
+            _load_memory_records,
+            self._repository,
+            memory_ids,
+            status=_memory_status_filter(filters.get("status")),
+            include_superseded=bool(filters.get("include_superseded", False)),
+            scalar_fallback=False,
+        )
         if self._prefetch is not None and memory_ids:
             await asyncio.to_thread(self._prefetch, memory_ids)
         signal_context = filters.get("_mcp_memory_signal_context")
         if hasattr(signal_context, "keyword_candidates_present"):
             setattr(signal_context, "keyword_candidates_present", bool(memory_ids))
         return [
-            (memory_id, 1.0 / rank)
+            RecordHit(
+                _memory_identity(
+                    memory_id,
+                    records_by_id.get(memory_id),
+                    workspace_id=workspace_id,
+                ),
+                1.0 / rank,
+            )
             for rank, memory_id in enumerate(memory_ids, start=1)
         ]
 
@@ -164,10 +207,12 @@ class MemoryVectorStore(AsyncVectorStore):
         prefetch: Callable[[Sequence[str]], None] | None = None,
         ensure_embeddings: Callable[[Sequence[str], Mapping[str, Any]], None]
         | None = None,
+        repository: MemoryReadPort | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._prefetch = prefetch
         self._ensure_embeddings = ensure_embeddings
+        self._repository = repository
         self.supports_candidate_filtering = isinstance(
             vector_store, CandidateFilterSupport
         )
@@ -234,13 +279,40 @@ class MemoryVectorStore(AsyncVectorStore):
             list[RecordHit | tuple[str, float]],
             await asyncio.to_thread(self._vector_store.search, **kwargs),
         )
-        if self._prefetch is not None and results:
+        records_by_id = (
+            await asyncio.to_thread(
+                _load_memory_records,
+                self._repository,
+                [
+                    result.source_id if isinstance(result, RecordHit) else result[0]
+                    for result in results
+                ],
+                include_superseded=True,
+                scalar_fallback=False,
+            )
+            if self._repository is not None
+            else {}
+        )
+        normalized_results = [
+            result
+            if isinstance(result, RecordHit)
+            else RecordHit(
+                _memory_identity(
+                    result[0],
+                    records_by_id.get(result[0]),
+                    workspace_id=workspace_id,
+                ),
+                result[1],
+            )
+            for result in results
+        ]
+        if self._prefetch is not None and normalized_results:
             record_ids = [
                 result.source_id if isinstance(result, RecordHit) else result[0]
-                for result in results
+                for result in normalized_results
             ]
             await asyncio.to_thread(self._prefetch, record_ids)
-        return results
+        return cast(list[RecordHit | tuple[str, float]], normalized_results)
 
     def delete(self, record_ids: list[str]) -> None:
         for record_id in record_ids:
@@ -280,48 +352,157 @@ class MemoryGraphStore(AsyncGraphStore):
     ) -> list[GraphNeighbor | tuple[str, str, float]]:
         return await asyncio.to_thread(
             self._neighbors_sync,
-            record_id.source_id if isinstance(record_id, RecordIdentity) else record_id,
+            record_id,
             edge_types,
             depth,
         )
 
     def _neighbors_sync(
         self,
-        record_id: str,
+        record_id: str | RecordIdentity,
         edge_types: list[str] | None,
         depth: int,
     ) -> list[GraphNeighbor | tuple[str, str, float]]:
-        if depth < 1:
-            return []
-        allowed_types = (
-            set(edge_types)
-            if edge_types is not None
-            else set(_GRAPH_EDGE_DISCOUNTS)
+        identity = _record_identity(record_id)
+        results = self._neighbors_many_sync(
+            [identity],
+            edge_types=edge_types,
+            depth=depth,
         )
-        results: list[GraphNeighbor | tuple[str, str, float]] = []
-        frontier = [record_id]
-        visited = {record_id}
+        return cast(
+            list[GraphNeighbor | tuple[str, str, float]],
+            next(iter(results.values()), []),
+        )
+
+    async def neighbors_many(
+        self,
+        identities: Sequence[RecordIdentity],
+        *,
+        depth: int,
+    ) -> Mapping[str, Sequence[GraphNeighbor | tuple[str, str, float]]]:
+        return await asyncio.to_thread(
+            self._neighbors_many_sync,
+            identities,
+            edge_types=None,
+            depth=depth,
+        )
+
+    def _neighbors_many_sync(
+        self,
+        identities: Sequence[RecordIdentity],
+        *,
+        edge_types: list[str] | None,
+        depth: int,
+    ) -> dict[str, list[GraphNeighbor]]:
+        seed_identities = list(dict.fromkeys(_record_identity(identity) for identity in identities))
+        seed_records = _load_memory_records(
+            self._repository,
+            [identity.source_id for identity in seed_identities],
+            include_superseded=True,
+        )
+        seeds = [
+            (
+                MemoryRecordAdapter.identity(
+                    seed_records[identity.source_id],
+                )
+                if identity.workspace_id is None
+                and identity.source_id in seed_records
+                else identity
+            )
+            for identity in seed_identities
+        ]
+        seeds = list(dict.fromkeys(seeds))
+        results = {identity.storage_key: [] for identity in seeds}
+        if depth < 1 or not seeds:
+            return results
+
+        allowed_types = set(edge_types) if edge_types is not None else set(_GRAPH_EDGE_DISCOUNTS)
+        frontiers = {
+            identity.storage_key: [identity.source_id] for identity in seeds
+        }
+        visited = {
+            identity.storage_key: {identity.source_id} for identity in seeds
+        }
+        workspace_by_seed = {
+            identity.storage_key: identity.workspace_id for identity in seeds
+        }
+
         for distance in range(1, depth + 1):
-            next_frontier: list[str] = []
-            for source_id in frontier:
-                links = self._repository.get_links(source_id, direction="outgoing")
-                for link in links:
-                    if allowed_types is not None and link.link_type not in allowed_types:
-                        continue
-                    if link.target_id in visited:
-                        continue
-                    discount = _GRAPH_EDGE_DISCOUNTS.get(link.link_type)
-                    if discount is None:
-                        continue
-                    visited.add(link.target_id)
-                    next_frontier.append(link.target_id)
-                    results.append(
-                        (link.target_id, link.link_type, discount / distance)
-                    )
-            frontier = next_frontier
-            if not frontier:
+            source_ids = list(
+                dict.fromkeys(
+                    source_id
+                    for frontier in frontiers.values()
+                    for source_id in frontier
+                )
+            )
+            if not source_ids:
+                break
+            links_by_source = self._get_links_many_sync(source_ids)
+            target_ids = list(
+                dict.fromkeys(
+                    link.target_id
+                    for links in links_by_source.values()
+                    for link in links
+                )
+            )
+            records_by_id = _load_memory_records(
+                self._repository,
+                target_ids,
+                include_superseded=True,
+            )
+            next_frontiers = {seed_key: [] for seed_key in frontiers}
+            for seed_key, frontier in frontiers.items():
+                for source_id in frontier:
+                    for link in links_by_source.get(source_id, ()):
+                        if link.link_type not in allowed_types:
+                            continue
+                        if link.target_id in visited[seed_key]:
+                            continue
+                        discount = _GRAPH_EDGE_DISCOUNTS.get(link.link_type)
+                        if discount is None:
+                            continue
+                        visited[seed_key].add(link.target_id)
+                        next_frontiers[seed_key].append(link.target_id)
+                        results[seed_key].append(
+                            GraphNeighbor(
+                                _memory_identity(
+                                    link.target_id,
+                                    records_by_id.get(link.target_id),
+                                    workspace_id=workspace_by_seed[seed_key],
+                                ),
+                                link.link_type,
+                                discount / distance,
+                            )
+                        )
+            frontiers = next_frontiers
+            if not any(frontiers.values()):
                 break
         return results
+
+    def _get_links_many_sync(
+        self,
+        memory_ids: Sequence[str],
+    ) -> dict[str, Sequence[Any]]:
+        for method_name in ("get_links_many", "get_links_by_memory_ids"):
+            method = getattr(self._repository, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                value = method(list(memory_ids), direction="outgoing")
+            except TypeError:
+                value = method(list(memory_ids))
+            if isinstance(value, Mapping):
+                return {
+                    memory_id: value.get(memory_id, ())
+                    for memory_id in memory_ids
+                }
+        return {
+            memory_id: self._repository.get_links(
+                memory_id,
+                direction="outgoing",
+            )
+            for memory_id in memory_ids
+        }
 
 
 class MemoryHydrator:
@@ -354,17 +535,40 @@ class MemoryHydrator:
         self,
         record_id: RecordIdentity | str,
     ) -> Record | None:
-        workspace_id = getattr(record_id, "workspace_id", None)
-        source_id = getattr(record_id, "source_id", record_id)
+        identity = _record_identity(record_id)
+        source_id = identity.source_id
         if not isinstance(source_id, str):
+            return None
+        if identity.source_kind != MemoryRecordAdapter.source_kind:
             return None
         context = await self.hydrate_context(source_id)
         if context is None:
             return None
-        record = MemoryRecordAdapter.to_record(context.record)
-        if isinstance(workspace_id, str):
-            record.workspace_id = workspace_id
-        return record
+        return MemoryRecordAdapter.to_record(context.record, identity=identity)
+
+    async def hydrate_records(
+        self,
+        identities: Sequence[RecordIdentity],
+    ) -> Mapping[str, Record | None]:
+        unique_identities = list(dict.fromkeys(identities))
+        records_by_id = await asyncio.to_thread(
+            _load_memory_records,
+            self._repository,
+            [identity.source_id for identity in unique_identities],
+            include_superseded=True,
+        )
+        return {
+            identity.storage_key: (
+                MemoryRecordAdapter.to_record(
+                    record,
+                    identity=identity,
+                )
+                if (record := records_by_id.get(identity.source_id)) is not None
+                and identity.source_kind == MemoryRecordAdapter.source_kind
+                else None
+            )
+            for identity in unique_identities
+        }
 
 
 class MemoryEmbeddingSink(EmbeddingSink):
@@ -426,6 +630,82 @@ class MemoryRepairQueue:
 def _parse_timestamp(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _record_identity(record_id: RecordIdentity | str) -> RecordIdentity:
+    if isinstance(record_id, RecordIdentity):
+        return record_id
+    if record_id.startswith("record:"):
+        try:
+            return RecordIdentity.from_storage_key(record_id)
+        except (TypeError, ValueError):
+            pass
+    return RecordIdentity(None, MemoryRecordAdapter.source_kind, record_id)
+
+
+def _memory_identity(
+    memory_id: str,
+    memory: MemoryRecord | None,
+    *,
+    workspace_id: str | None = None,
+) -> RecordIdentity:
+    if memory is not None:
+        return MemoryRecordAdapter.identity(memory, workspace_id=workspace_id)
+    return RecordIdentity(workspace_id, MemoryRecordAdapter.source_kind, memory_id)
+
+
+def _load_memory_records(
+    repository: object | None,
+    memory_ids: Sequence[str],
+    *,
+    status: str | None = None,
+    include_superseded: bool = True,
+    scalar_fallback: bool = True,
+) -> dict[str, MemoryRecord]:
+    normalized_ids = list(dict.fromkeys(memory_id for memory_id in memory_ids if memory_id))
+    if repository is None or not normalized_ids:
+        return {}
+
+    get_searchable_memories = getattr(repository, "get_searchable_memories", None)
+    if callable(get_searchable_memories):
+        batch_loader = cast(
+            Callable[..., Sequence[MemoryRecord]],
+            get_searchable_memories,
+        )
+        try:
+            records = batch_loader(
+                normalized_ids,
+                status=status,
+                include_superseded=include_superseded,
+            )
+        except TypeError:
+            records = batch_loader(normalized_ids)
+        return {record.id: record for record in records}
+
+    get_memory = getattr(repository, "get_memory", None)
+    records_by_id: dict[str, MemoryRecord] = {}
+    if scalar_fallback and callable(get_memory):
+        typed_get_memory = cast(Callable[[str], MemoryRecord | None], get_memory)
+        for memory_id in normalized_ids:
+            record = typed_get_memory(memory_id)
+            if record is not None:
+                records_by_id[record.id] = record
+        return records_by_id
+
+    if not scalar_fallback:
+        return records_by_id
+    peek_memory = getattr(repository, "peek_memory", None)
+    if not callable(peek_memory):
+        return records_by_id
+    typed_peek_memory = cast(
+        Callable[[str], MemoryReadContext | None],
+        peek_memory,
+    )
+    for memory_id in normalized_ids:
+        context = typed_peek_memory(memory_id)
+        if context is not None:
+            records_by_id[context.record.id] = context.record
+    return records_by_id
 
 
 def _kernel_status(status: str) -> RecordStatus:
