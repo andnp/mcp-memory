@@ -28,6 +28,12 @@ from mcp_memory.management.operator_health_reporting import (
     summarize_provider_policy,
 )
 from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
+from mcp_memory.management.runtime_log_service import (
+    RuntimeLogService,
+    RuntimeLogServiceDependencies,
+    _ensure_dashboard_base_href,  # noqa: F401 - retained for management helper compatibility
+    _resolve_log_workspace_id,  # noqa: F401 - retained for management helper compatibility
+)
 from mcp_memory.management.mutation_history_service import (
     MutationHistoryService,
     MutationHistoryServiceDependencies,
@@ -37,7 +43,6 @@ from mcp_memory.management.memory_service import (
     MemoryServiceDependencies,
     _SLOW_MEMORY_TOOL_WARNING_MS,
     _USE_SERVICE_WORKSPACE,
-    _resolve_log_workspace_id,
     _resolve_service_workspace_id,  # noqa: F401 - retained for management helper compatibility
 )
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
@@ -76,7 +81,6 @@ from mcp_memory.management.models import (
     QualityCleanupRecommendationPayload,
     RuntimeLogListPayload,
     RuntimeLogPrunePayload,
-    RuntimeLogPayload,
     RuntimeLogSummaryPayload,
     RestoreEligibilityPayload,
     RestoreRequestPayload,
@@ -281,11 +285,22 @@ class ManagementService:
         self._dashboard_static_path = self._dashboard_static_root / "index.html"
         self._dashboard_dist_path = self._dashboard_static_root / "dist" / "index.html"
         self._dashboard_asset_root = self._dashboard_static_root / "dist" / "assets"
+        self._runtime_log_service = RuntimeLogService(
+            RuntimeLogServiceDependencies(
+                db_manager=self._db_manager,
+                runtime_logs=self._runtime_logs,
+                workspace_id=self._workspace_id,
+                dashboard_static_root=self._dashboard_static_root,
+                dashboard_static_path=self._dashboard_static_path,
+                dashboard_dist_path=self._dashboard_dist_path,
+                dashboard_asset_root=self._dashboard_asset_root,
+            )
+        )
         self.capabilities = ManagementCapabilities.from_service(self)
 
     @property
     def dashboard_static_root(self) -> Path:
-        return self._dashboard_static_root
+        return self._runtime_log_service.dashboard_static_root
 
     @property
     def workspace_id(self) -> str | None:
@@ -909,31 +924,15 @@ class ManagementService:
         before: float | None = None,
         limit: int = 50,
     ) -> RuntimeLogListPayload:
-        if self._db_manager is None:
-            return RuntimeLogListPayload()
-        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
-        return RuntimeLogListPayload(
-            logs=[
-                RuntimeLogPayload(
-                    id=record.id,
-                    created_at=record.created_at,
-                    level=record.level,
-                    logger_name=record.logger_name,
-                    source=record.source,
-                    message=record.message,
-                    data=record.data,
-                )
-                for record in self._runtime_logs.list_logs(
-                    workspace_id=effective_workspace_id,
-                    level=level,
-                    logger_name=logger_name,
-                    source=source,
-                    query=query,
-                    after=after,
-                    before=before,
-                    limit=limit,
-                )
-            ]
+        return self._runtime_log_service.list_logs(
+            workspace_id=workspace_id,
+            level=level,
+            logger_name=logger_name,
+            source=source,
+            query=query,
+            after=after,
+            before=before,
+            limit=limit,
         )
 
     def summarize_logs(
@@ -947,22 +946,14 @@ class ManagementService:
         after: float | None = None,
         before: float | None = None,
     ) -> RuntimeLogSummaryPayload:
-        if self._db_manager is None:
-            return RuntimeLogSummaryPayload()
-        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
-        summary = self._runtime_logs.summarize_logs(
-            workspace_id=effective_workspace_id,
+        return self._runtime_log_service.summarize_logs(
+            workspace_id=workspace_id,
             level=level,
             logger_name=logger_name,
             source=source,
             query=query,
             after=after,
             before=before,
-        )
-        return RuntimeLogSummaryPayload(
-            total=summary.total,
-            by_level=summary.by_level,
-            by_source=summary.by_source,
         )
 
     def prune_logs(
@@ -972,35 +963,17 @@ class ManagementService:
         max_runtime_logs: int | None = None,
         max_log_age_days: int | None = None,
     ) -> RuntimeLogPrunePayload:
-        config = self._runtime_logs.retention_policy
-        effective_workspace_id = _resolve_log_workspace_id(self._workspace_id, workspace_id)
-        deleted = self._runtime_logs.prune_logs(
-            workspace_id=effective_workspace_id,
+        return self._runtime_log_service.prune_logs(
+            workspace_id=workspace_id,
             max_runtime_logs=max_runtime_logs,
-            max_age_days=max_log_age_days,
-        )
-        resolved_max_runtime_logs = config.max_runtime_logs if max_runtime_logs is None else max_runtime_logs
-        resolved_max_log_age_days = config.max_log_age_days if max_log_age_days is None else max_log_age_days
-        return RuntimeLogPrunePayload(
-            deleted=deleted,
-            max_runtime_logs=resolved_max_runtime_logs,
-            max_log_age_days=resolved_max_log_age_days,
+            max_log_age_days=max_log_age_days,
         )
 
     def load_dashboard_html(self):
-        html_path = self._dashboard_dist_path if self._dashboard_dist_path.exists() else self._dashboard_static_path
-        return _ensure_dashboard_base_href(html_path.read_text(encoding="utf-8"))
+        return self._runtime_log_service.load_dashboard_html()
 
     def resolve_dashboard_asset_path(self, asset_path: str) -> Path | None:
-        if not asset_path.strip() or not self._dashboard_asset_root.exists():
-            return None
-        candidate = (self._dashboard_asset_root / asset_path).resolve()
-        asset_root = self._dashboard_asset_root.resolve()
-        if asset_root not in candidate.parents and candidate != asset_root:
-            return None
-        if not candidate.is_file():
-            return None
-        return candidate
+        return self._runtime_log_service.resolve_dashboard_asset_path(asset_path)
 
     def _summarize_provider_policy(self, *, window_minutes: int):
         return summarize_provider_policy(
@@ -1032,14 +1005,6 @@ def _terminate_process(pid: int) -> bool:
         ),
     )
     return termination.signal_sent
-
-
-def _ensure_dashboard_base_href(html: str) -> str:
-    if "<base " in html:
-        return html
-    if "</head>" not in html:
-        return html
-    return html.replace("</head>", '    <base href="/dashboard/">\n  </head>', 1)
 
 
 def _is_process_alive(pid: int) -> bool:
