@@ -84,6 +84,11 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "exact endpoint, type, and context evidence" in contract
     assert "exact absent-link precondition" in contract
     assert "Only split_memory may introduce child records" in contract
+    assert "content is the final persisted durable memory body" in contract
+    assert "canonical_id is the retained base" in contract
+    assert "Do not write mutation-status prose" in contract
+    assert "target 1600 characters or less" in contract
+    assert "split content above 3000 characters" in contract
     assert "retention decision instead of inventing an ID" in contract
     assert "fail-closed" in contract
     assert "existing visible memory ID" in schema["$defs"]["CreateLinkAction"]["properties"]["source_id"]["description"]
@@ -92,6 +97,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
 
     prompt = _build_planner_prompt(request, CurationPlannerTools(context=cast(Any, {})))
     assert "Every memory ID in an action or retention decision must be copied" in prompt
+    assert "content is the final persisted durable memory body" in prompt
+    assert "do not write status prose" in prompt
     assert "If no visible canonical is appropriate, retain the memory" in prompt
 
 

@@ -539,6 +539,12 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "Every action affecting a visible memory must include its exact context.record_tokens value in preconditions.record_tokens.",
             "create_link requires exact endpoint, type, and context evidence plus an exact absent-link precondition.",
             "Only split_memory may introduce child records, and only through its typed children surface; never invent child IDs.",
+            "For rewrite_memory and merge_memories, content is the final persisted durable memory body, not a description of the mutation.",
+            "For merge_memories, canonical_id is the retained base; preserve its supported claims, integrate justified source claims, and make content stand alone after sources are archived.",
+            "Use claim_manifest to map preserved or transformed claims to source records; do not use it as a substitute for writing those claims into the final content.",
+            "Do not write mutation-status prose such as 'merged ... into the canonical' or 'added ... to the record' as memory content.",
+            "Prefer one conclusion-first takeaway with concrete evidence; target 1600 characters or less, and split content above 3000 characters when it contains multiple takeaways.",
+            "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
             "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
         ],
@@ -564,8 +570,14 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "into preconditions.record_tokens for every affected visible memory. A "
         "create_link action also requires exact endpoint, type, and context evidence "
         "plus an exact absent-link precondition. Only split may introduce child "
-        "records through its typed children surface. If no visible canonical is "
-        "appropriate, retain the memory instead of inventing an ID.\n"
+        "records through its typed children surface. For rewrite and merge actions, "
+        "content is the final persisted durable memory body, not a description of the "
+        "mutation: preserve the canonical's supported claims, integrate justified "
+        "source claims, and do not write status prose such as 'merged into the "
+        "canonical'. Use one conclusion-first takeaway with concrete evidence, target "
+        "1600 characters or less, and split multi-takeaway content above 3000 "
+        "characters. If no visible canonical is appropriate, retain the memory instead "
+        "of inventing an ID.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
 
