@@ -31,6 +31,7 @@ from mcp_memory.core.ports.memory import (
 from mcp_memory.core.search_ranking import (
     RankingEngine,
     RankingSignals,
+    _has_exact_identifier_match,
     _keyword_token_coverage,
     _query_tokens,
 )
@@ -94,6 +95,7 @@ class MemoryRecordPipelineDiagnostics:
 
 @dataclass
 class _MemorySearchSignalContext:
+    query: str
     query_tokens: tuple[str, ...]
     semantic_only_abstain_threshold: float
     keyword_candidates_present: bool = False
@@ -235,6 +237,7 @@ class MemoryRecordSearchPipeline:
         filters: dict[str, object] | None = None,
     ) -> RecordSearchOutcome:
         signal_context = _MemorySearchSignalContext(
+            query=query,
             query_tokens=tuple(_query_tokens(query)),
             semantic_only_abstain_threshold=self._semantic_only_abstain_threshold,
         )
@@ -596,6 +599,9 @@ def _adjust_score(
         semantic_score=semantic_score,
         keyword_token_coverage=keyword_token_coverage,
         expanded_by_graph="graph" in provenance.strategies,
+        exact_identifier_match=_has_exact_identifier_match(signal_context.query, record)
+        if signal_context is not None
+        else False,
     )
     ranked = ranking_engine.rank_records(
         [ranked_candidate],

@@ -6,6 +6,7 @@ This module deliberately contains no repository or storage dependencies.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -22,10 +23,40 @@ ACCESS_HALF_LIFE_DAYS = 7
 DEGRADATION_PENALTY = 0.3
 WORKSPACE_BOOST = 1.2
 RelationalMemoryRecord = MemoryRecord
+EXACT_IDENTIFIER_MATCH_MULTIPLIER = 1.1
+_TECHNICAL_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.:/-]*")
 
 
 def _query_tokens(query: str) -> list[str]:
     return [match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(query)]
+
+
+def _has_exact_identifier_match(
+    query: str,
+    record: RankedMemoryCandidate | RelationalMemoryRecord,
+) -> bool:
+    """Return whether a technical query identifier appears in title or summary."""
+    identifiers = [
+        token
+        for token in _TECHNICAL_IDENTIFIER_PATTERN.findall(query)
+        if _is_technical_identifier(token)
+    ]
+    if not identifiers:
+        return False
+    resolved_record = record.record if isinstance(record, RankedMemoryCandidate) else record
+    searchable_text = f"{resolved_record.title}\n{resolved_record.summary or ''}".casefold()
+    return any(identifier.casefold() in searchable_text for identifier in identifiers)
+
+
+def _is_technical_identifier(token: str) -> bool:
+    return (
+        any(character.isdigit() for character in token)
+        or any(character in "_-. :/" for character in token)
+        or any(
+            left.islower() and right.isupper()
+            for left, right in zip(token, token[1:])
+        )
+    )
 
 
 def _keyword_token_coverage(
@@ -68,6 +99,7 @@ class RankingSignals:
     semantic_score: float = 0.0
     keyword_token_coverage: float = 0.0
     expanded_by_graph: bool = False
+    exact_identifier_match: bool = False
 
 
 @dataclass(slots=True)
@@ -213,17 +245,22 @@ class RankingEngine:
     ) -> float:
         if not keyword_candidates_present:
             if signals.expanded_by_graph and not signals.matched_by_semantic:
-                return self._weights.graph_expansion_only_penalty
-            return 1.0
-        if signals.expanded_by_graph and not signals.matched_by_keyword and not signals.matched_by_semantic:
-            return self._weights.graph_expansion_only_penalty
-        if signals.matched_by_semantic and not signals.matched_by_keyword:
-            return self._weights.semantic_only_keyword_penalty
-        if not signals.matched_by_keyword:
-            return 1.0
-        if signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
-            return 1.0
-        return max(self._weights.keyword_low_coverage_penalty, signals.keyword_token_coverage)
+                multiplier = self._weights.graph_expansion_only_penalty
+            else:
+                multiplier = 1.0
+        elif signals.expanded_by_graph and not signals.matched_by_keyword and not signals.matched_by_semantic:
+            multiplier = self._weights.graph_expansion_only_penalty
+        elif signals.matched_by_semantic and not signals.matched_by_keyword:
+            multiplier = self._weights.semantic_only_keyword_penalty
+        elif not signals.matched_by_keyword:
+            multiplier = 1.0
+        elif signals.keyword_token_coverage >= self._weights.keyword_coverage_floor:
+            multiplier = 1.0
+        else:
+            multiplier = max(self._weights.keyword_low_coverage_penalty, signals.keyword_token_coverage)
+        if signals.exact_identifier_match:
+            multiplier *= EXACT_IDENTIFIER_MATCH_MULTIPLIER
+        return multiplier
 
     def rank_records(
         self,
@@ -308,6 +345,12 @@ class RankingEngine:
             "degradation_multiplier": round(degradation_multiplier, 6),
             "keyword_token_coverage": round(active_signals.keyword_token_coverage, 6),
             "semantic_score": round(active_signals.semantic_score, 6),
+            "exact_identifier_match": active_signals.exact_identifier_match,
+            "exact_identifier_multiplier": (
+                EXACT_IDENTIFIER_MATCH_MULTIPLIER
+                if active_signals.exact_identifier_match
+                else 1.0
+            ),
             "ranking_signal_multiplier": round(signal_multiplier, 6),
             "final_score": round(final_score, 6),
             "memory_type": record.type,
