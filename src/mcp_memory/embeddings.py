@@ -123,6 +123,37 @@ class SentenceTransformerEmbedder:
         return _load_sentence_transformer(self._configured_model_name, local_files_only=False)
 
 
+class OllamaEmbedder:
+    def __init__(self, config: EmbeddingsConfig) -> None:
+        from searchkernel.adapters.embedding import OllamaEmbeddingProvider
+
+        self._configured_model_name = config.model
+        self._provider = OllamaEmbeddingProvider(
+            config.model, base_url=config.ollama_base_url
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self._configured_model_name
+
+    @property
+    def configured_model_name(self) -> str:
+        return self._configured_model_name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return self._provider.embed(texts)
+
+    def status(self) -> EmbedderStatus:
+        return EmbedderStatus(
+            model_name=self.model_name,
+            backend="ollama",
+            model_cached=True,
+            configured_model_name=self._configured_model_name,
+        )
+
+
 class HashingEmbedder:
     def __init__(self, model_name: str = "hashing-local", dimensions: int = 64) -> None:
         self.model_name = model_name
@@ -389,6 +420,8 @@ class SQLiteVectorStore:
 
 
 def build_embedder(config: EmbeddingsConfig) -> EmbeddingBatchProvider | None:
+    if config.provider == "ollama":
+        return OllamaEmbedder(config)
     return SentenceTransformerEmbedder(config)
 
 

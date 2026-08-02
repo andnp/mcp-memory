@@ -296,12 +296,18 @@ class BackupsConfig:
 
 @dataclass
 class EmbeddingsConfig:
+    provider: str = "sentence-transformers"
     model: str = "sentence-transformers/all-MiniLM-L6-v2"
     batch_size: int = 32
+    ollama_base_url: str = "http://localhost:11434"
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("embeddings.batch_size must be >= 1")
+        if self.provider not in ("sentence-transformers", "ollama"):
+            raise ValueError(
+                "embeddings.provider must be 'sentence-transformers' or 'ollama'"
+            )
 
 
 @dataclass
