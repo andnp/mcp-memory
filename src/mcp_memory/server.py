@@ -354,13 +354,12 @@ class MCPServer:
         return cast(dict[str, object], response)
 
     def _request_payload(self, payload: dict | None) -> dict | None:
-        request_payload = None if payload is None else dict(payload)
-        if request_payload is not None:
-            if self.workspace_root is not None:
-                request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
-            if self._session_id is not None:
-                request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
-        return request_payload
+        request_payload = {} if payload is None else dict(payload)
+        if self.workspace_root is not None:
+            request_payload.setdefault(_REQUEST_WORKSPACE_ROOT_KEY, self.workspace_root)
+        if self._session_id is not None:
+            request_payload.setdefault(_REQUEST_SESSION_ID_KEY, self._session_id)
+        return request_payload or None
 
     def _request_json_with_recovery(
         self,

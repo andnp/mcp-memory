@@ -607,6 +607,29 @@ def test_mcp_server_request_json_with_recovery_respects_overall_client_deadline(
     assert server._daemon == refreshed_metadata
 
 
+def test_mcp_clients_carry_distinct_workspace_context_per_request(monkeypatch) -> None:
+    client_a = MCPServer(workspace_root="workspace-a")
+    client_b = MCPServer(workspace_root="workspace-b")
+    client_a._daemon = object()
+    client_b._daemon = object()
+    requests: list[tuple[object, dict | None]] = []
+
+    def fake_request_daemon_json(metadata, path: str, payload: dict | None, *, timeout_seconds=None):
+        del path, timeout_seconds
+        requests.append((metadata, payload))
+        return {"status": "ok"}
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", fake_request_daemon_json)
+
+    client_a._request_json("/internal/tools", None)
+    client_b._request_json("/internal/tools", None)
+
+    assert requests == [
+        (client_a._daemon, {"__workspace_root": "workspace-a"}),
+        (client_b._daemon, {"__workspace_root": "workspace-b"}),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_mcp_server_request_daemon_json_with_client_timeout_supports_legacy_recovery_override(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
