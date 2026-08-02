@@ -356,6 +356,25 @@ def test_internal_ingest_create_emits_warnings_for_untagged_generic_observation(
     assert payload["warnings"] == ["generic_summary", "observation_missing_tags"]
 
 
+def test_internal_ingest_create_warns_for_added_summary_boilerplate(db_manager) -> None:
+    ctx = _build_ctx(db_manager)
+    _start_running_ingest_task(ctx, "ingest-added-summary-warning")
+
+    payload = internal_tool_services()["internal_ingest_create_memory"](
+        ctx,
+        {
+            "task_id": "ingest-added-summary-warning",
+            "entry_ids": [42],
+            "title": "Specific observation",
+            "content": "A durable observation with a concrete detail.",
+            "summary": "Added several related findings.",
+        },
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["warnings"] == ["generic_summary", "observation_missing_tags"]
+
+
 def test_internal_ingest_append_alias_preserves_side_effects_and_target_errors(db_manager) -> None:
     ctx = _build_ctx(db_manager)
     _start_running_ingest_task(ctx, "ingest-append-task")

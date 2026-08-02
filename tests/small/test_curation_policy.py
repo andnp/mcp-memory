@@ -15,6 +15,7 @@ from mcp_memory.core.curation_policy import (
     PolicyMode,
     RejectionCode,
     evaluate_curation_action,
+    is_generic_summary,
 )
 
 
@@ -24,6 +25,12 @@ def test_initial_policy_enables_only_low_risk_operations() -> None:
     assert decision.risk is OperationRisk.LOW
     assert decision.mode is PolicyMode.ENABLED
     assert decision.authorized
+
+
+def test_generic_summary_predicate_covers_known_boilerplate() -> None:
+    assert is_generic_summary("Covers several related findings.")
+    assert is_generic_summary("Added several related findings.")
+    assert not is_generic_summary("The daemon now reports the Ollama backend.")
 
 
 def test_policy_rejects_empty_normalize_even_if_model_validation_is_bypassed() -> None:
