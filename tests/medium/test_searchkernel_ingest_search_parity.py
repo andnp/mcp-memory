@@ -148,7 +148,7 @@ async def test_cache_diagnostics_and_candidate_observability_are_repeatable(
     second = await harness.search("authentication policy", workspace_id="workspace-a")
 
     assert first.cache_diagnostics == second.cache_diagnostics == (
-        "candidate_cache:bypass:UnstableCacheKey",
+        "candidate_cache:bypass:unstable_policy",
     )
     assert first.candidate_observations
     assert second.candidate_observations

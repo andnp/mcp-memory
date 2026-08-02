@@ -163,6 +163,7 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
         assert planner.calls == 1
         assert curation_result.run.outcome is CurationRunOutcome.APPLIED
         assert curation_result.run.run_id == curation_result.result.run_id
+        assert original.memory_ref is not None
 
         search_after_curation = _payload(
             await call_memory_tool(
@@ -171,7 +172,9 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
                 {"query": "curated authentication lifecycle"},
             )
         )
-        assert [item["memory_id"] for item in search_after_curation["results"]] == [original.id]
+        assert [item["memory_ref"] for item in search_after_curation["results"]] == [
+            f"mem-{original.memory_ref}"
+        ]
         read_after_curation = _payload(
             await call_memory_tool(runtime_one, "read_memory_record", {"memory_id": original.id})
         )
@@ -223,7 +226,9 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
                 {"query": "curated authentication lifecycle"},
             )
         )
-        assert [item["memory_id"] for item in search_before_restore["results"]] == [original.id]
+        assert [item["memory_ref"] for item in search_before_restore["results"]] == [
+            f"mem-{original.memory_ref}"
+        ]
         read_before_restore = _payload(
             await call_memory_tool(runtime_two, "read_memory_record", {"memory_id": original.id})
         )
@@ -261,7 +266,9 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
                 {"query": "curated authentication lifecycle"},
             )
         )
-        assert original.id not in [item["memory_id"] for item in search_after_restore["results"]]
+        assert f"mem-{original.memory_ref}" not in [
+            item["memory_ref"] for item in search_after_restore["results"]
+        ]
         search_original = _payload(
             await call_memory_tool(
                 runtime_two,
@@ -269,7 +276,9 @@ async def test_curation_lifecycle_persists_reacquires_restores_and_reindexes(
                 {"query": "token rotation durable security review"},
             )
         )
-        assert [item["memory_id"] for item in search_original["results"]] == [original.id]
+        assert [item["memory_ref"] for item in search_original["results"]] == [
+            f"mem-{original.memory_ref}"
+        ]
         read_after_restore = _payload(
             await call_memory_tool(runtime_two, "read_memory_record", {"memory_id": original.id})
         )

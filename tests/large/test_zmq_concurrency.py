@@ -76,6 +76,7 @@ async def test_zmq_server_handles_concurrent_clients_and_request_workspace_conte
         assert {tool["name"] for tool in tools_payload["tools"]} == {
             "record_thought",
             "search_memory_records",
+            "read_memory_records",
             "read_memory_record",
         }
 

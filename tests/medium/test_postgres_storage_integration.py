@@ -400,6 +400,7 @@ async def test_postgres_integration_public_memory_tools_work_through_real_runtim
         )
 
         memory_id = memory_record.id
+        assert memory_record.memory_ref is not None
         read_payload = json.loads(
             (
                 await call_memory_tool(
@@ -412,9 +413,12 @@ async def test_postgres_integration_public_memory_tools_work_through_real_runtim
 
         assert record_payload["status"] == "recorded"
         assert search_payload["status"] == "ok"
-        assert any(result["memory_id"] == memory_id for result in search_payload["results"])
+        assert any(
+            result["memory_ref"] == f"mem-{memory_record.memory_ref}"
+            for result in search_payload["results"]
+        )
         assert read_payload["status"] == "ok"
-        assert read_payload["record"]["id"] == memory_id
+        assert read_payload["record"]["memory_ref"] == f"mem-{memory_record.memory_ref}"
         assert read_payload["record"]["content"] == "This memory should be searchable through the public MCP tools."
 
         assert runtime.db_manager is not None

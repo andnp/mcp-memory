@@ -149,11 +149,14 @@ def parity_backends(pgvector_base_dsn: str) -> Iterator[_ParityBackends]:
         pool_min=1,
         pool_max=2,
     )
-    searchkernel_pool = PostgresConnection(
-        _schema_dsn(pgvector_base_dsn, searchkernel_schema),
-        min_connections=1,
-        max_connections=2,
-    )
+    try:
+        searchkernel_pool = PostgresConnection(
+            _schema_dsn(pgvector_base_dsn, searchkernel_schema),
+            min_connections=1,
+            max_connections=2,
+        )
+    except ImportError as exc:
+        pytest.skip(f"searchkernel pgvector dependencies are unavailable: {exc}")
     _create_schema(searchkernel_pool)
     ensure_postgres_schema(mcp_config)
 

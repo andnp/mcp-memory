@@ -71,6 +71,7 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
         assert len(records) == 1
         created_record = records[0]
         assert created_record.type == "observation"
+        assert created_record.memory_ref is not None
 
         search_payload = _payload_text(
             await call_memory_tool(
@@ -79,7 +80,9 @@ async def test_e2e_record_thought_ingests_and_becomes_searchable(monkeypatch, tm
                 {"query": "sqlite worker search"},
             )
         )
-        assert [result["memory_id"] for result in search_payload["results"]] == [created_record.id]
+        assert [result["memory_ref"] for result in search_payload["results"]] == [
+            f"mem-{created_record.memory_ref}"
+        ]
     finally:
         runtime.close()
 
@@ -111,6 +114,7 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
     runtime_two = create_runtime(workspace_root_override=None, cwd=workspace)
     try:
         assert runtime_two.workspace_id is not None
+        assert record.memory_ref is not None
         search_payload = _payload_text(
             await call_memory_tool(
                 runtime_two,
@@ -121,7 +125,9 @@ async def test_e2e_search_and_read_persist_across_runtime_recreation(monkeypatch
         read_payload = _payload_text(
             await call_memory_tool(runtime_two, "read_memory_record", {"memory_id": record.id})
         )
-        assert [result["memory_id"] for result in search_payload["results"]] == [record.id]
-        assert read_payload["record"]["id"] == record.id
+        assert [result["memory_ref"] for result in search_payload["results"]] == [
+            f"mem-{record.memory_ref}"
+        ]
+        assert read_payload["record"]["memory_ref"] == f"mem-{record.memory_ref}"
     finally:
         runtime_two.close()

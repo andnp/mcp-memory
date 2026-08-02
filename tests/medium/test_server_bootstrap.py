@@ -40,6 +40,7 @@ def test_get_memory_tools_returns_expected_names() -> None:
     assert names == [
         "record_thought",
         "search_memory_records",
+        "read_memory_records",
         "read_memory_record",
     ]
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
@@ -75,6 +76,7 @@ def test_get_internal_maintenance_tools_returns_expected_names() -> None:
     assert names == [
         "internal_search_memory_records",
         "internal_read_memory_record",
+        "internal_read_memory_records",
         "internal_peek_record",
         "internal_maintenance_search",
         "internal_list_relationships",
