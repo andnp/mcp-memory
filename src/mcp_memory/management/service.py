@@ -48,6 +48,7 @@ from mcp_memory.management.task_administration import (
     TaskAdministrationServiceDependencies,
 )
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.integrations.federation_source import MemoryFederationSource
 from mcp_memory.management.models import (
     AgentRunHistoryListPayload,
     AIConversationListPayload,
@@ -136,6 +137,16 @@ class ManagementService:
                 native_search=self._relational_search,
             )
             if self._repository is not None
+            else None
+        )
+        self._retrieval = retrieval
+        self.federation_source = (
+            MemoryFederationSource(
+                retrieval,
+                self._repository,
+                health_provider=self._relational_search,
+            )
+            if retrieval is not None
             else None
         )
         self._task_reporting_service = TaskReportingService(

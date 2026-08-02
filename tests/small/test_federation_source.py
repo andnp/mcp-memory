@@ -142,6 +142,20 @@ def test_federation_dispatch_exposes_contract_capabilities_and_health() -> None:
     assert search["hits"][0]["provenance"]["request_id"] == "dispatch-request"
 
 
+def test_federation_dispatch_prefers_composed_route_source() -> None:
+    source = MemoryFederationSource(cast(Any, RetrievalDouble([_result()])))
+    routes = SimpleNamespace(
+        federation_source=source,
+        service=SimpleNamespace(_retrieval=None, _repository=None),
+    )
+
+    capabilities = asyncio.run(
+        dispatch_federation_request(routes, "/v1/search/capabilities", {})
+    )
+
+    assert capabilities["contract_versions"] == ["v1"]
+
+
 def test_http_endpoint_registers_v1_route() -> None:
     app = create_daemon_app(port=0)
 

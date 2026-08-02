@@ -149,6 +149,7 @@ class DaemonRuntimeSession:
                 management=service.capabilities,
                 hook_service=self.hook_service,
                 metadata_path=self.metadata_path,
+                federation_source=service.federation_source,
             )
             self.app.state.metadata = DaemonMetadata(
                 host=self.host,

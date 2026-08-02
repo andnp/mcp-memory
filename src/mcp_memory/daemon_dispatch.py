@@ -255,6 +255,14 @@ def _management_service(routes) -> Any:
 
 
 def _federation_source(routes) -> MemoryFederationSource:
+    source = getattr(routes, "federation_source", None)
+    if source is not None:
+        return source
+    return _legacy_federation_source(routes)
+
+
+def _legacy_federation_source(routes) -> MemoryFederationSource:
+    """Support legacy route fakes until they provide federation_source."""
     service = getattr(routes, "service", None) or _management_service(routes)
     source = getattr(service, "_federation_source", None)
     if isinstance(source, MemoryFederationSource):
