@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -105,8 +106,8 @@ def test_failure_details_project_provider_route_diagnostics() -> None:
         model_name="model-a",
         request_id="request-1",
         attempt=2,
-        started_at=SimpleNamespace(),
-        completed_at=SimpleNamespace(),
+        started_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC),
         status=PlannerExecutionStatus.PROVIDER_FAILED,
         reason_code="model_burst_limit_exceeded",
         metadata={
