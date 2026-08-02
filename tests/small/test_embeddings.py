@@ -145,8 +145,19 @@ def test_sqlite_vector_store_empty_candidate_filter_returns_no_results(db_manage
     ) == []
 
 
-def test_build_embedder_defaults_to_sentence_transformer() -> None:
-    embedder = build_embedder(EmbeddingsConfig())
+def test_build_embedder_defaults_to_ollama() -> None:
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider"):
+        embedder = build_embedder(EmbeddingsConfig())
+    assert isinstance(embedder, OllamaEmbedder)
+
+
+def test_build_embedder_uses_sentence_transformer_for_explicit_provider() -> None:
+    embedder = build_embedder(
+        EmbeddingsConfig(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
     assert isinstance(embedder, SentenceTransformerEmbedder)
 
 
@@ -221,7 +232,12 @@ def test_sentence_transformer_cache_model_uses_local_cache_before_network(monkey
 
     monkeypatch.setattr("mcp_memory.embeddings._load_sentence_transformer", fake_load)
 
-    embedder = SentenceTransformerEmbedder(EmbeddingsConfig())
+    embedder = SentenceTransformerEmbedder(
+        EmbeddingsConfig(
+            provider="sentence-transformers",
+            model="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
 
     assert embedder.cache_model() is True
     assert calls == [True]

@@ -74,7 +74,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.backups.enabled is True
     assert loaded.backups.interval_seconds == 3600.0
     assert loaded.backups.max_snapshots == 24
-    assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"
+    assert loaded.embeddings.provider == "ollama"
+    assert loaded.embeddings.model == "qwen3-embedding:0.6b"
+    assert loaded.embeddings.ollama_base_url == "http://localhost:11434"
     assert loaded.search_ranking.rrf_k == 60.0
     assert loaded.search_ranking.adaptive_result_max == 15
     assert loaded.search_ranking.adaptive_result_score_ratio_floor == 0.7

@@ -296,8 +296,8 @@ class BackupsConfig:
 
 @dataclass
 class EmbeddingsConfig:
-    provider: str = "sentence-transformers"
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    provider: str = "ollama"
+    model: str = "qwen3-embedding:0.6b"
     batch_size: int = 32
     ollama_base_url: str = "http://localhost:11434"
 
@@ -691,8 +691,10 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "warn_on_shared_storage": True,
     }
     document["embeddings"] = {
-        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "provider": "ollama",
+        "model": "qwen3-embedding:0.6b",
         "batch_size": 32,
+        "ollama_base_url": "http://localhost:11434",
     }
     document["logging"] = {
         "max_runtime_logs": 5000,
