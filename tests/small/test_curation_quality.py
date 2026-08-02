@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 import json
 import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self, cast
 from uuid import uuid4
@@ -11,7 +11,10 @@ from uuid import uuid4
 import pytest
 
 from mcp_memory.core.curation_models import CurationRunOutcome
-from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
+from mcp_memory.core.curation_quality import (
+    CurationQualityEvidence,
+    CurationQualitySampler,
+)
 from mcp_memory.curation_quality_store import (
     PostgresCurationQualityStore,
     SQLiteCurationQualityStore,
@@ -24,7 +27,6 @@ from mcp_memory.curation_store import (
     SQLiteCurationStore,
 )
 from mcp_memory.management.analytics_curation import build_curation_metrics
-
 
 pytestmark = pytest.mark.small
 
@@ -194,6 +196,32 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert search.calls in (None, [])
 
 
+def test_quality_sampler_marks_link_work_structural_only(db_manager) -> None:
+    run = _run()
+    SQLiteCurationStore(db_manager).create_run(run)
+    search = _Search([])
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=search,
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[
+            _receipt(
+                run.run_id,
+                event_id=uuid4(),
+            ).model_copy(update={"operation": "create_link"})
+        ],
+    )
+
+    assert evidence[0].status == "structural_only"
+    assert evidence[0].useful_work is None
+    assert search.calls in (None, [])
+
+
 def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)
@@ -315,9 +343,21 @@ def test_quality_metrics_project_sampled_evidence(db_manager) -> None:
             created_at=now,
         )
     )
+    SQLiteCurationQualityStore(db_manager).put_quality_evidence(
+        CurationQualityEvidence(
+            run_id=run.run_id,
+            action_id=uuid4(),
+            operation="create_link",
+            affected_memory_ids=receipt.affected_ids,
+            policy_version=run.policy_version,
+            status="structural_only",
+            created_at=now,
+        )
+    )
 
     metrics = build_curation_metrics(db_manager, window_hours=24, now=now.timestamp())
 
     assert metrics.verified_yield == 0.0
-    assert metrics.retrieval_quality.sampled_action_count == 1
+    assert metrics.retrieval_quality.sampled_action_count == 2
     assert metrics.retrieval_quality.no_query_action_count == 1
+    assert metrics.retrieval_quality.structural_only_action_count == 1

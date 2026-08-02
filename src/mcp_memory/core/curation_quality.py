@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
 import hashlib
 import json
+from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
 from pydantic import Field
 
-from mcp_memory.core.curation_evaluation import ReplayCase, ReplayResult, ReplaySnapshot, evaluate_query_replay
+from mcp_memory.core.curation_evaluation import (
+    ReplayCase,
+    ReplayResult,
+    ReplaySnapshot,
+    evaluate_query_replay,
+)
 from mcp_memory.core.curation_models import CurationModel
-from mcp_memory.core.ports.curation import CurationActionReceipt, CurationReceiptState, CurationRun
+from mcp_memory.core.ports.curation import (
+    CurationActionReceipt,
+    CurationReceiptState,
+    CurationRun,
+)
 
 
 class CurationQualityEvidence(CurationModel):
@@ -104,7 +113,6 @@ class CurationQualitySampler:
         run: CurationRun,
         receipt: CurationActionReceipt,
     ) -> CurationQualityEvidence:
-        query = self._find_historical_query(receipt)
         common = {
             "run_id": run.run_id,
             "action_id": receipt.action_id,
@@ -113,10 +121,15 @@ class CurationQualitySampler:
             "policy_version": run.policy_version,
             "created_at": self._clock(),
         }
+        if receipt.operation in {"create_link", "remove_link"}:
+            return CurationQualityEvidence(status="structural_only", **common)
+
+        query = self._find_historical_query(receipt)
         if query is None:
             return CurationQualityEvidence(status="no_query", **common)
 
         query_id, query_text, before_ids = query
+        intended_ids = self._intended_memory_ids(receipt)
         after_contexts = self._search.search_memories_for_maintenance(
             query_text,
             limit=self._top_k,
@@ -144,7 +157,7 @@ class CurationQualitySampler:
             [
                 ReplayCase(
                     query_id=query_id,
-                    intended_memory_ids=tuple(str(value) for value in receipt.affected_ids),
+                    intended_memory_ids=tuple(str(value) for value in intended_ids),
                     before=ReplaySnapshot(before_results),
                     after=ReplaySnapshot(after_results),
                     top_k=self._top_k,
@@ -164,6 +177,36 @@ class CurationQualitySampler:
             useful_work=report.useful_work_count > 0,
             **common,
         )
+
+    def _intended_memory_ids(self, receipt: CurationActionReceipt) -> list[UUID]:
+        rows = _fetch_rows(
+            self._db_manager,
+            """
+            SELECT memory_id, after_exists, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = ?
+            """,
+            (str(receipt.mutation_event_id),),
+        )
+        snapshots = {
+            str(row[0]): (row[1], row[2])
+            for row in rows
+            if row[0] is not None
+        }
+        intended: list[UUID] = []
+        for memory_id in receipt.affected_ids:
+            after_exists, snapshot = snapshots.get(str(memory_id), (True, None))
+            if not after_exists:
+                continue
+            if isinstance(snapshot, str):
+                try:
+                    snapshot = json.loads(snapshot)
+                except ValueError:
+                    snapshot = None
+            if isinstance(snapshot, Mapping) and snapshot.get("status") == "archived":
+                continue
+            intended.append(memory_id)
+        return intended or list(receipt.affected_ids)
 
     def _is_sampled(self, run_id: UUID, action_id: UUID) -> bool:
         if self._sample_rate >= 1.0:

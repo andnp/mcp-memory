@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections import Counter
-from datetime import UTC, datetime
 import json
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp_memory.management.models import (
@@ -15,8 +15,10 @@ from mcp_memory.management.models import (
     CurationQualityMetricsPayload,
     CurationSpecialistRouteMetricsPayload,
 )
-from mcp_memory.management.query_runner import ManagementQueryAdapter, ManagementQueryRunner
-
+from mcp_memory.management.query_runner import (
+    ManagementQueryAdapter,
+    ManagementQueryRunner,
+)
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
 _VALID_PLAN_OUTCOMES = frozenset(
@@ -74,7 +76,7 @@ def build_curation_metrics(
     quality_rows = (
         runner.fetchall(
             """
-            SELECT run_id, status, retrieval_regression_count, zero_result_change,
+            SELECT run_id, operation, status, retrieval_regression_count, zero_result_change,
                    payload_size_change, useful_work, created_at
             FROM curation_quality_evidence
             """
@@ -197,7 +199,18 @@ def build_curation_metrics(
         _mutation_category(_text(row.get("operation"), "unknown"))
         for row in receipts
     )
-    evaluated_quality = [row for row in quality if row.get("status") == "evaluated"]
+    structural_only_quality = [
+        row
+        for row in quality
+        if row.get("status") == "structural_only"
+        or _text(row.get("operation"), "") in {"create_link", "remove_link"}
+    ]
+    evaluated_quality = [
+        row
+        for row in quality
+        if row.get("status") == "evaluated"
+        and _text(row.get("operation"), "") not in {"create_link", "remove_link"}
+    ]
     useful_work_count = sum(1 for row in evaluated_quality if row.get("useful_work") in (1, True))
 
     history_event_count = len(events)
@@ -248,6 +261,7 @@ def build_curation_metrics(
             sampled_action_count=len(quality),
             evaluated_action_count=len(evaluated_quality),
             no_query_action_count=sum(1 for row in quality if row.get("status") == "no_query"),
+            structural_only_action_count=len(structural_only_quality),
             retrieval_regression_count=sum(
                 _integer(row.get("retrieval_regression_count")) for row in evaluated_quality
             ),
