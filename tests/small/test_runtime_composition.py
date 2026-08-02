@@ -95,10 +95,12 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
         )
     )
 
-    assert composition.resources.storage is storage
-    assert composition.resources.embedder is embedder
-    assert composition.resources.provider_registry is provider_registry
-    assert composition.resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker
+    resources = composition.resources
+    assert resources is not None
+    assert resources.storage is storage
+    assert resources.embedder is embedder
+    assert resources.provider_registry is provider_registry
+    assert resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker
 
 
 def test_runtime_resources_close_order_is_idempotent_and_skips_missing_close_methods() -> None:

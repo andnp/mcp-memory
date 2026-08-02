@@ -102,7 +102,7 @@ class RuntimeResources:
 class RuntimeComposition:
     context: ApplicationContext
     capabilities: RuntimeCapabilityBundles
-    resources: RuntimeResources = field(default_factory=lambda: cast(RuntimeResources, None))
+    resources: RuntimeResources | None = None
     _closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -113,12 +113,14 @@ class RuntimeComposition:
         if self._closed:
             return
         object.__setattr__(self, "_closed", True)
+        resources = self.resources
+        assert resources is not None
         try:
             self.context.close_auxiliary_resources(
-                excluded_resources=self.resources._storage_closeables(),
+                excluded_resources=resources._storage_closeables(),
             )
         finally:
-            self.resources.close()
+            resources.close()
 
 
 def resolve_workspace_runtime_spec(
