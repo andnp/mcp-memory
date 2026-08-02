@@ -17,10 +17,6 @@ from mcp_memory.management.context_resources import (
     ensure_management_context_resources,
 )
 from mcp_memory.management.capabilities import ManagementCapabilities
-from mcp_memory.management.operator_health_reporting import (
-    summarize_memory_tool_latency,
-    summarize_provider_policy,
-)
 from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
 from mcp_memory.management.runtime_health_service import (
     RuntimeHealthService,
@@ -41,7 +37,6 @@ from mcp_memory.management.mutation_history_service import (
 from mcp_memory.management.memory_service import (
     MemoryService,
     MemoryServiceDependencies,
-    _SLOW_MEMORY_TOOL_WARNING_MS,
     _USE_SERVICE_WORKSPACE,
     _resolve_service_workspace_id,  # noqa: F401 - retained for management helper compatibility
 )
@@ -62,7 +57,6 @@ from mcp_memory.management.models import (
     AIConversationListPayload,
     MemoryListPayload,
     MemorySearchPayload,
-    MemoryToolLatencyPayload,
     MutationHistoryDetailPayload,
     MutationHistoryDiffPayload,
     MutationHistoryListPayload,
@@ -765,14 +759,6 @@ class ManagementService:
             debug=debug,
         )
 
-    def _summarize_memory_tool_latency(self, *, window_minutes: int) -> MemoryToolLatencyPayload:
-        return summarize_memory_tool_latency(
-            self._db_manager,
-            workspace_id=self._workspace_id,
-            window_minutes=window_minutes,
-            slow_threshold_ms=_SLOW_MEMORY_TOOL_WARNING_MS,
-        )
-
     def list_logs(
         self,
         *,
@@ -835,16 +821,6 @@ class ManagementService:
 
     def resolve_dashboard_asset_path(self, asset_path: str) -> Path | None:
         return self._runtime_log_service.resolve_dashboard_asset_path(asset_path)
-
-    def _summarize_provider_policy(self, *, window_minutes: int):
-        return summarize_provider_policy(
-            self._db_manager,
-            provider_usage_repo=self._provider_usage,
-            workspace_id=self._workspace_id,
-            window_minutes=window_minutes,
-        )
-
-
 
 def _terminate_process(pid: int) -> bool:
     termination = _terminate_process_with_scope(
