@@ -985,6 +985,70 @@ def test_postgres_vector_store_round_trips_and_ranks_embeddings() -> None:
     assert deleted == 1
 
 
+def test_postgres_vector_store_rejects_empty_embeddings() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    with pytest.raises(ValueError, match="embedding dimension must be positive"):
+        store.upsert(
+            source_kind="memory",
+            source_id="memory-empty",
+            workspace_id=None,
+            model_name="mini-embed",
+            embedding=[],
+        )
+
+    assert session_manager.state.embeddings == []
+
+
+def test_postgres_vector_store_matches_kernel_diagnostics_and_tie_ordering() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    for source_id in ("memory-b", "memory-a"):
+        store.upsert(
+            source_kind="memory",
+            source_id=source_id,
+            workspace_id=None,
+            model_name="mini-embed",
+            embedding=[1.0, 0.0],
+        )
+
+    diagnostics: dict[str, object] = {}
+    ranked = store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        diagnostics=diagnostics,
+        limit=2,
+    )
+
+    assert [source_id for source_id, _score in ranked] == ["memory-a", "memory-b"]
+    assert store.last_search_diagnostics == diagnostics
+    diagnostics["row_count"] = -1
+    assert store.last_search_diagnostics["row_count"] == 2
+
+
+def test_postgres_vector_store_returns_no_results_for_nonpositive_limit() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+
+    assert store.search(
+        source_kind="memory",
+        model_name="mini-embed",
+        query_embedding=[1.0, 0.0],
+        limit=0,
+    ) == []
+
+
 def test_postgres_vector_store_can_bound_search_to_candidate_ids() -> None:
     session_manager = FakePrimitiveSessionManager()
     store = PostgresVectorStore(session_manager)

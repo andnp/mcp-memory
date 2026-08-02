@@ -71,8 +71,18 @@ class PostgresVectorStore:
         self._sessions = session_manager
         self._event_repository = event_repository
         self._search_capabilities: PostgresVectorSearchCapabilities | None = None
+        self._last_search_diagnostics: dict[str, object] = {}
         self._blocked_fallback_write_count = 0
         self._last_blocked_fallback_model_name: str | None = None
+
+    @property
+    def last_search_diagnostics(self) -> dict[str, object]:
+        """Return diagnostics from the most recent vector search.
+
+        This mirrors searchkernel's read-only diagnostics surface while
+        keeping the existing optional per-call diagnostics mapping intact.
+        """
+        return dict(self._last_search_diagnostics)
 
     def get_write_policy_state(self) -> PostgresEmbeddingWritePolicyState:
         return PostgresEmbeddingWritePolicyState(
@@ -337,6 +347,8 @@ class PostgresVectorStore:
         if self._sessions is None:
             return False
         normalized_embedding = [float(value) for value in embedding]
+        if not normalized_embedding:
+            raise ValueError("embedding dimension must be positive")
         payload_json = json.dumps(normalized_embedding)
         updated_at = time.time()
         capabilities = self._get_search_capabilities()
@@ -564,7 +576,7 @@ class PostgresVectorStore:
         workspace_id: str | None = None,
         limit: int = 20,
     ) -> list[tuple[str, float]]:
-        if self._sessions is None:
+        if self._sessions is None or limit < 1:
             return []
         capabilities = self._get_search_capabilities()
         normalized_candidate_ids = [candidate_id for candidate_id in (candidate_ids or []) if candidate_id]
@@ -587,7 +599,7 @@ class PostgresVectorStore:
             if normalized_candidate_ids:
                 query += " AND source_id = ANY(%s::text[])"
                 params.append(normalized_candidate_ids)
-            query += " ORDER BY embedding_vector <=> CAST(%s AS vector) LIMIT %s"
+            query += " ORDER BY embedding_vector <=> CAST(%s AS vector), source_id ASC LIMIT %s"
             params.extend((query_vector, limit))
             fetch_started = time.perf_counter()
             with self._sessions.open_connection() as connection:
@@ -596,25 +608,27 @@ class PostgresVectorStore:
                     rows = cursor.fetchall()
             fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
             scored = [(str(row[0]), _coerce_float(row[1])) for row in rows]
+            search_diagnostics = {
+                "backend": "postgres",
+                "requested_k": limit,
+                "row_count": len(rows),
+                "returned": len(scored),
+                "candidate_filter_count": len(normalized_candidate_ids),
+                "query_dimension": query_dimension,
+                "dimension_filter_applied": True,
+                "search_mode": "server_side_pgvector",
+                "pgvector_extension_installed": capabilities.pgvector_extension_installed,
+                "embedding_vector_column_present": capabilities.embedding_vector_column_present,
+                "server_side_vector_search_available": capabilities.server_side_vector_search_available,
+                "raw_type_counts": {},
+                "fetch_ms": round(fetch_ms, 3),
+                "decode_ms": 0.0,
+                "score_ms": 0.0,
+                "sort_ms": 0.0,
+            }
+            self._last_search_diagnostics = search_diagnostics
             if diagnostics is not None:
-                diagnostics.update(
-                    {
-                        "backend": "postgres",
-                        "row_count": len(rows),
-                        "candidate_filter_count": len(normalized_candidate_ids),
-                        "query_dimension": query_dimension,
-                        "dimension_filter_applied": True,
-                        "search_mode": "server_side_pgvector",
-                        "pgvector_extension_installed": capabilities.pgvector_extension_installed,
-                        "embedding_vector_column_present": capabilities.embedding_vector_column_present,
-                        "server_side_vector_search_available": capabilities.server_side_vector_search_available,
-                        "raw_type_counts": {},
-                        "fetch_ms": round(fetch_ms, 3),
-                        "decode_ms": 0.0,
-                        "score_ms": 0.0,
-                        "sort_ms": 0.0,
-                    }
-                )
+                diagnostics.update(search_diagnostics)
             return scored
         query = "SELECT source_id, embedding_json FROM embeddings WHERE source_kind = %s AND model_name = %s"
         params: list[object] = [source_kind, model_name]
@@ -651,29 +665,31 @@ class PostgresVectorStore:
             scored.append((source_id, score))
         score_ms = (time.perf_counter() - score_started) * 1000.0
         sort_started = time.perf_counter()
-        scored.sort(key=lambda item: item[1], reverse=True)
+        scored.sort(key=lambda item: (-item[1], item[0]))
         sort_ms = (time.perf_counter() - sort_started) * 1000.0
+        search_diagnostics = {
+            "backend": "postgres",
+            "requested_k": limit,
+            "row_count": len(rows),
+            "compatible_row_count": len(decoded_rows),
+            "returned": min(len(scored), limit),
+            "candidate_filter_count": len(normalized_candidate_ids),
+            "query_dimension": query_dimension,
+            "dimension_filter_applied": False,
+            "skipped_dimension_mismatch_count": skipped_dimension_mismatch_count,
+            "search_mode": "client_python_fallback",
+            "pgvector_extension_installed": capabilities.pgvector_extension_installed,
+            "embedding_vector_column_present": capabilities.embedding_vector_column_present,
+            "server_side_vector_search_available": capabilities.server_side_vector_search_available,
+            "raw_type_counts": raw_type_counts,
+            "fetch_ms": round(fetch_ms, 3),
+            "decode_ms": round(decode_ms, 3),
+            "score_ms": round(score_ms, 3),
+            "sort_ms": round(sort_ms, 3),
+        }
+        self._last_search_diagnostics = search_diagnostics
         if diagnostics is not None:
-            diagnostics.update(
-                {
-                    "backend": "postgres",
-                    "row_count": len(rows),
-                    "compatible_row_count": len(decoded_rows),
-                    "candidate_filter_count": len(normalized_candidate_ids),
-                    "query_dimension": query_dimension,
-                    "dimension_filter_applied": False,
-                    "skipped_dimension_mismatch_count": skipped_dimension_mismatch_count,
-                    "search_mode": "client_python_fallback",
-                    "pgvector_extension_installed": capabilities.pgvector_extension_installed,
-                    "embedding_vector_column_present": capabilities.embedding_vector_column_present,
-                    "server_side_vector_search_available": capabilities.server_side_vector_search_available,
-                    "raw_type_counts": raw_type_counts,
-                    "fetch_ms": round(fetch_ms, 3),
-                    "decode_ms": round(decode_ms, 3),
-                    "score_ms": round(score_ms, 3),
-                    "sort_ms": round(sort_ms, 3),
-                }
-            )
+            diagnostics.update(search_diagnostics)
         return scored[:limit]
 
     def delete_by_model(self, *, source_kind: str, model_name: str) -> int:
