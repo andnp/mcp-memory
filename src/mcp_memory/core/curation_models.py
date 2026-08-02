@@ -352,7 +352,10 @@ class CurationPlan(CurationModel):
     actions: list[CurationAction] = Field(default_factory=list)
     retained: list[RetentionDecision] = Field(default_factory=list)
     rationale: str
-    seed_memory_ids: list[UUID] = Field(default_factory=list)
+    seed_memory_ids: list[UUID] = Field(
+        ...,
+        description="Every seed memory ID from the planner context, with exactly one disposition.",
+    )
 
     @model_validator(mode="after")
     def validates_seed_dispositions(self) -> CurationPlan:

@@ -539,6 +539,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "schema": CurationPlan.model_json_schema(),
         "planner_contract": [
             "Every target_id, source_id, canonical_id, source_ids entry, and retained memory_id must refer to a memory visible in context.",
+            "seed_memory_ids is required and must exactly equal the context seed IDs; every seed must receive exactly one disposition.",
             "merge_memories canonical_id must be an existing visible record; merging never creates a record.",
             "create_link and remove_link require both endpoints to be visible in context.",
             "Every action affecting a visible memory must include its exact context.record_tokens value in preconditions.record_tokens.",
@@ -567,7 +568,8 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         }
     return (
         "You are a curation planner. Return exactly one JSON object matching the "
-        "provided CurationPlan JSON schema. Planning only: do not execute mutations, "
+        "provided CurationPlan JSON schema. Include seed_memory_ids exactly as the "
+        "context seed IDs. Planning only: do not execute mutations, "
         "call tools, or report a claimed action count; actions are counted only after "
         "validation. Every memory ID in an action or retention decision must be copied "
         "from a memory visible in the provided context. A merge canonical_id must be "

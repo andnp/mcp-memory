@@ -61,6 +61,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
         "plan_id",
         "frontier_key",
         "context_fingerprint",
+        "seed_memory_ids",
     }
     assert {"actions", "retained", "seed_memory_ids"} <= schema["properties"].keys()
     action_schema = schema["properties"]["actions"]["items"]
@@ -81,6 +82,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
 
     contract = " ".join(payload["planner_contract"])
     assert "visible in context" in contract
+    assert "seed_memory_ids is required" in contract
     assert "merging never creates a record" in contract
     assert "both endpoints to be visible" in contract
     assert "exact context.record_tokens value" in contract
@@ -103,6 +105,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
 
     prompt = _build_planner_prompt(request, CurationPlannerTools(context=cast(Any, {})))
     assert "Every memory ID in an action or retention decision must be copied" in prompt
+    assert "Include seed_memory_ids exactly as the context seed IDs" in prompt
     assert "content is the final persisted durable memory body" in prompt
     assert "do not write status prose" in prompt
     assert "evidence.link matching the exact endpoints" in prompt
