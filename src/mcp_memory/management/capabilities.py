@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
 from mcp_memory.management.memory_service import _USE_SERVICE_WORKSPACE
+from mcp_memory.management.models import MemoryListPayload, MutationHistoryListPayload, RuntimeLogListPayload
 
 
 class _ReportingService(Protocol):
@@ -143,8 +144,8 @@ class ManagementMaintenanceService:
 class ManagementMutationService:
     service: _MutationService
 
-    def list_mutation_history(self, **kwargs: object) -> object:
-        return self.service.list_mutation_history(**kwargs)
+    def list_mutation_history(self, **kwargs: object) -> MutationHistoryListPayload:
+        return cast(MutationHistoryListPayload, self.service.list_mutation_history(**kwargs))
 
     def get_mutation_history_event(self, event_id: str) -> object:
         return self.service.get_mutation_history_event(event_id)
@@ -179,8 +180,8 @@ class ManagementRuntimeService:
             self.refresh()
         return self.health.repair_search_index()
 
-    def list_logs(self, **kwargs: object) -> object:
-        return self.logs.list_logs(**kwargs)
+    def list_logs(self, **kwargs: object) -> RuntimeLogListPayload:
+        return cast(RuntimeLogListPayload, self.logs.list_logs(**kwargs))
 
     def summarize_logs(self, **kwargs: object) -> object:
         return self.logs.summarize_logs(**kwargs)
@@ -207,8 +208,8 @@ class ManagementMemoryService:
     ) -> dict[str, object]:
         return self.service.record_thought(content, workspace_id=workspace_id)
 
-    def list_memories(self, **kwargs: object) -> object:
-        return self.service.list_memories(**kwargs)
+    def list_memories(self, **kwargs: object) -> MemoryListPayload:
+        return cast(MemoryListPayload, self.service.list_memories(**kwargs))
 
     def search_memories(self, **kwargs: object) -> object:
         return self.service.search_memories(**kwargs)
