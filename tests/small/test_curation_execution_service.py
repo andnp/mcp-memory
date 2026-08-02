@@ -14,6 +14,8 @@ from mcp_memory.core.curation_models import CurationRunOutcome
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ClaimManifest,
+    CreateLinkAction,
+    LinkAssertion,
     MergeMemoriesAction,
     NormalizeMemoryAction,
 )
@@ -202,6 +204,60 @@ def test_preserves_provider_supplied_token_mismatch() -> None:
     hydrated = _hydrate_record_tokens(action, context)
 
     assert hydrated.preconditions.record_tokens[CANONICAL_ID] == "stale-provider-token"
+
+
+def test_hydrates_omitted_create_link_context_for_matching_absent_link() -> None:
+    context = _context()
+    action = CreateLinkAction(
+        action_id=UUID("00000000-0000-0000-0000-000000000008"),
+        source_id=CANONICAL_ID,
+        target_id=SOURCE_ID,
+        confidence=1,
+        rationale="connect related records",
+        link_type="RELATED",
+        context="The records cover the same operational area.",
+        preconditions=ActionPreconditions(
+            absent_links=[
+                LinkAssertion(
+                    source_id=CANONICAL_ID,
+                    target_id=SOURCE_ID,
+                    link_type="RELATED",
+                )
+            ]
+        ),
+    )
+
+    hydrated = _hydrate_record_tokens(action, context)
+
+    assert hydrated.preconditions.absent_links[0].context == action.context
+    assert set(hydrated.preconditions.record_tokens) == {CANONICAL_ID, SOURCE_ID}
+
+
+def test_preserves_conflicting_create_link_context() -> None:
+    context = _context()
+    action = CreateLinkAction(
+        action_id=UUID("00000000-0000-0000-0000-000000000009"),
+        source_id=CANONICAL_ID,
+        target_id=SOURCE_ID,
+        confidence=1,
+        rationale="connect related records",
+        link_type="RELATED",
+        context="The records cover the same operational area.",
+        preconditions=ActionPreconditions(
+            absent_links=[
+                LinkAssertion(
+                    source_id=CANONICAL_ID,
+                    target_id=SOURCE_ID,
+                    link_type="RELATED",
+                    context="Different relationship evidence.",
+                )
+            ]
+        ),
+    )
+
+    hydrated = _hydrate_record_tokens(action, context)
+
+    assert hydrated.preconditions.absent_links[0].context == "Different relationship evidence."
 
 
 def test_invalid_action_receipt_does_not_block_valid_action() -> None:
