@@ -14,7 +14,7 @@ from mcp_memory.application.memory_use_cases import (
     RecordThoughtUseCase,
     SearchMemoryRecordsUseCase,
 )
-from mcp_memory.application.ports import MemoryReadDependencies
+from mcp_memory.application.ports import MemoryReadContext, MemoryReadDependencies
 from mcp_memory.context import ApplicationContext
 from mcp_memory.mcp.adapters import (
     parse_batch_read_arguments,
@@ -36,7 +36,7 @@ from mcp_memory.storage.shared_mode_cache import resolve_shared_mode_cache_state
 
 
 class _ContextBoundRetrievalTelemetry:
-    def __init__(self, ctx: ApplicationContext) -> None:
+    def __init__(self, ctx: MemoryReadContext) -> None:
         self._ctx = ctx
         self._adapter = McpRetrievalTelemetryAdapter()
 
@@ -71,7 +71,7 @@ class _ContextBoundRetrievalTelemetry:
         )
 
 
-def _memory_read_dependencies(ctx: ApplicationContext) -> MemoryReadDependencies:
+def _memory_read_dependencies(ctx: MemoryReadContext) -> MemoryReadDependencies:
     return MemoryReadDependencies(
         config=ctx.config,
         workspace_id=ctx.workspace_id,
@@ -101,7 +101,7 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
 
 
 def search_memory_records_service(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -113,7 +113,7 @@ def search_memory_records_service(
 
 
 async def search_memory_records_async_service(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -133,7 +133,7 @@ async def search_memory_records_async_service(
 
 
 def read_memory_record_service(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     arguments: dict,
     *,
     caller_kind: str = "external",
@@ -145,7 +145,7 @@ def read_memory_record_service(
 
 
 def read_memory_records_service(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     arguments: dict,
     *,
     caller_kind: str = "external",

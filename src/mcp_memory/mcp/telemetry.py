@@ -4,7 +4,7 @@ from logging import getLogger
 from time import time
 from uuid import uuid4
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.application.ports import MemoryReadContext
 from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 
 
@@ -12,7 +12,7 @@ _SLOW_MEMORY_TOOL_WARNING_MS = 2_000.0
 logger = getLogger(__name__)
 
 def _retrieval_telemetry_repository(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
 ) -> RetrievalTelemetryRepository:
     repository = ctx.retrieval_telemetry
     if repository is None:
@@ -24,7 +24,7 @@ def _retrieval_telemetry_repository(
 
 
 def _log_slow_memory_tool_operation(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     *,
     tool_name: str,
     duration_ms: float,
@@ -57,7 +57,7 @@ def _log_slow_memory_tool_operation(
 
 
 def _record_search_invocation(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     *,
     caller_kind: str,
     query: str,
@@ -85,7 +85,7 @@ def _record_search_invocation(
 
 
 def _record_read_invocation(
-    ctx: ApplicationContext,
+    ctx: MemoryReadContext,
     *,
     caller_kind: str,
     memory_id: str,
@@ -120,7 +120,7 @@ def _record_read_invocation(
 class McpRetrievalTelemetryAdapter:
     def record_search(
         self,
-        ctx: ApplicationContext,
+        ctx: MemoryReadContext,
         *,
         caller_kind: str,
         query: str,
@@ -137,7 +137,7 @@ class McpRetrievalTelemetryAdapter:
 
     def record_read(
         self,
-        ctx: ApplicationContext,
+        ctx: MemoryReadContext,
         *,
         caller_kind: str,
         memory_id: str,

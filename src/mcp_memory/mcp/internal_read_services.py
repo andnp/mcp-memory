@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from mcp_memory.context import ApplicationContext
+from mcp_memory.application.ports import MemoryReadContext
 from mcp_memory.mcp.services import (
     _record_read_invocation,
     _record_search_invocation,
@@ -49,7 +49,7 @@ def _record_payload(record: Any, *, include_metadata: bool) -> dict:
     return agent_memory_record_payload(record)
 
 
-def _maintenance_context(ctx: ApplicationContext):
+def _maintenance_context(ctx: MemoryReadContext):
     if ctx.relational_search is None:
         return None
     return ctx.relational_search
@@ -59,12 +59,12 @@ def _not_initialized() -> dict[str, str]:
     return {"status": "error", "error": "relational_search_not_initialized"}
 
 
-def internal_search_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_search_memory_records_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     return search_memory_records_service(ctx, arguments, caller_kind="internal")
 
 
 async def internal_search_memory_records_async_service(
-    ctx: ApplicationContext, arguments: dict
+    ctx: MemoryReadContext, arguments: dict
 ) -> dict:
     return await search_memory_records_async_service(
         ctx,
@@ -73,15 +73,15 @@ async def internal_search_memory_records_async_service(
     )
 
 
-def internal_read_memory_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_read_memory_record_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     return read_memory_record_service(ctx, arguments, caller_kind="internal")
 
 
-def internal_read_memory_records_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_read_memory_records_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     return read_memory_records_service(ctx, arguments, caller_kind="internal")
 
 
-def internal_peek_record_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_peek_record_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     """Read one authoritative record without the public read cache or access updates."""
     search = _maintenance_context(ctx)
     if search is None:
@@ -107,7 +107,7 @@ def internal_peek_record_service(ctx: ApplicationContext, arguments: dict) -> di
     }
 
 
-def internal_maintenance_search_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_maintenance_search_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     """Search authoritative records without surfacing, accessing, or caching them."""
     search = _maintenance_context(ctx)
     if search is None:
@@ -151,7 +151,7 @@ def internal_maintenance_search_service(ctx: ApplicationContext, arguments: dict
     }
 
 
-def internal_list_relationships_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_list_relationships_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     """List a bounded relationship slice from an authoritative maintenance peek."""
     search = _maintenance_context(ctx)
     if search is None:
@@ -199,7 +199,7 @@ def internal_list_relationships_service(ctx: ApplicationContext, arguments: dict
     }
 
 
-def internal_bounded_adjacency_service(ctx: ApplicationContext, arguments: dict) -> dict:
+def internal_bounded_adjacency_service(ctx: MemoryReadContext, arguments: dict) -> dict:
     """Return one-hop neighboring records with a hard output/read bound."""
     search = _maintenance_context(ctx)
     if search is None:

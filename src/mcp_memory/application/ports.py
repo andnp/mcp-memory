@@ -28,6 +28,21 @@ class MemoryReadDependencies:
     embedding_maintenance: Any = None
 
 
+class MemoryReadContext(Protocol):
+    config: Any
+    workspace_id: str | None
+    db_manager: Any
+    repository: Any
+    relational_search: Any
+    read_cache: ReadCachePort | None
+    storage_backend: str | None
+    runtime_logs: Any
+    retrieval_telemetry: Any
+    embedder: Any
+    vector_store: Any
+    embedding_maintenance: Any
+
+
 class MemoryMutationDependencies(Protocol):
     config: Any
     journal: Any
