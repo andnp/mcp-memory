@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-memory = "mcp_memory.cli:main"
+mcp-memory = "mcp_memory.entrypoint:main"
 
 [dependency-groups]
 dev = [
