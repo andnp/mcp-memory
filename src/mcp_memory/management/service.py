@@ -55,6 +55,10 @@ from mcp_memory.management.operator_health_reporting import (
 from mcp_memory.management.overview_service import OverviewService, OverviewServiceDependencies
 from mcp_memory.management.query_runner import PostgresManagementQueryAdapter, SQLiteManagementQueryAdapter
 from mcp_memory.management.scope_policy import ScopePolicyKind, resolve_workspace_id_for_policy
+from mcp_memory.management.task_reporting_service import (
+    TaskReportingService,
+    TaskReportingServiceDependencies,
+)
 from mcp_memory.mutation_history import (
     LinkRevision,
     MutationEvent,
@@ -67,7 +71,6 @@ from mcp_memory.mutation_history import (
     RestoreScope,
 )
 from mcp_memory.management.selector_stats_reporting import build_selector_stats_payload
-from mcp_memory.management.task_sampling_summary import build_task_sampling_summary
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
 from mcp_memory.relational.operations import SearchMemoryRecordsOperation
 from mcp_memory.management.models import (
@@ -394,6 +397,12 @@ class ManagementService:
                 relational_search=self._relational_search,
                 cache_health=self._build_cache_health,
                 embedding_integrity_summary=lambda: self._embedding_integrity_summary(workspace_id=None),
+            )
+        )
+        self._task_reporting_service = TaskReportingService(
+            TaskReportingServiceDependencies(
+                db_manager=self._db_manager,
+                workspace_id=self._workspace_id,
             )
         )
         self._config = memory.config
@@ -1180,17 +1189,13 @@ class ManagementService:
         return TaskListPayload(tasks=[task_payload(task) for task in tasks])
 
     def list_recent_agent_runs(self, *, limit: int = 20, detail_level: str = "compact") -> AgentRunHistoryListPayload:
-        return AgentRunHistoryListPayload(
-            runs=build_recent_agent_runs(
-                self._db_manager,
-                self._workspace_id,
-                limit=limit,
-                detail_level=detail_level,
-            )
+        return self._task_reporting_service.list_recent_agent_runs(
+            limit=limit,
+            detail_level=detail_level,
         )
 
     def get_task_sampling_summary(self, *, limit: int = 50) -> TaskSamplingSummaryPayload:
-        return build_task_sampling_summary(self.list_recent_agent_runs(limit=limit).runs)
+        return self._task_reporting_service.get_task_sampling_summary(limit=limit)
 
     def get_selector_stats(
         self,
