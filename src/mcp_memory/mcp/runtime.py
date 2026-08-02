@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import shutil
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from mcp_memory.config import (
     GLOBAL_DAEMON_IDENTITY,
@@ -27,6 +27,7 @@ from mcp_memory.context import (
 )
 from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 from mcp_memory.embeddings import build_embedder
+from searchkernel.ports import EmbeddingBatchProvider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
@@ -70,9 +71,24 @@ class RuntimeCapabilityBundles:
 
 
 @dataclass(frozen=True)
+class RuntimeResources:
+    """Typed runtime resources assembled by the runtime composition root."""
+
+    storage: StorageBackendResources
+    embedder: EmbeddingBatchProvider | None
+    provider_registry: dict[str, dict[str, object]]
+    internal_tool_call_tracker: InternalToolCallTracker
+
+
+@dataclass(frozen=True)
 class RuntimeComposition:
     context: ApplicationContext
     capabilities: RuntimeCapabilityBundles
+    resources: RuntimeResources = field(default_factory=lambda: cast(RuntimeResources, None))
+
+    def __post_init__(self) -> None:
+        if self.resources is None:
+            object.__setattr__(self, "resources", _runtime_resources_from_context(self.context))
 
 
 def resolve_workspace_runtime_spec(
@@ -208,6 +224,12 @@ def create_runtime_composition(
             task=context.task_runtime_capabilities(),
             management=context.management_capabilities(),
         ),
+        resources=RuntimeResources(
+            storage=storage,
+            embedder=embedder,
+            provider_registry=provider_registry,
+            internal_tool_call_tracker=internal_tool_call_tracker,
+        ),
     )
 
 
@@ -217,6 +239,37 @@ def create_runtime(
 ) -> ApplicationContext:
     spec = resolve_workspace_runtime_spec(workspace_root_override, cwd)
     return create_runtime_from_spec(spec)
+
+
+def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResources:
+    """Preserve compatibility for callers that construct compositions manually."""
+
+    return RuntimeResources(
+        storage=StorageBackendResources(
+            backend=cast(str, context.storage_backend),
+            db_manager=context.db_manager,
+            journal=context.journal,
+            repository=context.repository,
+            relational_search=context.relational_search,
+            read_cache=context.read_cache,
+            task_queue=context.task_queue,
+            provider_usage=context.provider_usage,
+            runtime_logs=context.runtime_logs,
+            provider_policy_events=context.provider_policy_events,
+            embedding_integrity_events=context.embedding_integrity_events,
+            task_execution_attempts=context.task_execution_attempts,
+            work_items=context.work_items,
+            embedding_repair_queue=context.embedding_repair_queue,
+            vector_store=context.vector_store,
+            mutation_history=context.mutation_history,
+            curation=context.curation,
+            curation_action_store=context.curation_action_store,
+            embedding_maintenance=context.embedding_maintenance,
+        ),
+        embedder=cast(EmbeddingBatchProvider | None, context.embedder),
+        provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),
+        internal_tool_call_tracker=cast(InternalToolCallTracker, context.internal_tool_call_tracker),
+    )
 
 
 def _build_provider_registry(
