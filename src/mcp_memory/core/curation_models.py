@@ -131,15 +131,6 @@ class CreateLinkAction(ActionEnvelope):
         context = (self.context or "").strip()
         if len(context.split()) < 2:
             raise ValueError("create_link requires descriptive relationship context")
-        if not any(
-            evidence.link is not None
-            and evidence.link.source_id == self.source_id
-            and evidence.link.target_id == self.target_id
-            and evidence.link.link_type.strip() == self.link_type.strip()
-            and (evidence.link.context or "").strip() == context
-            for evidence in self.evidence
-        ):
-            raise ValueError("create_link requires exact link evidence")
         return self
 
 
