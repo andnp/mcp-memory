@@ -263,7 +263,10 @@ class RuntimeTaskWorker:
                         task.id,
                         execution_epoch=task.execution_epoch,
                     )
-                    await self._recover_abandoned_tasks(task_queue)
+                    await self._recover_abandoned_tasks(
+                        task_queue,
+                        include_owned_task=True,
+                    )
                     current_task = await asyncio.to_thread(task_queue.get_task, task.id)
                     if current_task.status == "running" and current_task.execution_epoch == task.execution_epoch:
                         continue
@@ -313,13 +316,22 @@ class RuntimeTaskWorker:
         await asyncio.to_thread(self._reconcile_terminal_task_state, failed_task)
         await self._schedule_follow_up(task, failed_task)
 
-    async def _recover_abandoned_tasks(self, task_queue) -> None:
+    async def _recover_abandoned_tasks(
+        self,
+        task_queue,
+        *,
+        include_owned_task: bool = False,
+    ) -> None:
         current_time = time.time()
         if current_time < self._next_abandoned_recovery_at:
             return
         self._next_abandoned_recovery_at = current_time + self._abandoned_recovery_interval_seconds
         del task_queue
-        await self._run_reconciliation_pass(now=current_time, reason="worker_loop")
+        await self._run_reconciliation_pass(
+            now=current_time,
+            reason="worker_loop",
+            include_owned_task=include_owned_task,
+        )
 
     async def _run_reconciliation_loop(self) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -346,6 +358,7 @@ class RuntimeTaskWorker:
         *,
         now: float | None = None,
         reason: str,
+        include_owned_task: bool = False,
     ) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
@@ -354,7 +367,11 @@ class RuntimeTaskWorker:
         async with self._reconciliation_lock:
             current_time = time.time() if now is None else now
             await asyncio.to_thread(self._recover_leaked_work_items)
-            recovered_tasks = await asyncio.to_thread(self._recover_running_tasks, current_time)
+            recovered_tasks = await asyncio.to_thread(
+                self._recover_running_tasks,
+                current_time,
+                include_owned_task,
+            )
             recovered_task_ids: list[str] = []
             for recovered_task in recovered_tasks:
                 recovered_task_ids.append(recovered_task.task.id)
@@ -629,7 +646,11 @@ class RuntimeTaskWorker:
         await asyncio.to_thread(self._reconcile_terminal_task_state, completed_task)
         await self._schedule_follow_up(task, completed_task, normalized_result)
 
-    def _recover_running_tasks(self, current_time: float) -> list[_RecoveredTaskOutcome]:
+    def _recover_running_tasks(
+        self,
+        current_time: float,
+        include_owned_task: bool = False,
+    ) -> list[_RecoveredTaskOutcome]:
         task_queue = getattr(self._ctx, "task_queue", None)
         if task_queue is None:
             return []
@@ -639,8 +660,16 @@ class RuntimeTaskWorker:
         recovered: list[_RecoveredTaskOutcome] = []
         running_tasks = task_queue.list_tasks(status="running", workspace_id=None, limit=200)
         for task in running_tasks:
-            if (task.id, task.execution_epoch) in owned_task_attempts:
+            is_owned_task = (task.id, task.execution_epoch) in owned_task_attempts
+            if is_owned_task and not include_owned_task:
                 continue
+            if is_owned_task and include_owned_task:
+                attempt = self._get_running_task_attempt(
+                    task,
+                    attempt_repository=attempt_repository,
+                )
+                if attempt is None or attempt.subprocess_pid is None:
+                    continue
             recovered_task = self._recover_running_task(
                 task_queue,
                 task,
