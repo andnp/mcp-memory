@@ -88,8 +88,10 @@ def _keyword_token_coverage(
 def _token_presence_ratio(query_tokens: Sequence[str], text: str) -> float:
     if not query_tokens or not text.strip():
         return 0.0
-    haystack = text.lower()
-    matched_tokens = sum(1 for token in query_tokens if token in haystack)
+    text_tokens = {
+        match.group(0).lower() for match in FTS_QUERY_TOKEN_PATTERN.finditer(text)
+    }
+    matched_tokens = sum(1 for token in query_tokens if token in text_tokens)
     return matched_tokens / len(query_tokens)
 
 @dataclass(slots=True)

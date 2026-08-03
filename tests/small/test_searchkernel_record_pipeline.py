@@ -455,7 +455,7 @@ async def test_policy_lookups_are_cached_for_one_search() -> None:
         cast("MemoryRepositoryPort", repository),
     )
 
-    outcome = await pipeline.search("query", limit=1)
+    outcome = await pipeline.search("depends query", limit=1)
 
     assert [result.record_id for result in outcome.results] == ["active"]
     assert repository.ranking_candidate_calls == 1
