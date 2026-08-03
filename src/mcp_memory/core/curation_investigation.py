@@ -18,11 +18,11 @@ READ_ONLY_CURATOR_INVESTIGATION_TOOLS = (
 
 @dataclass(frozen=True, slots=True)
 class CurationInvestigationLimits:
-    max_rounds: int = 2
-    max_tool_calls: int = 8
-    max_context_characters: int = 8_000
-    max_result_characters: int = 6_000
-    max_records: int = 8
+    max_rounds: int = 6
+    max_tool_calls: int = 24
+    max_context_characters: int = 20_000
+    max_result_characters: int = 12_000
+    max_records: int = 32
 
     def __post_init__(self) -> None:
         for name in (
@@ -137,12 +137,16 @@ def _investigation_prompt(
     payload["seed_records"] = seed_context
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return (
-        "You are a read-only curator investigator. Use only the listed internal tools. "
-        "Do not mutate records, links, work items, or task state. Stop within the stated "
-        "round and tool-call limits. Return one JSON object with rounds, tool_calls, "
-        "and record_ids containing only records that need to be added as evidence. "
-        "Do not return record content as evidence; the application will re-read every ID "
-        "authoritatively before planning.\n"
+        "You are the curator's exploration phase. Explore the memory base actively using "
+        "multiple rounds of the listed read-only tools. Start from the seed records, then "
+        "look for duplicates, better canonicals, related claims, stale traces, missing "
+        "evidence, and nearby records that could form a higher-quality repair together. "
+        "Read every record that may be relevant to a useful improvement, not only records "
+        "needed to justify retention. Do not mutate records, links, work items, or task "
+        "state. Stop within the stated round and tool-call limits. Return one JSON object "
+        "with rounds, tool_calls, and record_ids for every memory you actually read or "
+        "want the planner to inspect. Do not return record content; the application will "
+        "re-read every ID authoritatively before planning.\n"
         + encoded
     )
 
