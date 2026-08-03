@@ -146,6 +146,33 @@ class InstrumentedAIProvider:
             route_available=route_available,
         )
 
+    def with_allowed_tool_names(self, allowed_tool_names: tuple[str, ...]):
+        scoped_provider = getattr(self._provider, "with_allowed_tool_names", None)
+        if not callable(scoped_provider):
+            return self
+        return InstrumentedAIProvider(
+            scoped_provider(allowed_tool_names),
+            usage_repository=self._usage_repository,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            task_name=self._task_name,
+            task_id=self._task_id,
+            execution_epoch=self._execution_epoch,
+            workspace_id=self._workspace_id,
+            task_queue=self._task_queue,
+            task_execution_attempts=self._task_execution_attempts,
+            budget_key=self._budget_key,
+            daily_call_limit=self._daily_call_limit,
+            model_burst_call_limit=self._model_burst_call_limit,
+            model_burst_window_seconds=self._model_burst_window_seconds,
+            block_test_execution=self._block_test_execution,
+            provider_trust_class=self._provider_trust_class,
+            provider_allowlisted=self._provider_allowlisted,
+            provider_profile=self._provider_profile,
+            route_available=self._route_available,
+        )
+
     def _record_attempt_start(self, *, request_id: str, event: ProviderAttemptStartedEvent) -> None:
         if self._task_execution_attempts is None or self._task_id is None or self._execution_epoch is None:
             return

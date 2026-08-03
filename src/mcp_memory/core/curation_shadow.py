@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
@@ -11,6 +11,11 @@ from mcp_memory.core.curation_context import AcceptedMaintenanceRead
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
+from mcp_memory.core.curation_investigation import (
+    CurationInvestigationLimits,
+    CurationInvestigationResult,
+    run_curator_investigation,
+)
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_validation import CurationMutationBudget
@@ -42,6 +47,7 @@ async def run_curator_verified_campaign(
     seed_records: list[Any],
     claimed_work_item: Any,
     work_item_metadata: dict[str, Any],
+    investigation_limits: CurationInvestigationLimits | None = None,
 ) -> dict[str, Any]:
     """Plan and execute the canonical verified curator campaign path."""
     planner_provider = _curator_json_provider(ctx, task, provider)
@@ -66,6 +72,20 @@ async def run_curator_verified_campaign(
             release_work_item(ctx, claimed_work_item.id)
         raise RuntimeError("verified campaign storage is unavailable")
 
+    investigator = _curator_agentic_provider(ctx, task, provider)
+    investigation = await run_curator_investigation(
+        investigator,
+        seed_records=seed_records,
+        task_id=task.id,
+        limits=investigation_limits,
+    ) if investigator is not None else CurationInvestigationResult(
+        "skipped", reason="agentic_provider_unavailable"
+    )
+    exploratory_records, exploratory_reads = _investigated_reads(
+        ctx, investigation, seed_records
+    )
+    context_records = [*seed_records, *exploratory_records]
+
     planner = InstrumentedCurationPlanner(
         planner_provider,
         provider_key=str(getattr(planner_provider, "_provider_key", "curation-executor")),
@@ -79,6 +99,7 @@ async def run_curator_verified_campaign(
         "seed_reads": (
             _record_read(
                 record,
+                edges=_record_edges(ctx, record),
                 selection_reason=seed_batch.strategy_selection_reason,
                 selection_signals=_strategy_signals(seed_batch),
                 selection_scores=seed_batch.strategy_selection_scores,
@@ -86,7 +107,8 @@ async def run_curator_verified_campaign(
             )
             for record in sampled_records
         ),
-        "support_reads": (_record_read(record) for record in support_records),
+        "support_reads": (_record_read(record, edges=_record_edges(ctx, record)) for record in support_records),
+        "exploratory_reads": exploratory_reads,
         "task_id": _task_uuid(task.id),
         "campaign_hypothesis": campaign_hypothesis,
     }
@@ -95,8 +117,8 @@ async def run_curator_verified_campaign(
         if claimed_work_item is not None
         else CurationFrontier.direct(**frontier_args)
     )
-    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, seed_records)
-    memory_types = {UUID(record.id): record.type for record in seed_records}
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, context_records)
+    memory_types = {UUID(record.id): record.type for record in context_records}
     harness = CurationDryRunHarness(
         curation_store=ctx.curation,
         planner=planner,
@@ -159,6 +181,13 @@ async def run_curator_verified_campaign(
         curation_plan=None if plan is None else plan.model_dump(mode="json"),
         curation_decisions=decisions,
         curation_campaign_result=campaign_result,
+        curation_investigation={
+            "status": investigation.status,
+            "rounds": investigation.rounds,
+            "tool_calls": investigation.tool_calls,
+            "record_count": len(exploratory_reads),
+            "reason": investigation.reason,
+        },
     )
 
 
@@ -167,6 +196,25 @@ def _supports_json_planning(provider: Any) -> bool:
         return False
     supports_agentic = getattr(provider, "supports_agentic", None)
     return not callable(supports_agentic) or not bool(supports_agentic())
+
+
+def _supports_agentic_investigation(provider: Any) -> bool:
+    return callable(getattr(provider, "run_agent", None))
+
+
+def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
+    candidate = provider if _supports_agentic_investigation(provider) else getattr(ctx, "ai_agent_provider", None)
+    if not _supports_agentic_investigation(candidate):
+        return None
+    with_usage_context = getattr(candidate, "with_usage_context", None)
+    if callable(with_usage_context):
+        return with_usage_context(
+            task_name=task.task_name,
+            task_id=task.id,
+            execution_epoch=task.execution_epoch,
+            workspace_id=task.workspace_id,
+        )
+    return candidate
 
 
 def _curator_json_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
@@ -275,6 +323,7 @@ def _disclosure_context(
 def _record_read(
     record: Any,
     *,
+    edges: tuple[dict[str, Any], ...] = (),
     selection_reason: str | None = None,
     selection_signals: dict[str, float] | None = None,
     selection_scores: dict[str, float] | None = None,
@@ -313,8 +362,77 @@ def _record_read(
                     "quality_feedback",
                 )
             },
-        }
+        },
+        edges=edges,
     )
+
+
+def _record_edges(ctx: ApplicationContext, record: Any) -> tuple[dict[str, Any], ...]:
+    search = getattr(ctx, "relational_search", None)
+    peek = getattr(search, "peek_memory", None)
+    if not callable(peek):
+        return ()
+    result = peek(str(record.id))
+    return () if result is None else _relationship_edges(result)
+
+
+def _relationship_edges(result: Any) -> tuple[dict[str, Any], ...]:
+    relationships = getattr(result, "relationships", {})
+    edges: list[dict[str, Any]] = []
+    if not isinstance(relationships, dict):
+        return ()
+    for direction, links in relationships.items():
+        if not isinstance(links, (list, tuple)):
+            continue
+        for link in links:
+            edges.append(
+                {
+                    "direction": direction,
+                    "link": {
+                        "source_id": link.source_id,
+                        "target_id": link.target_id,
+                        "type": link.link_type,
+                        "context": link.context,
+                    },
+                }
+            )
+    return tuple(edges)
+
+
+def _investigated_reads(
+    ctx: ApplicationContext,
+    investigation: CurationInvestigationResult,
+    seed_records: list[Any],
+) -> tuple[list[Any], tuple[AcceptedMaintenanceRead, ...]]:
+    if investigation.status != "completed":
+        return [], ()
+    search = getattr(ctx, "relational_search", None)
+    peek = getattr(search, "peek_memory", None)
+    if not callable(peek):
+        return [], ()
+    seed_ids = {str(record.id) for record in seed_records}
+    records: list[Any] = []
+    reads: list[AcceptedMaintenanceRead] = []
+    for raw_id in investigation.record_ids:
+        memory_id = _resolve_memory_id(ctx, raw_id)
+        if memory_id is None or memory_id in seed_ids:
+            continue
+        result = cast(Any, peek(memory_id))
+        if result is None:
+            continue
+        record = result.record
+        records.append(record)
+        reads.append(_record_read(record, edges=_relationship_edges(result)))
+    return records, tuple(reads)
+
+
+def _resolve_memory_id(ctx: ApplicationContext, value: str) -> str | None:
+    try:
+        return str(UUID(value))
+    except ValueError:
+        resolver = getattr(getattr(ctx, "repository", None), "resolve_memory_id", None)
+        resolved = resolver(value) if callable(resolver) else None
+        return None if resolved is None else str(resolved)
 
 
 def _strategy_signals(seed_batch: Any) -> dict[str, float]:

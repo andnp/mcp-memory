@@ -254,6 +254,11 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
         self._internal_server_name = internal_server_name
         self._allowed_tool_names = tuple(allowed_tool_names or self._DEFAULT_INTERNAL_TOOL_NAMES)
 
+    def with_allowed_tool_names(self, allowed_tool_names: tuple[str, ...]):
+        clone = copy.copy(self)
+        clone._allowed_tool_names = tuple(dict.fromkeys(allowed_tool_names))
+        return clone
+
     def _mcp_servers(self) -> dict[str, Any]:
         workspace_root = self._cwd or str(Path.cwd())
         return {

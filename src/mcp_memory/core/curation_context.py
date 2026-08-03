@@ -362,9 +362,9 @@ def build_context_packet(
                 (
                     BudgetDimension.SEED_RECORDS
                     if role == "seed"
-                    else BudgetDimension.EXPLORATORY_RECORDS
-                    if role == "support"
                     else BudgetDimension.SUPPORT_RECORDS
+                    if role == "support"
+                    else BudgetDimension.EXPLORATORY_RECORDS
                 ),
                 next_count if role == "seed" else next_support if role == "support" else next_exploratory,
                 0,
@@ -894,6 +894,7 @@ def _advance_read_usage(
     return CurationReadCounters(
         seed_records=usage.seed_records,
         support_records=usage.support_records,
+        exploratory_records=usage.exploratory_records,
         context_characters=usage.context_characters,
         read_tool_calls=usage.read_tool_calls + read.read_tool_calls,
         records_returned=usage.records_returned + read.records_returned,
