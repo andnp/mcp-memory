@@ -60,6 +60,16 @@ def test_unsafe_rejection_still_stops_feedback() -> None:
     assert _feedback_termination_reason(result) == "safety_termination"
 
 
+def test_policy_rejection_still_stops_feedback_without_quality_evidence() -> None:
+    result = _result(
+        outcome="deferred",
+        rejection_codes=("contradictory_facts",),
+    )
+
+    assert _quality_feedback_payload(result)["retryable"] is False
+    assert _feedback_termination_reason(result) == "safety_termination"
+
+
 def test_all_accepted_positive_evidence_converges() -> None:
     result = _result(
         {"neutral_reason": None, "wave_status": "accepted"},
