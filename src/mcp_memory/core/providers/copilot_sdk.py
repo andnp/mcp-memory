@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -16,9 +18,6 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserver
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
-
-import copy
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -146,39 +145,50 @@ class CopilotSDKProvider:
         if globals()['CopilotClient'] is None:
             _import_copilot_modules()
         _CopilotClient = globals()['CopilotClient']
+        operation_task = asyncio.ensure_future(self._run_session(prompt, client_factory=_CopilotClient))
+        deadline = time.monotonic() + self._timeout_seconds
+        try:
+            while True:
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise TimeoutError
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(operation_task),
+                        timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
+                    )
+                except TimeoutError:
+                    if operation_task.done():
+                        return operation_task.result()
+                    heartbeat_at = time.time()
+                    self._notify(
+                        ProviderAttemptHeartbeatEvent(
+                            attempt=attempt,
+                            prompt=prompt,
+                            subprocess_pid=None,
+                            started_at=started_at,
+                            heartbeat_at=heartbeat_at,
+                            elapsed_seconds=max(heartbeat_at - started_at, 0.0),
+                        )
+                    )
+        finally:
+            if not operation_task.done():
+                operation_task.cancel()
+                try:
+                    await operation_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _run_session(self, prompt: str, *, client_factory):
         _PermissionHandler = globals()['PermissionHandler']
-        async with _CopilotClient(working_directory=self._cwd) as client:
+        async with client_factory(working_directory=self._cwd) as client:
             session = await client.create_session(
                 model=self._model,
                 on_permission_request=_PermissionHandler.approve_all,
                 mcp_servers=self._mcp_servers(),
             )
             try:
-                deadline = time.monotonic() + self._timeout_seconds
-                send_task = asyncio.ensure_future(session.send_and_wait(prompt, timeout=self._timeout_seconds))
-                while True:
-                    remaining_seconds = deadline - time.monotonic()
-                    if remaining_seconds <= 0:
-                        raise TimeoutError
-                    try:
-                        return await asyncio.wait_for(
-                            asyncio.shield(send_task),
-                            timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
-                        )
-                    except asyncio.TimeoutError:
-                        if send_task.done():
-                            return send_task.result()
-                        heartbeat_at = time.time()
-                        self._notify(
-                            ProviderAttemptHeartbeatEvent(
-                                attempt=attempt,
-                                prompt=prompt,
-                                subprocess_pid=None,
-                                started_at=started_at,
-                                heartbeat_at=heartbeat_at,
-                                elapsed_seconds=max(heartbeat_at - started_at, 0.0),
-                            )
-                        )
+                return await session.send_and_wait(prompt, timeout=self._timeout_seconds)
             finally:
                 await session.disconnect()
 
