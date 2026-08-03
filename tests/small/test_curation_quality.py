@@ -624,6 +624,112 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count
 
 
+def test_quality_sampler_recovers_explicit_zero_result_goal(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_id = uuid4()
+    receipt = _receipt(run.run_id, event_id=uuid4(), applied_at=now).model_copy(
+        update={"affected_ids": [memory_id]}
+    )
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "zero-result-goal",
+            "external",
+            "search",
+            None,
+            "find the goal",
+            None,
+            0,
+            (now - timedelta(minutes=1)).isoformat(),
+        ),
+    )
+    connection.commit()
+    search = _Search([_context(str(memory_id))])
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=search,
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(
+            query="find the goal",
+            expected_memory_ids=[memory_id],
+            target_mode=CampaignTargetMode.ZERO_RESULTS,
+            minimum_improvement=1.0,
+        ),
+    )
+
+    assert evidence[0].status == "evaluated"
+    assert evidence[0].query_id == "zero-result-goal"
+    assert evidence[0].zero_result_change == -1
+    assert evidence[0].acceptance_met is True
+    assert search.calls == ["find the goal"]
+
+
+def test_quality_sampler_excludes_unrelated_explicit_zero_result_searches(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_id = uuid4()
+    receipt = _receipt(run.run_id, event_id=uuid4(), applied_at=now).model_copy(
+        update={"affected_ids": [memory_id]}
+    )
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "unrelated-zero-result",
+            "external",
+            "search",
+            None,
+            "unrelated goal",
+            None,
+            0,
+            (now - timedelta(minutes=1)).isoformat(),
+        ),
+    )
+    connection.commit()
+    search = _Search([_context(str(memory_id))])
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=search,
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(
+            query="find the goal",
+            expected_memory_ids=[memory_id],
+            target_mode=CampaignTargetMode.ZERO_RESULTS,
+            minimum_improvement=1.0,
+        ),
+    )
+
+    assert evidence[0].status == "no_query"
+    assert evidence[0].neutral_reason == "no_trusted_query"
+    assert search.calls in (None, [])
+
+
 def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)

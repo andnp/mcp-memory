@@ -207,7 +207,10 @@ class CurationQualitySampler:
         if receipt.operation in {"create_link", "remove_link"}:
             return CurationQualityEvidence(status="structural_only", **common)
 
-        query = self._find_historical_query(receipt)
+        explicit_hypothesis = (
+            campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
+        )
+        query = self._find_historical_query(receipt, explicit_hypothesis)
         if query is None:
             return CurationQualityEvidence(
                 status="no_query",
@@ -215,9 +218,15 @@ class CurationQualitySampler:
                 **common,
             )
 
-        query_id, query_text, before_ids, replay_complete = query
-        explicit_hypothesis = (
-            campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
+        query_id, historical_query_text, before_ids, replay_complete = query
+        query_text = (
+            explicit_hypothesis.query
+            if (
+                explicit_hypothesis is not None
+                and explicit_hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS
+                and explicit_hypothesis.query
+            )
+            else historical_query_text
         )
         neutral_reason = _neutral_query_reason(
             query_text,
@@ -354,7 +363,10 @@ class CurationQualitySampler:
     def _find_historical_query(
         self,
         receipt: CurationActionReceipt,
+        explicit_hypothesis: CampaignHypothesis | None = None,
     ) -> tuple[str, str, list[str], bool] | None:
+        if explicit_hypothesis is not None and explicit_hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS:
+            return self._find_explicit_zero_result_query(receipt, explicit_hypothesis.query)
         target_ids = [str(value) for value in receipt.affected_ids]
         placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
@@ -385,6 +397,41 @@ class CurationQualitySampler:
         if not grouped:
             return None
         invocation_id = next(iter(grouped))
+        return self._hydrate_historical_query(invocation_id)
+
+    def _find_explicit_zero_result_query(
+        self,
+        receipt: CurationActionReceipt,
+        query_text: str | None,
+    ) -> tuple[str, str, list[str], bool] | None:
+        if not query_text or not query_text.strip():
+            return None
+        cutoff = receipt.applied_at or self._clock()
+        rows = _fetch_rows(
+            self._db_manager,
+            """
+            SELECT invocation_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IS NULL
+              AND result_count = 0
+              AND query_text = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1000
+            """,
+            (query_text,),
+        )
+        for row in rows:
+            event_time = _timestamp(row[1])
+            if event_time is not None and event_time < cutoff:
+                return self._hydrate_historical_query(str(row[0]))
+        return None
+
+    def _hydrate_historical_query(
+        self,
+        invocation_id: str,
+    ) -> tuple[str, str, list[str], bool] | None:
         rows = _fetch_rows(
             self._db_manager,
             """
