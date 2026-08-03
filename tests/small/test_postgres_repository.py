@@ -488,6 +488,12 @@ class FakeCursor:
             or "LENGTH(COALESCE(memories.content, '')) >= %s" in normalized
         ):
             strategy = "quality-signal"
+            if "LOWER(TRIM(memories.title)) LIKE %s" in normalized:
+                for _ in range(3):
+                    params.pop(0)
+            if "LOWER(TRIM(COALESCE(memories.summary" in normalized:
+                for _ in range(2):
+                    params.pop(0)
             quality_min_chars = self._as_int(params.pop(0)) if ">= %s" in normalized else None
         elif "memories.last_surfaced_at IS NULL" in normalized:
             strategy = "never-surfaced"
@@ -535,7 +541,7 @@ class FakeCursor:
                 all_quality_signals = all(
                     marker in normalized
                     for marker in (
-                        "LOWER(TRIM(memories.title)) LIKE",
+                        "LOWER(TRIM(memories.title)) LIKE %s",
                         "LOWER(TRIM(COALESCE(memories.summary",
                         "memories.type = 'observation'",
                         ">= %s",
@@ -543,7 +549,7 @@ class FakeCursor:
                 )
                 if (
                     not all_quality_signals
-                    and "LOWER(TRIM(memories.title)) LIKE 'task_complete%'" in normalized
+                    and "LOWER(TRIM(memories.title)) LIKE %s" in normalized
                     and "LOWER(TRIM(COALESCE(memories.summary" not in normalized
                 ):
                     signal_matches = title.startswith("task_complete")
