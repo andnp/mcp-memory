@@ -340,6 +340,28 @@ def build_selection_strategy_utility_priors(
     )
 
 
+def build_selection_strategy_priority_feedback(
+    runs: Iterable[AgentRunHistoryPayload],
+    *,
+    task_name: str,
+    allowed_strategies: Iterable[str] | None = None,
+    min_runs: int = UTILITY_PRIOR_MIN_RUNS,
+) -> dict[str, tuple[float, str]]:
+    summary = build_task_sampling_summary(runs)
+    allowed = set(allowed_strategies or [])
+    feedback: dict[str, tuple[float, str]] = {}
+    for row in summary.selection_utility:
+        if row.task_name != task_name or row.runs < max(min_runs, 1):
+            continue
+        if allowed and row.strategy_used not in allowed:
+            continue
+        feedback[row.strategy_used] = (
+            row.sampler_priority_score if row.sampler_priority_score is not None else 0.0,
+            row.sampler_priority_explanation or "",
+        )
+    return feedback
+
+
 def selection_utility_prior_scores(
     rows: Iterable[SelectionStrategyUtilityPayload],
     *,

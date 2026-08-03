@@ -35,6 +35,7 @@ DEDUPLICATOR_LENGTH_OUTLIER_RATIO = 0.7
 DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
 SELECTION_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
 SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
+SELECTION_EXPLORATION_BONUS = 0.02
 
 SEMANTIC_STRATEGY = "semantic"
 COLD_STORAGE_STRATEGY = "cold-storage"
@@ -107,6 +108,8 @@ class SamplingBatch(Generic[T]):
     strategy_selection_reason: str | None = None
     strategy_selection_scores: dict[str, float] | None = None
     selector_feature_snapshot: dict[str, Any] | None = None
+    sampler_priority_score: float | None = None
+    sampler_priority_explanation: str | None = None
 
 
 class RouletteProvider(Generic[T]):
@@ -309,11 +312,22 @@ class RouletteProvider(Generic[T]):
         signals: dict[str, float],
         applied_utility_priors: dict[str, float],
     ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
+        exploration_scores = (
+            {
+                strategy: min(
+                    max(scores.get(strategy, 0.0) + self._rng.random() * SELECTION_EXPLORATION_BONUS, 0.0),
+                    1.0,
+                )
+                for strategy in allowed_strategies
+            }
+            if applied_utility_priors
+            else scores
+        )
         strategy_used = min(
             allowed_strategies,
-            key=lambda strategy: (-scores.get(strategy, 0.0), allowed_strategies.index(strategy), strategy),
+            key=lambda strategy: (-exploration_scores[strategy], allowed_strategies.index(strategy), strategy),
         )
-        rounded_scores = {strategy: round(scores.get(strategy, 0.0), 3) for strategy in allowed_strategies}
+        rounded_scores = {strategy: round(exploration_scores[strategy], 3) for strategy in allowed_strategies}
         rounded_signals = {signal_name: round(signal_value, 3) for signal_name, signal_value in sorted(signals.items())}
         dominant_signals = ", ".join(
             f"{signal_name}={signal_value:.3f}"

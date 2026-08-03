@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.sampling import RouletteProvider, SamplingBatch
-from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors
+from mcp_memory.management.task_sampling_summary import build_selection_strategy_priority_feedback
 
 
 SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
@@ -44,32 +45,39 @@ def sample_maintenance_candidates(
             records=[],
         )
 
-    return RouletteProvider(
+    priority_feedback = _selection_strategy_priority_feedback(
+        ctx,
+        task_name=task.task_name,
+        allowed_strategies=allowed_strategies,
+    )
+    batch = RouletteProvider(
         task_name=task.task_name,
         task_id=task.task_id if hasattr(task, "task_id") else task.id,
         candidates=candidates,
         support_counts=support_counts or support_counts_for_candidates(ctx, candidates),
-        strategy_prior_scores=_selection_strategy_prior_scores(
-            ctx,
-            task_name=task.task_name,
-            allowed_strategies=allowed_strategies,
-        ),
+        strategy_prior_scores={strategy: score for strategy, (score, _) in priority_feedback.items()},
     ).get_batch(
         strategy=requested_strategy,
         allowed_strategies=allowed_strategies,
         strategy_weights=strategy_weights,
         limit=limit,
     )
+    priority_score, priority_explanation = priority_feedback.get(batch.strategy_used, (None, None))
+    return replace(
+        batch,
+        sampler_priority_score=priority_score,
+        sampler_priority_explanation=priority_explanation,
+    )
 
 
-def _selection_strategy_prior_scores(
+def _selection_strategy_priority_feedback(
     ctx: ApplicationContext,
     *,
     task_name: str,
     allowed_strategies: tuple[str, ...],
-) -> dict[str, float] | None:
+) -> dict[str, tuple[float, str]]:
     if task_name not in UTILITY_PRIOR_TASK_NAMES:
-        return None
+        return {}
     from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 
     recent_runs = build_recent_agent_runs(
@@ -79,13 +87,27 @@ def _selection_strategy_prior_scores(
         detail_level="compact",
     )
     if not recent_runs:
-        return None
-    priors = build_selection_strategy_utility_priors(
+        return {}
+    return build_selection_strategy_priority_feedback(
         recent_runs,
         task_name=task_name,
         allowed_strategies=allowed_strategies,
     )
-    return priors or None
+
+
+def _selection_strategy_prior_scores(
+    ctx: ApplicationContext,
+    *,
+    task_name: str,
+    allowed_strategies: tuple[str, ...],
+) -> dict[str, float] | None:
+    feedback = _selection_strategy_priority_feedback(
+        ctx,
+        task_name=task_name,
+        allowed_strategies=allowed_strategies,
+    )
+    scores = {strategy: score for strategy, (score, _) in feedback.items()}
+    return scores or None
 
 
 def sampling_payload(
@@ -110,6 +132,10 @@ def sampling_payload(
         payload["strategy_selection_scores"] = batch.strategy_selection_scores
     if batch.selector_feature_snapshot is not None:
         payload["selector_feature_snapshot"] = batch.selector_feature_snapshot
+    if batch.sampler_priority_score is not None:
+        payload["sampler_priority_score"] = batch.sampler_priority_score
+    if batch.sampler_priority_explanation is not None:
+        payload["sampler_priority_explanation"] = batch.sampler_priority_explanation
     if sampled_records is not None:
         payload["sampled_memory_ids"] = [record.id for record in sampled_records]
     if seed_records is not None:
