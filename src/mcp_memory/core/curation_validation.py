@@ -22,7 +22,10 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
 )
 from mcp_memory.core.curation_policy import RejectionCode, evaluate_curation_action
-from mcp_memory.core.curation_routing import MaintenanceFamily, primary_family_for_operation
+from mcp_memory.core.curation_routing import (
+    MaintenanceFamily,
+    primary_family_for_operation,
+)
 from mcp_memory.mutation_history import ProtectionMode
 
 
@@ -42,9 +45,9 @@ class CurationMutationBudget:
 
 @dataclass(frozen=True, slots=True)
 class CurationRetryFeedback:
-    """Bounded feedback suitable for one schema-formatting retry."""
+    """Bounded feedback suitable for one planner retry."""
 
-    reason_code: Literal["formatting_only", "schema_invalid"]
+    reason_code: Literal["formatting_only", "schema_invalid", "provider_failed"]
     message: str
     fields: tuple[str, ...] = ()
     issue_codes: tuple[str, ...] = ()

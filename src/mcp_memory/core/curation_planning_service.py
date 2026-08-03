@@ -7,12 +7,15 @@ from dataclasses import dataclass
 from typing import Any, Mapping, cast
 from uuid import UUID
 
-from mcp_memory.core.curation_context import CurationContextPacket as ImmutableCurationContextPacket
+from mcp_memory.core.curation_context import (
+    CurationContextPacket as ImmutableCurationContextPacket,
+)
 from mcp_memory.core.curation_models import CurationPlan, CurationPlanningRequest
 from mcp_memory.core.curation_planner import (
     CurationPlanner,
     CurationPlannerCancelledError,
     CurationPlannerError,
+    CurationPlannerProviderError,
     CurationPlannerSchemaError,
     PlannerExecutionEnvelope,
 )
@@ -103,6 +106,13 @@ async def plan_and_validate(
             failure = error
             if error.envelope is not None:
                 envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
+            if isinstance(error, CurationPlannerProviderError) and attempt == 0:
+                retry_reason = error.reason_code
+                feedback = CurationRetryFeedback(
+                    reason_code="provider_failed",
+                    message=_provider_retry_message(error),
+                )
+                continue
             return CurationPlanningOutput(None, None, envelopes, retry_reason, failure)
 
         validation = validate_curation_plan(
@@ -136,3 +146,13 @@ def _schema_retry_message(error: CurationPlannerSchemaError) -> str:
         f"received fields={list(error.received_fields)}"
     )
     return f"{str(error)}; {details}; {fields}"[:1000]
+
+
+def _provider_retry_message(error: CurationPlannerProviderError) -> str:
+    reason_code = error.reason_code or "provider_failed"
+    message = str(error).strip() or "provider failed during curation planning"
+    return (
+        f"The previous curation planning turn failed before producing a usable plan "
+        f"({reason_code}): {message}. Retry the request now, call the typed plan "
+        "submission tool exactly once, and do not stop after a prose response."
+    )[:1000]
