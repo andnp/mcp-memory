@@ -40,6 +40,8 @@ from mcp_memory.core.ports.providers import (
 
 logger = logging.getLogger(__name__)
 
+_CURATOR_PROVIDER_PREFLIGHT_PREFIX = "curator-provider-preflight:"
+
 
 @dataclass(frozen=True)
 class _RecoveredTaskReconciliationPolicy:
@@ -117,6 +119,21 @@ class _RunningTaskRecoveryPlan:
         )
 
     @classmethod
+    def retry_curator_provider_startup(
+        cls,
+        *,
+        recovered_at: float,
+        retry_delay_seconds: float,
+    ) -> _RunningTaskRecoveryPlan:
+        return cls(
+            action=RecoveryAction.RETRY_DEAD_SUBPROCESS,
+            recovered_at=recovered_at,
+            error_text="Curator provider startup became stale before an active provider subprocess was observed",
+            retry_delay_seconds=retry_delay_seconds,
+            retry_termination_reason="curator_provider_startup_timeout",
+        )
+
+    @classmethod
     def fail_abandoned(cls, *, recovered_at: float) -> _RunningTaskRecoveryPlan:
         return cls(
             action=RecoveryAction.FAIL_ABANDONED,
@@ -135,6 +152,7 @@ class RuntimeTaskWorker:
         retry_delay_seconds: float = 0.0,
         abandoned_recovery_interval_seconds: float = 30.0,
         abandoned_task_stale_after_seconds: float = 60.0,
+        curator_provider_startup_grace_seconds: float = 120.0,
         curation_reconciler: CurationReconciler | None = None,
     ) -> None:
         self._ctx = ctx
@@ -144,6 +162,7 @@ class RuntimeTaskWorker:
         self._retry_delay_seconds = retry_delay_seconds
         self._abandoned_recovery_interval_seconds = abandoned_recovery_interval_seconds
         self._abandoned_task_stale_after_seconds = abandoned_task_stale_after_seconds
+        self._curator_provider_startup_grace_seconds = curator_provider_startup_grace_seconds
         self._curation_reconciler = curation_reconciler
         self._stop_event = asyncio.Event()
         self._runner: asyncio.Task[None] | None = None
@@ -159,7 +178,7 @@ class RuntimeTaskWorker:
         # Deliberately process-local so restart recovery still sees stale attempts.
         self._owned_task_attempts: set[tuple[str, int]] = set()
         self._owned_task_attempts_lock = threading.Lock()
-        self._last_reconciliation_snapshot: tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]] | None = None
+        self._last_reconciliation_snapshot: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]] | None = None
 
     async def start(self) -> None:
         if self._runner is not None and not self._runner.done():
@@ -367,6 +386,10 @@ class RuntimeTaskWorker:
         async with self._reconciliation_lock:
             current_time = time.time() if now is None else now
             await asyncio.to_thread(self._recover_leaked_work_items)
+            startup_task_ids = await asyncio.to_thread(
+                self._reconcile_curator_provider_startup,
+                current_time,
+            )
             recovered_tasks = await asyncio.to_thread(
                 self._recover_running_tasks,
                 current_time,
@@ -404,12 +427,14 @@ class RuntimeTaskWorker:
             snapshot = (
                 tuple(recovered_task_ids),
                 tuple(reconciled_conversation_ids),
+                tuple(startup_task_ids),
                 tuple(released_claim_ids),
                 tuple(overdue_summaries),
             )
             should_log = bool(
                 recovered_task_ids
                 or reconciled_conversation_ids
+                or startup_task_ids
                 or released_claim_ids
                 or overdue_pending
                 or any(
@@ -427,6 +452,7 @@ class RuntimeTaskWorker:
                         "recovered_task_ids": recovered_task_ids,
                         "reconciled_conversation_count": len(reconciled_conversation_ids),
                         "reconciled_conversation_ids": reconciled_conversation_ids,
+                        "curator_provider_startup_task_ids": startup_task_ids,
                         "released_orphaned_claim_count": len(released_claim_ids),
                         "released_orphaned_claim_ids": released_claim_ids,
                         "overdue_pending_count": len(overdue_pending),
@@ -482,6 +508,89 @@ class RuntimeTaskWorker:
             )
             reconciled_request_ids.append(conversation.request_id)
         return reconciled_request_ids
+
+    def _preflight_curator_provider_startup(self, task: TaskRecord) -> None:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return
+        current = task_queue.get_task(task.id)
+        if current.status != "running" or current.execution_epoch != task.execution_epoch:
+            return
+        if current.active_request_id is not None and not current.active_request_id.startswith(
+            _CURATOR_PROVIDER_PREFLIGHT_PREFIX
+        ):
+            return
+        started_at = time.time()
+        task_queue.set_running_process(
+            task.id,
+            subprocess_pid=None,
+            request_id=(
+                f"{_CURATOR_PROVIDER_PREFLIGHT_PREFIX}{task.execution_epoch}:"
+                f"{started_at:.6f}"
+            ),
+            updated_at=started_at,
+            execution_epoch=task.execution_epoch,
+        )
+
+    def _reconcile_curator_provider_startup(self, current_time: float) -> list[str]:
+        task_queue = getattr(self._ctx, "task_queue", None)
+        if task_queue is None:
+            return []
+        attempt_repository = getattr(self._ctx, "task_execution_attempts", None)
+        refreshed_task_ids: list[str] = []
+        for task in task_queue.list_tasks(status="running", workspace_id=None, limit=200):
+            attempt = self._get_running_task_attempt(task, attempt_repository=attempt_repository)
+            if not self._curator_provider_startup_is_active(task, attempt, current_time):
+                continue
+            try:
+                task_queue.touch_running_task(
+                    task.id,
+                    updated_at=current_time,
+                    execution_epoch=task.execution_epoch,
+                )
+            except ValueError:
+                continue
+            refreshed_task_ids.append(task.id)
+        return refreshed_task_ids
+
+    def _curator_provider_startup_started_at(
+        self,
+        task: TaskRecord,
+        attempt: TaskExecutionAttemptRecordLike | None,
+    ) -> float | None:
+        if task.task_name != CURATOR_TASK_NAME:
+            return None
+        marker = task.active_request_id
+        marker_started_at: float | None = None
+        if marker is not None and marker.startswith(_CURATOR_PROVIDER_PREFLIGHT_PREFIX):
+            parts = marker.split(":")
+            if len(parts) == 3:
+                try:
+                    if int(parts[1]) == task.execution_epoch:
+                        marker_started_at = float(parts[2])
+                except ValueError:
+                    marker_started_at = None
+        if (
+            attempt is None
+            or getattr(attempt, "status", "running") != "running"
+            or attempt.subprocess_pid is not None
+        ):
+            return marker_started_at
+        if attempt.last_heartbeat_at is not None and attempt.last_heartbeat_at > attempt.started_at:
+            return None
+        return max(marker_started_at or attempt.started_at, attempt.started_at)
+
+    def _curator_provider_startup_is_active(
+        self,
+        task: TaskRecord,
+        attempt: TaskExecutionAttemptRecordLike | None,
+        current_time: float,
+    ) -> bool:
+        started_at = self._curator_provider_startup_started_at(task, attempt)
+        return (
+            started_at is not None
+            and max(current_time - started_at, 0.0) < self._curator_provider_startup_grace_seconds
+        )
 
     async def _process_task(self, task: TaskRecord) -> None:
         task_queue = getattr(self._ctx, "task_queue", None)
@@ -556,6 +665,9 @@ class RuntimeTaskWorker:
                     termination_reason=f"curation_reconciliation_{curation_outcome.reason_code}",
                 )
                 return
+
+        if task.task_name == CURATOR_TASK_NAME:
+            await asyncio.to_thread(self._preflight_curator_provider_startup, task)
 
         try:
             if iscoroutinefunction(handler):
@@ -729,6 +841,9 @@ class RuntimeTaskWorker:
             if attempt.subprocess_pid is not None:
                 subprocess_pid = attempt.subprocess_pid
 
+        curator_startup_started_at = self._curator_provider_startup_started_at(task, attempt)
+        if self._curator_provider_startup_is_active(task, attempt, current_time):
+            return None
         is_stale = max(current_time - recent_activity_at, 0.0) >= self._abandoned_task_stale_after_seconds
         if subprocess_pid is not None:
             if task_queue_module._is_process_alive(subprocess_pid):
@@ -746,6 +861,11 @@ class RuntimeTaskWorker:
             return _RunningTaskRecoveryPlan.finalize_cancellation(recovered_at=current_time)
         if not is_stale:
             return None
+        if curator_startup_started_at is not None:
+            return _RunningTaskRecoveryPlan.retry_curator_provider_startup(
+                recovered_at=current_time,
+                retry_delay_seconds=self._retry_delay_seconds,
+            )
         return _RunningTaskRecoveryPlan.retry_abandoned(
             recovered_at=current_time,
             retry_delay_seconds=self._retry_delay_seconds,
