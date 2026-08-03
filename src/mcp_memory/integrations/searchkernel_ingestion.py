@@ -156,7 +156,7 @@ def _to_kernel_record(memory: MemoryRecord) -> Record:
 def _memory_embedding_text(memory: MemoryRecord) -> str:
     return "\n".join(
         part
-        for part in [memory.title, memory.summary or "", memory.content, ", ".join(memory.tags)]
+        for part in [memory.summary or "", memory.content, ", ".join(memory.tags)]
         if part
     )
 

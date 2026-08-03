@@ -79,7 +79,7 @@ async def test_memory_ingestor_returns_per_record_receipt_and_checkpoint() -> No
     assert receipt.records[0].source_kind == "memory"
     assert receipt.records[0].source_id == "memory-1"
     assert receipt.records[0].workspace_id == "workspace-a"
-    assert embedder.calls == [["Memory title\nMemory summary\nMemory body\ningestion"]]
+    assert embedder.calls == [["Title: Memory title\n\nMemory summary\nMemory body\ningestion"]]
     assert vector_store.upserts[0]["source_updated_at"] == "2026-08-01T13:00:00+00:00"
 
 
