@@ -106,6 +106,7 @@ async def handle_memory_curator_task(
             tool_calls_executed=0,
             mutations=0,
             claimed_work_item_count=0,
+            curation_no_op_reason="no_candidates",
             reason="no_seed_records",
         )
 

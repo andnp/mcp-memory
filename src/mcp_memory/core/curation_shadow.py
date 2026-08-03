@@ -19,7 +19,7 @@ from mcp_memory.core.curation_investigation import (
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_validation import CurationMutationBudget
-from mcp_memory.core.curation_models import CampaignHypothesis
+from mcp_memory.core.curation_models import CampaignHypothesis, CurationRunOutcome
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import (
@@ -161,6 +161,7 @@ async def run_curator_verified_campaign(
     plan = None if result.validation is None else result.validation.plan
     decisions = _curator_decisions(result)
     campaign_result = _curator_campaign_result(result)
+    no_op_reason = _curation_no_op_reason(result.result.outcome, plan, investigation)
     return sampling_payload(
         seed_batch,
         sampled_records=sampled_records,
@@ -181,6 +182,7 @@ async def run_curator_verified_campaign(
         curation_plan=None if plan is None else plan.model_dump(mode="json"),
         curation_decisions=decisions,
         curation_campaign_result=campaign_result,
+        curation_no_op_reason=no_op_reason,
         curation_investigation={
             "status": investigation.status,
             "rounds": investigation.rounds,
@@ -190,6 +192,26 @@ async def run_curator_verified_campaign(
             "reason": investigation.reason,
         },
     )
+
+
+def _curation_no_op_reason(
+    outcome: CurationRunOutcome,
+    plan: Any,
+    investigation: CurationInvestigationResult,
+) -> str | None:
+    if outcome is CurationRunOutcome.NO_OP:
+        if investigation.status != "completed":
+            return "investigation_unavailable"
+        return "planner_retained" if plan is not None and not plan.actions else "execution_no_op"
+    if outcome in {
+        CurationRunOutcome.INVALID_PLAN,
+        CurationRunOutcome.STALE_PLAN,
+        CurationRunOutcome.VERIFICATION_FAILED,
+    }:
+        return "validation_rejected"
+    if outcome is CurationRunOutcome.PROVIDER_FAILED:
+        return "provider_failed"
+    return None
 
 
 def _supports_json_planning(provider: Any) -> bool:
