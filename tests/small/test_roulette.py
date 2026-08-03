@@ -11,6 +11,7 @@ from mcp_memory.core.sampling import (
     COOLDOWN_ESCAPE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
+    QUALITY_SIGNAL_STRATEGY,
     RouletteProvider,
     SEMANTIC_STRATEGY,
 )
@@ -139,6 +140,24 @@ def test_curator_low_prior_explores_unmeasured_strategy() -> None:
     assert batch.strategy_selection_mode == "priority_scores_with_exploration"
     assert batch.strategy_selection_reason is not None
     assert "exploration=bounded_untested" in batch.strategy_selection_reason
+
+
+def test_curator_quality_signal_exploration_uses_live_friction() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha", type="observation")]
+
+    batch = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-quality-explore",
+        candidates=candidates,
+        strategy_prior_scores={SEMANTIC_STRATEGY: 0.4},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, QUALITY_SIGNAL_STRATEGY, ANOMALY_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used == QUALITY_SIGNAL_STRATEGY
+    assert "exploration=bounded_quality_signal" in (batch.strategy_selection_reason or "")
 
 
 def test_roulette_selector_snapshot_captures_candidate_and_selected_feature_stats() -> None:
