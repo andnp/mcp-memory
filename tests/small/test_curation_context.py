@@ -17,6 +17,7 @@ from mcp_memory.mutation_history import ProtectionMode
 
 SEED_ID = UUID("00000000-0000-0000-0000-000000000001")
 SUPPORT_ID = UUID("00000000-0000-0000-0000-000000000002")
+EXPLORATORY_ID = UUID("00000000-0000-0000-0000-000000000003")
 
 
 def _record(memory_id: UUID, content: str) -> dict[str, object]:
@@ -159,6 +160,23 @@ def test_budget_exhaustion_is_typed_and_deterministic() -> None:
         1,
     )
     assert str(first.value) == str(second.value)
+
+
+def test_exploratory_record_budget_is_counted_across_reads() -> None:
+    with pytest.raises(CurationBudgetExhausted) as error:
+        build_context_packet(
+            family="curator",
+            strategy="recent",
+            seed_reads=[AcceptedMaintenanceRead(_record(SEED_ID, "seed"))],
+            exploratory_reads=[
+                AcceptedMaintenanceRead(_record(EXPLORATORY_ID, "one")),
+                AcceptedMaintenanceRead(_record(UUID("00000000-0000-0000-0000-000000000004"), "two")),
+            ],
+            provider=ProviderTrust(ProviderTrustClass.LOCAL),
+            budget=CurationReadBudget(max_exploratory_records=1, max_read_tool_calls=3),
+        )
+
+    assert error.value.dimension.value == "exploratory_records"
 
 
 def test_single_seed_that_cannot_fit_remains_typed() -> None:
