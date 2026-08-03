@@ -172,6 +172,10 @@ async def test_session_planner_reuses_conversation_for_quality_feedback() -> Non
     assert second.plan is not None
     assert len(session.prompts) == 2
     assert "retrieval utility delta -1.2" in session.prompts[1]
+    assert "Challenge weak split evidence" in session.prompts[1]
+    assert "preserve exact search anchors" in session.prompts[1]
+    assert "avoid speculative multi-action waves" in session.prompts[1]
+    assert "change strategy rather than repeat" in session.prompts[1]
 
 
 def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
