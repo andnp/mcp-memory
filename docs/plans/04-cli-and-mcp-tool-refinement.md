@@ -18,7 +18,7 @@ This plan finalizes the user-facing contract. It enforces **Progressive Discover
 
 ### 2.3 Tool Contract: `read_memory_record` (COMPLETED)
 - **Goal**: Depth on demand without paying the traceability cost on every read.
-- **Output Schema**: ✅ Compact `record` plus `related_counts` by default.
+- **Output Schema**: ✅ Minimal `record` by default.
 - **Breadcrumbs**: ✅ `superseded` list is available through `include_superseded`.
 - **Relationships**: ✅ Incoming/outgoing links are available through `include_relationships`.
 - **Metadata**: ✅ Maintenance metadata and workspace IDs are available through `include_metadata`.

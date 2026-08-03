@@ -111,8 +111,8 @@ The following tools are exposed via the MCP server:
 ### Minimal Public Surface
 - `record_thought`: Record a raw system-1 thought in the system-1 journal. In shared Postgres `writeback` mode, this can degrade into a durable local outbox queue when the authoritative write times out or connectivity fails.
 - `search_memory_records`: Search relational memory records with compact summary-first results and staged ranking over weighted keyword + optional semantic retrieval. Debug mode exposes score/workspace/ranking details.
-- `read_memory_record`: Read one memory record by stable reference or legacy UUID with compact related-counts by default. Relationships, superseded breadcrumbs, and metadata are explicit opt-ins.
-- `read_memory_records`: Read up to 20 records by stable references in one call; missing references are reported without aborting the batch.
+- `read_memory_record`: Read one memory record by stable reference or legacy UUID with only the reference, title, and content by default. Relationships, superseded breadcrumbs, and metadata are explicit opt-ins.
+- `read_memory_records`: Read up to 20 records by stable references in one call; unresolved references are included only when present.
 
 Agent-facing search results use `memory_ref` values such as `mem-123`. These references are persisted with each memory and are stable across restarts and migrations. Read tools accept both stable references and legacy UUIDs; UUIDs remain canonical in storage, telemetry, lineage, and debug/admin payloads.
 

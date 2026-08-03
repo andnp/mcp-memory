@@ -22,7 +22,7 @@
     - **Telemetry**: Updates `last_surfaced_at` for all returned results in one batch write.
 2. **`read_memory`**:
     - **Inputs**: `memory_ref` or a legacy UUID.
-    - **Outputs**: Returns full record content plus compact `related_counts` by default. Relationship edges, superseded breadcrumbs, and metadata/workspace routing fields are explicit opt-ins for callers that need traceability.
+    - **Outputs**: Returns only the stable reference, title, and full record content by default. Relationship edges, superseded breadcrumbs, and metadata/workspace routing fields are explicit opt-ins for callers that need traceability.
     - **Side Effect**: Decays `access_score` and adds `+1.0` (Working Memory boost).
 3. **`read_memory_records`**:
     - **Inputs**: Up to 20 `memory_ref` values or legacy UUIDs.
