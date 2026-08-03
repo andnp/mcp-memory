@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
@@ -11,6 +11,10 @@ from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_context import AcceptedMaintenanceRead
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_executor import CurationExecutor
+from mcp_memory.core.curation_feedback import (
+    _feedback_termination_reason,
+    _quality_feedback_payload,
+)
 from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
 from mcp_memory.core.curation_investigation import (
     CurationInvestigationLimits,
@@ -303,57 +307,6 @@ async def run_curator_verified_campaign(
             "max_accepted_mutations": configured_budget.max_accepted_mutations,
         },
     )
-
-
-def _quality_feedback_payload(result: Any) -> dict[str, object]:
-    evidence = [
-        item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
-        for item in result.result.quality_evidence
-    ]
-    unsafe_rejections = {
-        "verification_failed",
-        "protected_target",
-        "policy_denied",
-        "disclosure_denied",
-        "budget_exhausted",
-    }
-    rejection_codes = set(getattr(result.result, "rejection_codes", ()))
-    retryable = bool(evidence) and not rejection_codes.intersection(unsafe_rejections) and not any(
-        item.get("neutral_reason") in {"incomplete_replay", "no_trusted_query"}
-        or item.get("wave_status") == "conflict"
-        for item in evidence
-        if isinstance(item, dict)
-    )
-    return {
-        "retryable": retryable,
-        "latest_failed_live_run": {"evidence": evidence},
-        "required_response": [
-            "Challenge weak split evidence.",
-            "Preserve exact search anchors and concrete entities.",
-            "Avoid speculative multi-action waves.",
-            "Use measured feedback to change strategy rather than repeat.",
-        ],
-    }
-
-
-def _feedback_termination_reason(result: Any) -> str | None:
-    outcome = str(getattr(result.result, "outcome", ""))
-    if outcome in {"provider_failed", "budget_exhausted"}:
-        return outcome
-    rejection_codes = set(getattr(result.result, "rejection_codes", ()))
-    if rejection_codes.intersection(
-        {"verification_failed", "protected_target", "policy_denied", "disclosure_denied"}
-    ):
-        return "safety_termination"
-    evidence = getattr(result.result, "quality_evidence", ())
-    if outcome in {"no_op", "quality_override"}:
-        return "no_useful_work" if outcome == "no_op" else "converged"
-    if evidence and all(
-        getattr(item, "wave_status", None) == "accepted"
-        for item in evidence
-    ):
-        return "converged"
-    return None
 
 
 def _proposed_action_count(result: Any) -> int:
