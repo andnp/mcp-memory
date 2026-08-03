@@ -239,8 +239,8 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
         applied_at=now,
     )
     connection = db_manager.get_connection()
-    noise_id = uuid4()
-    for value in (memory_id, noise_id):
+    noise_ids = [uuid4() for _ in range(6)]
+    for value in (memory_id, *noise_ids):
         connection.execute(
             """
             INSERT INTO memories (
@@ -257,23 +257,38 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
         """,
         (str(event_id), "rewrite_memory", "maintenance", str(run.run_id), "applied", now.isoformat()),
     )
-    connection.execute(
+    connection.executemany(
         """
         INSERT INTO memory_tool_events (
             invocation_id, caller_kind, event_kind, memory_id, query_text, result_rank,
             result_count, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ("query-1", "maintenance", "search", str(memory_id), "important", 2, 2, (now - timedelta(minutes=1)).isoformat()),
-    )
-    connection.execute(
-        """
-        INSERT INTO memory_tool_events (
-            invocation_id, caller_kind, event_kind, memory_id, query_text, result_rank,
-            result_count, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("query-1", "maintenance", "search", str(noise_id), "important", 1, 2, (now - timedelta(minutes=1)).isoformat()),
+        [
+            (
+                "query-1",
+                "maintenance",
+                "search",
+                str(noise_id),
+                "important",
+                index + 1,
+                7,
+                (now - timedelta(minutes=1)).isoformat(),
+            )
+            for index, noise_id in enumerate(noise_ids)
+        ]
+        + [
+            (
+                "query-1",
+                "maintenance",
+                "search",
+                str(memory_id),
+                "important",
+                7,
+                7,
+                (now - timedelta(minutes=1)).isoformat(),
+            )
+        ],
     )
     connection.executemany(
         """
@@ -287,7 +302,7 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
                 f"noise-{index}",
                 "maintenance",
                 "search",
-                str(noise_id),
+                str(noise_ids[0]),
                 "unrelated",
                 1,
                 1,
@@ -319,8 +334,9 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
 
     assert evidence[0].status == "evaluated"
     assert evidence[0].query_id == "query-1"
-    assert evidence[0].before_ranked_memory_ids == [noise_id, memory_id]
+    assert evidence[0].before_ranked_memory_ids == [*noise_ids, memory_id]
     assert evidence[0].after_ranked_memory_ids == [memory_id]
+    assert evidence[0].useful_work is True
     assert evidence[0].payload_size_change is None
     assert search.calls == ["important"]
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count
