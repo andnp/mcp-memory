@@ -21,7 +21,9 @@ from mcp_memory.curation_quality_store import (
     SQLiteCurationQualityStore,
 )
 from mcp_memory.curation_store import (
+    CandidateDisposition,
     CurationActionReceipt,
+    CurationCandidateState,
     CurationReceiptState,
     CurationRun,
     CurationRunState,
@@ -195,6 +197,41 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert evidence[0].status == "no_query"
     assert evidence[0].useful_work is None
     assert search.calls in (None, [])
+
+
+def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    curation_store = SQLiteCurationStore(db_manager)
+    curation_store.create_run(run)
+    memory_id = uuid4()
+    receipt = _receipt(run.run_id, event_id=uuid4(), applied_at=now).model_copy(
+        update={"affected_ids": [memory_id]}
+    )
+    initial = CurationCandidateState(
+        memory_id=memory_id,
+        disposition=CandidateDisposition.ACTIONED,
+        last_disposition_reason="verified_receipt",
+        escalation_count=2,
+    )
+    curation_store.put_candidate_state(initial)
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        candidate_repository=curation_store,
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(query="important", minimum_improvement=0.5),
+    )
+
+    assert evidence[0].status == "no_query"
+    assert evidence[0].acceptance_met is None
+    assert curation_store.get_candidate_state(memory_id) == initial
 
 
 def test_explicit_acceptance_failure_defers_verified_work() -> None:

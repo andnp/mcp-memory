@@ -144,7 +144,7 @@ class CurationQualitySampler:
                 if (evidence.retrieval_regression_count or 0) > 0
                 else "zero_result_regression"
             )
-        elif evidence.acceptance_met is False:
+        elif evidence.status == "evaluated" and evidence.acceptance_met is False:
             reason = "acceptance_not_met"
         else:
             return
@@ -209,7 +209,6 @@ class CurationQualitySampler:
         if query is None:
             return CurationQualityEvidence(
                 status="no_query",
-                acceptance_met=False if _is_explicit(campaign_hypothesis) else None,
                 neutral_reason="no_trusted_query",
                 **common,
             )
@@ -231,9 +230,6 @@ class CurationQualitySampler:
                 retrieval_regression_count=0,
                 zero_result_change=0,
                 useful_work=None,
-                acceptance_met=(
-                    False if explicit_hypothesis is not None else None
-                ),
                 neutral_reason=neutral_reason,
                 **common,
             )
