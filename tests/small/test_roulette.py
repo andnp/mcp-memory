@@ -121,6 +121,26 @@ def test_priority_scores_select_the_best_sampler_and_explore_missing_feedback() 
     assert exploring.strategy_selection_scores == {SEMANTIC_STRATEGY: 0.0, ANOMALY_STRATEGY: 0.02}
 
 
+def test_curator_low_prior_explores_unmeasured_strategy() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
+
+    batch = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-low-prior",
+        candidates=candidates,
+        strategy_prior_scores={SEMANTIC_STRATEGY: 0.4},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, ANOMALY_STRATEGY, COLD_STORAGE_STRATEGY),
+        limit=1,
+    )
+
+    assert batch.strategy_used != SEMANTIC_STRATEGY
+    assert batch.strategy_selection_mode == "priority_scores_with_exploration"
+    assert batch.strategy_selection_reason is not None
+    assert "exploration=bounded_untested" in batch.strategy_selection_reason
+
+
 def test_roulette_selector_snapshot_captures_candidate_and_selected_feature_stats() -> None:
     candidates = [
         _FakeRecord(
