@@ -84,6 +84,10 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
         assert schema["$defs"][action_name]["properties"]["link_type"]["pattern"] == r"^[A-Z][A-Z0-9_]*$"
 
     contract = " ".join(payload["planner_contract"])
+    assert "primary objective is to improve durable memory quality" in contract
+    assert "Any record visible in context may be modified" in contract
+    assert "coherent set of mutations" in contract
+    assert "Retain a seed only when it is already focused and durable" in contract
     assert "visible in context" in contract
     assert "seed_memory_ids is required" in contract
     assert "merging never creates a record" in contract
@@ -109,6 +113,8 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
 
     prompt = _build_planner_prompt(request, CurationPlannerTools(context=cast(Any, {})))
     assert "Every memory ID in an action or retention decision must be copied" in prompt
+    assert "Do not optimize for safe no-ops" in prompt
+    assert "any visible seed, support, or exploratory memory may be changed" in prompt
     assert "Include seed_memory_ids exactly as the context seed IDs" in prompt
     assert "content is the final persisted durable memory body" in prompt
     assert "do not write status prose" in prompt

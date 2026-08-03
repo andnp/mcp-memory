@@ -6,6 +6,7 @@ from mcp_memory.core.curation_identity import action_id
 from mcp_memory.core.curation_models import (
     CurationPlan,
     CurationPlanningRequest,
+    NormalizeMemoryAction,
     RetentionDecision,
     RetentionReason,
 )
@@ -92,6 +93,55 @@ def test_validation_normalizes_action_ids_deterministically() -> None:
     assert result.valid
     assert result.plan is not None
     assert result.plan.actions[0].action_id == action_id(plan_id, 0, result.plan.actions[0])
+
+
+def test_validation_allows_actions_on_explored_records() -> None:
+    run_id, plan_id, seed, explored = uuid4(), uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    context = CurationContextPacket(
+        frontier_fingerprint="frontier-token",
+        seeds=({"memory_id": str(seed)},),
+        support=(),
+        exploratory=({"memory_id": str(explored)},),
+        record_tokens={},
+        graph_tokens={},
+        disclosure=(),
+        omissions=(),
+        limits={},
+        usage=CurationReadCounters(),
+        context_fingerprint="context",
+    )
+    action = {
+        "operation": "normalize_memory",
+        "action_id": uuid4(),
+        "target_id": explored,
+        "confidence": 1,
+        "rationale": "make the explored record specific",
+        "summary": "Specific explored finding.",
+    }
+    plan = CurationPlan(
+        run_id=run_id,
+        plan_id=plan_id,
+        frontier_key="frontier",
+        context_fingerprint="context",
+        seed_memory_ids=[seed],
+        rationale="improve explored evidence",
+        retained=[
+            RetentionDecision(
+                memory_id=seed,
+                reason=RetentionReason.ALREADY_FOCUSED,
+                rationale="seed remains focused",
+            )
+        ],
+        actions=[NormalizeMemoryAction.model_validate(action)],
+    )
+
+    result = validate_curation_plan(plan, request=request, context=context)
+
+    assert result.valid
+    assert result.plan is not None
+    assert isinstance(result.plan.actions[0], NormalizeMemoryAction)
+    assert result.plan.actions[0].target_id == explored
 
 
 def test_invalid_schema_returns_formatting_retry_feedback() -> None:
