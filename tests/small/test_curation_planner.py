@@ -97,6 +97,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "action source, target, canonical, and child-source IDs all count as affected" in contract
     assert "target 1600 characters or less" in contract
     assert "split content above 3000 characters" in contract
+    assert "quality_feedback field means a previous curator mutation" in contract
     assert "retention decision instead of inventing an ID" in contract
     assert "fail-closed" in contract
     assert "existing visible memory ID" in schema["$defs"]["CreateLinkAction"]["properties"]["source_id"]["description"]
@@ -152,6 +153,11 @@ def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
                     "selection_reason": "selected=quality-signal",
                     "selection_signals": {"quality_signal_share": 0.5},
                     "selection_scores": {"quality-signal": 0.7},
+                    "quality_feedback": {
+                        "reason": "retrieval_regression",
+                        "escalation_count": 2,
+                        "last_strategy": "semantic",
+                    },
                 }
             )
         ],
@@ -174,6 +180,8 @@ def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
     assert seed["selection_reason"] == "selected=quality-signal"
     assert seed["selection_signals"] == {"quality_signal_share": 0.5}
     assert seed["selection_scores"] == {"quality-signal": 0.7}
+    assert seed["quality_feedback"]["reason"] == "retrieval_regression"
+    assert seed["quality_feedback"]["escalation_count"] == 2
     assert seed["content"] == "Authoritative content"
 
 

@@ -9,6 +9,7 @@ import pytest
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.curator_support import (
     _quality_feedback_candidates,
+    curator_quality_feedback,
     curator_candidate_revision_token,
     filter_curator_candidates,
 )
@@ -153,6 +154,10 @@ def test_quality_feedback_candidates_are_prioritized(db_manager) -> None:
     )
 
     assert _quality_feedback_candidates(ctx, [first, second]) == [second]
+    feedback = curator_quality_feedback(ctx, second)
+    assert feedback is not None
+    assert feedback["reason"] == "retrieval_regression"
+    assert feedback["escalation_count"] == 2
 
 
 def test_recent_human_and_cross_family_edits_stabilize_candidates(db_manager) -> None:
