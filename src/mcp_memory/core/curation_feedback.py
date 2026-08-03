@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from mcp_memory.core.curation_policy import RejectionCode
+
 
 _REPAIRABLE_ACTION_ERROR_CODES = frozenset(
     {
@@ -19,6 +21,15 @@ _REPAIRABLE_ACTION_ERROR_CODES = frozenset(
         "action_transient",
     }
 )
+_TERMINAL_REJECTION_CODES = frozenset(code.value for code in RejectionCode) | {
+    "verification_failed",
+    "protected_target",
+    "policy_denied",
+    "disclosure_denied",
+    "budget_exhausted",
+    "action_fatal",
+    "policy_rejected",
+}
 
 
 def _quality_feedback_payload(result: Any) -> dict[str, object]:
@@ -34,22 +45,13 @@ def _quality_feedback_payload(result: Any) -> dict[str, object]:
         for item in action_failures
         if item["error_code"] not in _REPAIRABLE_ACTION_ERROR_CODES
     ]
-    unsafe_rejections = {
-        "verification_failed",
-        "protected_target",
-        "policy_denied",
-        "disclosure_denied",
-        "budget_exhausted",
-        "action_fatal",
-        "policy_rejected",
-    }
     rejection_codes = {_enum_value(code) for code in getattr(result.result, "rejection_codes", ())}
     retryable = bool(evidence) and any(
         item.get("neutral_reason") is None for item in evidence
     )
     retryable = (
         (retryable or bool(repairable_action_failures))
-        and not rejection_codes.intersection(unsafe_rejections)
+        and not rejection_codes.intersection(_TERMINAL_REJECTION_CODES)
         and not terminal_action_failures
         and not any(item.get("wave_status") == "conflict" for item in evidence)
     )
@@ -79,16 +81,7 @@ def _feedback_termination_reason(result: Any) -> str | None:
     }:
         return outcome
     rejection_codes = {_enum_value(code) for code in getattr(result.result, "rejection_codes", ())}
-    if rejection_codes.intersection(
-        {
-            "verification_failed",
-            "protected_target",
-            "policy_denied",
-            "disclosure_denied",
-            "action_fatal",
-            "policy_rejected",
-        }
-    ):
+    if rejection_codes.intersection(_TERMINAL_REJECTION_CODES):
         return "safety_termination"
     action_failures = _action_failure_payload(result)
     if any(
