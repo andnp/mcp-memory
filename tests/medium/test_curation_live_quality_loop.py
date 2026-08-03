@@ -8,13 +8,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_quality import CurationQualitySampler
+from mcp_memory.core.curation_quality import CurationQualityEvidence, CurationQualitySampler
 from mcp_memory.core.sampling import SamplingBatch
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mutation_history import Protection, ProtectionMode
+from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 
 
 pytestmark = pytest.mark.medium
@@ -167,6 +168,30 @@ class _LiveJSONProvider:
             "retained": retained,
             "rationale": "apply one safe action while retaining one candidate",
         }
+
+
+class _RejectingQualitySampler:
+    def evaluate(self, *, run: Any, receipts: list[Any], campaign_hypothesis: Any = None) -> tuple[CurationQualityEvidence, ...]:
+        del campaign_hypothesis
+        receipt = receipts[0]
+        return (
+            CurationQualityEvidence(
+                run_id=run.run_id,
+                action_id=receipt.action_id,
+                operation=receipt.operation,
+                affected_memory_ids=list(receipt.affected_ids),
+                policy_version=run.policy_version,
+                status="evaluated",
+                retrieval_regression_count=1,
+                useful_work=False,
+                wave_id=uuid4(),
+                wave_action_ids=[receipt.action_id],
+                wave_status="rejected",
+                collateral_regression_count=1,
+                productive_mutation_count=0,
+                created_at=datetime.now(UTC),
+            ),
+        )
 
 
 def _task(
@@ -365,6 +390,52 @@ async def test_live_campaign_quality_sampling_evaluates_historical_query_without
         assert connection.execute(
             "SELECT COUNT(*) FROM memory_tool_events"
         ).fetchone()[0] == before_event_count
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_live_campaign_restores_quality_rejected_normalize_wave(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    runtime = create_runtime(cwd=tmp_path / "workspace")
+    assert runtime.repository is not None and runtime.work_items is not None
+    try:
+        from mcp_memory.core import curation_shadow
+
+        monkeypatch.setattr(
+            curation_shadow,
+            "CurationQualitySampler",
+            lambda **_kwargs: _RejectingQualitySampler(),
+        )
+        target = _create_record(runtime, "Rejected normalize target", "Original summary.")
+        runtime.ai_json_provider = _LiveJSONProvider()
+        _patch_candidates(monkeypatch, [target])
+        item, _ = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [target.id]},
+            idempotency_key="quality-rejected-normalize",
+        )
+
+        result = await handle_memory_curator_task(
+            runtime,
+            _task(runtime, "quality-rejected-normalize-task"),
+            object(),
+        )
+
+        campaign = result["curation_campaign_result"]
+        assert result["curation_outcome"] == "quality_rejected"
+        assert campaign["productive_mutation_count"] == 0
+        assert campaign["restore_result"]["status"] == "applied"
+        assert runtime.repository.get_memory(target.id).summary == "Original summary."
+        assert runtime.work_items.get_item(item.id).status == "deferred"
+        assert runtime.curation.get_run(UUID(result["curation_run_id"])).outcome.value == "quality_rejected"
+        assert len(runtime.curation.list_receipts(UUID(result["curation_run_id"]))) == 1
     finally:
         runtime.close()
 
