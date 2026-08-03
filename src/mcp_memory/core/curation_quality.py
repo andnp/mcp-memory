@@ -34,6 +34,7 @@ from mcp_memory.core.ports.curation import (
     CurationRun,
 )
 
+
 class CurationQualityEvidence(CurationModel):
     run_id: UUID
     action_id: UUID
@@ -367,8 +368,10 @@ class CurationQualitySampler:
         receipt: CurationActionReceipt,
         explicit_hypothesis: CampaignHypothesis | None = None,
     ) -> tuple[str, str, list[str], bool] | None:
+        if explicit_hypothesis is not None and explicit_hypothesis.query:
+            return self._find_explicit_query(receipt, explicit_hypothesis.query)
         if explicit_hypothesis is not None and explicit_hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS:
-            return self._find_explicit_zero_result_query(receipt, explicit_hypothesis.query)
+            return None
         target_ids = [str(value) for value in receipt.affected_ids]
         placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
@@ -401,7 +404,7 @@ class CurationQualitySampler:
         invocation_id = next(iter(grouped))
         return self._hydrate_historical_query(invocation_id)
 
-    def _find_explicit_zero_result_query(
+    def _find_explicit_query(
         self,
         receipt: CurationActionReceipt,
         query_text: str | None,
@@ -416,8 +419,6 @@ class CurationQualitySampler:
             FROM memory_tool_events
             WHERE event_kind = 'search'
               AND caller_kind IN ('external', 'operator', 'user')
-              AND memory_id IS NULL
-              AND result_count = 0
               AND query_text = ?
             ORDER BY created_at DESC, id DESC
             LIMIT 1000
