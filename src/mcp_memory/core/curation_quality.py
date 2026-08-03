@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID, uuid4
 
 from pydantic import Field
@@ -57,6 +57,8 @@ class CurationQualityEvidence(CurationModel):
     content_quality_score_after: float | None = None
     content_quality_delta: float | None = None
     content_quality_improved: bool | None = None
+    engagement_utility_delta: float | None = None
+    engagement_evidence: dict[str, object] = Field(default_factory=dict)
     acceptance_met: bool | None = None
     neutral_reason: str | None = None
     wave_id: UUID | None = None
@@ -103,6 +105,7 @@ class CurationQualitySampler:
     """Capture one replay case per sampled, genuinely applied action."""
 
     _QUALITY_REGRESSION_COOLDOWN = timedelta(hours=6)
+    _ENGAGEMENT_ATTRIBUTION_WINDOW_SECONDS = 900.0
 
     def __init__(
         self,
@@ -199,8 +202,11 @@ class CurationQualitySampler:
             for item in raw
             if item.content_quality_delta is not None
         )
+        aggregate_engagement = sum(
+            item.engagement_utility_delta or 0.0 for item in raw
+        )
         aggregate_quality_utility = (
-            aggregate_retrieval_utility + aggregate_content_quality
+            aggregate_retrieval_utility + aggregate_content_quality + aggregate_engagement
         )
         wave_acceptance = bool(
             (evaluated or content_evaluated)
@@ -396,6 +402,14 @@ class CurationQualitySampler:
             if explicit_hypothesis is not None
             else self._top_k
         )
+        engagement = (
+            {}
+            if explicit_hypothesis is not None
+            else self._read_backed_engagement(
+                intended_ids,
+                cutoff=receipt.applied_at or self._clock(),
+            )
+        )
         if after_results_by_query is None:
             after_contexts = self._search.search_memories_for_maintenance(
                 query_text,
@@ -464,6 +478,16 @@ class CurationQualitySampler:
                 else content.improved
             ),
             retrieval_utility_delta=case.retrieval_utility_delta,
+            engagement_utility_delta=(
+                None
+                if not engagement
+                else float(cast(float, engagement["utility_delta"]))
+            ),
+            engagement_evidence=(
+                {}
+                if not engagement
+                else dict(cast(Mapping[str, object], engagement["evidence"]))
+            ),
             content_quality_score_before=content.before,
             content_quality_score_after=content.after,
             content_quality_delta=content.delta,
@@ -472,6 +496,146 @@ class CurationQualitySampler:
             neutral_reason=case.neutral_reason,
             **common,
         )
+
+    def _read_backed_engagement(
+        self,
+        memory_ids: Sequence[UUID],
+        *,
+        cutoff: datetime,
+    ) -> dict[str, object]:
+        target_ids = {str(value) for value in memory_ids}
+        if not target_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in target_ids)
+        cutoff_epoch = cutoff.timestamp()
+        search_rows = _fetch_rows(
+            self._db_manager,
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
+              AND created_at < ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 500
+            """,
+            (*sorted(target_ids), cutoff_epoch),
+        )
+        if not search_rows:
+            return {
+                "utility_delta": 0.0,
+                "evidence": {
+                    "positive": 0,
+                    "conditional_negative": 0,
+                    "weak_negative": 0,
+                    "unknown": 0,
+                    "exposures": 0,
+                    "attribution_window_seconds": self._ENGAGEMENT_ATTRIBUTION_WINDOW_SECONDS,
+                },
+            }
+        invocations = {str(row[0]) for row in search_rows}
+        all_search_rows = _fetch_rows(
+            self._db_manager,
+            f"""
+            SELECT invocation_id, memory_id, created_at
+            FROM memory_tool_events
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id IN ({", ".join("?" for _ in invocations)})
+              AND created_at < ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1000
+            """,
+            (*sorted(invocations), cutoff_epoch),
+        )
+        episode_ids: dict[str, set[str]] = defaultdict(set)
+        episode_search_times: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        episode_exposures: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for row in all_search_rows:
+            invocation_id = str(row[0])
+            memory_id = row[1]
+            created_at = _epoch(row[2])
+            if memory_id is None or created_at is None:
+                continue
+            episode_ids[invocation_id].add(str(memory_id))
+            episode_search_times[invocation_id].append((str(memory_id), created_at))
+            if str(memory_id) in target_ids:
+                episode_exposures[invocation_id].append((str(memory_id), created_at))
+        candidate_ids = sorted(set().union(*episode_ids.values()))
+        search_epochs = [
+            created_at
+            for row in all_search_rows
+            if (created_at := _epoch(row[2])) is not None
+        ]
+        read_rows: list[tuple[object, ...]] = []
+        if candidate_ids:
+            read_rows = _fetch_rows(
+                self._db_manager,
+                f"""
+                SELECT memory_id, created_at
+                FROM memory_tool_events
+                WHERE event_kind = 'read'
+                  AND caller_kind IN ('external', 'operator', 'user')
+                  AND memory_id IN ({", ".join("?" for _ in candidate_ids)})
+                  AND created_at >= ?
+                  AND created_at <= ?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1000
+                """,
+                (*candidate_ids, min(search_epochs), cutoff_epoch),
+            )
+        reads_by_memory: dict[str, list[float]] = defaultdict(list)
+        for row in read_rows:
+            created_at = _epoch(row[1])
+            if created_at is not None and row[0] is not None:
+                reads_by_memory[str(row[0])].append(created_at)
+        exposures = positives = conditional = 0
+        target_exposure_counts: Counter[str] = Counter()
+        for invocation_id, entries in episode_exposures.items():
+            co_reads = {
+                memory_id
+                for memory_id in episode_ids[invocation_id]
+                if any(
+                    search_time <= read_time <= min(
+                        cutoff_epoch,
+                        search_time + self._ENGAGEMENT_ATTRIBUTION_WINDOW_SECONDS,
+                    )
+                    for search_memory, search_time in episode_search_times[invocation_id]
+                    if search_memory == memory_id
+                    for read_time in reads_by_memory.get(memory_id, ())
+                )
+            }
+            for memory_id, search_time in entries:
+                exposures += 1
+                target_exposure_counts[memory_id] += 1
+                target_read = any(
+                    search_time <= read_time <= min(
+                        cutoff_epoch,
+                        search_time + self._ENGAGEMENT_ATTRIBUTION_WINDOW_SECONDS,
+                    )
+                    for read_time in reads_by_memory.get(memory_id, ())
+                )
+                if target_read:
+                    positives += 1
+                elif co_reads - {memory_id}:
+                    conditional += 1
+        weak = max(exposures - positives - conditional, 0)
+        repeated = sum(max(count - 1, 0) for count in target_exposure_counts.values())
+        weak = min(weak, repeated)
+        unknown = exposures - positives - conditional - weak
+        utility_delta = round(positives * 0.1 - conditional * 0.05 - weak * 0.02, 3)
+        return {
+            "utility_delta": utility_delta,
+            "evidence": {
+                "positive": positives,
+                "conditional_negative": conditional,
+                "weak_negative": weak,
+                "unknown": unknown,
+                "exposures": exposures,
+                "attribution_window_seconds": self._ENGAGEMENT_ATTRIBUTION_WINDOW_SECONDS,
+            },
+        }
 
     def _content_quality(self, receipt: CurationActionReceipt) -> _ContentQualityComparison:
         if receipt.operation not in {"normalize_memory", "rewrite_memory"}:
@@ -747,6 +911,11 @@ def _timestamp(value: object) -> datetime | None:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
+
+
+def _epoch(value: object) -> float | None:
+    timestamp = _timestamp(value)
+    return None if timestamp is None else timestamp.timestamp()
 
 
 def _context_memory_id(context: Any) -> str:

@@ -834,6 +834,14 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE memory_tool_events ADD COLUMN IF NOT EXISTS graph_provenance_json JSONB",
         ),
     ),
+    PostgresMigration(
+        version=25,
+        name="add_curation_engagement_evidence",
+        statements=(
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS engagement_utility_delta DOUBLE PRECISION",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS engagement_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ),
+    ),
 )
 
 

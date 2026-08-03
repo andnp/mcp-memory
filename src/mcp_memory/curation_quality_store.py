@@ -29,8 +29,9 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     zero_result_change, payload_size_change, useful_work, created_at,
                     retrieval_utility_delta, acceptance_met, neutral_reason
                     , content_quality_score_before, content_quality_score_after,
-                    content_quality_delta, content_quality_improved
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content_quality_delta, content_quality_improved,
+                    engagement_utility_delta, engagement_evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, action_id) DO UPDATE SET
                     operation = excluded.operation,
                     affected_memory_ids_json = excluded.affected_memory_ids_json,
@@ -50,7 +51,9 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     content_quality_score_before = excluded.content_quality_score_before,
                     content_quality_score_after = excluded.content_quality_score_after,
                     content_quality_delta = excluded.content_quality_delta,
-                    content_quality_improved = excluded.content_quality_improved
+                    content_quality_improved = excluded.content_quality_improved,
+                    engagement_utility_delta = excluded.engagement_utility_delta,
+                    engagement_evidence_json = excluded.engagement_evidence_json
                 """,
                 _values(evidence),
             )
@@ -92,8 +95,9 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     zero_result_change, payload_size_change, useful_work, created_at,
                     retrieval_utility_delta, acceptance_met, neutral_reason
                     , content_quality_score_before, content_quality_score_after,
-                    content_quality_delta, content_quality_improved
-                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    content_quality_delta, content_quality_improved,
+                    engagement_utility_delta, engagement_evidence_json
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 ON CONFLICT (run_id, action_id) DO UPDATE SET
                     operation = EXCLUDED.operation,
                     affected_memory_ids_json = EXCLUDED.affected_memory_ids_json,
@@ -113,7 +117,9 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     content_quality_score_before = EXCLUDED.content_quality_score_before,
                     content_quality_score_after = EXCLUDED.content_quality_score_after,
                     content_quality_delta = EXCLUDED.content_quality_delta,
-                    content_quality_improved = EXCLUDED.content_quality_improved
+                    content_quality_improved = EXCLUDED.content_quality_improved,
+                    engagement_utility_delta = EXCLUDED.engagement_utility_delta,
+                    engagement_evidence_json = EXCLUDED.engagement_evidence_json
                 """,
                 _values(evidence),
             )
@@ -164,6 +170,8 @@ def _values(evidence: CurationQualityEvidence) -> tuple[object, ...]:
         evidence.content_quality_score_after,
         evidence.content_quality_delta,
         None if evidence.content_quality_improved is None else int(evidence.content_quality_improved),
+        evidence.engagement_utility_delta,
+        _json(evidence.engagement_evidence),
     )
 
 
@@ -190,6 +198,8 @@ def _from_row(row: Any) -> CurationQualityEvidence:
         content_quality_score_after=_optional_float(_row_value(row, "content_quality_score_after")),
         content_quality_delta=_optional_float(_row_value(row, "content_quality_delta")),
         content_quality_improved=_optional_bool(_row_value(row, "content_quality_improved")),
+        engagement_utility_delta=_optional_float(_row_value(row, "engagement_utility_delta")),
+        engagement_evidence=_json_mapping(_row_value(row, "engagement_evidence_json")),
     )
 
 
@@ -216,6 +226,8 @@ def _from_postgres_row(row: tuple[object, ...]) -> CurationQualityEvidence:
         content_quality_score_after=_optional_float(_row_at(row, 18)),
         content_quality_delta=_optional_float(_row_at(row, 19)),
         content_quality_improved=_optional_bool(_row_at(row, 20)),
+        engagement_utility_delta=_optional_float(_row_at(row, 21)),
+        engagement_evidence=_json_mapping(_row_at(row, 22)),
     )
 
 
@@ -231,6 +243,13 @@ def _json_value(value: object, default: list[str]) -> list[str]:
     else:
         parsed = value
     return [str(item) for item in parsed] if isinstance(parsed, list) else default
+
+
+def _json_mapping(value: object) -> dict[str, object]:
+    if value is None:
+        return {}
+    parsed = json.loads(value) if isinstance(value, str) else value
+    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 def _optional_int(value: object) -> int | None:

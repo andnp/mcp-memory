@@ -97,6 +97,8 @@ class _PostgresQualityConnection:
                 content_quality_score_after REAL,
                 content_quality_delta REAL,
                 content_quality_improved INTEGER,
+                engagement_utility_delta REAL,
+                engagement_evidence_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (run_id, action_id)
             )
             """
@@ -314,6 +316,54 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert evidence[0].status == "no_query"
     assert evidence[0].useful_work is None
     assert search.calls in (None, [])
+
+
+def test_quality_sampler_uses_bounded_read_backed_engagement(db_manager) -> None:
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+    connection = db_manager.get_connection()
+    target_id, co_result_id = uuid4(), uuid4()
+    connection.executemany(
+        """
+        INSERT INTO memories (id, title, content, type, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (str(target_id), "target", "target", "fact", "2026-01-01", "2026-01-01"),
+            (str(co_result_id), "co-result", "co-result", "fact", "2026-01-01", "2026-01-01"),
+        ],
+    )
+    rows = [
+        ("episode-1", "external", "search", str(target_id), 100.0),
+        ("episode-1", "external", "search", str(co_result_id), 100.0),
+        ("episode-1-read", "external", "read", str(co_result_id), 120.0),
+        ("episode-2", "external", "search", str(target_id), 200.0),
+        ("internal", "internal", "search", str(target_id), 210.0),
+        ("future", "external", "read", str(target_id), 400.0),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    engagement = sampler._read_backed_engagement(
+        [target_id],
+        cutoff=datetime.fromtimestamp(300.0, UTC),
+    )
+
+    evidence = cast(dict[str, object], engagement["evidence"])
+    assert evidence["positive"] == 0
+    assert evidence["conditional_negative"] == 1
+    assert evidence["weak_negative"] == 1
+    assert evidence["unknown"] == 0
+    assert engagement["utility_delta"] == pytest.approx(-0.07)
 
 
 def test_quality_sampler_accepts_content_improvement_without_search_query(db_manager) -> None:
