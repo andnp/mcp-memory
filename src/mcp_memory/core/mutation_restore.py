@@ -6,7 +6,8 @@ from copy import deepcopy
 from collections.abc import Mapping
 from enum import StrEnum
 import json
-from typing import Any, Callable, Protocol
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -71,6 +72,17 @@ class InverseDescription(BaseModel):
     inverse_operation: str
     record_changes: list[InverseRecordChange] = Field(default_factory=list)
     link_changes: list[InverseLinkChange] = Field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreWaveResult:
+    """Terminal evidence for an all-or-nothing supported restore wave."""
+
+    status: RestoreResultStatus
+    target_event_ids: tuple[UUID, ...]
+    restored_event_ids: tuple[UUID, ...] = ()
+    results: tuple[RestoreResult, ...] = ()
+    conflict_reason: str | None = None
 
 
 _UNSUPPORTED = {
@@ -210,6 +222,107 @@ def _semantic_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def _conflict(code: RestoreConflictCode, operation: str, reason: str) -> RestoreConflict:
     return RestoreConflict(code=code, operation=operation, reason=reason)
+
+
+def restore_wave(
+    action_store: RestoreActionStore,
+    history_store: Any,
+    target_event_ids: Sequence[UUID],
+    *,
+    expected_record_tokens: Mapping[UUID, str] | None = None,
+    expected_link_tokens: Mapping[str, str] | None = None,
+    run_id: UUID | None = None,
+    idempotency_key: str = "wave",
+) -> RestoreWaveResult:
+    """Restore a coherent normalize-only wave in reverse history order.
+
+    The preflight rejects mixed or unsupported mutation families before any
+    restore request is executed.  Record inverse tokens are chained between
+    actions; link and compound families remain explicitly blocked.
+    """
+
+    event_ids = tuple(target_event_ids)
+    if not event_ids:
+        return RestoreWaveResult(RestoreResultStatus.CONFLICT, (), conflict_reason="empty_restore_wave")
+    inverses: list[tuple[MutationEvent, InverseDescription]] = []
+    for event_id in event_ids:
+        event = history_store.get_event(event_id)
+        if event is None:
+            return RestoreWaveResult(
+                RestoreResultStatus.CONFLICT,
+                event_ids,
+                conflict_reason="target_mutation_event_not_found",
+            )
+        inverse = build_inverse(
+            event,
+            history_store.get_record_revisions(event.id),
+            history_store.get_link_revisions(event.id),
+        )
+        if isinstance(inverse, RestoreConflict):
+            return RestoreWaveResult(
+                RestoreResultStatus.CONFLICT,
+                event_ids,
+                conflict_reason=inverse.code.value,
+            )
+        if inverse.link_changes or inverse.source_operation != "normalize_memory":
+            return RestoreWaveResult(
+                RestoreResultStatus.CONFLICT,
+                event_ids,
+                conflict_reason="unsupported_restore_wave_family",
+            )
+        inverses.append((event, inverse))
+
+    tokens = {str(key): value for key, value in (expected_record_tokens or {}).items()}
+    required_ids = {
+        str(change.memory_id)
+        for _, inverse in inverses
+        for change in inverse.record_changes
+    }
+    if required_ids - tokens.keys():
+        return RestoreWaveResult(
+            RestoreResultStatus.CONFLICT,
+            event_ids,
+            conflict_reason="incomplete_current_record_tokens",
+        )
+    results: list[RestoreResult] = []
+    restored: list[UUID] = []
+    for event, inverse in reversed(inverses):
+        request = RestoreRequest(
+            target_event_id=event.id,
+            scope=RestoreScope.RECORDS,
+            expected_record_tokens={
+                UUID(memory_id): tokens[memory_id]
+                for change in inverse.record_changes
+                for memory_id in (str(change.memory_id),)
+                if memory_id in tokens
+            },
+            expected_link_tokens=dict(expected_link_tokens or {}),
+            reason="restore rejected quality wave",
+            idempotency_key=f"{idempotency_key}:{event.id}",
+        )
+        result = RestoreExecutor(
+            action_store,
+            history_store,
+        ).execute(request, run_id=run_id)
+        results.append(result)
+        if result.status is not RestoreResultStatus.APPLIED:
+            return RestoreWaveResult(
+                result.status,
+                event_ids,
+                tuple(restored),
+                tuple(results),
+                conflict_reason=result.conflict_reason,
+            )
+        restored.append(event.id)
+        for change in inverse.record_changes:
+            if change.resulting_token is not None:
+                tokens[str(change.memory_id)] = change.resulting_token
+    return RestoreWaveResult(
+        RestoreResultStatus.APPLIED,
+        event_ids,
+        tuple(restored),
+        tuple(results),
+    )
 
 
 class RestoreExecutor:
