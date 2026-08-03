@@ -141,6 +141,19 @@ class CurationPlanner(Protocol):
         ...
 
 
+@dataclass(slots=True)
+class CurationPlanSubmissionBuffer:
+    payload: Mapping[str, Any] | None = None
+
+    def submit(self, payload: Any) -> None:
+        self.payload = payload if isinstance(payload, MappingABC) else None
+
+    def consume(self) -> Mapping[str, Any] | None:
+        payload = self.payload
+        self.payload = None
+        return payload
+
+
 class CancellationScope(Protocol):
     """Minimal cancellation surface accepted by the provider adapter."""
 
@@ -409,12 +422,14 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
         self,
         session: AgenticSession,
         *,
+        submission_buffer: CurationPlanSubmissionBuffer,
         provider_key: str = "agentic-session",
         provider_name: str = "agentic-session",
         model_name: str = "agentic-session",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._session = session
+        self._submission_buffer = submission_buffer
         self._provider_key = provider_key
         self._provider_name = provider_name
         self._model_name = model_name
@@ -434,6 +449,11 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
         self, request: CurationPlanningRequest, tools: CurationReadTools
     ) -> PlannerExecutionEnvelope[CurationPlan]:
         prompt = _build_planner_prompt(request, tools)
+        prompt += (
+            "\nThis is an agentic curator turn. Call the submit_curation_plan tool exactly "
+            "once with the complete plan; the tool submission is authoritative and assistant "
+            "text is not parsed as a plan."
+        )
         if self._quality_feedback is not None:
             prompt += "\nMeasured quality feedback:\n" + json.dumps(
                 self._quality_feedback, sort_keys=True, default=str
@@ -462,7 +482,8 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                 premium_request=True,
             )
             return self._translate_call(request, call)
-        parsed = result.parsed if isinstance(result.parsed, dict) else None
+        submission = self._submission_buffer.consume()
+        parsed = None if submission is None else dict(submission)
         self.override_confidence = _bounded_override_confidence(
             None if parsed is None else parsed.get("override_confidence")
         )
@@ -483,7 +504,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
             started_at=started_at.timestamp(),
             completed_at=self._clock().timestamp(),
             status="success" if parsed is not None else "parse_error",
-            error_text=None if parsed is not None else "agentic response was not a JSON object",
+            error_text=None if parsed is not None else "agentic session did not submit a curation plan",
             raw_text=result.raw_text,
             parsed=parsed,
             admission_status="admitted",

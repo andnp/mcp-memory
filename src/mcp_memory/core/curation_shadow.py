@@ -22,10 +22,14 @@ from mcp_memory.core.curation_investigation import (
     READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
     run_curator_investigation,
 )
-from mcp_memory.core.curation_planner import InstrumentedCurationPlanner, SessionCurationPlanner
+from mcp_memory.core.curation_planner import (
+    CurationPlanSubmissionBuffer,
+    InstrumentedCurationPlanner,
+    SessionCurationPlanner,
+)
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_validation import CurationMutationBudget
-from mcp_memory.core.curation_models import CampaignHypothesis, CurationRunOutcome
+from mcp_memory.core.curation_models import CampaignHypothesis, CurationPlan, CurationRunOutcome
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import (
@@ -70,11 +74,13 @@ async def run_curator_verified_campaign(
 
     investigator = _curator_agentic_provider(ctx, task, provider)
     session = None
+    submission_buffer = CurationPlanSubmissionBuffer()
     if investigator is not None:
         opener = getattr(investigator, "open_agent_session", None)
         if callable(opener):
             session = await cast(Callable[..., Awaitable[Any]], opener)(
-                allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS
+                allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
+                tools=[_curation_plan_submission_tool(submission_buffer)],
             )
     if session is None and (planner_provider is None or not _supports_json_planning(planner_provider)):
         if claimed_work_item is not None:
@@ -101,6 +107,7 @@ async def run_curator_verified_campaign(
         if investigator is not None
         else CurationInvestigationResult("skipped", reason="agentic_provider_unavailable")
     )
+    submission_buffer.consume()
     exploratory_records, exploratory_reads = _investigated_reads(
         ctx, investigation, seed_records
     )
@@ -109,6 +116,7 @@ async def run_curator_verified_campaign(
     if session is not None:
         planner = SessionCurationPlanner(
             session,
+            submission_buffer=submission_buffer,
             provider_key=str(getattr(planner_provider, "_provider_key", "curation-session")),
             provider_name=str(getattr(planner_provider, "_provider_name", "curation-session")),
             model_name=str(getattr(planner_provider, "_model_name", "curation-session")),
@@ -435,6 +443,31 @@ def _curator_json_provider(ctx: ApplicationContext, task: TaskRecord, provider: 
             workspace_id=task.workspace_id,
         )
     return planner_provider
+
+
+def _curation_plan_submission_tool(buffer: CurationPlanSubmissionBuffer) -> Any:
+    from copilot.tools import Tool, ToolInvocation, ToolResult
+
+    def submit(invocation: ToolInvocation) -> ToolResult:
+        buffer.submit(invocation.arguments)
+        return ToolResult(text_result_for_llm="Curation plan captured for validation.")
+
+    return Tool(
+        name="submit_curation_plan",
+        description="Submit one complete typed curation plan for application validation.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "plan": CurationPlan.model_json_schema(),
+                "override_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "override_reason": {"type": ["string", "null"]},
+            },
+            "required": ["plan"],
+        },
+        handler=submit,
+        skip_permission=True,
+        defer="never",
+    )
 
 
 def _disclosure_context(

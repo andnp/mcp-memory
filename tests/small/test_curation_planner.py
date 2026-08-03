@@ -24,6 +24,7 @@ from mcp_memory.core.curation_planner import (
     CurationPlannerCancelledError,
     CurationPlannerProviderError,
     CurationPlannerSchemaError,
+    CurationPlanSubmissionBuffer,
     FakeCurationPlanner,
     FakePlannerScenario,
     InstrumentedCurationPlanner,
@@ -151,13 +152,12 @@ async def test_session_planner_reuses_conversation_for_quality_feedback() -> Non
 
         async def run_agent(self, prompt: str) -> AgenticRunResult:
             self.prompts.append(prompt)
-            return AgenticRunResult(
-                status="success",
-                parsed=_plan(request, seed_id).model_dump(mode="json"),
-            )
+            return AgenticRunResult(status="success")
 
     session = _Session()
-    planner = SessionCurationPlanner(cast(Any, session))
+    submission_buffer = CurationPlanSubmissionBuffer()
+    planner = SessionCurationPlanner(cast(Any, session), submission_buffer=submission_buffer)
+    submission_buffer.submit({"plan": _plan(request, seed_id).model_dump(mode="json")})
     first = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
     planner.set_quality_feedback(
         {
@@ -166,6 +166,7 @@ async def test_session_planner_reuses_conversation_for_quality_feedback() -> Non
             }
         }
     )
+    submission_buffer.submit({"plan": _plan(request, seed_id).model_dump(mode="json")})
     second = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
 
     assert first.plan is not None
@@ -186,16 +187,17 @@ async def test_session_planner_records_final_override_signal() -> None:
     class _Session:
         async def run_agent(self, prompt: str) -> AgenticRunResult:
             del prompt
-            return AgenticRunResult(
-                status="success",
-                parsed={
-                    "plan": _plan(request, seed_id).model_dump(mode="json"),
-                    "override_confidence": 0.95,
-                    "override_reason": "Measured utility remains positive.",
-                },
-            )
+            return AgenticRunResult(status="success")
 
-    planner = SessionCurationPlanner(cast(Any, _Session()))
+    submission_buffer = CurationPlanSubmissionBuffer()
+    planner = SessionCurationPlanner(cast(Any, _Session()), submission_buffer=submission_buffer)
+    submission_buffer.submit(
+        {
+            "plan": _plan(request, seed_id).model_dump(mode="json"),
+            "override_confidence": 0.95,
+            "override_reason": "Measured utility remains positive.",
+        }
+    )
     result = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
 
     assert result.plan is not None
