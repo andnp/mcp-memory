@@ -698,6 +698,22 @@ def test_project_sampler_outcome_accepts_only_a_complete_quality_wave() -> None:
     assert (rejected.outcome, rejected.productive_mutations) == (SAMPLER_OUTCOME_QUALITY_FAILURE, 0)
 
 
+def test_project_sampler_outcome_accepts_persisted_heuristic_wave() -> None:
+    run = _sampler_run(
+        mutations=4,
+        quality_evidence_runs=2,
+        quality_acceptance_met=None,
+        quality_neutral_count=0,
+        quality_rejected_count=0,
+        retrieval_regression_count=2,
+        curation_outcome="applied",
+    )
+
+    projected = project_sampler_outcome(run)
+
+    assert (projected.outcome, projected.productive_mutations) == (SAMPLER_OUTCOME_QUALITY_PASS, 4)
+
+
 def test_project_sampler_outcome_excludes_neutral_rollbacks_and_provider_failures() -> None:
     neutral = project_sampler_outcome(
         _sampler_run(mutations=3, quality_evidence_runs=1, quality_neutral_count=1, quality_acceptance_met=True)
