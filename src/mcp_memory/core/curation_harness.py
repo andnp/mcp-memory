@@ -164,16 +164,20 @@ def _context_record_counts(
     source_support_count: int,
     source_exploratory_count: int = 0,
 ) -> dict[str, int]:
-    return {
+    counts = {
         "included_seed_count": len(context.seeds),
         "included_support_count": len(context.support),
         "omitted_seed_count": max(source_seed_count - len(context.seeds), 0),
         "omitted_support_count": max(source_support_count - len(context.support), 0),
-        "included_exploratory_count": len(context.exploratory),
-        "omitted_exploratory_count": max(
-            source_exploratory_count - len(context.exploratory), 0
-        ),
     }
+    if source_exploratory_count or context.exploratory:
+        counts.update(
+            included_exploratory_count=len(context.exploratory),
+            omitted_exploratory_count=max(
+                source_exploratory_count - len(context.exploratory), 0
+            ),
+        )
+    return counts
 
 
 def _materialize_read(
