@@ -348,6 +348,13 @@ def _snapshot_payload_size(value: object) -> int:
             value = json.loads(value)
         except ValueError:
             return 0
+    if isinstance(value, Mapping):
+        record = value.get("record", value)
+        if isinstance(record, Mapping):
+            value = {
+                key: record.get(key)
+                for key in ("title", "summary", "content", "tags")
+            }
     return _payload_size(value)
 
 
