@@ -514,7 +514,7 @@ class CurationDryRunHarness:
         )
         quality_evidence = (
             ()
-            if self._quality_sampler is None
+            if self._quality_sampler is None or not receipts
             else self._quality_sampler.evaluate(
                 run=self._curation_store.get_run(run_id) or executing,
                 receipts=receipts,
@@ -868,6 +868,13 @@ class CurationDryRunHarness:
     ) -> None:
         previous = self._curation_store.get_candidate_state(memory_id)
         if previous is not None and previous.last_run_id == run_id:
+            return
+        if (
+            previous is not None
+            and previous.disposition
+            in (CandidateDisposition.ACTIONED, CandidateDisposition.ESCALATED)
+            and disposition is CandidateDisposition.COOLDOWN
+        ):
             return
         if (
             previous is not None

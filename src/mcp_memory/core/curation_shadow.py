@@ -24,7 +24,6 @@ from mcp_memory.core.curation_investigation import (
 )
 from mcp_memory.core.curation_planner import (
     CurationPlanSubmissionBuffer,
-    InstrumentedCurationPlanner,
     SessionCurationPlanner,
 )
 from mcp_memory.core.curation_quality import CurationQualitySampler
@@ -64,25 +63,14 @@ async def run_curator_verified_campaign(
     investigation_limits: CurationInvestigationLimits | None = None,
 ) -> dict[str, Any]:
     """Plan and execute the canonical verified curator campaign path."""
-    planner_provider = _curator_json_provider(ctx, task, provider)
-
     action_store = getattr(ctx, "curation_action_store", None)
     if action_store is None or ctx.curation is None or ctx.relational_search is None:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
         raise RuntimeError("verified campaign storage is unavailable")
 
-    investigator = _curator_agentic_provider(ctx, task, provider)
-    session = None
-    submission_buffer = CurationPlanSubmissionBuffer()
-    if investigator is not None:
-        opener = getattr(investigator, "open_agent_session", None)
-        if callable(opener):
-            session = await cast(Callable[..., Awaitable[Any]], opener)(
-                allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
-                tools=[_curation_plan_submission_tool(submission_buffer)],
-            )
-    if session is None and (planner_provider is None or not _supports_json_planning(planner_provider)):
+    agentic_provider = _curator_agentic_provider(ctx, task, provider)
+    if agentic_provider is None:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
         return sampling_payload(
@@ -94,18 +82,39 @@ async def run_curator_verified_campaign(
             claimed_work_item_count=0,
             tool_calls_executed=0,
             mutations=0,
-            reason="campaign_json_provider_not_configured",
+            reason="campaign_agentic_provider_not_configured",
         )
+
+    opener = getattr(agentic_provider, "open_agent_session", None)
+    if not callable(opener):
+        if claimed_work_item is not None:
+            release_work_item(ctx, claimed_work_item.id)
+        return sampling_payload(
+            seed_batch,
+            sampled_records=sampled_records,
+            seed_records=seed_records,
+            extra=work_item_metadata,
+            execution_mode="curation_verified_campaign",
+            claimed_work_item_count=0,
+            tool_calls_executed=0,
+            mutations=0,
+            reason="campaign_agentic_session_not_configured",
+        )
+
+    session = None
+    submission_buffer = CurationPlanSubmissionBuffer()
+    session = await cast(Callable[..., Awaitable[Any]], opener)(
+        allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
+        tools=[_curation_plan_submission_tool(submission_buffer)],
+    )
     investigation = (
         await run_curator_investigation(
-            investigator,
+            agentic_provider,
             seed_records=seed_records,
             task_id=task.id,
             limits=investigation_limits,
             session=session,
         )
-        if investigator is not None
-        else CurationInvestigationResult("skipped", reason="agentic_provider_unavailable")
     )
     submission_buffer.consume()
     exploratory_records, exploratory_reads = _investigated_reads(
@@ -113,21 +122,13 @@ async def run_curator_verified_campaign(
     )
     context_records = [*seed_records, *exploratory_records]
 
-    if session is not None:
-        planner = SessionCurationPlanner(
-            session,
-            submission_buffer=submission_buffer,
-            provider_key=str(getattr(planner_provider, "_provider_key", "curation-session")),
-            provider_name=str(getattr(planner_provider, "_provider_name", "curation-session")),
-            model_name=str(getattr(planner_provider, "_model_name", "curation-session")),
-        )
-    else:
-        planner = InstrumentedCurationPlanner(
-            planner_provider,
-            provider_key=str(getattr(planner_provider, "_provider_key", "curation-executor")),
-            provider_name=str(getattr(planner_provider, "_provider_name", "curation-executor")),
-            model_name=str(getattr(planner_provider, "_model_name", "curation-executor")),
-        )
+    planner = SessionCurationPlanner(
+        session,
+        submission_buffer=submission_buffer,
+        provider_key=str(getattr(agentic_provider, "_provider_key", "curation-session")),
+        provider_name=str(getattr(agentic_provider, "_provider_name", "curation-session")),
+        model_name=str(getattr(agentic_provider, "_model_name", "curation-session")),
+    )
     support_records = seed_records[len(sampled_records) :] if len(seed_records) > len(sampled_records) else []
     frontier_args = {
         "family": "curator",
@@ -153,7 +154,9 @@ async def run_curator_verified_campaign(
         if claimed_work_item is not None
         else CurationFrontier.direct(**frontier_args)
     )
-    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, context_records)
+    provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(
+        ctx, agentic_provider, context_records
+    )
     memory_types = {UUID(record.id): record.type for record in context_records}
     configured_budget = mutation_budget or CurationMutationBudget()
     cumulative_proposed = 0
@@ -224,7 +227,7 @@ async def run_curator_verified_campaign(
             cast(Any, planner).set_quality_feedback(feedback)
             harness._config.mutation_budget = remaining_budget
             investigation = await run_curator_investigation(
-                investigator,
+                agentic_provider,
                 seed_records=seed_records,
                 task_id=task.id,
                 limits=investigation_limits,
@@ -252,6 +255,7 @@ async def run_curator_verified_campaign(
                     refreshed,
                     sampled_count=len(sampled_records),
                     exploratory_reads=exploratory_reads,
+                    retain_work_item=False,
                 )
             else:
                 frontier = _frontier_with_refreshed_records(
@@ -259,17 +263,25 @@ async def run_curator_verified_campaign(
                     [*seed_records, *exploratory_records],
                     sampled_count=len(sampled_records),
                     exploratory_reads=exploratory_reads,
+                    retain_work_item=False,
                 )
             for record in newly_read_records:
                 memory_types[UUID(record.id)] = record.type
-            result = await harness.run(frontier)
+            next_result = await harness.run(frontier)
             correction_turns += 1
+            if (
+                next_result.result.outcome is CurationRunOutcome.NO_OP
+                and not next_result.result.receipts
+            ):
+                termination_reason = "no_useful_work"
+                break
+            result = next_result
         if correction_turns == CURATOR_MAX_FEEDBACK_ITERATIONS:
             termination_reason = (
                 _feedback_termination_reason(result) or "iteration_limit"
             )
     except Exception:
-        if claimed_work_item is not None:
+        if _work_item_is_running(ctx, claimed_work_item):
             release_work_item(ctx, claimed_work_item.id)
         if session is not None:
             await session.close()
@@ -356,6 +368,7 @@ def _frontier_with_refreshed_records(
     *,
     sampled_count: int,
     exploratory_reads: tuple[AcceptedMaintenanceRead, ...] | None = None,
+    retain_work_item: bool = True,
 ) -> CurationFrontier:
     sampled = records[:sampled_count]
     support = records[sampled_count:]
@@ -374,7 +387,7 @@ def _frontier_with_refreshed_records(
     }
     return (
         CurationFrontier.claimed(frontier.work_item_id, **args)
-        if frontier.work_item_id is not None
+        if retain_work_item and frontier.work_item_id is not None
         else CurationFrontier.direct(**args)
     )
 
@@ -399,20 +412,20 @@ def _curation_no_op_reason(
     return None
 
 
-def _supports_json_planning(provider: Any) -> bool:
-    if not callable(getattr(provider, "ask_json", None)):
-        return False
-    supports_agentic = getattr(provider, "supports_agentic", None)
-    return not callable(supports_agentic) or not bool(supports_agentic())
-
-
-def _supports_agentic_investigation(provider: Any) -> bool:
+def _supports_agentic_provider(provider: Any) -> bool:
     return callable(getattr(provider, "run_agent", None))
 
 
+def _work_item_is_running(ctx: ApplicationContext, work_item: Any) -> bool:
+    if work_item is None or ctx.work_items is None:
+        return False
+    current = ctx.work_items.get_item(work_item.id)
+    return current is not None and str(current.status) == "running"
+
+
 def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
-    candidate = provider if _supports_agentic_investigation(provider) else getattr(ctx, "ai_agent_provider", None)
-    if not _supports_agentic_investigation(candidate):
+    candidate = provider if _supports_agentic_provider(provider) else getattr(ctx, "ai_agent_provider", None)
+    if not _supports_agentic_provider(candidate):
         return None
     with_usage_context = getattr(candidate, "with_usage_context", None)
     if callable(with_usage_context):
@@ -423,26 +436,6 @@ def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provide
             workspace_id=task.workspace_id,
         )
     return candidate
-
-
-def _curator_json_provider(ctx: ApplicationContext, task: TaskRecord, provider: Any) -> Any:
-    """Prefer the task route and bind the registry fallback to this execution."""
-    if _supports_json_planning(provider):
-        return provider
-
-    planner_provider = getattr(ctx, "ai_json_provider", None)
-    if not _supports_json_planning(planner_provider):
-        return planner_provider
-
-    with_usage_context = getattr(planner_provider, "with_usage_context", None)
-    if callable(with_usage_context):
-        return with_usage_context(
-            task_name=task.task_name,
-            task_id=task.id,
-            execution_epoch=task.execution_epoch,
-            workspace_id=task.workspace_id,
-        )
-    return planner_provider
 
 
 def _curation_plan_submission_tool(buffer: CurationPlanSubmissionBuffer) -> Any:

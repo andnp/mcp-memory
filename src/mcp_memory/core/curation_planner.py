@@ -448,11 +448,10 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
     async def create_plan(
         self, request: CurationPlanningRequest, tools: CurationReadTools
     ) -> PlannerExecutionEnvelope[CurationPlan]:
-        prompt = _build_planner_prompt(request, tools)
-        prompt += (
-            "\nThis is an agentic curator turn. Call the submit_curation_plan tool exactly "
-            "once with the complete plan; the tool submission is authoritative and assistant "
-            "text is not parsed as a plan."
+        prompt = _build_planner_prompt(
+            request,
+            tools,
+            submission_tool_name="submit_curation_plan",
         )
         if self._quality_feedback is not None:
             prompt += "\nMeasured quality feedback:\n" + json.dumps(
@@ -634,7 +633,12 @@ def _request_for_packet(
     )
 
 
-def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadTools) -> str:
+def _build_planner_prompt(
+    request: CurationPlanningRequest,
+    tools: CurationReadTools,
+    *,
+    submission_tool_name: str | None = None,
+) -> str:
     context = getattr(tools, "context", None)
     if context is None:
         context_payload: Any = None
@@ -693,7 +697,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
     quality_feedback = getattr(tools, "quality_feedback", None)
     if quality_feedback is not None:
         payload["quality_feedback"] = dict(quality_feedback)
-    return (
+    instruction = (
         "You are a curation planner whose job is to improve the durable quality of "
         "the memory base. Do not optimize for safe no-ops: inspect the visible "
         "neighborhood, find the highest-confidence quality gains, and make a coherent "
@@ -731,9 +735,14 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "unrelated takeaways. Preserve "
         "exact search anchors and concrete entities; retain only when no evidence-backed "
         "repair hypothesis survives investigation. If no visible canonical is appropriate, retain the memory instead "
-        "of inventing an ID.\n"
-        + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        "of inventing an ID."
     )
+    if submission_tool_name is not None:
+        instruction += (
+            f" Call the {submission_tool_name} tool exactly once with the complete plan; "
+            "the tool submission is authoritative and assistant text is not parsed as a plan."
+        )
+    return instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _envelope_base(

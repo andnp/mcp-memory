@@ -20,6 +20,7 @@ from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
     WORK_FAMILY_MEMORY_CURATION_REVIEW,
 )
+from tests.medium.curator_agentic_fixture import agentic_curator
 
 pytestmark = pytest.mark.medium
 
@@ -143,17 +144,6 @@ class _RetentionProvider:
         }
 
 
-class _RetentionInvestigator:
-    def with_allowed_tool_names(self, names: tuple[str, ...]) -> _RetentionInvestigator:
-        del names
-        return self
-
-    async def run_agent(self, prompt: str) -> SimpleNamespace:
-        del prompt
-        parsed = {"rounds": 1, "tool_calls": 1, "record_ids": []}
-        return SimpleNamespace(parsed=parsed, raw_text=json.dumps(parsed))
-
-
 def _task(runtime, task_id: str) -> TaskRecord:
     return TaskRecord(
         id=task_id,
@@ -187,7 +177,7 @@ async def test_default_campaign_uses_verified_executor_and_completes_claimed_wor
     assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
 
     try:
-        runtime.ai_json_provider = _NormalizeJSONProvider()
+        runtime.ai_agent_provider = agentic_curator(_NormalizeJSONProvider())
         record = runtime.repository.create_memory(
             title="Authentication target",
             content="JWT coverage is required for client authentication.",
@@ -212,12 +202,12 @@ async def test_default_campaign_uses_verified_executor_and_completes_claimed_wor
         assert result["curation_outcome"] == "applied"
         assert result["mutations"] == 1
         assert result["curation_investigation"] == {
-            "status": "skipped",
-            "rounds": 0,
-            "tool_calls": 0,
+            "status": "completed",
+            "rounds": 1,
+            "tool_calls": 1,
             "record_ids": [],
             "record_count": 0,
-            "reason": "agentic_provider_unavailable",
+            "reason": None,
         }
         assert refreshed is not None and refreshed.summary == "A durable authentication conclusion."
         assert receipt.status.value == "verified"
@@ -273,7 +263,7 @@ async def test_default_verified_campaign_reports_authoritative_counts(
     assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
 
     try:
-        runtime.ai_json_provider = _CampaignJSONProvider()
+        runtime.ai_agent_provider = agentic_curator(_CampaignJSONProvider())
         normalized = runtime.repository.create_memory(
             title="Authentication target",
             content="JWT coverage is required for client authentication.",
@@ -345,8 +335,7 @@ async def test_retained_campaign_reports_planner_no_op_reason(
 
     try:
         provider = _RetentionProvider()
-        runtime.ai_json_provider = provider
-        runtime.ai_agent_provider = _RetentionInvestigator()
+        runtime.ai_agent_provider = agentic_curator(provider)
         record = runtime.repository.create_memory(
             title="Focused record",
             content="The record already has a durable conclusion.",
@@ -380,7 +369,7 @@ async def test_local_manual_review_protection_denies_normalize_before_any_write(
     assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
 
     try:
-        runtime.ai_json_provider = _NormalizeJSONProvider()
+        runtime.ai_agent_provider = agentic_curator(_NormalizeJSONProvider())
         record = runtime.repository.create_memory(
             title="Protected authentication target",
             content="JWT coverage is required for client authentication.",

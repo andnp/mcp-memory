@@ -16,6 +16,7 @@ from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mutation_history import Protection, ProtectionMode
 from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
+from tests.medium.curator_agentic_fixture import agentic_curator
 
 
 pytestmark = pytest.mark.medium
@@ -294,7 +295,7 @@ async def test_live_campaign_applies_policy_allowed_action_blocks_protected_acti
             )
         )
         provider = _LiveJSONProvider()
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, records)
         _force_quality_sampling(monkeypatch)
 
@@ -373,7 +374,7 @@ async def test_live_campaign_quality_sampling_evaluates_historical_query_without
         ).fetchone()[0]
 
         provider = _LiveJSONProvider()
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, [target])
         _force_quality_sampling(monkeypatch)
 
@@ -412,7 +413,7 @@ async def test_live_campaign_restores_quality_rejected_normalize_wave(
             lambda **_kwargs: _RejectingQualitySampler(),
         )
         target = _create_record(runtime, "Rejected normalize target", "Original summary.")
-        runtime.ai_json_provider = _LiveJSONProvider()
+        runtime.ai_agent_provider = agentic_curator(_LiveJSONProvider())
         _patch_candidates(monkeypatch, [target])
         item, _ = runtime.work_items.enqueue_unique(
             family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
@@ -452,7 +453,7 @@ async def test_live_campaign_rejects_invalid_operation_before_mutation(
     try:
         target = _create_record(runtime, "Invalid operation target", "Original summary.")
         provider = _LiveJSONProvider(invalid=True)
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, [target, _create_record(runtime, "Unused target", "Unused summary.")])
 
         result = await handle_memory_curator_task(
@@ -492,7 +493,7 @@ async def test_live_campaign_honors_explicit_mutation_budget_override(
             _create_record(runtime, "Budget retained", "Generic summary."),
         ]
         provider = _LiveJSONProvider()
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, records)
 
         result = await handle_memory_curator_task(
@@ -527,7 +528,7 @@ async def test_live_campaign_hydrates_missing_record_tokens_before_execution(
     try:
         target = _create_record(runtime, "Hydrated target", "Generic summary.")
         provider = _LiveJSONProvider(mode="missing_tokens")
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, [target])
 
         result = await handle_memory_curator_task(
@@ -562,7 +563,7 @@ async def test_live_campaign_rejects_create_link_without_exact_evidence_or_absen
         source = _create_record(runtime, "Invalid link source", "Source summary.")
         target = _create_record(runtime, "Invalid link target", "Target summary.")
         provider = _LiveJSONProvider(mode="invalid_create_link")
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, [source, target])
 
         result = await handle_memory_curator_task(
@@ -636,7 +637,7 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
         ).fetchone()[0]
 
         provider = _LiveJSONProvider(mode="mixed_recovery")
-        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = agentic_curator(provider)
         _patch_candidates(monkeypatch, [valid, source, target])
         _force_quality_sampling(monkeypatch)
 
