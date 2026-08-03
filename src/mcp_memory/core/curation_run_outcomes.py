@@ -188,6 +188,10 @@ def build_run_result(
     envelopes: list[PlannerExecutionEnvelope[Any]] | None = None,
     quality_evidence: list[dict[str, object]] | None = None,
     restore_result: dict[str, object] | None = None,
+    override_confidence: float | None = None,
+    override_reason: str | None = None,
+    override_judge_evidence: dict[str, object] | None = None,
+    override_outcome: str | None = None,
 ) -> CurationRunResult:
     evidence = list(quality_evidence or [])
     return CurationRunResult(
@@ -214,4 +218,8 @@ def build_run_result(
         affected_memory_count=count_affected_memory_ids(receipts),
         quality_evidence=evidence,
         restore_result=restore_result,
+        override_confidence=override_confidence,
+        override_reason=override_reason,
+        override_judge_evidence=dict(override_judge_evidence or {}),
+        override_outcome=override_outcome,
     )

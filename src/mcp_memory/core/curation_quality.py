@@ -64,6 +64,10 @@ class CurationQualityEvidence(CurationModel):
     wave_status: str | None = None
     collateral_regression_count: int | None = None
     productive_mutation_count: int = 0
+    override_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    override_reason: str | None = None
+    override_judge_evidence: dict[str, object] = Field(default_factory=dict)
+    override_outcome: str | None = None
     created_at: datetime
 
 

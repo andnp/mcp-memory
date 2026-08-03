@@ -499,6 +499,7 @@ class CurationRunOutcome(StrEnum):
     PROVIDER_FAILED = "provider_failed"
     CANCELLED = "cancelled"
     NO_CANDIDATES = "no_candidates"
+    QUALITY_OVERRIDE = "quality_override"
 
 
 class CurationRunResult(CurationModel):
@@ -516,6 +517,10 @@ class CurationRunResult(CurationModel):
     affected_memory_count: int = 0
     quality_evidence: list[dict[str, object]] = Field(default_factory=list)
     restore_result: dict[str, object] | None = None
+    override_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    override_reason: str | None = None
+    override_judge_evidence: dict[str, object] = Field(default_factory=dict)
+    override_outcome: str | None = None
 
 
 def _action_memory_ids(action: CurationAction) -> set[UUID]:

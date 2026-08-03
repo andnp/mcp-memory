@@ -521,16 +521,40 @@ class CurationDryRunHarness:
                 campaign_hypothesis=frontier.campaign_hypothesis,
             )
         )
-        restore_result = self._restore_rejected_wave(
-            run_id=run_id,
+        override = self._quality_override(
+            outcome=outcome,
             receipts=receipts,
             quality_evidence=quality_evidence,
         )
-        if restore_result is not None:
-            outcome = CurationRunOutcome.QUALITY_REJECTED
-            reason_code = "quality_wave_rejected"
-            if "quality_wave_rejected" not in rejection_codes:
-                rejection_codes.append("quality_wave_rejected")
+        if override is not None:
+            override_confidence, override_reason, judge_evidence = override
+            quality_evidence = tuple(
+                evidence.model_copy(
+                    update={
+                        "override_confidence": override_confidence,
+                        "override_reason": override_reason,
+                        "override_judge_evidence": judge_evidence,
+                        "override_outcome": "quality_override",
+                        "wave_status": "accepted_override",
+                        "productive_mutation_count": len(receipts),
+                    }
+                )
+                for evidence in quality_evidence
+            )
+            outcome = CurationRunOutcome.QUALITY_OVERRIDE
+            reason_code = "quality_override"
+            restore_result = None
+        else:
+            restore_result = self._restore_rejected_wave(
+                run_id=run_id,
+                receipts=receipts,
+                quality_evidence=quality_evidence,
+            )
+            if restore_result is not None:
+                outcome = CurationRunOutcome.QUALITY_REJECTED
+                reason_code = "quality_wave_rejected"
+                if "quality_wave_rejected" not in rejection_codes:
+                    rejection_codes.append("quality_wave_rejected")
 
         terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
         if terminal is None:
@@ -573,6 +597,14 @@ class CurationDryRunHarness:
                 evidence.model_dump(mode="json") for evidence in quality_evidence
             ],
             restore_result=restore_result,
+            override_confidence=(
+                None if override is None else override[0]
+            ),
+            override_reason=None if override is None else override[1],
+            override_judge_evidence={} if override is None else override[2],
+            override_outcome=(
+                None if override is None else "quality_override"
+            ),
         )
         return CurationDryRunResult(
             run=terminal,
@@ -584,6 +616,45 @@ class CurationDryRunHarness:
             specialist_work_items=specialist_work_items,
             restore_result=restore_result,
         )
+
+    def _quality_override(
+        self,
+        *,
+        outcome: CurationRunOutcome,
+        receipts: tuple[CurationActionReceipt, ...],
+        quality_evidence: tuple[Any, ...],
+    ) -> tuple[float, str, dict[str, object]] | None:
+        confidence = getattr(self._planner, "override_confidence", None)
+        reason = getattr(self._planner, "override_reason", None)
+        if (
+            not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+            or confidence < 0.90
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or outcome not in {CurationRunOutcome.APPLIED}
+            or not receipts
+            or not quality_evidence
+            or any(receipt.status is not CurationReceiptState.VERIFIED for receipt in receipts)
+            or any(getattr(evidence, "acceptance_met", None) is False for evidence in quality_evidence)
+            or any(getattr(evidence, "wave_status", None) != "rejected" for evidence in quality_evidence)
+            or any(receipt.operation != "normalize_memory" for receipt in receipts)
+        ):
+            return None
+        judge_evidence = cast(
+            dict[str, object],
+            {
+            "quality_evidence": [
+                evidence.model_dump(mode="json")
+                if hasattr(evidence, "model_dump")
+                else dict(evidence)
+                for evidence in quality_evidence
+            ],
+            "original_outcome": str(outcome),
+            "threshold": 0.90,
+            },
+        )
+        return float(confidence), reason.strip(), judge_evidence
 
     def _restore_rejected_wave(
         self,

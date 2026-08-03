@@ -422,6 +422,8 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
         self._route_available = True
         self._clock = clock or (lambda: datetime.now(UTC))
         self._quality_feedback: Mapping[str, object] | None = None
+        self.override_confidence: float | None = None
+        self.override_reason: str | None = None
 
     def set_quality_feedback(self, feedback: Mapping[str, object] | None) -> None:
         self._quality_feedback = None if feedback is None else dict(feedback)
@@ -459,6 +461,16 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
             )
             return self._translate_call(request, call)
         parsed = result.parsed if isinstance(result.parsed, dict) else None
+        self.override_confidence = _bounded_override_confidence(
+            None if parsed is None else parsed.get("override_confidence")
+        )
+        self.override_reason = (
+            None
+            if parsed is None or not isinstance(parsed.get("override_reason"), str)
+            else parsed["override_reason"].strip() or None
+        )
+        if isinstance(parsed, dict) and isinstance(parsed.get("plan"), dict):
+            parsed = cast(dict[str, Any], parsed["plan"])
         call = ProviderJSONCall(
             response=parsed,
             provider_key=self._provider_key,
@@ -734,6 +746,14 @@ def _provider_profile(provider: Any, provider_key: str) -> str:
         if value is not None:
             return str(value)
     return provider_key
+
+
+def _bounded_override_confidence(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if 0.0 <= float(value) <= 1.0:
+        return float(value)
+    return None
 
 
 def _route_available(provider: Any) -> bool | None:

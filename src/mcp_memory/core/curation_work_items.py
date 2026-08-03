@@ -65,7 +65,11 @@ class CurationWorkItemService:
             )
         ):
             return CurationWorkItemDecision(WorkItemAction.DEFER, "quality_acceptance_failed")
-        if outcome in (CurationRunOutcome.NO_OP, CurationRunOutcome.APPLIED):
+        if outcome in (
+            CurationRunOutcome.NO_OP,
+            CurationRunOutcome.APPLIED,
+            CurationRunOutcome.QUALITY_OVERRIDE,
+        ):
             return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
         delay = None if envelope is None else envelope.retry_delay_seconds
         return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, delay)
