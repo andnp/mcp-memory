@@ -184,7 +184,7 @@ class CurationQualitySampler:
         )
         before_results = tuple(
             ReplayResult(memory_id)
-            for memory_id in before_ids[: self._top_k]
+            for memory_id in before_ids
         )
         report = evaluate_query_replay(
             [
@@ -200,7 +200,7 @@ class CurationQualitySampler:
         return CurationQualityEvidence(
             status="evaluated",
             query_id=query_id,
-            before_ranked_memory_ids=[UUID(value) for value in before_ids[: self._top_k]],
+            before_ranked_memory_ids=[UUID(value) for value in before_ids],
             after_ranked_memory_ids=[
                 UUID(result.memory_id) for result in after_results[: self._top_k]
             ],
