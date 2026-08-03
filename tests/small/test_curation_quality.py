@@ -878,6 +878,8 @@ def test_quality_sampler_escalates_explicit_acceptance_failure(db_manager) -> No
     assert candidate is not None
     assert candidate.disposition.value == "escalated"
     assert candidate.last_disposition_reason == "acceptance_not_met"
+    assert candidate.coverage_evidence_json["quality_regression"]["acceptance_met"] is False
+    assert candidate.coverage_evidence_json["quality_regression"]["neutral_reason"] is None
 
 
 def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:

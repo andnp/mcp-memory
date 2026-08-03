@@ -115,7 +115,7 @@ _CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS = (
     "declined",
 )
 _CURATOR_QUALITY_FEEDBACK_REASONS = frozenset(
-    {"retrieval_regression", "zero_result_regression"}
+    {"retrieval_regression", "zero_result_regression", "acceptance_not_met"}
 )
 
 
@@ -859,12 +859,29 @@ def curator_quality_feedback(ctx: ApplicationContext, record: Any) -> dict[str, 
         or state.last_disposition_reason not in _CURATOR_QUALITY_FEEDBACK_REASONS
     ):
         return None
-    return {
+    quality_evidence = state.coverage_evidence_json.get("quality_regression")
+    if (
+        state.last_disposition_reason == "acceptance_not_met"
+        and isinstance(quality_evidence, dict)
+        and quality_evidence.get("neutral_reason") is not None
+    ):
+        return None
+    feedback = {
         "reason": state.last_disposition_reason,
         "escalation_count": state.escalation_count,
         "last_run_id": str(state.last_run_id) if state.last_run_id is not None else None,
         "last_strategy": state.last_escalated_strategy,
     }
+    if isinstance(quality_evidence, dict):
+        for field in (
+            "retrieval_regression_count",
+            "zero_result_change",
+            "acceptance_met",
+            "neutral_reason",
+        ):
+            if field in quality_evidence:
+                feedback[field] = quality_evidence[field]
+    return feedback
 
 
 def _curator_backend_query_limit(

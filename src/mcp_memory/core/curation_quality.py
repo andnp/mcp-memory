@@ -159,6 +159,8 @@ class CurationQualitySampler:
                 "reason": reason,
                 "retrieval_regression_count": evidence.retrieval_regression_count or 0,
                 "zero_result_change": evidence.zero_result_change or 0,
+                "acceptance_met": evidence.acceptance_met,
+                "neutral_reason": evidence.neutral_reason,
             }
             candidate_repository.put_candidate_state(
                 CurationCandidateState(

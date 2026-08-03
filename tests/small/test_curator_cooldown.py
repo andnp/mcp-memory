@@ -160,6 +160,53 @@ def test_quality_feedback_candidates_are_prioritized(db_manager) -> None:
     assert feedback["escalation_count"] == 2
 
 
+def test_acceptance_failure_is_quality_feedback_for_retry(db_manager) -> None:
+    record = _record(uuid4())
+    ctx = _context(db_manager, _Repository())
+    ctx.curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=UUID(record.id),
+            disposition=CandidateDisposition.ESCALATED,
+            last_disposition_reason="acceptance_not_met",
+            escalation_count=1,
+            coverage_evidence_json={
+                "quality_regression": {
+                    "acceptance_met": False,
+                    "neutral_reason": None,
+                }
+            },
+        )
+    )
+
+    assert _quality_feedback_candidates(ctx, [record]) == [record]
+    feedback = curator_quality_feedback(ctx, record)
+    assert feedback is not None
+    assert feedback["reason"] == "acceptance_not_met"
+    assert feedback["acceptance_met"] is False
+    assert feedback["neutral_reason"] is None
+
+
+@pytest.mark.parametrize("neutral_reason", ["no_query", "irrelevant_query", "inconclusive"])
+def test_neutral_quality_evidence_is_not_feedback(db_manager, neutral_reason: str) -> None:
+    record = _record(uuid4())
+    ctx = _context(db_manager, _Repository())
+    ctx.curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=UUID(record.id),
+            disposition=CandidateDisposition.ESCALATED,
+            last_disposition_reason="acceptance_not_met",
+            coverage_evidence_json={
+                "quality_regression": {
+                    "acceptance_met": None,
+                    "neutral_reason": neutral_reason,
+                }
+            },
+        )
+    )
+
+    assert curator_quality_feedback(ctx, record) is None
+
+
 def test_recent_human_and_cross_family_edits_stabilize_candidates(db_manager) -> None:
     repository = _Repository()
     record = _record(uuid4())
