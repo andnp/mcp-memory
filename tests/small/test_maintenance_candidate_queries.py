@@ -178,3 +178,24 @@ def test_seeded_random_candidates_are_reproducible_and_tie_broken(db_manager) ->
 
 def test_shared_candidate_query_contract(db_manager) -> None:
     assert_maintenance_candidate_query_contract(RelationalMemoryRepository(db_manager))
+
+
+def test_retrieval_quality_candidates_rank_repeated_low_conversion_hits(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    poor = _create(repository, "poor", updated_at="2026-01-01T00:00:00+00:00")
+    good = _create(repository, "good", updated_at="2026-01-02T00:00:00+00:00")
+    connection = db_manager.get_connection()
+    rows = [(f"poor-{i}", poor.id, 1, 2) for i in range(3)]
+    rows += [(f"good-{i}", good.id, 1, 1) for i in range(2)]
+    connection.executemany(
+        "INSERT INTO memory_tool_events "
+        "(invocation_id, caller_kind, event_kind, memory_id, result_rank, result_count, created_at) "
+        "VALUES (?, 'operator', 'search', ?, ?, ?, ?)",
+        [(invocation, memory_id, rank, count, float(index))
+         for index, (invocation, memory_id, rank, count) in enumerate(rows)],
+    )
+    connection.commit()
+
+    candidates = repository.query_retrieval_quality_candidates(limit=1)
+
+    assert [record.id for record in candidates] == [poor.id]

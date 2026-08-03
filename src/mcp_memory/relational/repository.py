@@ -478,6 +478,8 @@ class RelationalMemoryRepository:
         thin_max_chars: int = _DEFAULT_THIN_CANDIDATE_MAX_CHARS,
         low_support_max: int = _DEFAULT_LOW_SUPPORT_MAX,
         quality_signal: str | None = None,
+        retrieval_min_searches: int = 2,
+        retrieval_max_conversion_rate: float = 0.25,
         seed: int | str = 0,
     ) -> list[RelationalMemoryRecord]:
         """Return a bounded, globally scoped maintenance candidate frontier.
@@ -500,6 +502,7 @@ class RelationalMemoryRepository:
             "oversized-thin": "oversized/thin",
             "orphan-low-support": "orphan/low-support",
             "quality": "quality-signal",
+            "retrieval_quality": "retrieval-quality",
             "seeded_random": "seeded-random",
         }
         normalized_strategy = strategy_aliases.get(normalized_strategy, normalized_strategy)
@@ -509,6 +512,7 @@ class RelationalMemoryRepository:
             "oversized/thin",
             "orphan/low-support",
             "quality-signal",
+            "retrieval-quality",
             "seeded-random",
         }
         if normalized_strategy not in supported_strategies:
@@ -517,6 +521,8 @@ class RelationalMemoryRepository:
             return []
         if oversized_min_chars < 0 or thin_max_chars < 0 or low_support_max < 0:
             raise ValueError("candidate thresholds must be non-negative")
+        if retrieval_min_searches <= 0 or not 0 <= retrieval_max_conversion_rate <= 1:
+            raise ValueError("retrieval-quality thresholds are invalid")
 
         clauses = ["1 = 1"]
         params: list[object] = []
@@ -569,6 +575,17 @@ class RelationalMemoryRepository:
             clauses.append(quality_clause)
             params.extend(quality_params)
             order_by = "memories.updated_at ASC, memories.created_at ASC, memories.id ASC"
+        elif normalized_strategy == "retrieval-quality":
+            clauses.append(
+                "COALESCE(retrieval_stats.search_count, 0) >= ? AND "
+                "COALESCE(retrieval_stats.read_count, 0) * 1.0 / "
+                "retrieval_stats.search_count <= ?"
+            )
+            params.extend([retrieval_min_searches, retrieval_max_conversion_rate])
+            order_by = (
+                "COALESCE(retrieval_stats.search_count, 0) DESC, "
+                "COALESCE(retrieval_stats.read_count, 0) ASC, memories.updated_at ASC, memories.id ASC"
+            )
         else:
             conn = self._db.get_connection()
             conn.create_function("stable_seeded_random_key", 2, _stable_seeded_random_key, deterministic=True)
@@ -599,6 +616,14 @@ class RelationalMemoryRepository:
                 FROM links
                 GROUP BY target_id
             ) incoming_counts ON incoming_counts.memory_id = memories.id
+            LEFT JOIN (
+                SELECT memory_id,
+                       SUM(CASE WHEN event_kind = 'search' THEN 1 ELSE 0 END) AS search_count,
+                       SUM(CASE WHEN event_kind = 'read' THEN 1 ELSE 0 END) AS read_count
+                FROM memory_tool_events
+                WHERE memory_id IS NOT NULL
+                GROUP BY memory_id
+            ) retrieval_stats ON retrieval_stats.memory_id = memories.id
             WHERE
             """
             + " AND ".join(clauses)
@@ -695,6 +720,17 @@ class RelationalMemoryRepository:
             status=status,
             include_superseded=include_superseded,
             quality_signal=quality_signal,
+        )
+
+    def query_retrieval_quality_candidates(
+        self, *, limit: int = _DEFAULT_CANDIDATE_LIMIT, workspace_id: str | None = None,
+        status: str | None = None, include_superseded: bool = False,
+        min_searches: int = 2, max_conversion_rate: float = 0.25,
+    ) -> list[RelationalMemoryRecord]:
+        return self.query_maintenance_candidates(
+            "retrieval-quality", limit=limit, workspace_id=workspace_id, status=status,
+            include_superseded=include_superseded, retrieval_min_searches=min_searches,
+            retrieval_max_conversion_rate=max_conversion_rate,
         )
 
     def query_seeded_random_candidates(

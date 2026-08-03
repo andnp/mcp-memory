@@ -98,6 +98,7 @@ class _BackendRepository:
 def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> None:
     old_record = _record("old-global-record", updated_at="2020-01-01T00:00:00+00:00")
     repository = _BackendRepository({
+        "retrieval-quality": [],
         "cold-storage": [old_record],
         "never-surfaced": [],
         "oversized/thin": [],
@@ -121,6 +122,7 @@ def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> Non
         "oversized/thin",
         "orphan/low-support",
         "quality-signal",
+        "retrieval-quality",
         "seeded-random",
     }
     assert all("workspace_id" not in call for call in repository.calls)
@@ -257,8 +259,8 @@ def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions()
     assert direct.records[0].id == second.id
     assert direct.candidate_count == 1
     assert direct.candidate_count == len(direct.records)
-    assert {call["limit"] for call in repository.calls[:6]} == {2}
-    assert {call["limit"] for call in repository.calls[6:]} == {50}
+    assert {call["limit"] for call in repository.calls[:7]} == {2}
+    assert {call["limit"] for call in repository.calls[7:]} == {50}
 
 
 def test_legacy_task_record_handles_large_candidate_pool_without_oversized_records() -> None:
