@@ -321,39 +321,9 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     assert evidence[0].query_id == "query-1"
     assert evidence[0].before_ranked_memory_ids == [noise_id, memory_id]
     assert evidence[0].after_ranked_memory_ids == [memory_id]
+    assert evidence[0].payload_size_change is None
     assert search.calls == ["important"]
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count
-
-
-def test_snapshot_payload_size_matches_search_payload_shape() -> None:
-    from mcp_memory.core.curation_quality import _snapshot_payload_size
-
-    snapshot = {
-        "record": {
-            "id": str(uuid4()),
-            "title": "title",
-            "summary": "summary",
-            "content": "content",
-            "tags": ["tag"],
-            "metadata": {"internal": "details"},
-            "workspace_ids": ["workspace"],
-        },
-        "schema_version": 1,
-    }
-
-    assert _snapshot_payload_size(snapshot) == len(
-        json.dumps(
-            {
-                "title": "title",
-                "summary": "summary",
-                "content": "content",
-                "tags": ["tag"],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
 
 
 def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:

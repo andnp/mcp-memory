@@ -135,22 +135,11 @@ class CurationQualitySampler:
             limit=self._top_k,
         )
         after_results = tuple(
-            ReplayResult(
-                _context_memory_id(context),
-                payload_size=_context_payload_size(context),
-            )
+            ReplayResult(_context_memory_id(context))
             for context in after_contexts
         )
-        after_sizes = {result.memory_id: result.size() for result in after_results}
         before_results = tuple(
-            ReplayResult(
-                memory_id,
-                payload_size=self._historical_payload_size(
-                    receipt.mutation_event_id,
-                    memory_id,
-                    fallback_size=after_sizes.get(memory_id, 0),
-                ),
-            )
+            ReplayResult(memory_id)
             for memory_id in before_ids[: self._top_k]
         )
         report = evaluate_query_replay(
@@ -173,7 +162,7 @@ class CurationQualitySampler:
             ],
             retrieval_regression_count=report.retrieval_regression_count,
             zero_result_change=report.zero_result_change,
-            payload_size_change=report.payload_size_change,
+            payload_size_change=None,
             useful_work=report.useful_work_count > 0,
             **common,
         )
@@ -270,31 +259,6 @@ class CurationQualitySampler:
             [str(row[2]) for row in rows if row[2] is not None],
         )
 
-    def _historical_payload_size(
-        self,
-        event_id: UUID | None,
-        memory_id: str,
-        *,
-        fallback_size: int,
-    ) -> int:
-        if event_id is not None:
-            rows = _fetch_rows(
-                self._db_manager,
-                """
-                SELECT before_snapshot
-                FROM memory_record_revisions
-                WHERE event_id = ? AND memory_id = ?
-                ORDER BY id ASC
-                LIMIT 1
-                """,
-                (str(event_id), memory_id),
-            )
-            row = rows[0] if rows else None
-            if row is not None and row[0] is not None:
-                return _snapshot_payload_size(row[0])
-        return fallback_size
-
-
 def _fetch_rows(
     db_manager: Any,
     query: str,
@@ -328,35 +292,3 @@ def _timestamp(value: object) -> datetime | None:
 
 def _context_memory_id(context: Any) -> str:
     return str(context.record.id)
-
-
-def _context_payload_size(context: Any) -> int:
-    record = context.record
-    return _payload_size(
-        {
-            "title": record.title,
-            "summary": record.summary,
-            "content": record.content,
-            "tags": record.tags,
-        }
-    )
-
-
-def _snapshot_payload_size(value: object) -> int:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            return 0
-    if isinstance(value, Mapping):
-        record = value.get("record", value)
-        if isinstance(record, Mapping):
-            value = {
-                key: record.get(key)
-                for key in ("title", "summary", "content", "tags")
-            }
-    return _payload_size(value)
-
-
-def _payload_size(value: object) -> int:
-    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
