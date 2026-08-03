@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState, SQLiteCurationStore
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.curation_models import CampaignHypothesis, CampaignRetrievalProblem
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
+    curator_candidate_revision_token,
     retrieval_friction_flags,
     select_curator_seed_batch,
     select_curator_support_records,
 )
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.mutation_history import MutationActorKind
 from mcp_memory.relational.repository import RelationalMemoryRecord
 
 
@@ -264,6 +268,131 @@ def test_explicit_campaign_hypothesis_prioritizes_expected_and_query_hits() -> N
     )
 
     assert [record.id for record in batch.records] == [expected.id, query_hit.id]
+
+
+def test_explicit_goal_anchors_survive_suppression_into_planner_batch(db_manager) -> None:
+    expected_id = uuid4()
+    expected = _record(str(expected_id), updated_at="2020-01-01T00:00:00+00:00")
+    query_hit_id = uuid4()
+    query_hit = _record(str(query_hit_id), updated_at="2020-01-02T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "quality-signal": [],
+        "seeded-random": [],
+    })
+    repository.by_id.update({expected.id: expected, query_hit.id: query_hit})
+    now = datetime.now(UTC)
+    curation = SQLiteCurationStore(db_manager)
+    history = SimpleNamespace(
+        list_events=lambda *, memory_id, limit: [
+            SimpleNamespace(
+                created_at=now - timedelta(minutes=5),
+                actor_kind=MutationActorKind.USER,
+                family="curator",
+            )
+        ]
+    )
+
+    class RetrievalFacade:
+        def search_sync(self, query: str, **kwargs: object) -> Any:
+            assert query == "find the goal"
+            return SimpleNamespace(
+                results=[SimpleNamespace(record=SimpleNamespace(source_id=query_hit.id))]
+            )
+
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        memory_retrieval=RetrievalFacade(),
+        curation=curation,
+        mutation_history=history,
+        db_manager=None,
+        workspace_id=None,
+    )
+    curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=expected_id,
+            last_observed_revision_token=curator_candidate_revision_token(ctx, expected),
+            disposition=CandidateDisposition.COOLDOWN,
+            cooldown_until=now + timedelta(hours=1),
+        )
+    )
+
+    batch = acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id="goal-cooldown-task",
+            requested_strategy="cold-storage",
+            limit=2,
+            campaign_hypothesis=CampaignHypothesis(
+                query="find the goal",
+                retrieval_problem=CampaignRetrievalProblem.RETRIEVAL_QUALITY,
+                expected_memory_ids=[expected_id],
+            ),
+        ),
+    )
+
+    assert [record.id for record in batch.records] == [expected.id, query_hit.id]
+
+
+@pytest.mark.parametrize("suppression", ["cooldown", "recent-edit"])
+def test_legacy_candidates_remain_filtered_during_acquisition(db_manager, suppression: str) -> None:
+    candidate_id = uuid4()
+    candidate = _record(str(candidate_id), updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [candidate],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "quality-signal": [],
+        "seeded-random": [],
+    })
+    curation = SQLiteCurationStore(db_manager)
+    now = datetime.now(UTC)
+    history = None
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        memory_retrieval=None,
+        curation=curation,
+        mutation_history=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+    if suppression == "cooldown":
+        curation.put_candidate_state(
+            CurationCandidateState(
+                memory_id=candidate_id,
+                last_observed_revision_token=curator_candidate_revision_token(ctx, candidate),
+                disposition=CandidateDisposition.COOLDOWN,
+                cooldown_until=now + timedelta(hours=1),
+            )
+        )
+    else:
+        history = SimpleNamespace(
+            list_events=lambda *, memory_id, limit: [
+                SimpleNamespace(
+                    created_at=now - timedelta(minutes=5),
+                    actor_kind=MutationActorKind.USER,
+                    family="curator",
+                )
+            ]
+        )
+    ctx.mutation_history = history
+
+    batch = acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id=f"legacy-{suppression}-task",
+            requested_strategy="cold-storage",
+            limit=1,
+        ),
+    )
+
+    assert batch.records == []
 
 
 def test_legacy_campaign_hypothesis_keeps_heuristic_acquisition() -> None:

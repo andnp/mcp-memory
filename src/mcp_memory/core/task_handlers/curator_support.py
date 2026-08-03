@@ -526,6 +526,7 @@ def filter_curator_candidates(
     *,
     now: datetime | None = None,
     suppress_destructive_actions: bool = True,
+    preserve_memory_ids: set[str] | frozenset[str] = frozenset(),
 ) -> list[Any]:
     """Apply persisted no-op cooldown and edit stabilization to a candidate pool."""
     curation = getattr(ctx, "curation", None)
@@ -571,6 +572,9 @@ def filter_curator_candidates(
                     )
                 )
             state = None
+        if record.id in preserve_memory_ids:
+            eligible.append(record)
+            continue
         if state is not None and state.cooldown_until is not None and state.cooldown_until > current_time:
             continue
         if suppress_destructive_actions and _has_recent_stabilizing_edit(ctx, memory_id, current_time):
@@ -739,6 +743,7 @@ def _query_campaign_goal_candidates(
     if ctx.repository is None:
         return []
     candidate_by_id: dict[str, Any] = {}
+    anchor_ids = {str(memory_id) for memory_id in hypothesis.expected_memory_ids}
     expected_ids = [str(memory_id) for memory_id in hypothesis.expected_memory_ids]
     for memory_id in expected_ids:
         record = ctx.repository.get_memory(memory_id)
@@ -769,6 +774,7 @@ def _query_campaign_goal_candidates(
                 record = ctx.repository.get_memory(memory_id)
                 if record is not None and record.status == "active":
                     candidate_by_id[record.id] = record
+                    anchor_ids.add(record.id)
 
     anchors = list(candidate_by_id.values())
     adjacent_ids = _seed_adjacent_memory_ids(ctx, anchors)
@@ -795,7 +801,11 @@ def _query_campaign_goal_candidates(
     for record in support_candidates:
         candidate_by_id[record.id] = record
 
-    filtered = filter_curator_candidates(ctx, list(candidate_by_id.values()))
+    filtered = filter_curator_candidates(
+        ctx,
+        list(candidate_by_id.values()),
+        preserve_memory_ids=anchor_ids,
+    )
     by_id = {record.id: record for record in filtered}
     ordered: list[Any] = []
     for memory_id in expected_ids:
