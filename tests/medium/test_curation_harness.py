@@ -38,6 +38,7 @@ from mcp_memory.core.curation_models import (
     RewriteMemoryAction,
     SplitMemoryAction,
 )
+from mcp_memory.core.curation_quality import CurationQualityEvidence
 from mcp_memory.core.curation_planner import (
     CurationPlannerCancelledError,
     CurationPlannerProviderError,
@@ -397,6 +398,49 @@ def _harness(
         config=config,
         clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
     )
+
+
+def test_quality_override_requires_soft_rejection_only(db_manager) -> None:
+    seed = uuid4()
+    planner = _RequestBoundFakePlanner([FakePlannerScenario(plan=_plan(_frontier(seed), seed))])
+    cast(Any, planner).override_confidence = 0.95
+    cast(Any, planner).override_reason = "Measured utility remains positive."
+    harness = _harness(db_manager, planner)
+    receipt = CurationActionReceipt(
+        run_id=uuid4(),
+        action_id=uuid4(),
+        operation="normalize_memory",
+        affected_ids=[seed],
+        status=CurationReceiptState.VERIFIED,
+    )
+    evidence = CurationQualityEvidence(
+        run_id=receipt.run_id,
+        action_id=receipt.action_id,
+        operation=receipt.operation,
+        policy_version="1",
+        status="evaluated",
+        wave_status="rejected",
+        acceptance_met=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    override = harness._quality_override(
+        outcome=CurationRunOutcome.APPLIED,
+        receipts=(receipt,),
+        quality_evidence=(evidence,),
+    )
+
+    assert override is not None
+    assert override[0] == pytest.approx(0.95)
+    assert override[1] == "Measured utility remains positive."
+    assert override[2]["threshold"] == 0.90
+
+    blocked = harness._quality_override(
+        outcome=CurationRunOutcome.APPLIED,
+        receipts=(receipt,),
+        quality_evidence=(evidence.model_copy(update={"acceptance_met": False}),),
+    )
+    assert blocked is None
 
 
 @pytest.mark.asyncio

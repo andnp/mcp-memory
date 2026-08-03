@@ -178,6 +178,31 @@ async def test_session_planner_reuses_conversation_for_quality_feedback() -> Non
     assert "change strategy rather than repeat" in session.prompts[1]
 
 
+@pytest.mark.asyncio
+async def test_session_planner_records_final_override_signal() -> None:
+    seed_id = uuid4()
+    request = _request(seed_id)
+
+    class _Session:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            del prompt
+            return AgenticRunResult(
+                status="success",
+                parsed={
+                    "plan": _plan(request, seed_id).model_dump(mode="json"),
+                    "override_confidence": 0.95,
+                    "override_reason": "Measured utility remains positive.",
+                },
+            )
+
+    planner = SessionCurationPlanner(cast(Any, _Session()))
+    result = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
+
+    assert result.plan is not None
+    assert planner.override_confidence == pytest.approx(0.95)
+    assert planner.override_reason == "Measured utility remains positive."
+
+
 def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
     memory_id = uuid4()
     context = build_context_packet(
