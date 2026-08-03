@@ -174,6 +174,14 @@ async def test_default_campaign_uses_verified_executor_and_completes_claimed_wor
         assert result["execution_mode"] == "curation_verified_campaign"
         assert result["curation_outcome"] == "applied"
         assert result["mutations"] == 1
+        assert result["curation_investigation"] == {
+            "status": "skipped",
+            "rounds": 0,
+            "tool_calls": 0,
+            "record_ids": [],
+            "record_count": 0,
+            "reason": "agentic_provider_unavailable",
+        }
         assert refreshed is not None and refreshed.summary == "A durable authentication conclusion."
         assert receipt.status.value == "verified"
         assert receipt.mutation_event_id is not None
