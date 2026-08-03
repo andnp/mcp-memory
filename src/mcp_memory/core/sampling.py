@@ -217,11 +217,20 @@ class RouletteProvider(Generic[T]):
                 and untested_strategies
                 and max(priority_scores.values()) < SELECTION_EXPLORATION_NEUTRAL_SCORE
             ):
-                strategy_used = untested_strategies[self._rng.randrange(len(untested_strategies))]
+                quality_signal_available = (
+                    QUALITY_SIGNAL_STRATEGY in untested_strategies
+                    and any(self._quality_signal_count(item) > 0 for item in self._candidates)
+                )
+                strategy_used = (
+                    QUALITY_SIGNAL_STRATEGY
+                    if quality_signal_available
+                    else untested_strategies[self._rng.randrange(len(untested_strategies))]
+                )
+                exploration_reason = "bounded_quality_signal" if quality_signal_available else "bounded_untested"
                 return (
                     strategy_used,
                     "priority_scores_with_exploration",
-                    f"selected={strategy_used}; priority_score={selection_scores[strategy_used]:.4f}; exploration=bounded_untested",
+                    f"selected={strategy_used}; priority_score={selection_scores[strategy_used]:.4f}; exploration={exploration_reason}",
                     {strategy: round(selection_scores[strategy], 4) for strategy in allowed_strategies},
                     None,
                 )
