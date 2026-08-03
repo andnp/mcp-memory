@@ -844,9 +844,6 @@ class RuntimeTaskWorker:
         curator_startup_started_at = self._curator_provider_startup_started_at(task, attempt)
         if self._curator_provider_startup_is_active(task, attempt, current_time):
             return None
-        if curator_startup_started_at is not None and attempt is None:
-            # Candidate acquisition and reconciliation happen before provider admission.
-            return None
         is_stale = max(current_time - recent_activity_at, 0.0) >= self._abandoned_task_stale_after_seconds
         if subprocess_pid is not None:
             if task_queue_module._is_process_alive(subprocess_pid):
@@ -864,7 +861,7 @@ class RuntimeTaskWorker:
             return _RunningTaskRecoveryPlan.finalize_cancellation(recovered_at=current_time)
         if not is_stale:
             return None
-        if curator_startup_started_at is not None:
+        if curator_startup_started_at is not None and attempt is not None:
             return _RunningTaskRecoveryPlan.retry_curator_provider_startup(
                 recovered_at=current_time,
                 retry_delay_seconds=self._retry_delay_seconds,

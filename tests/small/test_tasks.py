@@ -2272,13 +2272,48 @@ async def test_runtime_task_worker_keeps_curator_preparation_alive_without_provi
         abandoned_task_stale_after_seconds=10.0,
         curator_provider_startup_grace_seconds=20.0,
     )
+    worker._owned_task_attempts.add((task.id, claimed.execution_epoch))  # noqa: SLF001
 
-    await worker._run_reconciliation_pass(now=130.0, reason="periodic")  # noqa: SLF001
+    await worker._run_reconciliation_pass(now=130.0, reason="worker_loop", include_owned_task=True)  # noqa: SLF001
 
     running = queue.get_task(task.id)
     assert running.status == "running"
     assert running.active_request_id == "curator-provider-preflight:1:100.0"
     assert queue.list_task_runs(task_id=task.id) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_recovers_abandoned_curator_preparation_without_provider_attempt(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="abandoned-curator-preparation-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=None,
+        request_id="curator-provider-preflight:1:100.0",
+        updated_at=100.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={CURATOR_TASK_NAME: lambda context, queued_task: None},
+        abandoned_task_stale_after_seconds=10.0,
+        curator_provider_startup_grace_seconds=20.0,
+    )
+
+    await worker._run_reconciliation_pass(now=130.0, reason="startup")  # noqa: SLF001
+
+    recovered = queue.get_task(task.id)
+    assert recovered.status == "pending"
+    assert recovered.last_error == "Task was abandoned without an active provider subprocess"
 
 
 @pytest.mark.asyncio
