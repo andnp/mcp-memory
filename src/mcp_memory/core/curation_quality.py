@@ -28,7 +28,6 @@ from mcp_memory.core.ports.curation import (
     CurationRun,
 )
 
-
 class CurationQualityEvidence(CurationModel):
     run_id: UUID
     action_id: UUID
@@ -263,7 +262,9 @@ class CurationQualitySampler:
             f"""
             SELECT invocation_id, query_text, memory_id, result_rank, created_at
             FROM memory_tool_events
-            WHERE event_kind = 'search' AND memory_id IN ({placeholders})
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND memory_id IN ({placeholders})
             ORDER BY created_at DESC, id DESC
             LIMIT 1000
             """,
@@ -289,7 +290,9 @@ class CurationQualitySampler:
             """
             SELECT invocation_id, query_text, memory_id, result_rank
             FROM memory_tool_events
-            WHERE event_kind = 'search' AND invocation_id = ?
+            WHERE event_kind = 'search'
+              AND caller_kind IN ('external', 'operator', 'user')
+              AND invocation_id = ?
             ORDER BY result_rank ASC
             LIMIT 50
             """,

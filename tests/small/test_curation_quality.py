@@ -196,6 +196,60 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert search.calls in (None, [])
 
 
+def test_quality_sampler_ignores_maintenance_searches(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memories (
+            id, title, content, type, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (str(memory_id), "title", "content", "observation", "active", now.isoformat(), now.isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "maintenance-query",
+            "internal",
+            "search",
+            str(memory_id),
+            "maintenance-only query",
+            1,
+            1,
+            (now - timedelta(minutes=1)).isoformat(),
+        ),
+    )
+    connection.commit()
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[
+            _receipt(
+                run.run_id,
+                event_id=uuid4(),
+                applied_at=now,
+            ).model_copy(update={"affected_ids": [memory_id]}),
+        ],
+    )
+
+    assert evidence[0].status == "no_query"
+
+
 def test_quality_sampler_marks_link_work_structural_only(db_manager) -> None:
     run = _run()
     SQLiteCurationStore(db_manager).create_run(run)
@@ -267,7 +321,7 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
         [
             (
                 "query-1",
-                "maintenance",
+                "external",
                 "search",
                 str(noise_id),
                 "important",
@@ -280,7 +334,7 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
         + [
             (
                 "query-1",
-                "maintenance",
+                "external",
                 "search",
                 str(memory_id),
                 "important",
@@ -383,7 +437,7 @@ def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
             result_count, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ("query-regression", "maintenance", "search", str(memory_id), "important", 1, 1, (now - timedelta(minutes=1)).isoformat()),
+        ("query-regression", "external", "search", str(memory_id), "important", 1, 1, (now - timedelta(minutes=1)).isoformat()),
     )
     connection.execute(
         """
