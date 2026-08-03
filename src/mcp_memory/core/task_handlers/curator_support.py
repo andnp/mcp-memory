@@ -654,7 +654,6 @@ def _query_curator_backend_candidates(
         expand_for_exclusions=expand_for_exclusions,
     )
     candidates_by_id: dict[str, Any] = {}
-    seeded_candidates: list[Any] = []
     for strategy in _CURATOR_BACKEND_STRATEGIES:
         records = cast(
             list[Any],
@@ -666,8 +665,6 @@ def _query_curator_backend_candidates(
                 seed=_sampling_task_id(task),
             ),
         )
-        if strategy == "seeded-random":
-            seeded_candidates = list(records)
         for record in records:
             candidates_by_id[record.id] = record
     list_candidate_states = getattr(getattr(ctx, "curation", None), "list_candidate_states", None)
@@ -683,32 +680,6 @@ def _query_curator_backend_candidates(
             record = ctx.repository.get_memory(str(state.memory_id))
             if record is not None and record.status == "active":
                 candidates_by_id[record.id] = record
-
-    retrieval = getattr(ctx, "memory_retrieval", None)
-    if retrieval is None and ctx.relational_search is not None:
-        retrieval = build_memory_retrieval_facade(
-            ctx.repository,
-            config=getattr(ctx, "config", None),
-            vector_store=getattr(ctx, "vector_store", None),
-            embedder=getattr(ctx, "embedder", None),
-            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
-            native_search=ctx.relational_search,
-        )
-    if retrieval is not None:
-        for anchor in seeded_candidates[: min(3, query_limit)]:
-            outcome = retrieval.search_sync(
-                anchor.content,
-                limit=query_limit,
-                workspace_id=None,
-                status="active",
-                include_superseded=False,
-            )
-            for result in outcome.results:
-                memory_id = getattr(result.record, "source_id", None)
-                if isinstance(memory_id, str):
-                    record = ctx.repository.get_memory(memory_id)
-                    if record is not None:
-                        candidates_by_id[record.id] = record
 
     return filter_curator_candidates(ctx, list(candidates_by_id.values()))
 

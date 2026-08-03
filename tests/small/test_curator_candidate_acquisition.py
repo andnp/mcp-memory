@@ -184,9 +184,8 @@ def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:
     assert {record.workspace_ids[0] for record in support} == {"workspace-other"}
 
 
-def test_semantic_candidates_use_global_search_seam() -> None:
+def test_semantic_candidates_do_not_prefetch_remote_search() -> None:
     anchor = _record("semantic-anchor", updated_at="2026-01-01T00:00:00+00:00")
-    neighbor = _record("semantic-neighbor", updated_at="2020-01-01T00:00:00+00:00")
     repository = _BackendRepository({
         "cold-storage": [],
         "never-surfaced": [],
@@ -195,16 +194,12 @@ def test_semantic_candidates_use_global_search_seam() -> None:
         "quality-signal": [],
         "seeded-random": [anchor],
     })
-    repository.by_id[neighbor.id] = neighbor
     search_calls: list[dict[str, object]] = []
 
     class RetrievalFacade:
         def search_sync(self, query: str, **kwargs: object) -> Any:
             search_calls.append({"query": query, **kwargs})
-            result = SimpleNamespace(
-                record=SimpleNamespace(source_id=neighbor.id),
-            )
-            return SimpleNamespace(results=[result])
+            return SimpleNamespace(results=[])
 
     ctx: Any = SimpleNamespace(
         repository=repository,
@@ -216,10 +211,8 @@ def test_semantic_candidates_use_global_search_seam() -> None:
 
     batch = select_curator_seed_batch(ctx, _task("semantic"), seed_limit=2)
 
-    assert {record.id for record in batch.records} == {anchor.id, neighbor.id}
-    assert search_calls
-    assert all(call["workspace_id"] is None for call in search_calls)
-    assert all(call["status"] == "active" for call in search_calls)
+    assert [record.id for record in batch.records] == [anchor.id]
+    assert search_calls == []
 
 
 def test_explicit_campaign_hypothesis_prioritizes_expected_and_query_hits() -> None:
