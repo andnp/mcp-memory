@@ -37,7 +37,7 @@ from mcp_memory.curation_quality_store import (
 )
 
 
-CURATOR_MAX_ITERATIONS = 3
+CURATOR_MAX_FEEDBACK_ITERATIONS = 3
 
 
 async def run_curator_verified_campaign(
@@ -180,17 +180,19 @@ async def run_curator_verified_campaign(
     )
     try:
         result = await harness.run(frontier)
-        correction_turns = 1
+        correction_turns = 0
         termination_reason = "initial_result"
         while (
             session is not None
-            and result.result.outcome is CurationRunOutcome.QUALITY_REJECTED
-            and correction_turns < CURATOR_MAX_ITERATIONS
+            and correction_turns < CURATOR_MAX_FEEDBACK_ITERATIONS
         ):
             cumulative_proposed += _proposed_action_count(result)
             cumulative_accepted += int(
                 getattr(result.result, "verified_action_count", len(result.result.receipts))
             )
+            termination_reason = _feedback_termination_reason(result)
+            if termination_reason is not None:
+                break
             remaining_budget = _remaining_mutation_budget(
                 configured_budget,
                 cumulative_proposed=cumulative_proposed,
@@ -205,17 +207,51 @@ async def run_curator_verified_campaign(
                 break
             cast(Any, planner).set_quality_feedback(feedback)
             harness._config.mutation_budget = remaining_budget
+            investigation = await run_curator_investigation(
+                investigator,
+                seed_records=seed_records,
+                task_id=task.id,
+                limits=investigation_limits,
+                session=session,
+            )
+            newly_read_records, newly_read_context = _investigated_reads(
+                ctx, investigation, seed_records
+            )
+            exploratory_records = list(
+                {
+                    record.id: record
+                    for record in [*exploratory_records, *newly_read_records]
+                }.values()
+            )
+            exploratory_reads = tuple(
+                {
+                    str(read.record["id"]): read
+                    for read in [*exploratory_reads, *newly_read_context]
+                }.values()
+            )
             refreshed = _refresh_records(ctx, [*seed_records, *exploratory_records])
             if refreshed:
                 frontier = _frontier_with_refreshed_records(
                     frontier,
                     refreshed,
                     sampled_count=len(sampled_records),
+                    exploratory_reads=exploratory_reads,
                 )
+            else:
+                frontier = _frontier_with_refreshed_records(
+                    frontier,
+                    [*seed_records, *exploratory_records],
+                    sampled_count=len(sampled_records),
+                    exploratory_reads=exploratory_reads,
+                )
+            for record in newly_read_records:
+                memory_types[UUID(record.id)] = record.type
             result = await harness.run(frontier)
             correction_turns += 1
-        if result.result.outcome is CurationRunOutcome.QUALITY_REJECTED and termination_reason == "initial_result":
-            termination_reason = "iteration_limit"
+        if correction_turns == CURATOR_MAX_FEEDBACK_ITERATIONS:
+            termination_reason = (
+                _feedback_termination_reason(result) or "iteration_limit"
+            )
     except Exception:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -300,6 +336,26 @@ def _quality_feedback_payload(result: Any) -> dict[str, object]:
     }
 
 
+def _feedback_termination_reason(result: Any) -> str | None:
+    outcome = str(getattr(result.result, "outcome", ""))
+    if outcome in {"provider_failed", "budget_exhausted"}:
+        return outcome
+    rejection_codes = set(getattr(result.result, "rejection_codes", ()))
+    if rejection_codes.intersection(
+        {"verification_failed", "protected_target", "policy_denied", "disclosure_denied"}
+    ):
+        return "safety_termination"
+    evidence = getattr(result.result, "quality_evidence", ())
+    if outcome in {"no_op", "quality_override"}:
+        return "no_useful_work" if outcome == "no_op" else "converged"
+    if evidence and all(
+        getattr(item, "wave_status", None) == "accepted"
+        for item in evidence
+    ):
+        return "converged"
+    return None
+
+
 def _proposed_action_count(result: Any) -> int:
     plan = getattr(getattr(result, "validation", None), "plan", None)
     return 0 if plan is None else len(plan.actions)
@@ -334,6 +390,7 @@ def _frontier_with_refreshed_records(
     records: list[Any],
     *,
     sampled_count: int,
+    exploratory_reads: tuple[AcceptedMaintenanceRead, ...] | None = None,
 ) -> CurationFrontier:
     sampled = records[:sampled_count]
     support = records[sampled_count:]
@@ -342,7 +399,11 @@ def _frontier_with_refreshed_records(
         "strategy": frontier.strategy,
         "seed_reads": tuple(_record_read(record) for record in sampled),
         "support_reads": tuple(_record_read(record) for record in support),
-        "exploratory_reads": frontier.exploratory_reads,
+        "exploratory_reads": (
+            frontier.exploratory_reads
+            if exploratory_reads is None
+            else exploratory_reads
+        ),
         "task_id": frontier.task_id,
         "campaign_hypothesis": frontier.campaign_hypothesis,
     }
