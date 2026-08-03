@@ -227,6 +227,19 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
     mutations = _coerce_int(result.get("mutations"))
     if mutations is None:
         mutations = _sum_mutation_outcome(mutation_outcome)
+    quality_evidence = _curation_campaign_value(result, "quality_evidence")
+    quality_records = quality_evidence if isinstance(quality_evidence, list) else []
+    useful_work_count = sum(1 for item in quality_records if isinstance(item, Mapping) and item.get("useful_work") is True)
+    retrieval_regression_count = sum(
+        max(_coerce_int(item.get("retrieval_regression_count")) or 0, 0)
+        for item in quality_records
+        if isinstance(item, Mapping)
+    )
+    zero_result_change = sum(
+        _coerce_int(item.get("zero_result_change")) or 0
+        for item in quality_records
+        if isinstance(item, Mapping)
+    )
     return RunResultMetadataPayload(
         requested_strategy=_coerce_str(result.get("requested_strategy")),
         strategy_used=_coerce_str(result.get("strategy_used")),
@@ -258,6 +271,10 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
         work_items_per_premium_execution=_ratio_or_none(claimed_work_item_count, provider_calls_used),
         mutations_per_premium_execution=_ratio_or_none(mutations, provider_calls_used),
         tool_calls_per_premium_execution=_ratio_or_none(tool_calls_executed, provider_calls_used),
+        quality_evidence_runs=len(quality_records),
+        useful_work_count=useful_work_count,
+        retrieval_regression_count=retrieval_regression_count,
+        zero_result_change=zero_result_change,
     )
 
 

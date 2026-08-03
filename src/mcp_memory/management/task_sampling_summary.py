@@ -18,6 +18,8 @@ UTILITY_PRIOR_MUTATIONS_PER_RUN_WEIGHT = 0.30
 UTILITY_PRIOR_MUTATIONS_PER_TOOL_CALL_WEIGHT = 0.15
 UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT = 0.20
 UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE = 2.0
+UTILITY_PRIOR_QUALITY_WEIGHT = 0.85
+UTILITY_PRIOR_QUALITY_REGRESSION_SCALE = 2.0
 UNKNOWN_SELECTOR_MODE = "unspecified"
 UNKNOWN_SELECTOR_STRATEGY = "unknown"
 
@@ -42,6 +44,10 @@ class _UtilityAccumulator:
     candidate_count_total: int = 0
     candidate_count_observations: int = 0
     no_op_runs: int = 0
+    quality_evidence_runs: int = 0
+    useful_work_count: int = 0
+    retrieval_regression_count: int = 0
+    zero_result_change: int = 0
 
 
 @dataclass
@@ -97,6 +103,10 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
             if metadata.candidate_count is not None:
                 utility_row.candidate_count_total += metadata.candidate_count
                 utility_row.candidate_count_observations += 1
+            utility_row.quality_evidence_runs += metadata.quality_evidence_runs
+            utility_row.useful_work_count += metadata.useful_work_count
+            utility_row.retrieval_regression_count += metadata.retrieval_regression_count
+            utility_row.zero_result_change += metadata.zero_result_change
 
         if _has_selector_behavior_signal(metadata):
             selector_mode = metadata.strategy_selection_mode or UNKNOWN_SELECTOR_MODE
@@ -177,6 +187,10 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 mutations_per_tool_call=_safe_ratio(row.total_mutations, row.total_tool_calls),
                 no_op_runs=row.no_op_runs,
                 no_op_rate=_safe_ratio(row.no_op_runs, row.runs) or 0.0,
+                quality_evidence_runs=row.quality_evidence_runs,
+                useful_work_count=row.useful_work_count,
+                retrieval_regression_count=row.retrieval_regression_count,
+                zero_result_change=row.zero_result_change,
             )
             for row in sorted(utility_rows.values(), key=lambda item: (item.task_name, -item.runs, item.strategy_used))
         ],
@@ -247,6 +261,12 @@ def selection_utility_prior_scores(
 
 
 def _utility_prior_score(row: SelectionStrategyUtilityPayload) -> float:
+    if row.quality_evidence_runs > 0:
+        useful_rate = _clamp01(row.useful_work_count / row.quality_evidence_runs)
+        regression_penalty = _clamp01(row.retrieval_regression_count / row.quality_evidence_runs / UTILITY_PRIOR_QUALITY_REGRESSION_SCALE)
+        zero_result_penalty = _clamp01(max(row.zero_result_change, 0) / row.quality_evidence_runs / UTILITY_PRIOR_QUALITY_REGRESSION_SCALE)
+        quality_score = _clamp01(useful_rate - regression_penalty - zero_result_penalty)
+        return round(_clamp01(UTILITY_PRIOR_QUALITY_WEIGHT * quality_score - UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT * _clamp01(row.no_op_rate)), 4)
     mutation_rate = _clamp01(row.mutation_rate)
     mutations_per_run = _clamp01(row.mutations_per_run / UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE)
     mutations_per_tool_call = _clamp01(row.mutations_per_tool_call or 0.0)

@@ -600,6 +600,56 @@ def test_selection_strategy_utility_priors_include_curator_strategies_with_enoug
     assert 0.0 < priors["cold-storage"] <= 1.0
 
 
+def test_run_metadata_extracts_persisted_curator_quality_evidence() -> None:
+    metadata = extract_run_result_metadata(
+        {
+            "strategy_used": "semantic",
+            "curation_campaign_result": {
+                "quality_evidence": [
+                    {"useful_work": True, "retrieval_regression_count": 0, "zero_result_change": -1},
+                    {"useful_work": False, "retrieval_regression_count": 1, "zero_result_change": 0},
+                ]
+            },
+        }
+    )
+
+    assert metadata.quality_evidence_runs == 2
+    assert metadata.useful_work_count == 1
+    assert metadata.retrieval_regression_count == 1
+    assert metadata.zero_result_change == -1
+
+
+def test_quality_evidence_overrides_mutation_volume_in_curator_priors() -> None:
+    runs = []
+    for strategy, useful, regressions in (("semantic", True, 0), ("anomaly", False, 1)):
+        for index in range(3):
+            runs.append(
+                AgentRunHistoryPayload(
+                    task_id=f"{strategy}-{index}",
+                    task_name="memory-curator",
+                    status="completed",
+                    started_at=float(index),
+                    completed_at=float(index + 1),
+                    duration_seconds=1.0,
+                    result_metadata=RunResultMetadataPayload(
+                        strategy_used=strategy,
+                        mutations=5 if strategy == "anomaly" else 1,
+                        quality_evidence_runs=1,
+                        useful_work_count=int(useful),
+                        retrieval_regression_count=regressions,
+                    ),
+                )
+            )
+
+    priors = build_selection_strategy_utility_priors(
+        runs,
+        task_name="memory-curator",
+        allowed_strategies=("semantic", "anomaly"),
+    )
+
+    assert priors["semantic"] > priors["anomaly"]
+
+
 def test_selection_strategy_utility_priors_include_deduplicator_strategies_with_enough_runs() -> None:
     priors = build_selection_strategy_utility_priors(
         [

@@ -373,6 +373,10 @@ class RunResultMetadataPayload(BaseModel):
     work_items_per_premium_execution: float | None = None
     mutations_per_premium_execution: float | None = None
     tool_calls_per_premium_execution: float | None = None
+    quality_evidence_runs: int = 0
+    useful_work_count: int = 0
+    retrieval_regression_count: int = 0
+    zero_result_change: int = 0
 
 
 class IngestEntryDispositionPayload(BaseModel):
@@ -471,6 +475,10 @@ class SelectionStrategyUtilityPayload(BaseModel):
     mutations_per_tool_call: float | None = None
     no_op_runs: int = 0
     no_op_rate: float = 0.0
+    quality_evidence_runs: int = 0
+    useful_work_count: int = 0
+    retrieval_regression_count: int = 0
+    zero_result_change: int = 0
 
 
 class SelectorBehaviorSummaryPayload(BaseModel):
