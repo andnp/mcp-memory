@@ -134,6 +134,14 @@ class CurationQualitySampler:
         )
         for memory_id in self._intended_memory_ids(receipt):
             previous = candidate_repository.get_candidate_state(memory_id)
+            coverage_evidence = (
+                {} if previous is None else dict(previous.coverage_evidence_json)
+            )
+            coverage_evidence["quality_regression"] = {
+                "reason": reason,
+                "retrieval_regression_count": evidence.retrieval_regression_count or 0,
+                "zero_result_change": evidence.zero_result_change or 0,
+            }
             candidate_repository.put_candidate_state(
                 CurationCandidateState(
                     memory_id=memory_id,
@@ -148,6 +156,19 @@ class CurationQualitySampler:
                     last_run_id=run.run_id,
                     escalation_count=(0 if previous is None else previous.escalation_count) + 1,
                     last_escalated_strategy=run.selector_strategy,
+                    last_considered_at=(
+                        None if previous is None else previous.last_considered_at
+                    ),
+                    last_considered_strategy=(
+                        None if previous is None else previous.last_considered_strategy
+                    ),
+                    last_mutation_family=(
+                        None if previous is None else previous.last_mutation_family
+                    ),
+                    last_mutated_at=(
+                        None if previous is None else previous.last_mutated_at
+                    ),
+                    coverage_evidence_json=coverage_evidence,
                 )
             )
 

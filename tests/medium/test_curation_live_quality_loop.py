@@ -600,8 +600,11 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
         valid_state = runtime.curation.get_candidate_state(UUID(valid.id))
         source_state = runtime.curation.get_candidate_state(UUID(source.id))
         target_state = runtime.curation.get_candidate_state(UUID(target.id))
-        assert valid_state is not None and valid_state.disposition.value == "actioned"
-        assert valid_state.last_disposition_reason == "verified_receipt"
+        assert valid_state is not None and valid_state.disposition.value == "escalated"
+        assert valid_state.last_disposition_reason == "retrieval_regression"
+        assert valid_state.last_considered_strategy == "quality-signal"
+        assert valid_state.coverage_evidence_json["reason"] == "verified_receipt"
+        assert valid_state.coverage_evidence_json["quality_regression"]["reason"] == "retrieval_regression"
         for state in (source_state, target_state):
             assert state is not None
             assert state.disposition.value == "escalated"
