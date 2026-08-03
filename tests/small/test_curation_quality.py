@@ -316,6 +316,140 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert search.calls in (None, [])
 
 
+def test_quality_sampler_accepts_content_improvement_without_search_query(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_id = uuid4()
+    event_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memory_mutation_events (id, operation, actor_kind, status, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (str(event_id), "rewrite_memory", "curator", "applied", now.isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_record_revisions (
+            event_id, memory_id, role, before_exists, before_snapshot,
+            after_exists, after_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(event_id),
+            str(memory_id),
+            "target",
+            1,
+            json.dumps(
+                {
+                    "record": {
+                        "title": "Auth",
+                        "summary": "Added auth.",
+                        "content": "Short note.",
+                    }
+                }
+            ),
+            1,
+            json.dumps(
+                {
+                    "record": {
+                        "title": "JWT client authentication requires coverage",
+                        "summary": "JWT client authentication requires coverage in the API test suite.",
+                        "content": "JWT coverage is required in src/auth.py; error ENG-741 confirmed the missing path.",
+                    }
+                }
+            ),
+        ),
+    )
+    connection.commit()
+    receipt = _receipt(
+        run.run_id,
+        event_id=event_id,
+        applied_at=now,
+    ).model_copy(update={"affected_ids": [memory_id]})
+    evidence = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    ).evaluate(run=run, receipts=[receipt])
+
+    assert evidence[0].status == "content_evaluated"
+    assert evidence[0].content_quality_improved is True
+    assert (evidence[0].content_quality_delta or 0.0) > 0
+    assert evidence[0].useful_work is True
+    assert evidence[0].wave_status == "accepted"
+    assert evidence[0].productive_mutation_count == 1
+
+
+def test_quality_sampler_rejects_content_regression_without_search_query(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_id = uuid4()
+    event_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memory_mutation_events (id, operation, actor_kind, status, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (str(event_id), "rewrite_memory", "curator", "applied", now.isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_record_revisions (
+            event_id, memory_id, role, before_exists, before_snapshot,
+            after_exists, after_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(event_id),
+            str(memory_id),
+            "target",
+            1,
+            json.dumps(
+                {
+                    "record": {
+                        "title": "JWT client authentication requires coverage",
+                        "summary": "JWT client authentication requires coverage in the API test suite.",
+                        "content": "JWT coverage is required in src/auth.py; error ENG-741 confirmed the missing path.",
+                    }
+                }
+            ),
+            1,
+            json.dumps(
+                {
+                    "record": {
+                        "title": "Auth",
+                        "summary": "Added auth.",
+                        "content": "Short note.",
+                    }
+                }
+            ),
+        ),
+    )
+    connection.commit()
+    receipt = _receipt(
+        run.run_id,
+        event_id=event_id,
+        applied_at=now,
+    ).model_copy(update={"affected_ids": [memory_id]})
+    evidence = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    ).evaluate(run=run, receipts=[receipt])
+
+    assert evidence[0].content_quality_improved is False
+    assert evidence[0].useful_work is False
+    assert evidence[0].wave_status == "rejected"
+    assert evidence[0].productive_mutation_count == 0
+
+
 def test_quality_sampler_accepts_coherent_multi_action_wave(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)

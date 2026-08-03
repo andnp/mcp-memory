@@ -175,7 +175,7 @@ class CurationQualitySampler:
             item.acceptance_met is True
             or bool(item.useful_work)
             or item.content_quality_improved is True
-            for item in evaluated
+            for item in raw
         )
         content_evaluated = any(
             item.content_quality_improved is not None for item in raw
