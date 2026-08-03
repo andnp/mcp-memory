@@ -194,16 +194,20 @@ class CurationQualitySampler:
         aggregate_retrieval_utility = sum(
             item.retrieval_utility_delta or 0.0 for item in evaluated
         )
-        content_gain = any(
-            item.content_quality_improved is True or item.useful_work is True
+        aggregate_content_quality = sum(
+            item.content_quality_delta or 0.0
             for item in raw
+            if item.content_quality_delta is not None
+        )
+        aggregate_quality_utility = (
+            aggregate_retrieval_utility + aggregate_content_quality
         )
         wave_acceptance = bool(
             (evaluated or content_evaluated)
             and complete_receipts
             and (
                 (
-                    aggregate_retrieval_utility > 0.0 or content_gain
+                    aggregate_quality_utility > 0.0
                 )
                 if explicit is None
                 else (

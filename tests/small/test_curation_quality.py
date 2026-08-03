@@ -563,6 +563,66 @@ def test_quality_sampler_accepts_net_positive_heuristic_wave_with_local_loss(db_
     assert {item.productive_mutation_count for item in evidence} == {2}
 
 
+def test_quality_sampler_rejects_net_negative_wave_despite_local_content_gain(db_manager) -> None:
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+    run = _run()
+    receipts = [
+        _receipt(run.run_id, event_id=uuid4()),
+        _receipt(run.run_id, event_id=uuid4()),
+        _receipt(run.run_id, event_id=uuid4()),
+    ]
+    raw = [
+        CurationQualityEvidence(
+            run_id=run.run_id,
+            action_id=receipts[0].action_id,
+            operation="rewrite_memory",
+            policy_version="1",
+            status="evaluated",
+            query_id="q1",
+            retrieval_utility_delta=-0.3,
+            content_quality_delta=-0.25,
+            retrieval_regression_count=1,
+            created_at=datetime.now(UTC),
+        ),
+        CurationQualityEvidence(
+            run_id=run.run_id,
+            action_id=receipts[1].action_id,
+            operation="rewrite_memory",
+            policy_version="1",
+            status="evaluated",
+            query_id="q2",
+            retrieval_utility_delta=-0.4,
+            content_quality_delta=0.375,
+            useful_work=True,
+            retrieval_regression_count=1,
+            created_at=datetime.now(UTC),
+        ),
+        CurationQualityEvidence(
+            run_id=run.run_id,
+            action_id=receipts[2].action_id,
+            operation="normalize_memory",
+            policy_version="1",
+            status="content_evaluated",
+            content_quality_delta=0.0,
+            created_at=datetime.now(UTC),
+        ),
+    ]
+    sampler._evaluate_action = cast(
+        Any,
+        lambda run, receipt, campaign_hypothesis: raw[receipts.index(receipt)],
+    )
+
+    evidence = sampler._evaluate_wave(run, receipts, None, wave_id=uuid4())
+
+    assert {item.wave_status for item in evidence} == {"rejected"}
+    assert {item.productive_mutation_count for item in evidence} == {0}
+
+
 def test_quality_sampler_keeps_explicit_target_loss_strict(db_manager) -> None:
     sampler = CurationQualitySampler(
         db_manager=db_manager,
