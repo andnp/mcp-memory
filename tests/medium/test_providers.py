@@ -149,6 +149,24 @@ async def test_copilot_sdk_agentic_provider_forwards_native_tools(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_copilot_sdk_agentic_session_accepts_non_json_native_tool_completion(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content="Plan submitted.", message_id="m-tool"))])
+    )
+    _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKAgenticProvider(max_retries=0)
+    agent_session = await provider.open_agent_session(tools=[object()])
+    try:
+        result = await agent_session.run_agent("submit the plan")
+    finally:
+        await agent_session.close()
+
+    assert result.status == "success"
+    assert result.parsed == {}
+
+
+@pytest.mark.asyncio
 async def test_copilot_sdk_agentic_provider_keeps_session_for_multiple_turns(monkeypatch) -> None:
     session = FakeCopilotSession(
         events=deque(

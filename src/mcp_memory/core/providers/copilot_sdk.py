@@ -282,7 +282,13 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
             }
         }
 
-    async def _send_session_with_heartbeat(self, session: Any, prompt: str) -> AIResponse:
+    async def _send_session_with_heartbeat(
+        self,
+        session: Any,
+        prompt: str,
+        *,
+        allow_non_json: bool = False,
+    ) -> AIResponse:
         started_at = time.time()
         self._notify(
             ProviderAttemptStartedEvent(
@@ -306,7 +312,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                         asyncio.shield(operation_task),
                         timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
                     )
-                    response = _to_ai_response(event)
+                    response = _to_ai_response(event, allow_non_json=allow_non_json)
                     self._finish(
                         attempt=1,
                         prompt=prompt,
@@ -317,7 +323,10 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                     return response
                 except TimeoutError:
                     if operation_task.done():
-                        response = _to_ai_response(operation_task.result())
+                        response = _to_ai_response(
+                            operation_task.result(),
+                            allow_non_json=allow_non_json,
+                        )
                         self._finish(
                             attempt=1,
                             prompt=prompt,
@@ -383,20 +392,32 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
         except BaseException:
             await client.__aexit__(None, None, None)
             raise
-        return _CopilotSDKAgenticSession(self, client, session)
+        return _CopilotSDKAgenticSession(self, client, session, allow_non_json=bool(tools))
 
 
 class _CopilotSDKAgenticSession:
-    def __init__(self, provider: CopilotSDKAgenticProvider, client: Any, session: Any) -> None:
+    def __init__(
+        self,
+        provider: CopilotSDKAgenticProvider,
+        client: Any,
+        session: Any,
+        *,
+        allow_non_json: bool,
+    ) -> None:
         self._provider = provider
         self._client = client
         self._session = session
+        self._allow_non_json = allow_non_json
         self._closed = False
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
         if self._closed:
             raise RuntimeError("agentic_session_closed")
-        response = await self._provider._send_session_with_heartbeat(self._session, prompt)
+        response = await self._provider._send_session_with_heartbeat(
+            self._session,
+            prompt,
+            allow_non_json=self._allow_non_json,
+        )
         if not response.success:
             raise build_cli_failure_exception(
                 self._provider.provider_name,
@@ -421,7 +442,7 @@ class _CopilotSDKAgenticSession:
             await self._client.__aexit__(None, None, None)
 
 
-def _to_ai_response(event: Any) -> AIResponse:
+def _to_ai_response(event: Any, *, allow_non_json: bool = False) -> AIResponse:
     # Use global modules (may be patched in tests)
     if globals()['AssistantMessageData'] is None:
         _import_copilot_modules()
@@ -437,6 +458,8 @@ def _to_ai_response(event: Any) -> AIResponse:
     content = event.data.content
     parsed = _extract_json_object(content)
     if parsed is None:
+        if allow_non_json:
+            return AIResponse(raw_text=content, parsed={})
         return AIResponse(raw_text=content, parsed=None, error="Assistant message did not contain a JSON object")
     return AIResponse(raw_text=content, parsed=parsed)
 
