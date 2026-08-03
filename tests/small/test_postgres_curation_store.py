@@ -109,12 +109,22 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 21
+    assert POSTGRES_SCHEMA_VERSION == 22
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"
     assert any("CREATE TABLE IF NOT EXISTS curation_runs" in statement for statement in migration.statements)
     assert any("PRIMARY KEY (run_id, action_id)" in statement for statement in migration.statements)
+
+
+def test_postgres_migration_adds_quality_acceptance_evidence() -> None:
+    migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 22)
+
+    assert migration.name == "add_curation_quality_acceptance_evidence"
+    statements = " ".join(migration.statements)
+    assert "ADD COLUMN IF NOT EXISTS retrieval_utility_delta DOUBLE PRECISION" in statements
+    assert "ADD COLUMN IF NOT EXISTS acceptance_met INTEGER" in statements
+    assert "ADD COLUMN IF NOT EXISTS neutral_reason TEXT" in statements
 
 
 def test_postgres_migration_adds_memory_references() -> None:

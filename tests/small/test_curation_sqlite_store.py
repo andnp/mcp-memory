@@ -32,6 +32,14 @@ def test_fresh_schema_contains_curation_tables_indexes_and_version(tmp_path: Pat
             "last_mutated_at",
             "coverage_evidence_json",
         } <= columns
+        quality_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(curation_quality_evidence)").fetchall()
+        }
+        assert {
+            "retrieval_utility_delta",
+            "acceptance_met",
+            "neutral_reason",
+        } <= quality_columns
         indexes = {
             row[1] for row in connection.execute("PRAGMA index_list(curation_action_receipts)").fetchall()
         }

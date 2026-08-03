@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
-import json
 from typing import Any
 from uuid import UUID
 
@@ -26,8 +26,9 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     run_id, action_id, operation, affected_memory_ids_json,
                     policy_version, query_id, status, before_ranked_ids_json,
                     after_ranked_ids_json, retrieval_regression_count,
-                    zero_result_change, payload_size_change, useful_work, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    zero_result_change, payload_size_change, useful_work, created_at,
+                    retrieval_utility_delta, acceptance_met, neutral_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, action_id) DO UPDATE SET
                     operation = excluded.operation,
                     affected_memory_ids_json = excluded.affected_memory_ids_json,
@@ -40,7 +41,10 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     zero_result_change = excluded.zero_result_change,
                     payload_size_change = excluded.payload_size_change,
                     useful_work = excluded.useful_work,
-                    created_at = excluded.created_at
+                    created_at = excluded.created_at,
+                    retrieval_utility_delta = excluded.retrieval_utility_delta,
+                    acceptance_met = excluded.acceptance_met,
+                    neutral_reason = excluded.neutral_reason
                 """,
                 _values(evidence),
             )
@@ -79,8 +83,9 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     run_id, action_id, operation, affected_memory_ids_json,
                     policy_version, query_id, status, before_ranked_ids_json,
                     after_ranked_ids_json, retrieval_regression_count,
-                    zero_result_change, payload_size_change, useful_work, created_at
-                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
+                    zero_result_change, payload_size_change, useful_work, created_at,
+                    retrieval_utility_delta, acceptance_met, neutral_reason
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (run_id, action_id) DO UPDATE SET
                     operation = EXCLUDED.operation,
                     affected_memory_ids_json = EXCLUDED.affected_memory_ids_json,
@@ -93,7 +98,10 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     zero_result_change = EXCLUDED.zero_result_change,
                     payload_size_change = EXCLUDED.payload_size_change,
                     useful_work = EXCLUDED.useful_work,
-                    created_at = EXCLUDED.created_at
+                    created_at = EXCLUDED.created_at,
+                    retrieval_utility_delta = EXCLUDED.retrieval_utility_delta,
+                    acceptance_met = EXCLUDED.acceptance_met,
+                    neutral_reason = EXCLUDED.neutral_reason
                 """,
                 _values(evidence),
             )
@@ -137,6 +145,9 @@ def _values(evidence: CurationQualityEvidence) -> tuple[object, ...]:
         evidence.payload_size_change,
         None if evidence.useful_work is None else int(evidence.useful_work),
         evidence.created_at.isoformat(),
+        evidence.retrieval_utility_delta,
+        None if evidence.acceptance_met is None else int(evidence.acceptance_met),
+        evidence.neutral_reason,
     )
 
 
@@ -156,6 +167,9 @@ def _from_row(row: Any) -> CurationQualityEvidence:
         payload_size_change=row["payload_size_change"],
         useful_work=None if row["useful_work"] is None else bool(row["useful_work"]),
         created_at=_datetime(row["created_at"]),
+        retrieval_utility_delta=_optional_float(_row_value(row, "retrieval_utility_delta")),
+        acceptance_met=_optional_bool(_row_value(row, "acceptance_met")),
+        neutral_reason=_optional_text(_row_value(row, "neutral_reason")),
     )
 
 
@@ -175,6 +189,9 @@ def _from_postgres_row(row: tuple[object, ...]) -> CurationQualityEvidence:
         payload_size_change=_optional_int(row[11]),
         useful_work=None if row[12] is None else bool(row[12]),
         created_at=_datetime(row[13]),
+        retrieval_utility_delta=_optional_float(_row_at(row, 14)),
+        acceptance_met=_optional_bool(_row_at(row, 15)),
+        neutral_reason=_optional_text(_row_at(row, 16)),
     )
 
 
@@ -194,6 +211,29 @@ def _json_value(value: object, default: list[str]) -> list[str]:
 
 def _optional_int(value: object) -> int | None:
     return None if value is None else int(str(value))
+
+
+def _optional_float(value: object) -> float | None:
+    return None if value is None else float(str(value))
+
+
+def _optional_bool(value: object) -> bool | None:
+    return None if value is None else bool(value)
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _row_value(row: Any, column: str) -> object:
+    keys = row.keys() if hasattr(row, "keys") else ()
+    if column not in keys:
+        return None
+    return row[column]
+
+
+def _row_at(row: tuple[object, ...], index: int) -> object:
+    return row[index] if len(row) > index else None
 
 
 def _datetime(value: object) -> datetime:

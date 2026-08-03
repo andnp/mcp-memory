@@ -90,6 +90,9 @@ class _PostgresQualityConnection:
                 payload_size_change INTEGER,
                 useful_work INTEGER,
                 created_at TEXT NOT NULL,
+                retrieval_utility_delta REAL,
+                acceptance_met INTEGER,
+                neutral_reason TEXT,
                 PRIMARY KEY (run_id, action_id)
             )
             """
@@ -176,14 +179,118 @@ def test_postgres_quality_store_commits_evidence() -> None:
         affected_memory_ids=[uuid4()],
         policy_version="policy",
         status="no_query",
+        retrieval_utility_delta=0.75,
+        acceptance_met=True,
+        neutral_reason="trusted_query",
         created_at=datetime.now(UTC),
     )
 
+    store.put_quality_evidence(evidence)
     store.put_quality_evidence(evidence)
 
     stored = store.list_quality_evidence()
     assert len(stored) == 1
     assert stored[0].action_id == evidence.action_id
+    assert stored[0].retrieval_utility_delta == 0.75
+    assert stored[0].acceptance_met is True
+    assert stored[0].neutral_reason == "trusted_query"
+
+
+def test_sqlite_quality_store_persists_acceptance_evidence(db_manager) -> None:
+    run = _run()
+    SQLiteCurationStore(db_manager).create_run(run)
+    evidence = CurationQualityEvidence(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        operation="rewrite_memory",
+        affected_memory_ids=[uuid4()],
+        policy_version="policy",
+        status="evaluated",
+        retrieval_utility_delta=0.5,
+        acceptance_met=False,
+        neutral_reason=None,
+        created_at=datetime.now(UTC),
+    )
+    store = SQLiteCurationQualityStore(db_manager)
+
+    store.put_quality_evidence(evidence)
+    store.put_quality_evidence(evidence)
+
+    stored = store.list_quality_evidence()
+    assert len(stored) == 1
+    assert stored[0].retrieval_utility_delta == 0.5
+    assert stored[0].acceptance_met is False
+    assert stored[0].neutral_reason is None
+
+
+def test_quality_hydration_defaults_missing_acceptance_columns() -> None:
+    from mcp_memory.curation_quality_store import _from_postgres_row, _from_row
+
+    run_id, action_id = uuid4(), uuid4()
+    row = (
+        str(run_id),
+        str(action_id),
+        "rewrite_memory",
+        [],
+        "policy",
+        None,
+        "no_query",
+        [],
+        [],
+        None,
+        None,
+        None,
+        None,
+        datetime.now(UTC).isoformat(),
+    )
+
+    evidence = _from_postgres_row(row)
+
+    assert evidence.retrieval_utility_delta is None
+    assert evidence.acceptance_met is None
+    assert evidence.neutral_reason is None
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE curation_quality_evidence (
+            run_id TEXT, action_id TEXT, operation TEXT,
+            affected_memory_ids_json TEXT, policy_version TEXT, query_id TEXT,
+            status TEXT, before_ranked_ids_json TEXT, after_ranked_ids_json TEXT,
+            retrieval_regression_count INTEGER, zero_result_change INTEGER,
+            payload_size_change INTEGER, useful_work INTEGER, created_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO curation_quality_evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            str(run_id),
+            str(action_id),
+            "rewrite_memory",
+            "[]",
+            "policy",
+            None,
+            "no_query",
+            "[]",
+            "[]",
+            None,
+            None,
+            None,
+            None,
+            row[13],
+        ),
+    )
+
+    sqlite_evidence = _from_row(
+        connection.execute("SELECT * FROM curation_quality_evidence").fetchone()
+    )
+
+    assert sqlite_evidence.run_id == run_id
+    assert sqlite_evidence.retrieval_utility_delta is None
+    assert sqlite_evidence.acceptance_met is None
+    assert sqlite_evidence.neutral_reason is None
 
 
 def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) -> None:

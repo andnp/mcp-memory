@@ -639,12 +639,18 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             payload_size_change INTEGER,
             useful_work INTEGER,
             created_at TEXT NOT NULL,
+            retrieval_utility_delta REAL,
+            acceptance_met INTEGER,
+            neutral_reason TEXT,
             PRIMARY KEY (run_id, action_id),
             FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
         );
         """
     )
     ensure_column(conn, "curation_runs", "disclosure_audit_json", "TEXT NOT NULL DEFAULT '{}'")
+    ensure_column(conn, "curation_quality_evidence", "retrieval_utility_delta", "REAL")
+    ensure_column(conn, "curation_quality_evidence", "acceptance_met", "INTEGER")
+    ensure_column(conn, "curation_quality_evidence", "neutral_reason", "TEXT")
 
 
 def create_mutation_history_schema(conn: sqlite3.Connection) -> None:

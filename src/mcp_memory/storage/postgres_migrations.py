@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 21
+POSTGRES_SCHEMA_VERSION = 22
 
 
 @dataclass(frozen=True)
@@ -783,6 +783,9 @@ POSTGRES_MIGRATIONS = (
                 payload_size_change INTEGER,
                 useful_work INTEGER,
                 created_at TEXT NOT NULL,
+                retrieval_utility_delta DOUBLE PRECISION,
+                acceptance_met INTEGER,
+                neutral_reason TEXT,
                 PRIMARY KEY (run_id, action_id),
                 FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
             )
@@ -799,6 +802,15 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_mutation_family TEXT",
             "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_mutated_at TEXT",
             "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS coverage_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ),
+    ),
+    PostgresMigration(
+        version=22,
+        name="add_curation_quality_acceptance_evidence",
+        statements=(
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS retrieval_utility_delta DOUBLE PRECISION",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS acceptance_met INTEGER",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS neutral_reason TEXT",
         ),
     ),
 )
