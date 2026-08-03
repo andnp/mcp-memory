@@ -185,6 +185,7 @@ async def run_curator_verified_campaign(
             "status": investigation.status,
             "rounds": investigation.rounds,
             "tool_calls": investigation.tool_calls,
+            "record_ids": list(investigation.record_ids),
             "record_count": len(exploratory_reads),
             "reason": investigation.reason,
         },
