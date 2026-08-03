@@ -31,18 +31,6 @@ def _bounded_limit(arguments: dict, field_name: str, default: int) -> tuple[int,
     return requested, min(requested, _MAX_MAINTENANCE_READ_LIMIT)
 
 
-def _budget_metadata(
-    *, requested: int, effective: int, returned: int, truncated: bool = False
-) -> dict[str, object]:
-    return {
-        "requested_limit": requested,
-        "effective_limit": effective,
-        "returned_count": returned,
-        "remaining_budget": max(effective - returned, 0),
-        "truncated": truncated,
-    }
-
-
 def _record_payload(record: Any, *, include_metadata: bool) -> dict:
     if include_metadata:
         return agent_memory_record_payload_with_metadata(record)
@@ -103,7 +91,6 @@ def internal_peek_record_service(ctx: MemoryReadContext, arguments: dict) -> dic
     return {
         "status": "ok",
         "record": _record_payload(result.record, include_metadata=include_metadata),
-        "budget": _budget_metadata(requested=1, effective=1, returned=1),
     }
 
 
@@ -134,7 +121,7 @@ def internal_maintenance_search_service(ctx: MemoryReadContext, arguments: dict)
         surfaced_memory_ids=[result.record.id for result in results],
         duration_ms=(perf_counter() - started_at) * 1000.0,
     )
-    return {
+    payload: dict[str, object] = {
         "status": "ok",
         "results": [
             {
@@ -142,13 +129,10 @@ def internal_maintenance_search_service(ctx: MemoryReadContext, arguments: dict)
             }
             for result in results
         ],
-        "budget": _budget_metadata(
-            requested=requested_limit,
-            effective=limit,
-            returned=len(results),
-            truncated=len(results) >= limit and requested_limit > limit,
-        ),
     }
+    if len(results) >= limit and requested_limit > limit:
+        payload["truncated"] = True
+    return payload
 
 
 def internal_list_relationships_service(ctx: MemoryReadContext, arguments: dict) -> dict:
@@ -161,7 +145,7 @@ def internal_list_relationships_service(ctx: MemoryReadContext, arguments: dict)
     direction = optional_string(arguments, "direction") or "both"
     if direction not in {"incoming", "outgoing", "both"}:
         raise ValueError("direction must be incoming, outgoing, or both")
-    requested_limit, limit = _bounded_limit(
+    _, limit = _bounded_limit(
         arguments, "limit", _DEFAULT_MAINTENANCE_RELATIONSHIP_LIMIT
     )
     started_at = perf_counter()
@@ -186,17 +170,14 @@ def internal_list_relationships_service(ctx: MemoryReadContext, arguments: dict)
         memory_id=memory_id,
         duration_ms=(perf_counter() - started_at) * 1000.0,
     )
-    return {
+    payload: dict[str, object] = {
         "status": "ok",
         "memory_id": memory_id,
         "relationships": relationships,
-        "budget": _budget_metadata(
-            requested=requested_limit,
-            effective=limit,
-            returned=len(relationships),
-            truncated=len(all_relationships) > limit,
-        ),
     }
+    if len(all_relationships) > limit:
+        payload["truncated"] = True
+    return payload
 
 
 def internal_bounded_adjacency_service(ctx: MemoryReadContext, arguments: dict) -> dict:
@@ -209,7 +190,7 @@ def internal_bounded_adjacency_service(ctx: MemoryReadContext, arguments: dict) 
     direction = optional_string(arguments, "direction") or "both"
     if direction not in {"incoming", "outgoing", "both"}:
         raise ValueError("direction must be incoming, outgoing, or both")
-    requested_limit, limit = _bounded_limit(
+    _, limit = _bounded_limit(
         arguments, "limit", _DEFAULT_MAINTENANCE_ADJACENCY_LIMIT
     )
     include_metadata = optional_bool(arguments, "include_metadata", False)
@@ -252,14 +233,11 @@ def internal_bounded_adjacency_service(ctx: MemoryReadContext, arguments: dict) 
             memory_id=telemetry_id,
             duration_ms=duration_ms,
         )
-    return {
+    payload: dict[str, object] = {
         "status": "ok",
         "memory_id": memory_id,
         "neighbors": neighbors,
-        "budget": _budget_metadata(
-            requested=requested_limit,
-            effective=limit,
-            returned=len(neighbors),
-            truncated=len(links_by_neighbor) > limit,
-        ),
     }
+    if len(links_by_neighbor) > limit:
+        payload["truncated"] = True
+    return payload

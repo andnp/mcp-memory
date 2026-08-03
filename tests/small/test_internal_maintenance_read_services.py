@@ -79,21 +79,15 @@ def test_internal_maintenance_reads_are_bounded_authoritative_and_instrumented(d
 
     assert peek["status"] == "ok"
     assert peek["record"]["memory_ref"] == f"mem-{root.memory_ref}"
-    assert peek["budget"] == {
-        "requested_limit": 1,
-        "effective_limit": 1,
-        "returned_count": 1,
-        "remaining_budget": 0,
-        "truncated": False,
-    }
+    assert "budget" not in peek
     assert search["status"] == "ok"
     assert [item["record"]["memory_ref"] for item in search["results"]] == [
         f"mem-{root.memory_ref}"
     ]
-    assert search["budget"]["remaining_budget"] == 0
+    assert "budget" not in search
     assert relationships["relationships"][0]["link"]["target_id"] == neighbor.id
     assert adjacency["neighbors"][0]["record"]["memory_ref"] == f"mem-{neighbor.memory_ref}"
-    assert adjacency["budget"]["remaining_budget"] == 0
+    assert "budget" not in adjacency
 
     context.retrieval_telemetry.flush()
     rows = db_manager.get_connection().execute(
