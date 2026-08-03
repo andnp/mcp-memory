@@ -169,11 +169,19 @@ class _LiveJSONProvider:
         }
 
 
-def _task(runtime: Any, task_id: str) -> TaskRecord:
+def _task(
+    runtime: Any,
+    task_id: str,
+    *,
+    data: dict[str, Any] | None = None,
+) -> TaskRecord:
+    task_data = {"workspace_id": runtime.workspace_id}
+    if data:
+        task_data.update(data)
     return TaskRecord(
         id=task_id,
         task_name=CURATOR_TASK_NAME,
-        data={"workspace_id": runtime.workspace_id},
+        data=task_data,
         workspace_id=runtime.workspace_id,
         status="running",
         priority=100,
@@ -390,6 +398,45 @@ async def test_live_campaign_rejects_invalid_operation_before_mutation(
         assert state is not None
         assert state.disposition.value == "escalated"
         assert state.last_disposition_reason == "invalid_plan"
+        assert runtime.db_manager.get_connection().execute(
+            "SELECT COUNT(*) FROM memory_mutation_events"
+        ).fetchone()[0] == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_live_campaign_honors_explicit_mutation_budget_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    runtime = create_runtime(cwd=tmp_path / "workspace")
+    assert runtime.repository is not None
+    try:
+        records = [
+            _create_record(runtime, "Budget target one", "Generic summary."),
+            _create_record(runtime, "Budget target two", "Generic summary."),
+            _create_record(runtime, "Budget retained", "Generic summary."),
+        ]
+        provider = _LiveJSONProvider()
+        runtime.ai_json_provider = provider
+        _patch_candidates(monkeypatch, records)
+
+        result = await handle_memory_curator_task(
+            runtime,
+            _task(
+                runtime,
+                "live-quality-budget-task",
+                data={"max_accepted_mutations": 1},
+            ),
+            object(),
+        )
+
+        assert result["curation_outcome"] == "invalid_plan"
+        assert result["mutations"] == 0
+        assert "accepted_mutations_budget" in result["curation_rejection_codes"]
         assert runtime.db_manager.get_connection().execute(
             "SELECT COUNT(*) FROM memory_mutation_events"
         ).fetchone()[0] == 0
