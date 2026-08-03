@@ -53,6 +53,13 @@ class CurationRepositoryLike(Protocol):
 
     def get_candidate_state(self, memory_id: UUID) -> CurationCandidateState | None: ...
 
+    def list_candidate_states(
+        self,
+        *,
+        disposition: CandidateDisposition | None = None,
+        limit: int = 100,
+    ) -> Sequence[CurationCandidateState]: ...
+
     def put_candidate_state(self, state: CurationCandidateState) -> CurationCandidateState: ...
 
     def is_candidate_in_cooldown(self, memory_id: UUID, *, now: datetime | None = None) -> bool: ...
@@ -181,6 +188,19 @@ def assert_curation_repository_contract(make_repository: RepositoryFactory) -> N
     )
     assert repository.put_candidate_state(candidate) == candidate
     assert repository.get_candidate_state(memory_id) == candidate
+    escalated = candidate.model_copy(
+        update={
+            "memory_id": uuid4(),
+            "disposition": CandidateDisposition.ESCALATED,
+            "last_disposition_reason": "retrieval_regression",
+            "escalation_count": 2,
+        }
+    )
+    assert repository.put_candidate_state(escalated) == escalated
+    assert repository.list_candidate_states(
+        disposition=CandidateDisposition.ESCALATED,
+        limit=1,
+    ) == [escalated]
     assert repository.is_candidate_in_cooldown(
         memory_id,
         now=cooldown_until - timedelta(seconds=1),

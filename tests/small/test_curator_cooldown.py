@@ -8,6 +8,7 @@ import pytest
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.curator_support import (
+    _quality_feedback_candidates,
     curator_candidate_revision_token,
     filter_curator_candidates,
 )
@@ -135,6 +136,23 @@ def test_quality_feedback_escalation_survives_revision_change(db_manager) -> Non
     assert updated.disposition is CandidateDisposition.ESCALATED
     assert updated.last_disposition_reason == "retrieval_regression"
     assert updated.last_observed_revision_token == curator_candidate_revision_token(ctx, record)
+
+
+def test_quality_feedback_candidates_are_prioritized(db_manager) -> None:
+    repository = _Repository()
+    first = _record(uuid4())
+    second = _record(uuid4())
+    ctx = _context(db_manager, repository)
+    ctx.curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=UUID(second.id),
+            disposition=CandidateDisposition.ESCALATED,
+            last_disposition_reason="retrieval_regression",
+            escalation_count=2,
+        )
+    )
+
+    assert _quality_feedback_candidates(ctx, [first, second]) == [second]
 
 
 def test_recent_human_and_cross_family_edits_stabilize_candidates(db_manager) -> None:
