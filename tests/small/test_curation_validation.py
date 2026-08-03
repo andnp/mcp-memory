@@ -78,6 +78,12 @@ def test_validation_rejects_hidden_targets_and_budgets() -> None:
         mutation_budget=CurationMutationBudget(max_proposed_actions=0, max_accepted_mutations=1),
     )
     assert {issue.code for issue in result.issues} == {"target_not_visible", "proposed_actions_budget"}
+    assert result.retry_feedback is not None
+    assert result.retry_feedback.reason_code == "contract_invalid"
+    assert set(result.retry_feedback.issue_codes) == {
+        "target_not_visible",
+        "proposed_actions_budget",
+    }
 
 
 def test_validation_normalizes_action_ids_deterministically() -> None:

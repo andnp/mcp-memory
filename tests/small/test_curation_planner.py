@@ -21,6 +21,7 @@ from mcp_memory.core.curation_models import (
     CampaignRetrievalProblem,
     CurationPlan,
     CurationPlanningRequest,
+    NormalizeMemoryAction,
     RetentionDecision,
     RetentionReason,
 )
@@ -345,6 +346,25 @@ def test_planner_prompt_preserves_schema_retry_diagnostics() -> None:
     }
 
 
+def test_planner_prompt_preserves_contract_retry_diagnostics() -> None:
+    request = _request(uuid4())
+    feedback = CurationRetryFeedback(
+        reason_code="contract_invalid",
+        message="target_not_visible: target is absent from context",
+        issue_codes=("target_not_visible",),
+    )
+
+    payload = json.loads(
+        _build_planner_prompt(
+            request,
+            CurationPlannerTools(context=cast(Any, {}), retry_feedback=feedback),
+        ).split("\n", 1)[1]
+    )
+
+    assert payload["retry_feedback"]["reason_code"] == "contract_invalid"
+    assert payload["retry_feedback"]["issue_codes"] == ["target_not_visible"]
+
+
 @pytest.mark.asyncio
 async def test_planning_retries_provider_failure_with_bounded_error_feedback() -> None:
     seed_id = uuid4()
@@ -404,6 +424,86 @@ async def test_planning_retries_provider_failure_with_bounded_error_feedback() -
     assert planner.feedback[0] is None
     assert planner.feedback[1].reason_code == "provider_failed"
     assert "assistant completion was not usable" in planner.feedback[1].message
+
+
+@pytest.mark.asyncio
+async def test_planning_retries_context_contract_failure() -> None:
+    seed_id = uuid4()
+    hidden_id = uuid4()
+    context = build_context_packet(
+        family="curator",
+        strategy="quality-signal",
+        seed_reads=[
+            AcceptedMaintenanceRead(
+                {
+                    "id": seed_id,
+                    "title": "A focused memory",
+                    "content": "Authoritative content",
+                    "summary": "A focused summary.",
+                    "type": "observation",
+                    "status": "active",
+                    "tags": [],
+                    "workspace_ids": [],
+                }
+            )
+        ],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+    request = _request_for_packet(context, run_id=uuid4())
+    invalid_plan = CurationPlan(
+        plan_id=request.plan_id,
+        run_id=request.run_id,
+        frontier_key=request.frontier_key,
+        context_fingerprint=request.context_fingerprint,
+        seed_memory_ids=[seed_id],
+        retained=[
+            RetentionDecision(
+                memory_id=seed_id,
+                reason=RetentionReason.ALREADY_FOCUSED,
+                rationale="still useful",
+            )
+        ],
+        actions=[
+            NormalizeMemoryAction(
+                action_id=uuid4(),
+                target_id=hidden_id,
+                confidence=1,
+                rationale="improve metadata",
+                summary="A clearer summary.",
+            )
+        ],
+        rationale="improve the visible neighborhood",
+    )
+
+    class _RetryingPlanner:
+        def __init__(self) -> None:
+            self.feedback: list[Any] = []
+            self.inner = FakeCurationPlanner(
+                [
+                    FakePlannerScenario(plan=invalid_plan),
+                    FakePlannerScenario(plan=_plan(request, seed_id)),
+                ]
+            )
+
+        async def create_plan(self, request, tools):
+            self.feedback.append(tools.retry_feedback)
+            return await self.inner.create_plan(request, tools)
+
+    planner = _RetryingPlanner()
+    result = await plan_and_validate(
+        planner,
+        CurationPlanningInput(
+            request=request,
+            context=context,
+            mutation_budget=CurationMutationBudget(),
+        ),
+    )
+
+    assert result.plan is not None
+    assert planner.inner.calls == 2
+    assert result.retry_reason == "contract_invalid"
+    assert planner.feedback[1].reason_code == "contract_invalid"
+    assert "target_not_visible" in planner.feedback[1].message
 
 
 @pytest.mark.asyncio
