@@ -61,6 +61,19 @@ async def test_investigation_scopes_tools_and_bounds_prompt() -> None:
     assert prompt_payload["limits"]["max_tool_calls"] == 3
     assert prompt_payload["available_tools"] == list(READ_ONLY_CURATOR_INVESTIGATION_TOOLS)
     assert "internal_update_memory_record" not in provider.prompt
+    assert "multiple rounds" in provider.prompt
+    assert "duplicates, better canonicals" in provider.prompt
+    assert "every memory you actually read" in provider.prompt
+
+
+def test_default_investigation_budget_supports_open_exploration() -> None:
+    limits = CurationInvestigationLimits()
+
+    assert limits.max_rounds == 6
+    assert limits.max_tool_calls == 24
+    assert limits.max_context_characters == 20_000
+    assert limits.max_result_characters == 12_000
+    assert limits.max_records == 32
 
 
 @pytest.mark.asyncio
