@@ -639,6 +639,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
             "A quality_feedback field means a previous curator mutation caused a measured retrieval regression; do not repeat that mutation blindly, but investigate and propose a different targeted repair when the evidence supports one.",
             "For quality-feedback records, preserve exact search anchors, concrete entities, and the current durable meaning. Retain only when no evidence-backed repair hypothesis survives investigation.",
+            "Challenge weak split evidence, preserve exact search anchors, avoid speculative multi-action waves, and use measured feedback to change strategy rather than repeat.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
             "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
         ],
