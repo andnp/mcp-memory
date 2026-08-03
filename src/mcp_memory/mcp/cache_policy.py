@@ -21,7 +21,6 @@ from mcp_memory.application.cache_policy import (
     _load_projection_search_fallback,
     _load_validated_cached_projection_entries,
     _load_validated_cached_read_hit,
-    _read_related_counts,
     _resolve_read_cache_validation_token,
     _resolve_read_cache_validation_tokens,
     _shared_read_cache_enabled,

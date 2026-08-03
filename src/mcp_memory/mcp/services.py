@@ -173,16 +173,10 @@ def read_memory_records_service(
             missing.append(memory_id)
             continue
         return response
-    return {
-        "status": "ok",
-        "records": records,
-        "missing": missing,
-        "budget": {
-            "requested": len(parsed["memory_ids"]),
-            "returned": len(records),
-            "missing": len(missing),
-        },
-    }
+    payload: dict[str, object] = {"status": "ok", "records": records}
+    if missing:
+        payload["missing"] = missing
+    return payload
 
 
 __all__ = [

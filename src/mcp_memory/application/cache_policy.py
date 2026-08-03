@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 import logging
 from typing import Any
 
@@ -130,19 +130,9 @@ def _compact_cached_read_payload(
     include_metadata: bool,
 ) -> dict[str, object]:
     compact_payload = dict(payload)
-    relationships = compact_payload.get("relationships")
-    superseded = compact_payload.get("superseded")
-    if isinstance(relationships, dict) or isinstance(superseded, list):
-        compact_payload.setdefault(
-            "related_counts",
-            _read_related_counts(
-                relationships if isinstance(relationships, dict) else {},
-                superseded if isinstance(superseded, list) else [],
-            ),
-        )
+    compact_payload.pop("related_counts", None)
     if not include_relationships:
         compact_payload.pop("relationships", None)
-        compact_payload.pop("related_counts", None)
     if not include_superseded:
         compact_payload.pop("superseded", None)
     if not include_metadata:
@@ -172,18 +162,6 @@ def _strip_cached_record_noise(record: object) -> None:
         "tags",
     ):
         record.pop(key, None)
-
-
-def _read_related_counts(
-    relationships: Mapping[str, object], superseded: Sequence[object]
-) -> dict[str, int]:
-    outgoing = relationships.get("outgoing") or relationships.get("outbound") or []
-    incoming = relationships.get("incoming") or relationships.get("inbound") or []
-    return {
-        "outgoing": len(outgoing) if isinstance(outgoing, list) else 0,
-        "incoming": len(incoming) if isinstance(incoming, list) else 0,
-        "superseded": len(superseded),
-    }
 
 
 def _load_cached_search_fallback(

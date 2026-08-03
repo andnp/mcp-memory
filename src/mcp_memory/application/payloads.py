@@ -65,11 +65,6 @@ def build_read_payload(
     }
     if include_relationships:
         payload["relationships"] = relationships_payload
-        payload["related_counts"] = {
-            "outgoing": len(relationships_payload.get("outgoing", [])),
-            "incoming": len(relationships_payload.get("incoming", [])),
-            "superseded": len(superseded_payload),
-        }
     if include_superseded:
         payload["superseded"] = superseded_payload
     return payload

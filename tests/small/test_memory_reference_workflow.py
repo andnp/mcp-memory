@@ -95,7 +95,7 @@ def test_batch_read_deduplicates_references_and_enforces_bound(db_manager) -> No
     )
     assert batch["status"] == "ok"
     assert len(batch["records"]) == 1
-    assert batch["budget"]["requested"] == 1
+    assert "missing" not in batch
 
     with pytest.raises(ValueError, match="at most 20"):
         read_memory_records_service(

@@ -100,7 +100,6 @@ def test_build_read_payload_applies_requested_relationship_and_metadata_flags() 
             ],
             "incoming": [],
         },
-        "related_counts": {"outgoing": 1, "incoming": 0, "superseded": 1},
         "superseded": [
             {
                 "memory_ref": "mem-6",
