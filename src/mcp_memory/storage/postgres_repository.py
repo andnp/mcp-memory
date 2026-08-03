@@ -1664,15 +1664,19 @@ class PostgresRelationalMemoryRepository:
             signal = _QUALITY_SIGNAL_ALIASES.get(signal, signal)
         clauses: dict[str, tuple[str, list[object]]] = {
             "trace_like_memory_count": (
-                "(LOWER(TRIM(memories.title)) LIKE 'task_complete%' OR "
-                "LOWER(TRIM(memories.title)) LIKE 'task complete%' OR "
-                "LOWER(TRIM(memories.title)) LIKE 'task_complete_record%')",
-                [],
+                (
+                    "(LOWER(TRIM(memories.title)) LIKE %s OR "
+                    "LOWER(TRIM(memories.title)) LIKE %s OR "
+                    "LOWER(TRIM(memories.title)) LIKE %s)"
+                ),
+                ["task_complete%", "task complete%", "task_complete_record%"],
             ),
             "generic_summary_count": (
-                "(LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %' OR "
-                "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'added %')",
-                [],
+                (
+                    "(LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE %s OR "
+                    "LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE %s)"
+                ),
+                ["covers %", "added %"],
             ),
             "untagged_observation_count": (
                 "memories.type = 'observation' AND NOT EXISTS ("
