@@ -315,6 +315,9 @@ def _select_curator_seed_batch(
         strategy_selection_mode=sampled_batch.strategy_selection_mode,
         strategy_selection_reason=sampled_batch.strategy_selection_reason,
         strategy_selection_scores=sampled_batch.strategy_selection_scores,
+        selector_feature_snapshot=sampled_batch.selector_feature_snapshot,
+        sampler_priority_score=sampled_batch.sampler_priority_score,
+        sampler_priority_explanation=sampled_batch.sampler_priority_explanation,
     )
 
 
