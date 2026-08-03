@@ -510,6 +510,78 @@ def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
     assert candidate.last_disposition_reason == "retrieval_regression"
 
 
+def test_quality_sampler_escalates_explicit_acceptance_failure(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    curation_store = SQLiteCurationStore(db_manager)
+    curation_store.create_run(run)
+    memory_id = uuid4()
+    receipt = _receipt(run.run_id, event_id=uuid4(), applied_at=now).model_copy(
+        update={"affected_ids": [memory_id]}
+    )
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memories (
+            id, title, content, type, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(memory_id),
+            "Acceptance target",
+            "Durable acceptance target.",
+            "observation",
+            "active",
+            now.isoformat(),
+            now.isoformat(),
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "acceptance-query",
+            "external",
+            "search",
+            str(memory_id),
+            "important",
+            1,
+            1,
+            (now - timedelta(minutes=1)).isoformat(),
+        ),
+    )
+    connection.commit()
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([_context(str(memory_id))]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        candidate_repository=curation_store,
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(
+            query="important",
+            expected_memory_ids=[memory_id],
+            minimum_improvement=0.5,
+        ),
+    )
+
+    assert evidence[0].status == "evaluated"
+    assert evidence[0].acceptance_met is False
+    assert evidence[0].retrieval_regression_count == 0
+    candidate = curation_store.get_candidate_state(memory_id)
+    assert candidate is not None
+    assert candidate.disposition.value == "escalated"
+    assert candidate.last_disposition_reason == "acceptance_not_met"
+
+
 def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)

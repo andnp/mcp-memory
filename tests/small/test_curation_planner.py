@@ -13,6 +13,8 @@ from mcp_memory.core.curation_context import (
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_harness import CurationPlannerTools
 from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CampaignRetrievalProblem,
     CurationPlan,
     CurationPlanningRequest,
     RetentionDecision,
@@ -27,6 +29,7 @@ from mcp_memory.core.curation_planner import (
     InstrumentedCurationPlanner,
     PlannerExecutionStatus,
     _build_planner_prompt,
+    _request_for_packet,
 )
 from mcp_memory.core.curation_validation import CurationRetryFeedback
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
@@ -183,6 +186,46 @@ def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
     assert seed["quality_feedback"]["reason"] == "retrieval_regression"
     assert seed["quality_feedback"]["escalation_count"] == 2
     assert seed["content"] == "Authoritative content"
+
+
+def test_campaign_hypothesis_reaches_planner_request_and_context_payload() -> None:
+    seed_id = uuid4()
+    hypothesis = CampaignHypothesis(
+        query="find the authentication goal",
+        retrieval_problem=CampaignRetrievalProblem.RETRIEVAL_QUALITY,
+        expected_memory_ids=[seed_id],
+        minimum_improvement=0.5,
+    )
+    context = build_context_packet(
+        family="curator",
+        strategy="quality-signal",
+        seed_reads=[
+            AcceptedMaintenanceRead(
+                {
+                    "id": seed_id,
+                    "title": "Authentication goal",
+                    "content": "The durable authentication conclusion.",
+                    "summary": "Authentication conclusion.",
+                    "type": "fact",
+                    "status": "active",
+                    "tags": [],
+                    "workspace_ids": [],
+                }
+            )
+        ],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+        campaign_hypothesis=hypothesis,
+    )
+
+    request = _request_for_packet(context, run_id=uuid4())
+    payload = json.loads(
+        _build_planner_prompt(request, CurationPlannerTools(context=context)).split("\n", 1)[1]
+    )
+    expected = hypothesis.model_dump(mode="json")
+
+    assert request.campaign_hypothesis == hypothesis
+    assert payload["request"]["campaign_hypothesis"] == expected
+    assert payload["context"]["campaign_hypothesis"] == expected
 
 
 def test_planner_prompt_preserves_schema_retry_diagnostics() -> None:

@@ -82,12 +82,21 @@ def test_query_replay_marks_neutral_evidence_without_utility_or_regression() -> 
                 after=ReplaySnapshot(),
                 replay_complete=False,
             ),
+            ReplayCase(
+                query_id="irrelevant",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot((ReplayResult("wanted"),)),
+                after=ReplaySnapshot((ReplayResult("wanted"),)),
+                query_text="unrelated query",
+                expected_query="wanted target",
+            ),
         ]
     )
 
     assert [case.neutral_reason for case in report.cases] == [
         "blank_query",
         "incomplete_replay",
+        "irrelevant_query",
     ]
     assert report.retrieval_regression_count == 0
     assert report.useful_work_count == 0
