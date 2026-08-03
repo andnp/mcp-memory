@@ -100,6 +100,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "descriptive relationship context" in contract
     assert "labels and memory excerpts alone are not link evidence" in contract
     assert "exact absent-link precondition" in contract
+    assert "containing only source_id, target_id, and link_type" in contract
     assert "Only split_memory may introduce child records" in contract
     assert "content is the final persisted durable memory body" in contract
     assert "canonical_id is the retained base" in contract
@@ -123,6 +124,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "content is the final persisted durable memory body" in prompt
     assert "do not write status prose" in prompt
     assert "evidence.link matching the exact endpoints" in prompt
+    assert "absent-link precondition containing only source_id, target_id, and link_type" in prompt
     assert "Give every seed exactly one disposition" in prompt
     assert "If no visible canonical is appropriate, retain the memory" in prompt
 

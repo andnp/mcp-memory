@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -153,6 +154,63 @@ def test_invalid_schema_returns_formatting_retry_feedback() -> None:
     assert not result.valid
     assert result.retry_feedback is not None
     assert result.retry_feedback.reason_code == "formatting_only"
+    assert "rationale" in result.retry_feedback.message
+
+
+def test_context_bearing_absent_link_returns_field_specific_retry_feedback() -> None:
+    run_id, plan_id, source, target = uuid4(), uuid4(), uuid4(), uuid4()
+    request = _request(run_id, plan_id, "frontier", "context")
+    raw = {
+        "run_id": str(run_id),
+        "plan_id": str(plan_id),
+        "frontier_key": "frontier",
+        "context_fingerprint": "context",
+        "seed_memory_ids": [str(source), str(target)],
+        "rationale": "connect related records",
+        "actions": [
+            {
+                "operation": "create_link",
+                "action_id": str(uuid4()),
+                "source_id": str(source),
+                "target_id": str(target),
+                "link_type": "RELATED",
+                "context": "The records describe one relationship.",
+                "confidence": 1,
+                "rationale": "connect related records",
+                "evidence": [
+                    {
+                        "link": {
+                            "source_id": str(source),
+                            "target_id": str(target),
+                            "link_type": "RELATED",
+                            "context": "The records describe one relationship.",
+                        }
+                    }
+                ],
+                "preconditions": {
+                    "absent_links": [
+                        {
+                            "source_id": str(source),
+                            "target_id": str(target),
+                            "link_type": "RELATED",
+                            "context": "The records describe one relationship.",
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    context = replace(
+        _context(source, "context"),
+        seeds=({"memory_id": str(source)}, {"memory_id": str(target)}),
+    )
+
+    result = validate_curation_plan(raw, request=request, context=context)
+
+    assert not result.valid
+    assert result.retry_feedback is not None
+    assert "actions.0.create_link.preconditions.absent_links.0.context" in result.retry_feedback.fields
+    assert "Extra inputs are not permitted" in result.retry_feedback.message
 
 
 def test_material_seed_ambiguity_is_not_retryable() -> None:

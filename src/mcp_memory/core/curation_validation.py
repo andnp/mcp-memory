@@ -217,12 +217,22 @@ def _parse_plan(plan: CurationPlan | Mapping[str, Any]) -> CurationPlan | Curati
         return TypeAdapter(CurationPlan).validate_python(plan)
     except ValidationError as exc:
         if _is_formatting_only(exc):
-            fields = tuple(sorted({".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()}))
+            errors = tuple(
+                (
+                    ".".join(str(part) for part in error.get("loc", ())),
+                    str(error.get("msg", "invalid value")),
+                )
+                for error in exc.errors()
+            )
+            fields = tuple(sorted({field for field, _message in errors}))
             return CurationValidationResult(
                 plan=None,
                 retry_feedback=CurationRetryFeedback(
                     reason_code="formatting_only",
-                    message="return a schema-valid typed curation plan; no semantic changes are requested",
+                    message=(
+                        "Return a schema-valid typed curation plan. Fix: "
+                        + "; ".join(f"{field}: {message}" for field, message in errors)
+                    )[:1000],
                     fields=fields,
                 ),
             )
