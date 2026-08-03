@@ -563,6 +563,40 @@ def test_quality_sampler_accepts_net_positive_heuristic_wave_with_local_loss(db_
     assert {item.productive_mutation_count for item in evidence} == {2}
 
 
+def test_quality_sampler_keeps_explicit_target_loss_strict(db_manager) -> None:
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+    run = _run()
+    receipt = _receipt(run.run_id, event_id=uuid4())
+    evidence = CurationQualityEvidence(
+        run_id=run.run_id,
+        action_id=receipt.action_id,
+        operation="rewrite_memory",
+        policy_version="1",
+        status="evaluated",
+        query_id="goal",
+        retrieval_utility_delta=1.0,
+        useful_work=True,
+        acceptance_met=False,
+        retrieval_regression_count=0,
+        created_at=datetime.now(UTC),
+    )
+    sampler._evaluate_action = cast(Any, lambda run, receipt, campaign_hypothesis: evidence)
+
+    result = sampler._evaluate_wave(
+        run,
+        [receipt],
+        CampaignHypothesis(query="goal", expected_memory_ids=[uuid4()]),
+        wave_id=uuid4(),
+    )
+
+    assert result[0].wave_status == "rejected"
+
+
 def test_quality_sampler_rejects_wave_when_one_action_regresses(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)
