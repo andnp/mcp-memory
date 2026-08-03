@@ -678,6 +678,7 @@ def _build_planner_prompt(
             "Prefer one conclusion-first takeaway with concrete evidence; target 1600 characters or less, and split content above 3000 characters when it contains multiple takeaways.",
             "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
             "A quality_feedback field means a previous curator mutation caused a measured retrieval regression; do not repeat that mutation blindly, but investigate and propose a different targeted repair when the evidence supports one.",
+            "Action failure feedback is execution evidence: repair listed contract, stale, or transient failures instead of repeating the same invalid action shape; keep terminal safety failures out of the next plan.",
             "For quality-feedback records, preserve exact search anchors, concrete entities, and the current durable meaning. Retain only when no evidence-backed repair hypothesis survives investigation.",
             "Challenge weak split evidence, preserve exact search anchors, avoid speculative multi-action waves, and use measured feedback to change strategy rather than repeat.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
@@ -730,6 +731,8 @@ def _build_planner_prompt(
         "characters. A quality_feedback field marks a previous curator mutation as a "
         "measured retrieval regression: do not repeat that mutation blindly; investigate "
         "and propose a different targeted repair when evidence supports one. Treat "
+        "rejected_actions feedback as execution evidence: repair listed contract, stale, "
+        "or transient failures instead of repeating the same invalid action shape. "
         "raw_ingress as a likely system1-created record: normalize weak metadata, and "
         "use rewrite_memory when the body itself is raw, status-shaped, or combines "
         "unrelated takeaways. Preserve "
