@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, ClassVar, Protocol
+from collections.abc import Callable
+from typing import Any, ClassVar, Protocol
 
 
 @dataclass(slots=True)
@@ -164,4 +165,12 @@ class JSONTaskProvider(Protocol):
 
 class AgenticTaskProvider(Protocol):
     async def run_agent(self, prompt: str) -> AgenticRunResult:
+        ...
+
+
+class AgenticSession(Protocol):
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        ...
+
+    async def close(self) -> None:
         ...

@@ -12,7 +12,7 @@ from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers._json_cli import PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS
 from mcp_memory.core.providers._json_cli import build_cli_failure_exception
 from mcp_memory.core.providers._json_cli import chain_observers
-from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.providers.interfaces import AgenticRunResult, AgenticSession
 from mcp_memory.core.providers.interfaces import ProviderAttemptFinishedEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
@@ -282,6 +282,69 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
             }
         }
 
+    async def _send_session_with_heartbeat(self, session: Any, prompt: str) -> AIResponse:
+        started_at = time.time()
+        self._notify(
+            ProviderAttemptStartedEvent(
+                attempt=1,
+                prompt=prompt,
+                subprocess_pid=None,
+                started_at=started_at,
+            )
+        )
+        operation_task = asyncio.ensure_future(
+            session.send_and_wait(prompt, timeout=self._timeout_seconds)
+        )
+        deadline = time.monotonic() + self._timeout_seconds
+        try:
+            while True:
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise TimeoutError
+                try:
+                    event = await asyncio.wait_for(
+                        asyncio.shield(operation_task),
+                        timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
+                    )
+                    response = _to_ai_response(event)
+                    self._finish(
+                        attempt=1,
+                        prompt=prompt,
+                        started_at=started_at,
+                        status="success" if response.success else "error",
+                        response=response,
+                    )
+                    return response
+                except TimeoutError:
+                    if operation_task.done():
+                        response = _to_ai_response(operation_task.result())
+                        self._finish(
+                            attempt=1,
+                            prompt=prompt,
+                            started_at=started_at,
+                            status="success" if response.success else "error",
+                            response=response,
+                        )
+                        return response
+                    heartbeat_at = time.time()
+                    self._notify(
+                        ProviderAttemptHeartbeatEvent(
+                            attempt=1,
+                            prompt=prompt,
+                            subprocess_pid=None,
+                            started_at=started_at,
+                            heartbeat_at=heartbeat_at,
+                            elapsed_seconds=max(heartbeat_at - started_at, 0.0),
+                        )
+                    )
+        finally:
+            if not operation_task.done():
+                operation_task.cancel()
+                try:
+                    await operation_task
+                except asyncio.CancelledError:
+                    pass
+
     async def run_agent(self, prompt: str) -> AgenticRunResult:
         last_response: AIResponse | None = None
         for attempt in range(self._max_retries + 1):
@@ -297,6 +360,63 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                 )
         assert last_response is not None
         raise build_cli_failure_exception(self.provider_name, self._max_retries + 1, last_response.error)
+
+    async def open_agent_session(
+        self,
+        *,
+        allowed_tool_names: tuple[str, ...] | None = None,
+    ) -> AgenticSession:
+        if globals()["CopilotClient"] is None:
+            _import_copilot_modules()
+        client = globals()["CopilotClient"](working_directory=self._cwd)
+        await client.__aenter__()
+        try:
+            session = await client.create_session(
+                model=self._model,
+                on_permission_request=globals()["PermissionHandler"].approve_all,
+                mcp_servers=self._mcp_servers()
+                if allowed_tool_names is None
+                else self.with_allowed_tool_names(allowed_tool_names)._mcp_servers(),
+            )
+        except BaseException:
+            await client.__aexit__(None, None, None)
+            raise
+        return _CopilotSDKAgenticSession(self, client, session)
+
+
+class _CopilotSDKAgenticSession:
+    def __init__(self, provider: CopilotSDKAgenticProvider, client: Any, session: Any) -> None:
+        self._provider = provider
+        self._client = client
+        self._session = session
+        self._closed = False
+
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        if self._closed:
+            raise RuntimeError("agentic_session_closed")
+        response = await self._provider._send_session_with_heartbeat(self._session, prompt)
+        if not response.success:
+            raise build_cli_failure_exception(
+                self._provider.provider_name,
+                1,
+                response.error,
+            )
+        return AgenticRunResult(
+            status="success",
+            summary=_extract_summary(response.parsed),
+            raw_text=response.raw_text,
+            parsed=response.parsed,
+            subprocess_pid=None,
+        )
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._session.disconnect()
+        finally:
+            await self._client.__aexit__(None, None, None)
 
 
 def _to_ai_response(event: Any) -> AIResponse:

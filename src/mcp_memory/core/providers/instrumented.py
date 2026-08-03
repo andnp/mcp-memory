@@ -378,6 +378,25 @@ class InstrumentedAIProvider:
     def supports_agentic(self) -> bool:
         return callable(getattr(self._provider, "run_agent", None))
 
+    async def open_agent_session(self, *, allowed_tool_names: tuple[str, ...] | None = None):
+        provider = self._provider
+        binder = getattr(provider, "with_observer", None)
+        if callable(binder):
+            provider = binder(
+                self._build_observer(
+                    prompt="",
+                    request_id=str(uuid4()),
+                    state=_ProviderObserverState(),
+                )
+            )
+        opener = getattr(provider, "open_agent_session", None)
+        if not callable(opener):
+            raise RuntimeError("agentic_session_not_supported")
+        session = await cast(
+            Callable[..., Awaitable[Any]], opener
+        )(allowed_tool_names=allowed_tool_names)
+        return _InstrumentedAgenticSession(self, session)
+
     async def ask_json(
         self,
         prompt: str,
@@ -824,6 +843,80 @@ class InstrumentedAIProvider:
             termination_reason=None if result.status == "success" else "agent_run_unsuccessful",
         )
         return result
+
+
+class _InstrumentedAgenticSession:
+    def __init__(self, provider: InstrumentedAIProvider, session) -> None:
+        self._provider = provider
+        self._session = session
+
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        started_at = time.time()
+        request_id = str(uuid4())
+        self._provider._guard_test_execution()
+        self._provider._enforce_rate_limits()
+        try:
+            result = await self._session.run_agent(prompt)
+        except asyncio.CancelledError:
+            completed_at = time.time()
+            self._provider._usage_repository.record_call(
+                task_name=self._provider._task_name,
+                task_id=self._provider._task_id,
+                request_id=request_id,
+                subprocess_pid=None,
+                provider_key=self._provider._provider_key,
+                provider_name=self._provider._provider_name,
+                model_name=self._provider._model_name,
+                status="cancelled",
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
+                error_text="Command cancelled",
+                reason_category="cancellation",
+                reason_code="provider_cancelled",
+                retry_delay_seconds=None,
+            )
+            raise
+        except Exception as exc:
+            completed_at = time.time()
+            classification = classify_provider_failure(exc)
+            self._provider._usage_repository.record_call(
+                task_name=self._provider._task_name,
+                task_id=self._provider._task_id,
+                request_id=request_id,
+                subprocess_pid=None,
+                provider_key=self._provider._provider_key,
+                provider_name=self._provider._provider_name,
+                model_name=self._provider._model_name,
+                status="error",
+                duration_seconds=max(completed_at - started_at, 0.0),
+                created_at=completed_at,
+                error_text=classification.error_text,
+                reason_category=classification.reason_category,
+                reason_code=classification.reason_code,
+                retry_delay_seconds=classification.retry_delay_seconds,
+            )
+            raise
+        completed_at = time.time()
+        self._provider._usage_repository.record_call(
+            task_name=self._provider._task_name,
+            task_id=self._provider._task_id,
+            request_id=request_id,
+            subprocess_pid=None,
+            provider_key=self._provider._provider_key,
+            provider_name=self._provider._provider_name,
+            model_name=self._provider._model_name,
+            status=result.status,
+            duration_seconds=max(completed_at - started_at, 0.0),
+            created_at=completed_at,
+            error_text=None if result.status == "success" else result.summary,
+            reason_category=None if result.status == "success" else "execution",
+            reason_code=None if result.status == "success" else "agent_run_unsuccessful",
+            retry_delay_seconds=None,
+        )
+        return result
+
+    async def close(self) -> None:
+        await self._session.close()
 
 
 def _safe_task_queue_update(task_queue, *, task_id: str, operation: str, callback: Callable[[], object]) -> None:
