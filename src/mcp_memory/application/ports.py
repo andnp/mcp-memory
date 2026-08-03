@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 
 class ReadCachePort(Protocol):
@@ -68,6 +68,7 @@ class RetrievalTelemetryPort(Protocol):
         caller_kind: str,
         query: str,
         surfaced_memory_ids: list[str],
+        graph_provenance: Mapping[str, object] | None = None,
         duration_ms: float,
     ) -> None: ...
 

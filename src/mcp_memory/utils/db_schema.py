@@ -237,6 +237,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             result_rank INTEGER,
             result_count INTEGER,
             duration_ms REAL,
+            graph_provenance_json TEXT,
             created_at REAL NOT NULL,
             FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL
         );
@@ -465,6 +466,7 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
         """
     )
     ensure_column(conn, "memory_tool_events", "duration_ms", "REAL")
+    ensure_column(conn, "memory_tool_events", "graph_provenance_json", "TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_policy_events (

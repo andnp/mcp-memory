@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from logging import getLogger
 from time import time
+from collections.abc import Mapping
 from uuid import uuid4
 
 from mcp_memory.application.ports import MemoryReadContext
@@ -64,6 +65,7 @@ def _record_search_invocation(
     caller_kind: str,
     query: str,
     surfaced_memory_ids: list[str],
+    graph_provenance: Mapping[str, object] | None = None,
     duration_ms: float,
 ) -> None:
     _retrieval_telemetry_repository(ctx).record_search(
@@ -71,6 +73,7 @@ def _record_search_invocation(
         caller_kind=caller_kind,
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
+        graph_provenance=graph_provenance,
         duration_ms=duration_ms,
     )
     _log_slow_memory_tool_operation(
@@ -127,6 +130,7 @@ class McpRetrievalTelemetryAdapter:
         caller_kind: str,
         query: str,
         surfaced_memory_ids: list[str],
+        graph_provenance: Mapping[str, object] | None = None,
         duration_ms: float,
     ) -> None:
         _record_search_invocation(
@@ -134,6 +138,7 @@ class McpRetrievalTelemetryAdapter:
             caller_kind=caller_kind,
             query=query,
             surfaced_memory_ids=surfaced_memory_ids,
+            graph_provenance=graph_provenance,
             duration_ms=duration_ms,
         )
 

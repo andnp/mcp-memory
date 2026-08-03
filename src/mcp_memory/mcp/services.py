@@ -8,6 +8,7 @@ them directly.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 
 from mcp_memory.application.memory_use_cases import (
     ReadMemoryRecordUseCase,
@@ -46,6 +47,7 @@ class _ContextBoundRetrievalTelemetry:
         caller_kind: str,
         query: str,
         surfaced_memory_ids: list[str],
+        graph_provenance: Mapping[str, object] | None = None,
         duration_ms: float,
     ) -> None:
         self._adapter.record_search(
@@ -53,6 +55,7 @@ class _ContextBoundRetrievalTelemetry:
             caller_kind=caller_kind,
             query=query,
             surfaced_memory_ids=surfaced_memory_ids,
+            graph_provenance=graph_provenance,
             duration_ms=duration_ms,
         )
 

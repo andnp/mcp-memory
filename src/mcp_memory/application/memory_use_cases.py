@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from time import perf_counter
 
@@ -45,6 +46,37 @@ from mcp_memory.relational.operations import (
 from mcp_memory.relational.search import _to_relational_search_result
 
 logger = logging.getLogger(__name__)
+
+
+def _graph_provenance_from_results(
+    results: Sequence[object],
+) -> dict[str, Mapping[str, object]]:
+    provenance: dict[str, Mapping[str, object]] = {}
+    for result in results:
+        memory_id = getattr(result, "memory_id", None)
+        ranking_debug = getattr(result, "ranking_debug", None)
+        graph = ranking_debug.get("provenance") if isinstance(ranking_debug, Mapping) else None
+        if isinstance(memory_id, str) and isinstance(graph, Mapping):
+            provenance[memory_id] = dict(graph)
+    return provenance
+
+
+def _graph_provenance_from_payload(
+    payload: Mapping[str, object],
+) -> dict[str, Mapping[str, object]]:
+    provenance: dict[str, Mapping[str, object]] = {}
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return provenance
+    for result in results:
+        if not isinstance(result, Mapping):
+            continue
+        memory_id = result.get("memory_id")
+        ranking_debug = result.get("ranking_debug")
+        graph = ranking_debug.get("provenance") if isinstance(ranking_debug, Mapping) else None
+        if isinstance(memory_id, str) and isinstance(graph, Mapping):
+            provenance[memory_id] = dict(graph)
+    return provenance
 
 
 def _record_thought(
@@ -176,6 +208,7 @@ def _search_memory_records(
             caller_kind=caller_kind,
             query=query,
             surfaced_memory_ids=surfaced_memory_ids,
+            graph_provenance=_graph_provenance_from_payload(coalesced_payload),
             duration_ms=duration_ms,
         )
         return _compact_cached_search_payload(coalesced_payload)
@@ -229,6 +262,7 @@ def _search_memory_records(
         caller_kind=caller_kind,
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
+        graph_provenance=_graph_provenance_from_results(results),
         duration_ms=duration_ms,
     )
     result_payloads = build_search_result_payloads(
@@ -339,6 +373,7 @@ async def _search_memory_records_async(
         caller_kind=caller_kind,
         query=query,
         surfaced_memory_ids=surfaced_memory_ids,
+        graph_provenance=_graph_provenance_from_results(results),
         duration_ms=duration_ms,
     )
     payload: dict[str, object] = {

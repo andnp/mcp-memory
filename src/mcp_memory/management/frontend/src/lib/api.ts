@@ -456,6 +456,16 @@ export interface RetrievalConversionMemoryRow {
   last_search_at: number | null;
 }
 
+export interface RetrievalEngagementEvidence {
+  memory_id: string;
+  query_family_key: string;
+  evidence_kind: string;
+  strength: string;
+  exposure_count: number;
+  co_result_read: boolean;
+  graph_provenance: Record<string, unknown>;
+}
+
 export interface RetrievalMemoryRow {
   memory_id: string;
   title: string;
@@ -493,6 +503,7 @@ export interface RetrievalMetrics {
   top_read_memories: RetrievalMemoryRow[];
   top_search_memories: RetrievalMemoryRow[];
   low_conversion_memories: RetrievalConversionMemoryRow[];
+  engagement_evidence: RetrievalEngagementEvidence[];
   top_tags: RetrievalTagRow[];
   tag_timelines: RetrievalTagTimeline[];
 }

@@ -8,6 +8,7 @@ from mcp_memory.management.models import (
     NerdRetrievalCallerKindRowPayload,
     NerdRetrievalConversionMemoryRowPayload,
     NerdRetrievalFunnelPayload,
+    NerdRetrievalEngagementEvidencePayload,
     NerdRetrievalMemoryRowPayload,
     NerdRetrievalPayload,
     NerdRetrievalQueryFamilyRowPayload,
@@ -107,13 +108,24 @@ def build_retrieval_analytics(
     converted_search_hits = 0
     read_events = 0
     search_hits = 0
+    external_search_hits: list[tuple[MemoryToolEventRow, str, str]] = []
+    external_reads_by_memory: dict[str, list[float]] = {}
 
     for row in retrieval_rows:
         event_kind = row.event_kind
         invocation_id = row.invocation_id
         created_at = row.created_at
         caller_kind = _normalize_caller_kind(row.caller_kind)
+        is_internal = caller_kind == "internal"
         if event_kind == "search":
+            if not is_internal and row.memory_id is not None and row.memory_id in memory_info:
+                external_search_hits.append(
+                    (
+                        row,
+                        _normalize_query_family_key(row.query_text),
+                        row.memory_id,
+                    )
+                )
             search_invocation_ids.add(invocation_id)
             search_invocation = search_invocation_accumulators.setdefault(
                 invocation_id,
@@ -133,6 +145,8 @@ def build_retrieval_analytics(
                 caller_kind_accumulators.setdefault(caller_kind, _RetrievalCallerKindAccumulator()).read_events += 1
             continue
 
+        if event_kind == "read" and not is_internal:
+            external_reads_by_memory.setdefault(memory_id, []).append(created_at)
         info = memory_info[memory_id]
         memory_accumulator = memory_accumulators.setdefault(
             memory_id,
@@ -348,6 +362,10 @@ def build_retrieval_analytics(
         for tag, _accumulator in ordered_tag_items[:_RETRIEVAL_TAG_TIMELINE_LIMIT]
     ]
 
+    engagement_evidence = _build_engagement_evidence(
+        external_search_hits,
+        external_reads_by_memory,
+    )
     return NerdRetrievalPayload(
         summary=NerdRetrievalSummaryPayload(
             search_invocations=len(search_invocation_ids),
@@ -368,9 +386,47 @@ def build_retrieval_analytics(
         top_read_memories=top_read_memories,
         top_search_memories=top_search_memories,
         low_conversion_memories=low_conversion_memories,
+        engagement_evidence=engagement_evidence,
         top_tags=top_tags,
         tag_timelines=tag_timelines,
     )
+
+
+def _build_engagement_evidence(
+    search_hits: list[tuple[MemoryToolEventRow, str, str]],
+    reads_by_memory: dict[str, list[float]],
+) -> list[NerdRetrievalEngagementEvidencePayload]:
+    exposures_by_memory: Counter[str] = Counter(memory_id for _row, _family, memory_id in search_hits)
+    read_by_invocation: dict[str, set[str]] = {}
+    for row, _family, memory_id in search_hits:
+        if any(read_at >= row.created_at for read_at in reads_by_memory.get(memory_id, ())):
+            read_by_invocation.setdefault(row.invocation_id, set()).add(memory_id)
+
+    evidence: list[NerdRetrievalEngagementEvidencePayload] = []
+    for row, family, memory_id in search_hits:
+        reads = reads_by_memory.get(memory_id, ())
+        converted = any(read_at >= row.created_at for read_at in reads)
+        co_result_read = bool(read_by_invocation.get(row.invocation_id, set()) - {memory_id})
+        if converted:
+            kind, strength = "search_to_read", "strong"
+        elif co_result_read:
+            kind, strength = "skipped_co_result", "conditional"
+        elif exposures_by_memory[memory_id] >= 2:
+            kind, strength = "repeated_exposure", "weak"
+        else:
+            kind, strength = "unknown", "neutral"
+        evidence.append(
+            NerdRetrievalEngagementEvidencePayload(
+                memory_id=memory_id,
+                query_family_key=family,
+                evidence_kind=kind,
+                strength=strength,
+                exposure_count=exposures_by_memory[memory_id],
+                co_result_read=co_result_read,
+                graph_provenance=dict(row.graph_provenance),
+            )
+        )
+    return evidence
 
 
 def _normalize_caller_kind(value: object) -> str:

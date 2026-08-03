@@ -653,6 +653,7 @@ class MemoryToolEventRow:
     result_rank: int | None = None
     result_count: int = 0
     duration_ms: float | None = None
+    graph_provenance: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -831,6 +832,7 @@ def adapt_memory_tool_event_row(row: Mapping[str, object]) -> MemoryToolEventRow
         result_rank=_optional_int(row, "result_rank"),
         result_count=_optional_int(row, "result_count") or 0,
         duration_ms=_optional_float(row, "duration_ms"),
+        graph_provenance=_coerce_json_mapping(row.get("graph_provenance_json")),
         created_at=_require_float(row, "created_at"),
     )
 
@@ -1403,7 +1405,7 @@ def list_memory_tool_event_rows_since(
     if db_manager is None:
         return []
     query = (
-        "SELECT invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, duration_ms, created_at "
+        "SELECT invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, duration_ms, created_at, graph_provenance_json "
         "FROM memory_tool_events WHERE created_at >= ?"
     )
     params: list[object] = [cutoff]

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from mcp_memory.storage.buffered_writer import BufferedWriter
@@ -46,6 +48,7 @@ class RetrievalTelemetryRepository:
         caller_kind: str,
         query: str,
         surfaced_memory_ids: list[str],
+        graph_provenance: Mapping[str, object] | None = None,
         duration_ms: float | None = None,
         created_at: float | None = None,
     ) -> None:
@@ -68,6 +71,7 @@ class RetrievalTelemetryRepository:
                     result_count,
                     event_time,
                     duration_ms,
+                    _provenance_json(graph_provenance, memory_id),
                 )
                 for index, memory_id in enumerate(surfaced_memory_ids, start=1)
             )
@@ -84,6 +88,7 @@ class RetrievalTelemetryRepository:
                     0,
                     event_time,
                     duration_ms,
+                    None,
                 )
             )
 
@@ -115,6 +120,7 @@ class RetrievalTelemetryRepository:
                     None,
                     event_time,
                     duration_ms,
+                    None,
                 )
             ]
         )
@@ -126,6 +132,57 @@ class RetrievalTelemetryRepository:
     def close(self) -> None:
         if self._writer is not None:
             self._writer.close()
+
+    def engagement_stats(self, memory_ids: list[str]) -> dict[str, dict[str, int]]:
+        if self._db_manager is None or not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        workspace_clause = "workspace_id IS NULL" if self._workspace_id is None else "workspace_id = ?"
+        query = (
+            "SELECT memory_id, event_kind, created_at FROM memory_tool_events "
+            f"WHERE {workspace_clause} AND caller_kind != 'internal' AND memory_id IN ({placeholders}) "
+        )
+        params: tuple[object, ...] = (
+            *((self._workspace_id,) if self._workspace_id is not None else ()),
+            *memory_ids,
+        )
+        try:
+            if self._uses_postgres_sessions():
+                query = _postgres_placeholder_query(query)
+                with self._db_manager.open_connection() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(query, params)
+                        rows = cursor.fetchall()
+            else:
+                connection = self._db_manager.open_connection(timeout_seconds=_NONCRITICAL_WRITE_TIMEOUT_SECONDS)
+                try:
+                    rows = connection.execute(query, params).fetchall()
+                finally:
+                    connection.close()
+        except Exception:
+            return {}
+        stats = {
+            memory_id: {"search_count": 0, "read_count": 0, "converted_search_count": 0}
+            for memory_id in memory_ids
+        }
+        search_times: dict[str, list[float]] = {memory_id: [] for memory_id in memory_ids}
+        read_times: dict[str, list[float]] = {memory_id: [] for memory_id in memory_ids}
+        for memory_id, event_kind, created_at in rows:
+            memory_key = str(memory_id)
+            if memory_key not in stats:
+                continue
+            if str(event_kind) == "search":
+                search_times[memory_key].append(float(created_at))
+            elif str(event_kind) == "read":
+                read_times[memory_key].append(float(created_at))
+        for memory_id in memory_ids:
+            stats[memory_id]["search_count"] = len(search_times[memory_id])
+            stats[memory_id]["read_count"] = len(read_times[memory_id])
+            stats[memory_id]["converted_search_count"] = sum(
+                any(read_time >= search_time for read_time in read_times[memory_id])
+                for search_time in search_times[memory_id]
+            )
+        return stats
 
     def _write_rows(self, rows: list[_TelemetryRow]) -> None:
         if self._writer is not None:
@@ -159,7 +216,7 @@ class RetrievalTelemetryRepository:
                 try:
                     cursor.executemany(
                         _postgres_placeholder_query(
-                            "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms, graph_provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         ),
                         rows,
                     )
@@ -177,7 +234,7 @@ class RetrievalTelemetryRepository:
         try:
             with conn:
                 conn.executemany(
-                    "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO memory_tool_events (invocation_id, workspace_id, caller_kind, event_kind, memory_id, query_text, result_rank, result_count, created_at, duration_ms, graph_provenance_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
         except sqlite3.OperationalError as exc:
@@ -190,3 +247,15 @@ class RetrievalTelemetryRepository:
 
 def _postgres_placeholder_query(query: str) -> str:
     return query.replace("?", "%s")
+
+
+def _provenance_json(
+    graph_provenance: Mapping[str, object] | None,
+    memory_id: str,
+) -> str | None:
+    if not graph_provenance:
+        return None
+    value = graph_provenance.get(memory_id)
+    if not isinstance(value, Mapping):
+        return None
+    return json.dumps(dict(value), ensure_ascii=False, sort_keys=True)

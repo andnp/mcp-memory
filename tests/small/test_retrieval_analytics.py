@@ -54,6 +54,7 @@ def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> Non
                 query_text="Alpha phrase",
                 result_count=2,
                 memory_id="memory-b",
+                graph_provenance={"path": "graph"},
             ),
             MemoryToolEventRow(
                 event_kind="read",
@@ -94,6 +95,11 @@ def test_build_retrieval_analytics_rolls_up_direct_search_and_read_rows() -> Non
     assert payload.funnel.search_hits == 2
     assert payload.funnel.converted_search_hits == 1
     assert payload.funnel.conversion_rate == 0.5
+    evidence = {(row.memory_id, row.evidence_kind): row for row in payload.engagement_evidence}
+    assert evidence[("memory-a", "search_to_read")].strength == "strong"
+    assert evidence[("memory-b", "skipped_co_result")].co_result_read is True
+    assert evidence[("memory-b", "skipped_co_result")].graph_provenance == {"path": "graph"}
+    assert not any(row.memory_id == "missing-memory" for row in payload.engagement_evidence)
 
     by_caller_kind = {row.key: row for row in payload.by_caller_kind}
     assert by_caller_kind["external"].search_invocations == 2

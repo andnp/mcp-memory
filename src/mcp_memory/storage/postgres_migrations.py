@@ -827,6 +827,13 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS content_quality_improved INTEGER",
         ),
     ),
+    PostgresMigration(
+        version=24,
+        name="add_memory_tool_graph_provenance",
+        statements=(
+            "ALTER TABLE memory_tool_events ADD COLUMN IF NOT EXISTS graph_provenance_json JSONB",
+        ),
+    ),
 )
 
 

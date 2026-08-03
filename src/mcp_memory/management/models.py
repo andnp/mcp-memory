@@ -847,6 +847,16 @@ class NerdRetrievalConversionMemoryRowPayload(BaseModel):
     last_search_at: float | None = None
 
 
+class NerdRetrievalEngagementEvidencePayload(BaseModel):
+    memory_id: str
+    query_family_key: str
+    evidence_kind: str
+    strength: str
+    exposure_count: int = 0
+    co_result_read: bool = False
+    graph_provenance: dict[str, object] = Field(default_factory=dict)
+
+
 class NerdRetrievalPayload(BaseModel):
     summary: NerdRetrievalSummaryPayload = Field(default_factory=NerdRetrievalSummaryPayload)
     funnel: NerdRetrievalFunnelPayload = Field(default_factory=NerdRetrievalFunnelPayload)
@@ -856,6 +866,7 @@ class NerdRetrievalPayload(BaseModel):
     top_read_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
     top_search_memories: list[NerdRetrievalMemoryRowPayload] = Field(default_factory=list)
     low_conversion_memories: list[NerdRetrievalConversionMemoryRowPayload] = Field(default_factory=list)
+    engagement_evidence: list[NerdRetrievalEngagementEvidencePayload] = Field(default_factory=list)
     top_tags: list[NerdRetrievalTagRowPayload] = Field(default_factory=list)
     tag_timelines: list[NerdRetrievalTagTimelinePayload] = Field(default_factory=list)
 
