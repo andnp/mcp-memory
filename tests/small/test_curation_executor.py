@@ -298,14 +298,15 @@ def _link_action(
     link_type: str = "SUPPORTS",
     context: str = "The source records the target as supporting evidence.",
 ) -> CreateLinkAction:
-    assertion = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type, context=context)
+    assertion = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
+    evidence = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type, context=context)
     return CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,
         target_id=target_id,
         confidence=1,
         rationale=rationale,
-        evidence=[EvidenceRef(link=assertion)],
+        evidence=[EvidenceRef(link=evidence)],
         preconditions=ActionPreconditions(
             record_tokens={source_id: source_token, target_id: target_token},
             absent_links=[assertion],
@@ -507,6 +508,46 @@ def test_create_link_rejects_generic_vocabulary_without_exact_evidence_or_precon
 
     assert repository.get_links(str(source_id)) == []
     assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+
+
+def test_create_link_rejects_context_bearing_absent_precondition_before_mutation(
+    db_manager: DatabaseManager,
+) -> None:
+    repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
+    source = repository.get_memory(str(source_id))
+    target = repository.get_memory(str(target_id))
+    assert source is not None and target is not None
+    action = _link_action(
+        source_id,
+        target_id,
+        record_token(source),
+        record_token(target),
+    ).model_copy(
+        update={
+            "preconditions": ActionPreconditions(
+                record_tokens={source_id: record_token(source), target_id: record_token(target)},
+                absent_links=[
+                    LinkAssertion(
+                        source_id=source_id,
+                        target_id=target_id,
+                        link_type="SUPPORTS",
+                        context="Existing relationship context.",
+                    )
+                ],
+            )
+        }
+    )
+    repository.add_link(str(source_id), str(target_id), "SUPPORTS", "Different existing context.")
+
+    with pytest.raises(CurationActionFatalError, match="must omit relationship context"):
+        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+            action,
+            run_id=run.run_id,
+            source_type=source.type,
+            target_type=target.type,
+        )
+
+    assert repository.get_links(str(source_id))[0].context == "Different existing context."
 
 
 def test_create_link_missing_endpoint_fails_before_history(db_manager: DatabaseManager) -> None:

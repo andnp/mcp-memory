@@ -225,7 +225,7 @@ def test_preserves_provider_supplied_token_mismatch() -> None:
     assert hydrated.preconditions.record_tokens[CANONICAL_ID] == "stale-provider-token"
 
 
-def test_hydrates_omitted_create_link_context_for_matching_absent_link() -> None:
+def test_does_not_hydrate_create_link_context_for_absent_link() -> None:
     context = _context()
     action = CreateLinkAction(
         action_id=UUID("00000000-0000-0000-0000-000000000008"),
@@ -258,11 +258,11 @@ def test_hydrates_omitted_create_link_context_for_matching_absent_link() -> None
 
     hydrated = _hydrate_record_tokens(action, context)
 
-    assert hydrated.preconditions.absent_links[0].context == action.context
+    assert hydrated.preconditions.absent_links[0].context is None
     assert set(hydrated.preconditions.record_tokens) == {CANONICAL_ID, SOURCE_ID}
 
 
-def test_preserves_conflicting_create_link_context() -> None:
+def test_preserves_explicit_create_link_absent_context_without_hydration() -> None:
     context = _context()
     action = CreateLinkAction(
         action_id=UUID("00000000-0000-0000-0000-000000000009"),

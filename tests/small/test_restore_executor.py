@@ -190,6 +190,7 @@ def test_create_link_restore_removes_only_the_exact_edge(db_manager: DatabaseMan
         link_type="SUPPORTS",
         context="exact restore edge",
     )
+    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type=edge.link_type)
     action = CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,
@@ -199,7 +200,7 @@ def test_create_link_restore_removes_only_the_exact_edge(db_manager: DatabaseMan
         evidence=[EvidenceRef(link=edge)],
         preconditions=ActionPreconditions(
             record_tokens={source_id: record_token(source), target_id: record_token(target)},
-            absent_links=[edge],
+            absent_links=[absent],
         ),
         link_type=edge.link_type,
         context=edge.context,

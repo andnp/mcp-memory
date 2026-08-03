@@ -30,6 +30,11 @@ class _CreateLinkJSONProvider:
             "link_type": "SUPPORTS",
             "context": "The source records the target as supporting evidence.",
         }
+        absent_link = {
+            "source_id": source["memory_id"],
+            "target_id": target["memory_id"],
+            "link_type": "SUPPORTS",
+        }
         return {
             "run_id": request["run_id"],
             "plan_id": request["plan_id"],
@@ -52,7 +57,7 @@ class _CreateLinkJSONProvider:
                             source["memory_id"]: context["record_tokens"][source["memory_id"]],
                             target["memory_id"]: context["record_tokens"][target["memory_id"]],
                         },
-                        "absent_links": [link],
+                        "absent_links": [absent_link],
                     },
                 }
             ],

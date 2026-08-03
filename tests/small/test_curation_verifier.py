@@ -102,6 +102,7 @@ def _link_action(
     link_type: str = "SUPPORTS",
     context: str = "exact typed edge",
 ) -> CreateLinkAction:
+    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
     edge = LinkAssertion(
         source_id=source_id,
         target_id=target_id,
@@ -117,7 +118,7 @@ def _link_action(
         evidence=[EvidenceRef(link=edge)],
         preconditions=ActionPreconditions(
             record_tokens={source_id: source_token, target_id: target_token},
-            absent_links=[edge],
+            absent_links=[absent],
         ),
         link_type=link_type,
         context=context,

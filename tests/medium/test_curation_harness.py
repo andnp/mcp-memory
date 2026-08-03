@@ -156,6 +156,7 @@ def _create_link_action(source: dict[str, object], target: dict[str, object]) ->
         link_type="SUPPORTS",
         context="The source supports the target.",
     )
+    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type="SUPPORTS")
     return CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,
@@ -167,7 +168,7 @@ def _create_link_action(source: dict[str, object], target: dict[str, object]) ->
         evidence=[EvidenceRef(link=link)],
         preconditions=ActionPreconditions(
             record_tokens={source_id: record_token(source), target_id: record_token(target)},
-            absent_links=[link],
+            absent_links=[absent],
         ),
     )
 

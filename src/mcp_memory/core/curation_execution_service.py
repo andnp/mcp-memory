@@ -14,7 +14,6 @@ from mcp_memory.core.curation_models import (
     CurationAction,
     CreateLinkAction,
     CurationRunOutcome,
-    LinkAssertion,
     MergeMemoriesAction,
     NormalizeMemoryAction,
     RemoveLinkAction,
@@ -199,10 +198,6 @@ def _hydrate_record_tokens(
         if token is not None:
             record_tokens.setdefault(memory_id, token)
     preconditions = action.preconditions
-    if isinstance(action, CreateLinkAction):
-        absent_links = _hydrate_create_link_preconditions(action, preconditions.absent_links)
-        if absent_links != preconditions.absent_links:
-            preconditions = preconditions.model_copy(update={"absent_links": absent_links})
     if (
         record_tokens == preconditions.record_tokens
         and preconditions is action.preconditions
@@ -210,26 +205,6 @@ def _hydrate_record_tokens(
         return action
     preconditions = preconditions.model_copy(update={"record_tokens": record_tokens})
     return action.model_copy(update={"preconditions": preconditions})
-
-
-def _hydrate_create_link_preconditions(
-    action: CreateLinkAction,
-    absent_links: list[LinkAssertion],
-) -> list[LinkAssertion]:
-    if action.context is None:
-        return absent_links
-    hydrated: list[LinkAssertion] = []
-    for assertion in absent_links:
-        if (
-            assertion.context is None
-            and assertion.source_id == action.source_id
-            and assertion.target_id == action.target_id
-            and assertion.link_type.strip() == action.link_type.strip()
-        ):
-            hydrated.append(assertion.model_copy(update={"context": action.context}))
-        else:
-            hydrated.append(assertion)
-    return hydrated
 
 
 def _action_memory_ids(action: CurationAction) -> set[UUID]:

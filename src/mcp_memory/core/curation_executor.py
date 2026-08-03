@@ -8,6 +8,7 @@ idempotency.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import NoReturn, cast
 from uuid import UUID
@@ -17,7 +18,6 @@ from mcp_memory.core.curation_models import (
     ClaimMapping,
     CreateLinkAction,
     CurationVerificationDescriptor,
-    LinkAssertion,
     MergeMemoriesAction,
     NormalizeMemoryAction,
     RemoveLinkAction,
@@ -143,7 +143,7 @@ class CurationExecutor:
         link_type = action.link_type.strip()
         context = (action.context or "").strip()
         _require_exact_link_evidence(action, link_type=link_type, context=context)
-        _require_create_link_preconditions(action, link_type=link_type, context=context)
+        _require_create_link_preconditions(action, link_type=link_type)
 
         endpoint_ids = (action.source_id, action.target_id)
         expected_tokens: dict[str, str] = {}
@@ -733,23 +733,24 @@ def _require_create_link_preconditions(
     action: CreateLinkAction,
     *,
     link_type: str,
-    context: str,
 ) -> None:
-    expected = LinkAssertion(
-        source_id=action.source_id,
-        target_id=action.target_id,
-        link_type=link_type,
-        context=context,
-    )
+    normalized_type = _normalize_link_type(link_type)
     for assertion in action.preconditions.absent_links:
+        if assertion.context is not None:
+            raise CurationActionFatalError(
+                "create_link absent-link precondition must omit relationship context"
+            )
         if (
-            assertion.source_id == expected.source_id
-            and assertion.target_id == expected.target_id
-            and assertion.link_type.strip() == expected.link_type
-            and (assertion.context or "").strip() == expected.context
+            assertion.source_id == action.source_id
+            and assertion.target_id == action.target_id
+            and _normalize_link_type(assertion.link_type) == normalized_type
         ):
             return
     raise CurationActionFatalError("create_link requires an exact absent-link precondition")
+
+
+def _normalize_link_type(link_type: str) -> str:
+    return re.sub(r"[\s-]+", "_", link_type.strip()).upper()
 
 
 __all__ = [

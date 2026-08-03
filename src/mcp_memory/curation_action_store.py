@@ -443,12 +443,17 @@ class SQLiteCurationActionStore:
                 if source_id not in target_ids or target_id not in target_ids:
                     raise CurationActionFatalError("link precondition references an unlocked target")
                 link_type = _normalize_link_type(str(_field(assertion, "link_type")))
+                context = _field(assertion, "context", None)
+                if not should_exist and context is not None:
+                    raise CurationActionFatalError(
+                        "absent-link precondition must omit relationship context"
+                    )
                 row = connection.execute(
                     "SELECT context FROM links WHERE source_id = ? AND target_id = ? AND type = ?",
                     (source_id, target_id, link_type),
                 ).fetchone()
                 present = row is not None and (
-                    _field(assertion, "context", None) is None or str(row[0] or "") == str(_field(assertion, "context"))
+                    not should_exist or context is None or str(row[0] or "") == str(context)
                 )
                 if present != should_exist:
                     raise CurationActionStaleError("link precondition is stale")
