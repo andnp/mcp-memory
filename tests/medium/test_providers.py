@@ -134,6 +134,33 @@ async def test_copilot_sdk_agentic_provider_scopes_mcp_tools_to_workspace(monkey
 
 
 @pytest.mark.asyncio
+async def test_copilot_sdk_agentic_provider_keeps_session_for_multiple_turns(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque(
+            [
+                FakeCopilotSessionEvent(data=AssistantMessageData(content='{"round": 1}', message_id="m1")),
+                FakeCopilotSessionEvent(data=AssistantMessageData(content='{"round": 2}', message_id="m2")),
+            ]
+        )
+    )
+    factory = _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+
+    provider = CopilotSDKAgenticProvider(max_retries=0, cwd="/workspace")
+    agent_session = await provider.open_agent_session()
+    try:
+        first = await agent_session.run_agent("investigate")
+        second = await agent_session.run_agent("correct")
+    finally:
+        await agent_session.close()
+
+    assert first.parsed == {"round": 1}
+    assert second.parsed == {"round": 2}
+    assert session.sent_prompts == ["investigate", "correct"]
+    assert len(factory.client.create_session_calls) == 1
+    assert session.disconnected is True
+
+
+@pytest.mark.asyncio
 async def test_instrumented_provider_records_task_name_with_usage_context(db_manager) -> None:
     class _Provider:
         async def ask(self, prompt: str) -> dict[str, object]:
@@ -209,6 +236,47 @@ async def test_instrumented_provider_can_forward_agentic_runs(db_manager) -> Non
 
     assert result.status == "success"
     assert result.summary == "agent mode"
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_records_each_persistent_session_turn(db_manager) -> None:
+    class _Session:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(status="success", summary=prompt)
+
+        async def close(self) -> None:
+            return None
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.session = _Session()
+
+        async def open_agent_session(self, *, allowed_tool_names=None):
+            return self.session
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="copilot-sdk",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    ).with_usage_context(task_name="memory-curator", task_id="session-task")
+
+    session = await provider.open_agent_session()
+    await session.run_agent("investigate")
+    await session.run_agent("feedback")
+    await session.close()
+
+    rows = db_manager.get_connection().execute(
+        "SELECT COUNT(*) AS count FROM provider_usage WHERE task_id = ?",
+        ("session-task",),
+    ).fetchone()
+    assert rows["count"] == 2
 
 
 @pytest.mark.asyncio
