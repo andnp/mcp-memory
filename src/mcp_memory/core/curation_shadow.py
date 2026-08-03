@@ -8,7 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
-from mcp_memory.core.curation_context import AcceptedMaintenanceRead
+from mcp_memory.core.curation_context import AcceptedMaintenanceRead, CurationReadBudget
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_feedback import (
@@ -42,6 +42,7 @@ from mcp_memory.curation_quality_store import (
 
 
 CURATOR_MAX_FEEDBACK_ITERATIONS = 2
+CURATOR_MAX_CONTEXT_CHARACTERS = 24_000
 
 
 async def run_curator_verified_campaign(
@@ -155,6 +156,9 @@ async def run_curator_verified_campaign(
         work_items=ctx.work_items,
         config=CurationHarnessConfig(
             provider=provider_trust,
+            read_budget=CurationReadBudget(
+                max_context_characters=CURATOR_MAX_CONTEXT_CHARACTERS,
+            ),
             mutation_budget=configured_budget,
             execute_accepted_actions=True,
             require_authoritative_disclosure_context=require_policy,
