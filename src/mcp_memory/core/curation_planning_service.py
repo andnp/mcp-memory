@@ -29,6 +29,7 @@ from mcp_memory.mutation_history import ProtectionMode
 class CurationPlannerTools:
     context: ImmutableCurationContextPacket
     retry_feedback: CurationRetryFeedback | None = None
+    quality_feedback: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,7 @@ class CurationPlanningInput:
     memory_types: Mapping[UUID, str] | None = None
     contradictory_memory_ids: set[UUID] | frozenset[UUID] = frozenset()
     protections_by_memory: Mapping[UUID, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None
+    quality_feedback: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +64,14 @@ async def plan_and_validate(
         try:
             envelope = await planner.create_plan(
                 input.request,
-                cast(Any, CurationPlannerTools(context=input.context, retry_feedback=feedback)),
+                cast(
+                    Any,
+                    CurationPlannerTools(
+                        context=input.context,
+                        retry_feedback=feedback,
+                        quality_feedback=input.quality_feedback,
+                    ),
+                ),
             )
             envelopes.append(cast(PlannerExecutionEnvelope[Any], envelope))
         except CurationPlannerSchemaError as error:

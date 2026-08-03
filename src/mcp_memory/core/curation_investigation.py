@@ -52,22 +52,26 @@ async def run_curator_investigation(
     seed_records: list[Any],
     task_id: str,
     limits: CurationInvestigationLimits | None = None,
+    session: Any | None = None,
 ) -> CurationInvestigationResult:
     """Ask an agent to discover evidence, without accepting its record payloads."""
 
     bounds = limits or CurationInvestigationLimits()
     run_agent = getattr(provider, "run_agent", None)
+    if session is not None:
+        run_agent = getattr(session, "run_agent", None)
     if not callable(run_agent):
         return CurationInvestigationResult("skipped", reason="agentic_provider_unavailable")
 
     prompt = _investigation_prompt(seed_records, task_id=task_id, limits=bounds)
-    scoped_provider = getattr(provider, "with_allowed_tool_names", None)
-    if not callable(scoped_provider):
-        return CurationInvestigationResult("skipped", reason="read_only_scope_unavailable")
-    provider = scoped_provider(READ_ONLY_CURATOR_INVESTIGATION_TOOLS)
-    run_agent = getattr(provider, "run_agent", None)
-    if not callable(run_agent):
-        return CurationInvestigationResult("skipped", reason="read_only_provider_unavailable")
+    if session is None:
+        scoped_provider = getattr(provider, "with_allowed_tool_names", None)
+        if not callable(scoped_provider):
+            return CurationInvestigationResult("skipped", reason="read_only_scope_unavailable")
+        provider = scoped_provider(READ_ONLY_CURATOR_INVESTIGATION_TOOLS)
+        run_agent = getattr(provider, "run_agent", None)
+        if not callable(run_agent):
+            return CurationInvestigationResult("skipped", reason="read_only_provider_unavailable")
 
     try:
         result = await cast(Callable[[str], Awaitable[Any]], run_agent)(prompt)

@@ -21,7 +21,7 @@ from mcp_memory.core.curation_models import (
     CurationPlanningRequest,
 )
 from mcp_memory.core.provider_admission import classify_provider_failure
-from mcp_memory.core.providers.interfaces import ProviderJSONCall
+from mcp_memory.core.providers.interfaces import AgenticSession, ProviderJSONCall
 
 
 class CurationReadTools(Protocol):
@@ -402,6 +402,81 @@ class InstrumentedCurationPlanner:
         )
 
 
+class SessionCurationPlanner(InstrumentedCurationPlanner):
+    """Use one persistent agent conversation for typed planning turns."""
+
+    def __init__(
+        self,
+        session: AgenticSession,
+        *,
+        provider_key: str = "agentic-session",
+        provider_name: str = "agentic-session",
+        model_name: str = "agentic-session",
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._session = session
+        self._provider_key = provider_key
+        self._provider_name = provider_name
+        self._model_name = model_name
+        self._provider_profile = provider_key
+        self._route_available = True
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._quality_feedback: Mapping[str, object] | None = None
+
+    def set_quality_feedback(self, feedback: Mapping[str, object] | None) -> None:
+        self._quality_feedback = None if feedback is None else dict(feedback)
+
+    async def create_plan(
+        self, request: CurationPlanningRequest, tools: CurationReadTools
+    ) -> PlannerExecutionEnvelope[CurationPlan]:
+        prompt = _build_planner_prompt(request, tools)
+        if self._quality_feedback is not None:
+            prompt += "\nMeasured quality feedback:\n" + json.dumps(
+                self._quality_feedback, sort_keys=True, default=str
+            )
+        started_at = self._clock()
+        try:
+            result = await self._session.run_agent(prompt)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            completed_at = self._clock()
+            call = ProviderJSONCall(
+                response=None,
+                provider_key=self._provider_key,
+                provider_name=self._provider_name,
+                model_name=self._model_name,
+                request_id=str(uuid4()),
+                attempt=1,
+                started_at=started_at.timestamp(),
+                completed_at=completed_at.timestamp(),
+                status="error",
+                error_text=str(exc),
+                reason_code="provider_failed",
+                reason_category="execution",
+                admission_status="admitted",
+                premium_request=True,
+            )
+            return self._translate_call(request, call)
+        parsed = result.parsed if isinstance(result.parsed, dict) else None
+        call = ProviderJSONCall(
+            response=parsed,
+            provider_key=self._provider_key,
+            provider_name=self._provider_name,
+            model_name=self._model_name,
+            request_id=str(uuid4()),
+            attempt=1,
+            started_at=started_at.timestamp(),
+            completed_at=self._clock().timestamp(),
+            status="success" if parsed is not None else "parse_error",
+            error_text=None if parsed is not None else "agentic response was not a JSON object",
+            raw_text=result.raw_text,
+            parsed=parsed,
+            admission_status="admitted",
+            premium_request=True,
+        )
+        return self._translate_call(request, call)
+
 # Descriptive alias for callers that name the boundary after the provider.
 ProviderCurationPlanner = InstrumentedCurationPlanner
 
@@ -578,6 +653,9 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "expected_fields": list(retry_feedback.expected_fields),
             "received_fields": list(retry_feedback.received_fields),
         }
+    quality_feedback = getattr(tools, "quality_feedback", None)
+    if quality_feedback is not None:
+        payload["quality_feedback"] = dict(quality_feedback)
     return (
         "You are a curation planner whose job is to improve the durable quality of "
         "the memory base. Do not optimize for safe no-ops: inspect the visible "
