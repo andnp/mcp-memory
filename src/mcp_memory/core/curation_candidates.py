@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mcp_memory.context import ApplicationContext
+from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.sampling import SamplingBatch
 
 
@@ -15,6 +16,7 @@ class CuratorCandidateRequest:
     requested_strategy: str | None = None
     limit: int | None = None
     exclude_memory_ids: frozenset[str] = frozenset()
+    campaign_hypothesis: CampaignHypothesis | None = None
 
 
 @dataclass(frozen=True, slots=True)

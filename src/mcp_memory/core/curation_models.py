@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Any, Iterable, Literal, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -325,6 +326,7 @@ class CampaignHypothesis(CurationModel):
 
     schema_version: Literal[1] = 1
     retrieval_problem: CampaignRetrievalProblem = CampaignRetrievalProblem.HEURISTIC
+    query: str | None = None
     expected_memory_ids: list[UUID] = Field(default_factory=list)
     target_mode: CampaignTargetMode = CampaignTargetMode.HEURISTIC
     top_k: int = Field(default=5, ge=1)

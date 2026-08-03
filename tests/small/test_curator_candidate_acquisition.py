@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
+from mcp_memory.core.curation_models import CampaignHypothesis, CampaignRetrievalProblem
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
@@ -214,6 +216,85 @@ def test_semantic_candidates_use_global_search_seam() -> None:
     assert search_calls
     assert all(call["workspace_id"] is None for call in search_calls)
     assert all(call["status"] == "active" for call in search_calls)
+
+
+def test_explicit_campaign_hypothesis_prioritizes_expected_and_query_hits() -> None:
+    expected_id = uuid4()
+    expected = _record(str(expected_id), updated_at="2020-01-01T00:00:00+00:00")
+    query_hit = _record("query-hit", updated_at="2020-01-02T00:00:00+00:00")
+    heuristic = _record("heuristic", updated_at="2020-01-03T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [heuristic],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "quality-signal": [],
+        "seeded-random": [],
+    })
+    repository.by_id.update({expected.id: expected, query_hit.id: query_hit})
+
+    class RetrievalFacade:
+        def search_sync(self, query: str, **kwargs: object) -> Any:
+            assert query == "find the goal"
+            return SimpleNamespace(
+                results=[SimpleNamespace(record=SimpleNamespace(source_id=query_hit.id))]
+            )
+
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        memory_retrieval=RetrievalFacade(),
+        db_manager=None,
+        workspace_id=None,
+    )
+    hypothesis = CampaignHypothesis(
+        query="find the goal",
+        retrieval_problem=CampaignRetrievalProblem.RETRIEVAL_QUALITY,
+        expected_memory_ids=[expected_id],
+    )
+
+    batch = acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id="goal-task",
+            requested_strategy="cold-storage",
+            limit=2,
+            campaign_hypothesis=hypothesis,
+        ),
+    )
+
+    assert [record.id for record in batch.records] == [expected.id, query_hit.id]
+
+
+def test_legacy_campaign_hypothesis_keeps_heuristic_acquisition() -> None:
+    heuristic = _record("heuristic", updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "cold-storage": [heuristic],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "quality-signal": [],
+        "seeded-random": [],
+    })
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        memory_retrieval=None,
+        db_manager=None,
+        workspace_id=None,
+    )
+
+    batch = acquire_curator_candidates(
+        ctx,
+        CuratorCandidateRequest(
+            task_id="legacy-task",
+            requested_strategy="cold-storage",
+            limit=1,
+            campaign_hypothesis=CampaignHypothesis.legacy(),
+        ),
+    )
+
+    assert [record.id for record in batch.records] == [heuristic.id]
 
 
 def test_typed_candidate_service_matches_compatibility_wrapper_with_exclusions() -> None:

@@ -9,6 +9,11 @@ from uuid import UUID
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_candidates import CuratorCandidateRequest, CuratorSamplingContext
 from mcp_memory.core.curation_identity import candidate_revision_token, graph_token, record_token
+from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CampaignRetrievalProblem,
+    campaign_hypothesis_from_payload,
+)
 from mcp_memory.core.ports.curation import CandidateDisposition, CurationCandidateState
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
@@ -159,6 +164,7 @@ def _acquire_curator_candidates(
         seed_limit=request.limit,
         exclude_memory_ids=set(request.exclude_memory_ids),
         backend_query_limit=request.limit,
+        campaign_hypothesis=request.campaign_hypothesis,
     )
 
 
@@ -183,6 +189,7 @@ def select_curator_seed_batch(
         seed_limit=seed_limit,
         exclude_memory_ids=exclude_memory_ids,
         backend_query_limit=int(task.data["limit"]) if "limit" in task.data else None,
+        campaign_hypothesis=campaign_hypothesis_from_payload(task.data),
     )
 
 
@@ -193,22 +200,41 @@ def _select_curator_seed_batch(
     seed_limit: int | None = None,
     exclude_memory_ids: set[str] | None = None,
     backend_query_limit: int | None = None,
+    campaign_hypothesis: CampaignHypothesis | None = None,
 ) -> SamplingBatch:
     assert ctx.repository is not None
     limit = _normalize_curator_seed_limit(seed_limit)
     excluded_ids = exclude_memory_ids or set()
     excluded_ids = exclude_memory_ids or set()
-    candidates = [
-        record
-        for record in _query_curator_backend_candidates(
+    backend_candidates = _query_curator_backend_candidates(
+        ctx,
+        task,
+        frontier_limit=limit + len(excluded_ids),
+        configured_limit=backend_query_limit,
+        expand_for_exclusions=backend_query_limit is not None and not hasattr(task, "data"),
+    )
+    explicit_hypothesis = (
+        campaign_hypothesis if _is_explicit_campaign_hypothesis(campaign_hypothesis) else None
+    )
+    goal_candidates: list[Any] = []
+    if explicit_hypothesis is not None:
+        goal_candidates = _query_campaign_goal_candidates(
             ctx,
-            task,
-            frontier_limit=limit + len(excluded_ids),
-            configured_limit=backend_query_limit,
-            expand_for_exclusions=backend_query_limit is not None and not hasattr(task, "data"),
+            explicit_hypothesis,
+            backend_candidates,
+            limit=min(
+                CURATOR_MAX_BATCH_RECORDS,
+                max(limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER,
+            ),
         )
-        if record.id not in excluded_ids
-    ]
+        candidates = [
+            record
+            for record in (goal_candidates + backend_candidates)
+            if record.id not in excluded_ids
+        ]
+        candidates = list({record.id: record for record in candidates}.values())
+    else:
+        candidates = [record for record in backend_candidates if record.id not in excluded_ids]
     if not candidates:
         return SamplingBatch(
             requested_strategy=requested_sampling_strategy(task),
@@ -218,10 +244,11 @@ def _select_curator_seed_batch(
             records=[],
         )
 
+    goal_ids = {record.id for record in goal_candidates}
     sampled_batch = sample_maintenance_candidates(
         ctx,
         task,
-        candidates,
+        [record for record in candidates if record.id not in goal_ids],
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
         strategy_weights=CURATOR_STRATEGY_WEIGHTS,
         limit=min(len(candidates), max(limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER),
@@ -261,6 +288,8 @@ def _select_curator_seed_batch(
     )
 
     seed_records: list[Any] = []
+    if explicit_hypothesis is not None:
+        extend_unique_seed_records(seed_records, goal_candidates, limit)
     extend_unique_seed_records(
         seed_records,
         quality_feedback_candidates,
@@ -291,7 +320,7 @@ def _select_curator_seed_batch(
         requested_strategy=sampled_batch.requested_strategy,
         strategy_used=sampled_batch.strategy_used,
         strategy_fallback_reason=sampled_batch.strategy_fallback_reason,
-        candidate_count=sampled_batch.candidate_count,
+        candidate_count=len(candidates) if explicit_hypothesis is not None else sampled_batch.candidate_count,
         records=seed_records[:limit],
         strategy_selection_mode=sampled_batch.strategy_selection_mode,
         strategy_selection_reason=sampled_batch.strategy_selection_reason,
@@ -688,6 +717,96 @@ def _query_curator_backend_candidates(
                         candidates_by_id[record.id] = record
 
     return filter_curator_candidates(ctx, list(candidates_by_id.values()))
+
+
+def _is_explicit_campaign_hypothesis(hypothesis: CampaignHypothesis | None) -> bool:
+    if hypothesis is None:
+        return False
+    return bool(
+        hypothesis.expected_memory_ids
+        or (hypothesis.query and hypothesis.query.strip())
+        or hypothesis.retrieval_problem is not CampaignRetrievalProblem.HEURISTIC
+    )
+
+
+def _query_campaign_goal_candidates(
+    ctx: ApplicationContext,
+    hypothesis: CampaignHypothesis,
+    backend_candidates: list[Any],
+    *,
+    limit: int,
+) -> list[Any]:
+    if ctx.repository is None:
+        return []
+    candidate_by_id: dict[str, Any] = {}
+    expected_ids = [str(memory_id) for memory_id in hypothesis.expected_memory_ids]
+    for memory_id in expected_ids:
+        record = ctx.repository.get_memory(memory_id)
+        if record is not None and record.status == "active":
+            candidate_by_id[record.id] = record
+
+    retrieval = getattr(ctx, "memory_retrieval", None)
+    if retrieval is None and ctx.relational_search is not None:
+        retrieval = build_memory_retrieval_facade(
+            ctx.repository,
+            config=getattr(ctx, "config", None),
+            vector_store=getattr(ctx, "vector_store", None),
+            embedder=getattr(ctx, "embedder", None),
+            embedding_maintenance=getattr(ctx, "embedding_maintenance", None),
+            native_search=ctx.relational_search,
+        )
+    if retrieval is not None and hypothesis.query and hypothesis.query.strip():
+        outcome = retrieval.search_sync(
+            hypothesis.query.strip(),
+            limit=limit,
+            workspace_id=None,
+            status="active",
+            include_superseded=False,
+        )
+        for result in outcome.results:
+            memory_id = getattr(result.record, "source_id", None)
+            if isinstance(memory_id, str):
+                record = ctx.repository.get_memory(memory_id)
+                if record is not None and record.status == "active":
+                    candidate_by_id[record.id] = record
+
+    anchors = list(candidate_by_id.values())
+    adjacent_ids = _seed_adjacent_memory_ids(ctx, anchors)
+    for memory_id in sorted(adjacent_ids):
+        record = ctx.repository.get_memory(memory_id)
+        if record is not None and record.status == "active":
+            candidate_by_id[record.id] = record
+
+    anchor_tags = {tag for record in anchors for tag in record.tags}
+    support_candidates = [
+        record
+        for record in backend_candidates
+        if record.id not in candidate_by_id
+        and (record.id in adjacent_ids or anchor_tags.intersection(record.tags))
+    ]
+    support_candidates.sort(
+        key=lambda record: (
+            -int(record.id in adjacent_ids),
+            -len(anchor_tags.intersection(record.tags)),
+            -record.read_count,
+            str(record.updated_at),
+        )
+    )
+    for record in support_candidates:
+        candidate_by_id[record.id] = record
+
+    filtered = filter_curator_candidates(ctx, list(candidate_by_id.values()))
+    by_id = {record.id: record for record in filtered}
+    ordered: list[Any] = []
+    for memory_id in expected_ids:
+        record = by_id.get(memory_id)
+        if record is not None:
+            ordered.append(record)
+    ordered_ids = {record.id for record in ordered}
+    for record in filtered:
+        if record.id not in ordered_ids:
+            ordered.append(record)
+    return ordered[:limit]
 
 
 def _quality_feedback_candidates(ctx: ApplicationContext, candidates: list[Any]) -> list[Any]:

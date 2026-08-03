@@ -74,6 +74,7 @@ async def handle_memory_curator_task(
                     task_id=task.id,
                     workspace_id=task.workspace_id,
                     requested_strategy=task.data.get("strategy"),
+                    campaign_hypothesis=campaign_hypothesis,
                 ),
             )
             seed_records = seed_batch.records
@@ -84,6 +85,7 @@ async def handle_memory_curator_task(
                 task_id=task.id,
                 workspace_id=task.workspace_id,
                 requested_strategy=task.data.get("strategy"),
+                campaign_hypothesis=campaign_hypothesis,
             ),
         )
         seed_records = seed_batch.records
