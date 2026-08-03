@@ -1,3 +1,5 @@
+from typing import Any
+
 from mcp_memory.management.agent_run_reporting import (
     build_agent_run_history_payload,
     build_recent_agent_runs,
@@ -15,7 +17,16 @@ from mcp_memory.core.task_results import TaskRunResult, coerce_task_run_result
 from mcp_memory.management.models import AgentRunHistoryPayload, MutationOutcomePayload, RunResultMetadataPayload
 from mcp_memory.management.query_runner import ManagementQueryAdapter
 from mcp_memory.management.reporting_rows import coerce_task_result_view
-from mcp_memory.management.task_sampling_summary import build_selection_strategy_utility_priors, build_task_sampling_summary
+from mcp_memory.management.task_sampling_summary import (
+    SAMPLER_OUTCOME_NEUTRAL,
+    SAMPLER_OUTCOME_PROVIDER_FAILURE,
+    SAMPLER_OUTCOME_QUALITY_FAILURE,
+    SAMPLER_OUTCOME_QUALITY_PASS,
+    SAMPLER_OUTCOME_ROLLED_BACK,
+    build_selection_strategy_utility_priors,
+    build_task_sampling_summary,
+    project_sampler_outcome,
+)
 
 
 def test_build_recent_agent_runs_uses_explicit_query_adapter() -> None:
@@ -648,6 +659,77 @@ def test_quality_evidence_overrides_mutation_volume_in_curator_priors() -> None:
     )
 
     assert priors["semantic"] > priors["anomaly"]
+
+
+def _sampler_run(**metadata: Any) -> AgentRunHistoryPayload:
+    return AgentRunHistoryPayload(
+        task_id="sampler-test",
+        task_name="memory-curator",
+        status=str(metadata.pop("status", "completed")),
+        started_at=1.0,
+        completed_at=2.0,
+        duration_seconds=1.0,
+        result_metadata=RunResultMetadataPayload(
+            strategy_used="semantic",
+            **metadata,
+        ),
+    )
+
+
+def test_project_sampler_outcome_accepts_only_a_complete_quality_wave() -> None:
+    passed = project_sampler_outcome(
+        _sampler_run(
+            mutations=4,
+            quality_evidence_runs=2,
+            quality_acceptance_met=True,
+            useful_work_count=2,
+        )
+    )
+    rejected = project_sampler_outcome(
+        _sampler_run(
+            mutations=9,
+            quality_evidence_runs=2,
+            quality_acceptance_met=False,
+            useful_work_count=2,
+        )
+    )
+
+    assert (passed.outcome, passed.productive_mutations) == (SAMPLER_OUTCOME_QUALITY_PASS, 4)
+    assert (rejected.outcome, rejected.productive_mutations) == (SAMPLER_OUTCOME_QUALITY_FAILURE, 0)
+
+
+def test_project_sampler_outcome_excludes_neutral_rollbacks_and_provider_failures() -> None:
+    neutral = project_sampler_outcome(
+        _sampler_run(mutations=3, quality_evidence_runs=1, quality_neutral_count=1, quality_acceptance_met=True)
+    )
+    rollback = project_sampler_outcome(
+        _sampler_run(mutations=3, curation_outcome="verification_failed")
+    )
+    provider = project_sampler_outcome(
+        _sampler_run(mutations=3, status="failed", provider_failure_classification="rate_limit")
+    )
+
+    assert (neutral.outcome, neutral.productive_mutations) == (SAMPLER_OUTCOME_NEUTRAL, 0)
+    assert (rollback.outcome, rollback.productive_mutations) == (SAMPLER_OUTCOME_ROLLED_BACK, 0)
+    assert (provider.outcome, provider.productive_mutations) == (SAMPLER_OUTCOME_PROVIDER_FAILURE, 0)
+    assert provider.quality_failure is False
+
+
+def test_sampling_summary_reports_productive_mutations_separately() -> None:
+    summary = build_task_sampling_summary(
+        [
+            _sampler_run(mutations=4, quality_evidence_runs=1, quality_acceptance_met=True),
+            _sampler_run(mutations=8, quality_evidence_runs=1, quality_acceptance_met=False),
+            _sampler_run(mutations=6, status="failed", provider_failure_classification="timeout"),
+        ]
+    )
+
+    row = summary.selection_utility[0]
+    assert row.total_mutations == 18
+    assert row.productive_mutations == 4
+    assert row.quality_pass_runs == 1
+    assert row.quality_failure_runs == 1
+    assert row.provider_failure_runs == 1
 
 
 def test_selection_strategy_utility_priors_include_deduplicator_strategies_with_enough_runs() -> None:
