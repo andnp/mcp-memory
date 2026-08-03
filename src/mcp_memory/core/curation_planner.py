@@ -424,9 +424,11 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
         self._quality_feedback: Mapping[str, object] | None = None
         self.override_confidence: float | None = None
         self.override_reason: str | None = None
+        self.override_eligible = False
 
     def set_quality_feedback(self, feedback: Mapping[str, object] | None) -> None:
         self._quality_feedback = None if feedback is None else dict(feedback)
+        self.override_eligible = feedback is not None
 
     async def create_plan(
         self, request: CurationPlanningRequest, tools: CurationReadTools

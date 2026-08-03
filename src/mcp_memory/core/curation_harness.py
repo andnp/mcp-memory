@@ -626,7 +626,10 @@ class CurationDryRunHarness:
     ) -> tuple[float, str, dict[str, object]] | None:
         confidence = getattr(self._planner, "override_confidence", None)
         reason = getattr(self._planner, "override_reason", None)
+        eligible = getattr(self._planner, "override_eligible", True)
         if (
+            not eligible
+            or
             not isinstance(confidence, (int, float))
             or isinstance(confidence, bool)
             or confidence < 0.90
