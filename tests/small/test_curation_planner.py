@@ -12,7 +12,10 @@ from mcp_memory.core.curation_context import (
 )
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_harness import CurationPlannerTools
-from mcp_memory.core.curation_planning_service import CurationPlanningInput, plan_and_validate
+from mcp_memory.core.curation_planning_service import (
+    CurationPlanningInput,
+    plan_and_validate,
+)
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -110,6 +113,7 @@ def test_planner_prompt_contains_exact_schema_and_no_mutation_tools() -> None:
     assert "target 1600 characters or less" in contract
     assert "split content above 3000 characters" in contract
     assert "quality_feedback field means a previous curator mutation" in contract
+    assert "Action failure feedback is execution evidence" in contract
     assert "retention decision instead of inventing an ID" in contract
     assert "fail-closed" in contract
     assert "existing visible memory ID" in schema["$defs"]["CreateLinkAction"]["properties"]["source_id"]["description"]
@@ -180,6 +184,7 @@ async def test_session_planner_reuses_conversation_for_quality_feedback() -> Non
     assert "preserve exact search anchors" in session.prompts[1]
     assert "avoid speculative multi-action waves" in session.prompts[1]
     assert "change strategy rather than repeat" in session.prompts[1]
+    assert "rejected_actions feedback as execution evidence" in session.prompts[1]
 
 
 @pytest.mark.asyncio
