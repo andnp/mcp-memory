@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 22
+POSTGRES_SCHEMA_VERSION = 23
 
 
 @dataclass(frozen=True)
