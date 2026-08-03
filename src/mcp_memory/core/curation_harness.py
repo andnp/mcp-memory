@@ -480,10 +480,20 @@ class CurationDryRunHarness:
         quality_evidence = (
             ()
             if self._quality_sampler is None
-            else self._quality_sampler.evaluate(run=terminal, receipts=receipts)
+            else self._quality_sampler.evaluate(
+                run=terminal,
+                receipts=receipts,
+                campaign_hypothesis=frontier.campaign_hypothesis,
+            )
         )
 
-        work_item = self._work_item_service.decide(outcome, reason_code, latest)
+        work_item = self._work_item_service.decide(
+            outcome,
+            reason_code,
+            latest,
+            quality_evidence=quality_evidence,
+            campaign_hypothesis=frontier.campaign_hypothesis,
+        )
         specialist_work_items: tuple[WorkItemRecordLike, ...] = ()
         specialist_routes = () if validation is None else validation.specialist_routes
         if self._config.execute_accepted_actions:

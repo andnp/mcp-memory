@@ -18,7 +18,11 @@ from mcp_memory.core.curation_evaluation import (
     ReplaySnapshot,
     evaluate_query_replay,
 )
-from mcp_memory.core.curation_models import CurationModel
+from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CampaignRetrievalProblem,
+    CurationModel,
+)
 from mcp_memory.core.ports.curation import (
     CandidateDisposition,
     CurationActionReceipt,
@@ -42,6 +46,9 @@ class CurationQualityEvidence(CurationModel):
     zero_result_change: int | None = None
     payload_size_change: int | None = None
     useful_work: bool | None = None
+    retrieval_utility_delta: float | None = None
+    acceptance_met: bool | None = None
+    neutral_reason: str | None = None
     created_at: datetime
 
 
@@ -98,6 +105,7 @@ class CurationQualitySampler:
         *,
         run: CurationRun,
         receipts: Sequence[CurationActionReceipt],
+        campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> tuple[CurationQualityEvidence, ...]:
         selected = [
             receipt
@@ -107,7 +115,10 @@ class CurationQualitySampler:
             and receipt.affected_ids
             and self._is_sampled(run.run_id, receipt.action_id)
         ][: self._max_actions]
-        evidence = tuple(self._evaluate_action(run, receipt) for receipt in selected)
+        evidence = tuple(
+            self._evaluate_action(run, receipt, campaign_hypothesis)
+            for receipt in selected
+        )
         for item in evidence:
             self._repository.put_quality_evidence(item)
         if self._candidate_repository is not None:
@@ -122,16 +133,21 @@ class CurationQualitySampler:
         receipt: CurationActionReceipt,
     ) -> None:
         candidate_repository = self._candidate_repository
-        if candidate_repository is None or evidence.status != "evaluated" or not (
+        if candidate_repository is None:
+            return
+        if evidence.status == "evaluated" and (
             (evidence.retrieval_regression_count or 0) > 0
             or (evidence.zero_result_change or 0) > 0
         ):
+            reason = (
+                "retrieval_regression"
+                if (evidence.retrieval_regression_count or 0) > 0
+                else "zero_result_regression"
+            )
+        elif evidence.acceptance_met is False:
+            reason = "acceptance_not_met"
+        else:
             return
-        reason = (
-            "retrieval_regression"
-            if (evidence.retrieval_regression_count or 0) > 0
-            else "zero_result_regression"
-        )
         for memory_id in self._intended_memory_ids(receipt):
             previous = candidate_repository.get_candidate_state(memory_id)
             coverage_evidence = (
@@ -176,6 +192,7 @@ class CurationQualitySampler:
         self,
         run: CurationRun,
         receipt: CurationActionReceipt,
+        campaign_hypothesis: CampaignHypothesis | None,
     ) -> CurationQualityEvidence:
         common = {
             "run_id": run.run_id,
@@ -190,13 +207,49 @@ class CurationQualitySampler:
 
         query = self._find_historical_query(receipt)
         if query is None:
-            return CurationQualityEvidence(status="no_query", **common)
+            return CurationQualityEvidence(
+                status="no_query",
+                acceptance_met=False if _is_explicit(campaign_hypothesis) else None,
+                neutral_reason="no_trusted_query",
+                **common,
+            )
 
-        query_id, query_text, before_ids = query
-        intended_ids = self._intended_memory_ids(receipt)
+        query_id, query_text, before_ids, replay_complete = query
+        explicit_hypothesis = (
+            campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
+        )
+        neutral_reason = _neutral_query_reason(
+            query_text,
+            None if explicit_hypothesis is None else explicit_hypothesis.query,
+            replay_complete,
+        )
+        if neutral_reason is not None:
+            return CurationQualityEvidence(
+                status=f"neutral_{neutral_reason}",
+                query_id=query_id,
+                before_ranked_memory_ids=[UUID(value) for value in before_ids],
+                retrieval_regression_count=0,
+                zero_result_change=0,
+                useful_work=None,
+                acceptance_met=(
+                    False if explicit_hypothesis is not None else None
+                ),
+                neutral_reason=neutral_reason,
+                **common,
+            )
+        intended_ids = (
+            list(explicit_hypothesis.expected_memory_ids)
+            if explicit_hypothesis is not None and explicit_hypothesis.expected_memory_ids
+            else self._intended_memory_ids(receipt)
+        )
+        top_k = (
+            explicit_hypothesis.top_k
+            if explicit_hypothesis is not None
+            else self._top_k
+        )
         after_contexts = self._search.search_memories_for_maintenance(
             query_text,
-            limit=self._top_k,
+            limit=top_k,
         )
         after_results = tuple(
             ReplayResult(_context_memory_id(context))
@@ -213,21 +266,50 @@ class CurationQualitySampler:
                     intended_memory_ids=tuple(str(value) for value in intended_ids),
                     before=ReplaySnapshot(before_results),
                     after=ReplaySnapshot(after_results),
-                    top_k=self._top_k,
+                    top_k=top_k,
+                    query_text=query_text,
+                    expected_query=(
+                        None
+                        if explicit_hypothesis is None
+                        else explicit_hypothesis.query
+                    ),
+                    replay_complete=replay_complete,
                 )
             ]
         )
+        case = report.cases[0]
+        acceptance_met = (
+            None
+            if explicit_hypothesis is None or case.neutral_reason is not None
+            else case.retrieval_utility_delta
+            >= explicit_hypothesis.minimum_improvement
+        )
         return CurationQualityEvidence(
-            status="evaluated",
+            status=(
+                "evaluated"
+                if case.neutral_reason is None
+                else f"neutral_{case.neutral_reason}"
+            ),
             query_id=query_id,
             before_ranked_memory_ids=[UUID(value) for value in before_ids],
             after_ranked_memory_ids=[
-                UUID(result.memory_id) for result in after_results[: self._top_k]
+                UUID(result.memory_id) for result in after_results[:top_k]
             ],
-            retrieval_regression_count=report.retrieval_regression_count,
-            zero_result_change=report.zero_result_change,
+            retrieval_regression_count=(
+                report.retrieval_regression_count
+                if case.neutral_reason is None
+                else 0
+            ),
+            zero_result_change=(
+                report.zero_result_change if case.neutral_reason is None else 0
+            ),
             payload_size_change=None,
-            useful_work=report.useful_work_count > 0,
+            useful_work=(
+                report.useful_work_count > 0 if case.neutral_reason is None else None
+            ),
+            retrieval_utility_delta=case.retrieval_utility_delta,
+            acceptance_met=acceptance_met,
+            neutral_reason=case.neutral_reason,
             **common,
         )
 
@@ -275,13 +357,13 @@ class CurationQualitySampler:
     def _find_historical_query(
         self,
         receipt: CurationActionReceipt,
-    ) -> tuple[str, str, list[str]] | None:
+    ) -> tuple[str, str, list[str], bool] | None:
         target_ids = [str(value) for value in receipt.affected_ids]
         placeholders = ", ".join("?" for _ in target_ids)
         rows = _fetch_rows(
             self._db_manager,
             f"""
-            SELECT invocation_id, query_text, memory_id, result_rank, created_at
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count, created_at
             FROM memory_tool_events
             WHERE event_kind = 'search'
               AND caller_kind IN ('external', 'operator', 'user')
@@ -295,7 +377,7 @@ class CurationQualitySampler:
         cutoff = receipt.applied_at or self._clock()
         grouped: dict[str, list[Any]] = defaultdict(list)
         for row in rows:
-            invocation_id, _, memory_id, _, created_at = row
+            invocation_id, _, memory_id, _, _, created_at = row
             event_time = _timestamp(created_at)
             if (
                 str(memory_id) in target_id_set
@@ -309,7 +391,7 @@ class CurationQualitySampler:
         rows = _fetch_rows(
             self._db_manager,
             """
-            SELECT invocation_id, query_text, memory_id, result_rank
+            SELECT invocation_id, query_text, memory_id, result_rank, result_count
             FROM memory_tool_events
             WHERE event_kind = 'search'
               AND caller_kind IN ('external', 'operator', 'user')
@@ -325,7 +407,45 @@ class CurationQualitySampler:
             invocation_id,
             str(rows[0][1] or ""),
             [str(row[2]) for row in rows if row[2] is not None],
+            max(
+                (int(str(row[4])) for row in rows if row[4] is not None),
+                default=len(rows),
+            )
+            <= len(rows),
         )
+
+
+def _is_explicit(hypothesis: CampaignHypothesis | None) -> bool:
+    if hypothesis is None:
+        return False
+    return bool(
+        hypothesis.expected_memory_ids
+        or (hypothesis.query and hypothesis.query.strip())
+        or hypothesis.retrieval_problem is not CampaignRetrievalProblem.HEURISTIC
+        or hypothesis.minimum_improvement > 0
+        or hypothesis.target_mode.value != "heuristic"
+    )
+
+
+def _neutral_query_reason(
+    query_text: str,
+    expected_query: str | None,
+    replay_complete: bool,
+) -> str | None:
+    if not query_text.strip():
+        return "blank_query"
+    if expected_query and not _query_terms_overlap(query_text, expected_query):
+        return "irrelevant_query"
+    if not replay_complete:
+        return "incomplete_replay"
+    return None
+
+
+def _query_terms_overlap(query: str, expected_query: str) -> bool:
+    return bool(
+        set(query.casefold().split()) & set(expected_query.casefold().split())
+    )
+
 
 def _fetch_rows(
     db_manager: Any,

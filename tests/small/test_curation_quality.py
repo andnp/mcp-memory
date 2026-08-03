@@ -10,11 +10,12 @@ from uuid import uuid4
 
 import pytest
 
-from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_models import CampaignHypothesis, CurationRunOutcome
 from mcp_memory.core.curation_quality import (
     CurationQualityEvidence,
     CurationQualitySampler,
 )
+from mcp_memory.core.curation_work_items import CurationWorkItemService, WorkItemAction
 from mcp_memory.curation_quality_store import (
     PostgresCurationQualityStore,
     SQLiteCurationQualityStore,
@@ -194,6 +195,31 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert evidence[0].status == "no_query"
     assert evidence[0].useful_work is None
     assert search.calls in (None, [])
+
+
+def test_explicit_acceptance_failure_defers_verified_work() -> None:
+    decision = CurationWorkItemService().decide(
+        CurationRunOutcome.APPLIED,
+        "applied",
+        None,
+        quality_evidence=[
+            SimpleNamespace(acceptance_met=False),
+        ],
+        campaign_hypothesis=CampaignHypothesis(query="important", minimum_improvement=0.5),
+    )
+
+    assert decision.action is WorkItemAction.DEFER
+    assert decision.reason_code == "quality_acceptance_failed"
+
+
+def test_legacy_campaign_accepts_verified_work_without_quality_evidence() -> None:
+    decision = CurationWorkItemService().decide(
+        CurationRunOutcome.APPLIED,
+        "applied",
+        None,
+    )
+
+    assert decision.action is WorkItemAction.COMPLETE
 
 
 def test_quality_sampler_ignores_maintenance_searches(db_manager) -> None:
@@ -384,13 +410,23 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     )
     before_event_count = connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0]
 
-    evidence = sampler.evaluate(run=run, receipts=[receipt])
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(
+            query="important",
+            expected_memory_ids=[memory_id],
+            minimum_improvement=0.5,
+        ),
+    )
 
     assert evidence[0].status == "evaluated"
     assert evidence[0].query_id == "query-1"
     assert evidence[0].before_ranked_memory_ids == [*noise_ids, memory_id]
     assert evidence[0].after_ranked_memory_ids == [memory_id]
     assert evidence[0].useful_work is True
+    assert evidence[0].acceptance_met is True
+    assert (evidence[0].retrieval_utility_delta or 0.0) >= 0.5
     assert evidence[0].payload_size_change is None
     assert search.calls == ["important"]
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count

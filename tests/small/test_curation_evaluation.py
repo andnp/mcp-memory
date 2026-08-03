@@ -63,3 +63,32 @@ def test_evaluator_has_no_provider_or_public_request_path_dependency() -> None:
     assert "mcp_memory.server" not in source
     assert "server" not in source.lower()
     assert "http" not in source.lower()
+
+
+def test_query_replay_marks_neutral_evidence_without_utility_or_regression() -> None:
+    report = evaluate_query_replay(
+        [
+            ReplayCase(
+                query_id="blank",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot((ReplayResult("wanted"),)),
+                after=ReplaySnapshot(),
+                query_text=" ",
+            ),
+            ReplayCase(
+                query_id="incomplete",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot((ReplayResult("wanted"),)),
+                after=ReplaySnapshot(),
+                replay_complete=False,
+            ),
+        ]
+    )
+
+    assert [case.neutral_reason for case in report.cases] == [
+        "blank_query",
+        "incomplete_replay",
+    ]
+    assert report.retrieval_regression_count == 0
+    assert report.useful_work_count == 0
+    assert report.retrieval_utility_delta == 0.0

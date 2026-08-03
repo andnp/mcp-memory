@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CampaignRetrievalProblem,
+    CurationRunOutcome,
+)
 from mcp_memory.core.ports.planner import PlannerExecutionEnvelope
 from mcp_memory.core.ports.work_items import WorkItemRepository
 
@@ -36,9 +41,28 @@ class CurationWorkItemService:
         outcome: CurationRunOutcome,
         reason_code: str,
         envelope: PlannerExecutionEnvelope[Any] | None,
+        *,
+        quality_evidence: Sequence[object] = (),
+        campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> CurationWorkItemDecision:
         if outcome is CurationRunOutcome.BUDGET_EXHAUSTED:
             return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, self._no_op_cooldown_seconds)
+        if (
+            _is_explicit_campaign(campaign_hypothesis)
+            and outcome in (
+                CurationRunOutcome.NO_OP,
+                CurationRunOutcome.APPLIED,
+                CurationRunOutcome.PARTIALLY_APPLIED,
+            )
+            and (
+                not quality_evidence
+                or any(
+                    _acceptance_met(item) is not True
+                    for item in quality_evidence
+                )
+            )
+        ):
+            return CurationWorkItemDecision(WorkItemAction.DEFER, "quality_acceptance_failed")
         if outcome in (CurationRunOutcome.NO_OP, CurationRunOutcome.APPLIED):
             return CurationWorkItemDecision(WorkItemAction.COMPLETE, reason_code)
         delay = None if envelope is None else envelope.retry_delay_seconds
@@ -55,3 +79,23 @@ class CurationWorkItemService:
                 error=decision.reason_code,
                 retry_delay_seconds=decision.retry_delay_seconds or 0.0,
             )
+
+
+def _is_explicit_campaign(hypothesis: CampaignHypothesis | None) -> bool:
+    if hypothesis is None:
+        return False
+    return bool(
+        hypothesis.expected_memory_ids
+        or (hypothesis.query and hypothesis.query.strip())
+        or hypothesis.retrieval_problem is not CampaignRetrievalProblem.HEURISTIC
+        or hypothesis.minimum_improvement > 0
+        or hypothesis.target_mode.value != "heuristic"
+    )
+
+
+def _acceptance_met(evidence: object) -> bool | None:
+    if isinstance(evidence, Mapping):
+        value = evidence.get("acceptance_met")
+    else:
+        value = getattr(evidence, "acceptance_met", None)
+    return value if isinstance(value, bool) else None
