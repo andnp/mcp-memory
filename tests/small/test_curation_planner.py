@@ -28,10 +28,12 @@ from mcp_memory.core.curation_planner import (
     FakePlannerScenario,
     InstrumentedCurationPlanner,
     PlannerExecutionStatus,
+    SessionCurationPlanner,
     _build_planner_prompt,
     _request_for_packet,
 )
 from mcp_memory.core.curation_validation import CurationRetryFeedback
+from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
 
@@ -136,6 +138,40 @@ def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> N
     assert retry["retry_feedback"]["reason_code"] == "formatting_only"
     assert len(retry["retry_feedback"]["message"]) == 1000
     assert retry["retry_feedback"]["message"].startswith("fix the JSON")
+
+
+@pytest.mark.asyncio
+async def test_session_planner_reuses_conversation_for_quality_feedback() -> None:
+    seed_id = uuid4()
+    request = _request(seed_id)
+
+    class _Session:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            self.prompts.append(prompt)
+            return AgenticRunResult(
+                status="success",
+                parsed=_plan(request, seed_id).model_dump(mode="json"),
+            )
+
+    session = _Session()
+    planner = SessionCurationPlanner(cast(Any, session))
+    first = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
+    planner.set_quality_feedback(
+        {
+            "latest_failed_live_run": {
+                "diagnosis": "retrieval utility delta -1.2",
+            }
+        }
+    )
+    second = await planner.create_plan(request, CurationPlannerTools(context=cast(Any, {})))
+
+    assert first.plan is not None
+    assert second.plan is not None
+    assert len(session.prompts) == 2
+    assert "retrieval utility delta -1.2" in session.prompts[1]
 
 
 def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
