@@ -365,6 +365,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
         self,
         *,
         allowed_tool_names: tuple[str, ...] | None = None,
+        tools: list[Any] | None = None,
     ) -> AgenticSession:
         if globals()["CopilotClient"] is None:
             _import_copilot_modules()
@@ -374,6 +375,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
             session = await client.create_session(
                 model=self._model,
                 on_permission_request=globals()["PermissionHandler"].approve_all,
+                tools=tools,
                 mcp_servers=self._mcp_servers()
                 if allowed_tool_names is None
                 else self.with_allowed_tool_names(allowed_tool_names)._mcp_servers(),

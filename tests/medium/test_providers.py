@@ -134,6 +134,21 @@ async def test_copilot_sdk_agentic_provider_scopes_mcp_tools_to_workspace(monkey
 
 
 @pytest.mark.asyncio
+async def test_copilot_sdk_agentic_provider_forwards_native_tools(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content='{"summary": "ok"}', message_id="m-native"))])
+    )
+    factory = _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+    native_tool = object()
+
+    provider = CopilotSDKAgenticProvider(max_retries=0)
+    agent_session = await provider.open_agent_session(tools=[native_tool])
+    await agent_session.close()
+
+    assert factory.client.create_session_calls[0]["tools"] == [native_tool]
+
+
+@pytest.mark.asyncio
 async def test_copilot_sdk_agentic_provider_keeps_session_for_multiple_turns(monkeypatch) -> None:
     session = FakeCopilotSession(
         events=deque(
