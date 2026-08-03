@@ -542,6 +542,11 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "available_tools": [],
         "schema": CurationPlan.model_json_schema(),
         "planner_contract": [
+            "The primary objective is to improve durable memory quality, not to minimize action count or maximize retention.",
+            "Diagnose each seed for focused scope, conclusion-first wording, concrete evidence, title and summary specificity, stale status prose, duplication, and missing relationships before deciding.",
+            "Use support and exploratory records as active repair candidates. Any record visible in context may be modified; only initial seeds require exactly one disposition.",
+            "Prefer a coherent set of mutations when several changes together improve a local memory cluster, even if one isolated change would be incomplete.",
+            "Retain a seed only when it is already focused and durable, or when the available evidence does not support a specific improvement hypothesis.",
             "Every target_id, source_id, canonical_id, source_ids entry, and retained memory_id must refer to a memory visible in context.",
             "seed_memory_ids is required and must exactly equal the initial context seed IDs; every seed must receive exactly one disposition.",
             "Exploratory records are separately audited visible context. Actions may use their IDs, but exploratory IDs must never be silently counted as initial seeds.",
@@ -557,8 +562,8 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "Each seed memory must have exactly one disposition: it appears in an action's affected IDs or in retained, never both; action source, target, canonical, and child-source IDs all count as affected.",
             "Prefer one conclusion-first takeaway with concrete evidence; target 1600 characters or less, and split content above 3000 characters when it contains multiple takeaways.",
             "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
-            "A quality_feedback field means a previous curator mutation caused a measured retrieval regression; treat the record as a failed repair, retain it by default, and do not repeat a broad split, normalize, rewrite, or merge without a specific evidence-backed repair.",
-            "For quality-feedback records, preserve exact search anchors, concrete entities, and the current durable meaning; if no targeted repair is clearly justified, put the seed in retained.",
+            "A quality_feedback field means a previous curator mutation caused a measured retrieval regression; do not repeat that mutation blindly, but investigate and propose a different targeted repair when the evidence supports one.",
+            "For quality-feedback records, preserve exact search anchors, concrete entities, and the current durable meaning. Retain only when no evidence-backed repair hypothesis survives investigation.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
             "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
         ],
@@ -574,13 +579,18 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "received_fields": list(retry_feedback.received_fields),
         }
     return (
-        "You are a curation planner. Return exactly one JSON object matching the "
-        "provided CurationPlan JSON schema. Include seed_memory_ids exactly as the "
+        "You are a curation planner whose job is to improve the durable quality of "
+        "the memory base. Do not optimize for safe no-ops: inspect the visible "
+        "neighborhood, find the highest-confidence quality gains, and make a coherent "
+        "set of changes when the evidence supports them. Return exactly one JSON "
+        "object matching the provided CurationPlan JSON schema. Include "
+        "seed_memory_ids exactly as the "
         "context seed IDs (the initial context seed IDs); exploratory records are visible but separately "
         "audited. Planning only: do not execute mutations, "
         "call tools, or report a claimed action count; actions are counted only after "
         "validation. Every memory ID in an action or retention decision must be copied "
-        "from a memory visible in the provided context. A merge canonical_id must be "
+        "from a memory visible in the provided context; any visible seed, support, or "
+        "exploratory memory may be changed. A merge canonical_id must be "
         "an existing visible record and merge never creates records; both create-link "
         "endpoints must be visible. Copy exact record tokens from context.record_tokens "
         "into preconditions.record_tokens for every affected visible memory. A "
@@ -599,10 +609,10 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "child-source ID counts as acted on. Use one conclusion-first takeaway with concrete evidence, target "
         "1600 characters or less, and split multi-takeaway content above 3000 "
         "characters. A quality_feedback field marks a previous curator mutation as a "
-        "measured retrieval regression: retain that record by default and do not repeat "
-        "a broad split, normalize, rewrite, or merge without a specific evidence-backed "
-        "repair. Preserve exact search anchors and concrete entities; if no targeted "
-        "repair is clearly justified, put the seed in retained. If no visible canonical is appropriate, retain the memory instead "
+        "measured retrieval regression: do not repeat that mutation blindly; investigate "
+        "and propose a different targeted repair when evidence supports one. Preserve "
+        "exact search anchors and concrete entities; retain only when no evidence-backed "
+        "repair hypothesis survives investigation. If no visible canonical is appropriate, retain the memory instead "
         "of inventing an ID.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
