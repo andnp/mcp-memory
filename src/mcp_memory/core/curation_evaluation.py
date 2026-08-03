@@ -78,6 +78,9 @@ class ReplayCaseReport:
     retrieval_utility_before: float = 0.0
     retrieval_utility_after: float = 0.0
     neutral_reason: str | None = None
+    intended_top_k_before: int = 0
+    intended_top_k_after: int = 0
+    intended_top_k_loss: bool = False
 
     @property
     def intended_rank_change(self) -> int | None:
@@ -102,6 +105,22 @@ class ReplayCaseReport:
     @property
     def retrieval_utility_delta(self) -> float:
         return self.retrieval_utility_after - self.retrieval_utility_before
+
+    @property
+    def rank_improvement(self) -> float:
+        before = 0.0 if self.intended_rank_before is None else 1.0 / self.intended_rank_before
+        after = 0.0 if self.intended_rank_after is None else 1.0 / self.intended_rank_after
+        return after - before
+
+    @property
+    def top_k_improvement(self) -> float:
+        return float(
+            self.irrelevant_top_results_before - self.irrelevant_top_results_after
+        )
+
+    @property
+    def zero_results_improvement(self) -> float:
+        return float(self.zero_results_before) - float(self.zero_results_after)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +176,8 @@ def _evaluate_case(case: ReplayCase) -> ReplayCaseReport:
     intended = frozenset(case.intended_memory_ids)
     before_ids = tuple(result.memory_id for result in case.before.results)
     after_ids = tuple(result.memory_id for result in case.after.results)
+    intended_top_k_before = set(before_ids[: case.top_k]) & intended
+    intended_top_k_after = set(after_ids[: case.top_k]) & intended
     neutral_reason = _neutral_reason(case, intended, before_ids, after_ids)
     return ReplayCaseReport(
         query_id=case.query_id,
@@ -187,6 +208,9 @@ def _evaluate_case(case: ReplayCase) -> ReplayCaseReport:
             neutral=neutral_reason is not None,
         ),
         neutral_reason=neutral_reason,
+        intended_top_k_before=len(intended_top_k_before),
+        intended_top_k_after=len(intended_top_k_after),
+        intended_top_k_loss=bool(intended_top_k_before - intended_top_k_after),
     )
 
 

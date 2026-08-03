@@ -42,6 +42,9 @@ def test_query_replay_reports_rank_irrelevance_zero_results_and_payload_delta() 
     assert second.zero_result_change == -1
     assert (report.zero_results_before, report.zero_results_after) == (1, 0)
     assert report.payload_size_change == -4
+    assert first.rank_improvement == 0.5
+    assert first.top_k_improvement == 1.0
+    assert first.zero_results_improvement == 0.0
 
 
 def test_query_replay_is_deterministic_and_uses_canonical_payload_size() -> None:

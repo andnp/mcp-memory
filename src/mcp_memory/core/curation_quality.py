@@ -14,6 +14,7 @@ from pydantic import Field
 
 from mcp_memory.core.curation_evaluation import (
     ReplayCase,
+    ReplayCaseReport,
     ReplayResult,
     ReplaySnapshot,
     evaluate_query_replay,
@@ -21,6 +22,7 @@ from mcp_memory.core.curation_evaluation import (
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
+    CampaignTargetMode,
     CurationModel,
 )
 from mcp_memory.core.ports.curation import (
@@ -276,9 +278,8 @@ class CurationQualitySampler:
         case = report.cases[0]
         acceptance_met = (
             None
-            if explicit_hypothesis is None or case.neutral_reason is not None
-            else case.retrieval_utility_delta
-            >= explicit_hypothesis.minimum_improvement
+            if explicit_hypothesis is None
+            else _acceptance_met(case, explicit_hypothesis)
         )
         return CurationQualityEvidence(
             status=(
@@ -421,6 +422,22 @@ def _is_explicit(hypothesis: CampaignHypothesis | None) -> bool:
         or hypothesis.minimum_improvement > 0
         or hypothesis.target_mode.value != "heuristic"
     )
+
+
+def _acceptance_met(case: ReplayCaseReport, hypothesis: CampaignHypothesis) -> bool | None:
+    if case.neutral_reason is not None:
+        return None
+    if case.intended_top_k_loss or case.zero_result_change > 0:
+        return False
+    if hypothesis.target_mode is CampaignTargetMode.RANK:
+        improvement = case.rank_improvement
+    elif hypothesis.target_mode is CampaignTargetMode.TOP_K:
+        improvement = case.top_k_improvement
+    elif hypothesis.target_mode is CampaignTargetMode.ZERO_RESULTS:
+        improvement = case.zero_results_improvement
+    else:
+        improvement = case.retrieval_utility_delta
+    return improvement >= hypothesis.minimum_improvement
 
 
 def _neutral_query_reason(

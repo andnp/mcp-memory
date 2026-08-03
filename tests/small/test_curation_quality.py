@@ -10,10 +10,16 @@ from uuid import uuid4
 
 import pytest
 
-from mcp_memory.core.curation_models import CampaignHypothesis, CurationRunOutcome
+from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CampaignTargetMode,
+    CurationRunOutcome,
+)
+from mcp_memory.core.curation_evaluation import ReplayCase, ReplayResult, ReplaySnapshot, evaluate_query_replay
 from mcp_memory.core.curation_quality import (
     CurationQualityEvidence,
     CurationQualitySampler,
+    _acceptance_met,
 )
 from mcp_memory.core.curation_work_items import CurationWorkItemService, WorkItemAction
 from mcp_memory.curation_quality_store import (
@@ -247,6 +253,48 @@ def test_explicit_acceptance_failure_defers_verified_work() -> None:
 
     assert decision.action is WorkItemAction.DEFER
     assert decision.reason_code == "quality_acceptance_failed"
+
+
+@pytest.mark.parametrize(
+    ("mode", "before", "after", "minimum", "expected"),
+    [
+        (CampaignTargetMode.RANK, ("noise", "wanted"), ("wanted",), 0.5, True),
+        (CampaignTargetMode.RANK, ("wanted",), ("noise", "wanted"), 0.1, False),
+        (CampaignTargetMode.TOP_K, ("noise", "noise-2", "wanted"), ("wanted",), 1.0, True),
+        (CampaignTargetMode.TOP_K, ("wanted",), ("noise",), 0.1, False),
+        (CampaignTargetMode.ZERO_RESULTS, (), ("wanted",), 1.0, True),
+        (CampaignTargetMode.ZERO_RESULTS, ("wanted",), (), 0.1, False),
+        (CampaignTargetMode.HEURISTIC, ("noise", "wanted"), ("wanted",), 0.5, True),
+        (CampaignTargetMode.HEURISTIC, ("wanted",), ("noise", "wanted"), 0.1, False),
+    ],
+)
+def test_campaign_acceptance_target_modes(
+    mode: CampaignTargetMode,
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    minimum: float,
+    expected: bool,
+) -> None:
+    case = evaluate_query_replay(
+        [
+            ReplayCase(
+                query_id="acceptance",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot(tuple(ReplayResult(value) for value in before)),
+                after=ReplaySnapshot(tuple(ReplayResult(value) for value in after)),
+                top_k=2,
+            )
+        ]
+    ).cases[0]
+
+    assert _acceptance_met(
+        case,
+        CampaignHypothesis(
+            expected_memory_ids=[],
+            target_mode=mode,
+            minimum_improvement=minimum,
+        ),
+    ) is expected
 
 
 def test_legacy_campaign_accepts_verified_work_without_quality_evidence() -> None:
