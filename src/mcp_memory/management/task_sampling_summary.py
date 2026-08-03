@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from mcp_memory.management.models import (
     AgentRunHistoryPayload,
@@ -22,6 +22,13 @@ UTILITY_PRIOR_QUALITY_WEIGHT = 0.85
 UTILITY_PRIOR_QUALITY_REGRESSION_SCALE = 2.0
 UNKNOWN_SELECTOR_MODE = "unspecified"
 UNKNOWN_SELECTOR_STRATEGY = "unknown"
+SAMPLER_OUTCOME_QUALITY_PASS = "quality_pass"
+SAMPLER_OUTCOME_QUALITY_FAILURE = "quality_failure"
+SAMPLER_OUTCOME_PROVIDER_FAILURE = "provider_failure"
+SAMPLER_OUTCOME_ROLLED_BACK = "rolled_back"
+SAMPLER_OUTCOME_NEUTRAL = "neutral"
+SAMPLER_OUTCOME_NO_OP = "no_op"
+SAMPLER_OUTCOME_LEGACY_MUTATION = "legacy_mutation"
 
 
 @dataclass
@@ -48,6 +55,10 @@ class _UtilityAccumulator:
     useful_work_count: int = 0
     retrieval_regression_count: int = 0
     zero_result_change: int = 0
+    productive_mutations: int = 0
+    quality_pass_runs: int = 0
+    quality_failure_runs: int = 0
+    provider_failure_runs: int = 0
 
 
 @dataclass
@@ -107,6 +118,15 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
             utility_row.useful_work_count += metadata.useful_work_count
             utility_row.retrieval_regression_count += metadata.retrieval_regression_count
             utility_row.zero_result_change += metadata.zero_result_change
+            outcome = project_sampler_outcome(run)
+            utility_row.productive_mutations += outcome.productive_mutations
+            utility_row.quality_pass_runs += int(outcome.outcome == SAMPLER_OUTCOME_QUALITY_PASS)
+            utility_row.quality_failure_runs += int(outcome.outcome in {
+                SAMPLER_OUTCOME_QUALITY_FAILURE,
+                SAMPLER_OUTCOME_ROLLED_BACK,
+                SAMPLER_OUTCOME_NEUTRAL,
+            })
+            utility_row.provider_failure_runs += int(outcome.outcome == SAMPLER_OUTCOME_PROVIDER_FAILURE)
 
         if _has_selector_behavior_signal(metadata):
             selector_mode = metadata.strategy_selection_mode or UNKNOWN_SELECTOR_MODE
@@ -191,6 +211,10 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 useful_work_count=row.useful_work_count,
                 retrieval_regression_count=row.retrieval_regression_count,
                 zero_result_change=row.zero_result_change,
+                productive_mutations=row.productive_mutations,
+                quality_pass_runs=row.quality_pass_runs,
+                quality_failure_runs=row.quality_failure_runs,
+                provider_failure_runs=row.provider_failure_runs,
             )
             for row in sorted(utility_rows.values(), key=lambda item: (item.task_name, -item.runs, item.strategy_used))
         ],
@@ -223,6 +247,74 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 ),
             )
         ],
+    )
+
+
+@dataclass(frozen=True)
+class SamplerOutcomeProjection:
+    outcome: str
+    productive_mutations: int
+    quality_passed: bool
+    quality_failure: bool
+    provider_failure: bool
+
+
+def project_sampler_outcome(run: AgentRunHistoryPayload) -> SamplerOutcomeProjection:
+    metadata = run.result_metadata
+    mutations = max(metadata.mutations or 0, 0)
+    if metadata.provider_failure_classification is not None or run.status in {"failed", "retry"}:
+        return SamplerOutcomeProjection(
+            outcome=SAMPLER_OUTCOME_PROVIDER_FAILURE,
+            productive_mutations=0,
+            quality_passed=False,
+            quality_failure=False,
+            provider_failure=True,
+        )
+    if metadata.curation_outcome in {"verification_failed", "stale_plan", "invalid_plan"}:
+        return SamplerOutcomeProjection(
+            outcome=SAMPLER_OUTCOME_ROLLED_BACK,
+            productive_mutations=0,
+            quality_passed=False,
+            quality_failure=True,
+            provider_failure=False,
+        )
+    if mutations == 0:
+        outcome = SAMPLER_OUTCOME_NEUTRAL if metadata.quality_neutral_count else SAMPLER_OUTCOME_NO_OP
+        return SamplerOutcomeProjection(
+            outcome=outcome,
+            productive_mutations=0,
+            quality_passed=False,
+            quality_failure=outcome == SAMPLER_OUTCOME_NEUTRAL,
+            provider_failure=False,
+        )
+    if metadata.quality_neutral_count:
+        return SamplerOutcomeProjection(
+            outcome=SAMPLER_OUTCOME_NEUTRAL,
+            productive_mutations=0,
+            quality_passed=False,
+            quality_failure=True,
+            provider_failure=False,
+        )
+    if metadata.quality_evidence_runs:
+        quality_passed = (
+            metadata.quality_acceptance_met is True
+            and metadata.quality_rejected_count == 0
+            and metadata.retrieval_regression_count == 0
+            and metadata.zero_result_change <= 0
+        )
+        return SamplerOutcomeProjection(
+            outcome=SAMPLER_OUTCOME_QUALITY_PASS if quality_passed else SAMPLER_OUTCOME_QUALITY_FAILURE,
+            productive_mutations=mutations if quality_passed else 0,
+            quality_passed=quality_passed,
+            quality_failure=not quality_passed,
+            provider_failure=False,
+        )
+    return SamplerOutcomeProjection(
+        outcome=SAMPLER_OUTCOME_LEGACY_MUTATION,
+        productive_mutations=mutations,
+        quality_passed=False,
+        quality_failure=False,
+        provider_failure=False,
     )
 
 

@@ -230,6 +230,17 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
     quality_evidence = _curation_campaign_value(result, "quality_evidence")
     quality_records = quality_evidence if isinstance(quality_evidence, list) else []
     useful_work_count = sum(1 for item in quality_records if isinstance(item, Mapping) and item.get("useful_work") is True)
+    quality_acceptance_values = [
+        item.get("acceptance_met")
+        for item in quality_records
+        if isinstance(item, Mapping) and isinstance(item.get("acceptance_met"), bool)
+    ]
+    quality_neutral_count = sum(
+        1
+        for item in quality_records
+        if isinstance(item, Mapping) and item.get("neutral_reason") is not None
+    )
+    quality_rejected_count = sum(1 for value in quality_acceptance_values if value is False)
     retrieval_regression_count = sum(
         max(_coerce_int(item.get("retrieval_regression_count")) or 0, 0)
         for item in quality_records
@@ -247,6 +258,8 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
         strategy_selection_mode=_coerce_str(result.get("strategy_selection_mode")),
         strategy_selection_reason=_coerce_str(result.get("strategy_selection_reason")),
         strategy_selection_scores=_coerce_score_mapping(result.get("strategy_selection_scores")),
+        sampler_priority_score=_coerce_float(result.get("sampler_priority_score")),
+        sampler_priority_explanation=_coerce_str(result.get("sampler_priority_explanation")),
         selector_feature_snapshot=_coerce_selector_feature_snapshot(result.get("selector_feature_snapshot")),
         candidate_count=_coerce_int(result.get("candidate_count")),
         sampled_memory_ids=[item for item in sampled_memory_ids if isinstance(item, str)] if isinstance(sampled_memory_ids, list) else [],
@@ -275,6 +288,15 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
         useful_work_count=useful_work_count,
         retrieval_regression_count=retrieval_regression_count,
         zero_result_change=zero_result_change,
+        quality_acceptance_met=(
+            all(quality_acceptance_values)
+            if quality_acceptance_values and len(quality_acceptance_values) == len(quality_records)
+            else None
+        ),
+        quality_neutral_count=quality_neutral_count,
+        quality_rejected_count=quality_rejected_count,
+        provider_failure_classification=_coerce_str(result.get("provider_failure_classification")),
+        curation_outcome=_coerce_str(result.get("curation_outcome")),
     )
 
 

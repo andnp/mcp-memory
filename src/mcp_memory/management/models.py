@@ -349,6 +349,8 @@ class RunResultMetadataPayload(BaseModel):
     strategy_selection_mode: str | None = None
     strategy_selection_reason: str | None = None
     strategy_selection_scores: dict[str, float] = Field(default_factory=dict)
+    sampler_priority_score: float | None = None
+    sampler_priority_explanation: str | None = None
     selector_feature_snapshot: SelectorFeatureSnapshotPayload = Field(default_factory=SelectorFeatureSnapshotPayload)
     candidate_count: int | None = None
     sampled_memory_ids: list[str] = Field(default_factory=list)
@@ -377,6 +379,11 @@ class RunResultMetadataPayload(BaseModel):
     useful_work_count: int = 0
     retrieval_regression_count: int = 0
     zero_result_change: int = 0
+    quality_acceptance_met: bool | None = None
+    quality_neutral_count: int = 0
+    quality_rejected_count: int = 0
+    provider_failure_classification: str | None = None
+    curation_outcome: str | None = None
 
 
 class IngestEntryDispositionPayload(BaseModel):
@@ -479,6 +486,12 @@ class SelectionStrategyUtilityPayload(BaseModel):
     useful_work_count: int = 0
     retrieval_regression_count: int = 0
     zero_result_change: int = 0
+    productive_mutations: int = 0
+    quality_pass_runs: int = 0
+    quality_failure_runs: int = 0
+    provider_failure_runs: int = 0
+    sampler_priority_score: float | None = None
+    sampler_priority_explanation: str | None = None
 
 
 class SelectorBehaviorSummaryPayload(BaseModel):
