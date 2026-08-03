@@ -511,6 +511,7 @@ class CurationRunResult(CurationModel):
     budget_usage: CurationBudgetUsage = Field(default_factory=CurationBudgetUsage)
     context_record_counts: dict[str, int] = Field(default_factory=dict)
     verified_action_count: int = 0
+    productive_mutation_count: int = 0
     affected_memory_count: int = 0
     quality_evidence: list[dict[str, object]] = Field(default_factory=list)
 

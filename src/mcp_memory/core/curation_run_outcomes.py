@@ -140,7 +140,7 @@ def budget_usage(
     return CurationBudgetUsage(
         seed_records=context.usage.seed_records,
         support_records=context.usage.support_records,
-        exploratory_records=context.usage.exploratory_records,
+        exploratory_records=getattr(context.usage, "exploratory_records", 0),
         context_characters=context.usage.context_characters,
         read_tool_calls=context.usage.read_tool_calls,
         records_returned=context.usage.records_returned,
@@ -188,6 +188,7 @@ def build_run_result(
     envelopes: list[PlannerExecutionEnvelope[Any]] | None = None,
     quality_evidence: list[dict[str, object]] | None = None,
 ) -> CurationRunResult:
+    evidence = list(quality_evidence or [])
     return CurationRunResult(
         run_id=run_id,
         outcome=outcome,
@@ -199,6 +200,16 @@ def build_run_result(
         budget_usage=budget_usage,
         context_record_counts=context_record_counts,
         verified_action_count=count_verified_receipts(receipts),
+        productive_mutation_count=max(
+            (
+                int(value)
+                for item in evidence
+                if isinstance(item, dict)
+                for value in (item.get("productive_mutation_count", 0),)
+                if isinstance(value, (int, float))
+            ),
+            default=0,
+        ),
         affected_memory_count=count_affected_memory_ids(receipts),
-        quality_evidence=list(quality_evidence or []),
+        quality_evidence=evidence,
     )

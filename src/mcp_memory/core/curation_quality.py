@@ -8,7 +8,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import Field
 
@@ -42,6 +42,7 @@ class CurationQualityEvidence(CurationModel):
     affected_memory_ids: list[UUID] = Field(default_factory=list)
     policy_version: str
     query_id: str | None = None
+    query_text: str | None = None
     status: str
     before_ranked_memory_ids: list[UUID] = Field(default_factory=list)
     after_ranked_memory_ids: list[UUID] = Field(default_factory=list)
@@ -52,6 +53,11 @@ class CurationQualityEvidence(CurationModel):
     retrieval_utility_delta: float | None = None
     acceptance_met: bool | None = None
     neutral_reason: str | None = None
+    wave_id: UUID | None = None
+    wave_action_ids: list[UUID] = Field(default_factory=list)
+    wave_status: str | None = None
+    collateral_regression_count: int | None = None
+    productive_mutation_count: int = 0
     created_at: datetime
 
 
@@ -118,9 +124,12 @@ class CurationQualitySampler:
             and receipt.affected_ids
             and self._is_sampled(run.run_id, receipt.action_id)
         ][: self._max_actions]
-        evidence = tuple(
-            self._evaluate_action(run, receipt, campaign_hypothesis)
-            for receipt in selected
+        wave_id = uuid4()
+        evidence = self._evaluate_wave(
+            run,
+            selected,
+            campaign_hypothesis,
+            wave_id=wave_id,
         )
         for item in evidence:
             self._repository.put_quality_evidence(item)
@@ -128,6 +137,64 @@ class CurationQualitySampler:
             for item, receipt in zip(evidence, selected, strict=True):
                 self._escalate_quality_regression(run, item, receipt)
         return evidence
+
+    def _evaluate_wave(
+        self,
+        run: CurationRun,
+        receipts: Sequence[CurationActionReceipt],
+        campaign_hypothesis: CampaignHypothesis | None,
+        *,
+        wave_id: UUID,
+    ) -> tuple[CurationQualityEvidence, ...]:
+        if not receipts:
+            return ()
+        raw = [self._evaluate_action(run, receipt, campaign_hypothesis) for receipt in receipts]
+        evaluated = [item for item in raw if item.status == "evaluated" and item.query_id]
+        explicit = campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
+        complete_receipts = all(
+            receipt.status is CurationReceiptState.VERIFIED
+            and receipt.mutation_event_id is not None
+            for receipt in receipts
+        )
+        collateral = sum(item.retrieval_regression_count or 0 for item in evaluated)
+        goal_improved = any(
+            item.acceptance_met is True
+            or bool(item.useful_work)
+            for item in evaluated
+        )
+        wave_acceptance = bool(
+            evaluated
+            and complete_receipts
+            and collateral == 0
+            and goal_improved
+            and (explicit is None or all(item.acceptance_met is True for item in evaluated))
+        )
+        wave_status = (
+            "accepted"
+            if wave_acceptance
+            else "neutral"
+            if not evaluated
+            else "rejected"
+        )
+        productive = len(receipts) if wave_acceptance else 0
+        action_ids = [receipt.action_id for receipt in receipts]
+        return tuple(
+            item.model_copy(
+                update={
+                    "wave_id": wave_id,
+                    "wave_action_ids": action_ids,
+                    "wave_status": wave_status,
+                    "collateral_regression_count": collateral,
+                    "productive_mutation_count": productive,
+                    "acceptance_met": (
+                        wave_acceptance
+                        if explicit is not None and item.status == "evaluated"
+                        else item.acceptance_met
+                    ),
+                }
+            )
+            for item in raw
+        )
 
     def _escalate_quality_regression(
         self,
@@ -198,6 +265,8 @@ class CurationQualitySampler:
         run: CurationRun,
         receipt: CurationActionReceipt,
         campaign_hypothesis: CampaignHypothesis | None,
+        *,
+        after_results_by_query: Mapping[str, tuple[ReplayResult, ...]] | None = None,
     ) -> CurationQualityEvidence:
         common = {
             "run_id": run.run_id,
@@ -240,6 +309,7 @@ class CurationQualitySampler:
             return CurationQualityEvidence(
                 status=f"neutral_{neutral_reason}",
                 query_id=query_id,
+                query_text=query_text,
                 before_ranked_memory_ids=[UUID(value) for value in before_ids],
                 retrieval_regression_count=0,
                 zero_result_change=0,
@@ -257,14 +327,17 @@ class CurationQualitySampler:
             if explicit_hypothesis is not None
             else self._top_k
         )
-        after_contexts = self._search.search_memories_for_maintenance(
-            query_text,
-            limit=top_k,
-        )
-        after_results = tuple(
-            ReplayResult(_context_memory_id(context))
-            for context in after_contexts
-        )
+        if after_results_by_query is None:
+            after_contexts = self._search.search_memories_for_maintenance(
+                query_text,
+                limit=top_k,
+            )
+            after_results = tuple(
+                ReplayResult(_context_memory_id(context))
+                for context in after_contexts
+            )
+        else:
+            after_results = after_results_by_query.get(query_text, ())
         before_results = tuple(
             ReplayResult(memory_id)
             for memory_id in before_ids
