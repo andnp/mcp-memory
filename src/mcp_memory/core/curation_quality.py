@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -51,6 +53,10 @@ class CurationQualityEvidence(CurationModel):
     payload_size_change: int | None = None
     useful_work: bool | None = None
     retrieval_utility_delta: float | None = None
+    content_quality_score_before: float | None = None
+    content_quality_score_after: float | None = None
+    content_quality_delta: float | None = None
+    content_quality_improved: bool | None = None
     acceptance_met: bool | None = None
     neutral_reason: str | None = None
     wave_id: UUID | None = None
@@ -59,6 +65,14 @@ class CurationQualityEvidence(CurationModel):
     collateral_regression_count: int | None = None
     productive_mutation_count: int = 0
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _ContentQualityComparison:
+    before: float | None = None
+    after: float | None = None
+    delta: float | None = None
+    improved: bool | None = None
 
 
 class CurationQualityRepository(Protocol):
@@ -160,10 +174,19 @@ class CurationQualitySampler:
         goal_improved = any(
             item.acceptance_met is True
             or bool(item.useful_work)
+            or item.content_quality_improved is True
             for item in evaluated
         )
+        content_evaluated = any(
+            item.content_quality_improved is not None for item in raw
+        )
+        quality_observations = [
+            item
+            for item in raw
+            if item in evaluated or item.content_quality_improved is not None
+        ]
         wave_acceptance = bool(
-            evaluated
+            (evaluated or content_evaluated)
             and complete_receipts
             and collateral == 0
             and goal_improved
@@ -173,7 +196,7 @@ class CurationQualitySampler:
             "accepted"
             if wave_acceptance
             else "neutral"
-            if not evaluated
+            if not quality_observations
             else "rejected"
         )
         productive = len(receipts) if wave_acceptance else 0
@@ -278,6 +301,7 @@ class CurationQualitySampler:
             "policy_version": run.policy_version,
             "created_at": self._clock(),
         }
+        content = self._content_quality(receipt)
         if receipt.operation in {"create_link", "remove_link"}:
             return CurationQualityEvidence(status="structural_only", **common)
 
@@ -287,8 +311,21 @@ class CurationQualitySampler:
         query = self._find_historical_query(receipt, explicit_hypothesis)
         if query is None:
             return CurationQualityEvidence(
-                status="no_query",
-                neutral_reason="no_trusted_query",
+                status=(
+                    "content_evaluated"
+                    if content.improved is not None
+                    else "no_query"
+                ),
+                neutral_reason=(
+                    None
+                    if content.improved is not None
+                    else "no_trusted_query"
+                ),
+                useful_work=content.improved,
+                content_quality_score_before=content.before,
+                content_quality_score_after=content.after,
+                content_quality_delta=content.delta,
+                content_quality_improved=content.improved,
                 **common,
             )
 
@@ -389,12 +426,49 @@ class CurationQualitySampler:
             ),
             payload_size_change=None,
             useful_work=(
-                report.useful_work_count > 0 if case.neutral_reason is None else None
+                (
+                    report.useful_work_count > 0
+                    or content.improved is True
+                )
+                if case.neutral_reason is None
+                else content.improved
             ),
             retrieval_utility_delta=case.retrieval_utility_delta,
+            content_quality_score_before=content.before,
+            content_quality_score_after=content.after,
+            content_quality_delta=content.delta,
+            content_quality_improved=content.improved,
             acceptance_met=acceptance_met,
             neutral_reason=case.neutral_reason,
             **common,
+        )
+
+    def _content_quality(self, receipt: CurationActionReceipt) -> _ContentQualityComparison:
+        if receipt.operation not in {"normalize_memory", "rewrite_memory"}:
+            return _ContentQualityComparison()
+        rows = _fetch_rows(
+            self._db_manager,
+            """
+            SELECT before_snapshot, after_snapshot
+            FROM memory_record_revisions
+            WHERE event_id = ?
+            """,
+            (str(receipt.mutation_event_id),),
+        )
+        scores = [
+            (_content_quality_score(row[0]), _content_quality_score(row[1]))
+            for row in rows
+        ]
+        if not scores or any(before is None or after is None for before, after in scores):
+            return _ContentQualityComparison()
+        before = sum(score[0] for score in scores if score[0] is not None) / len(scores)
+        after = sum(score[1] for score in scores if score[1] is not None) / len(scores)
+        delta = round(after - before, 3)
+        return _ContentQualityComparison(
+            before=before,
+            after=after,
+            delta=delta,
+            improved=delta > 0,
         )
 
     def _intended_memory_ids(self, receipt: CurationActionReceipt) -> list[UUID]:
@@ -563,6 +637,35 @@ def _acceptance_met(case: ReplayCaseReport, hypothesis: CampaignHypothesis) -> b
     else:
         improvement = case.retrieval_utility_delta
     return improvement >= hypothesis.minimum_improvement
+
+
+def _content_quality_score(snapshot: Any) -> float | None:
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except ValueError:
+            return None
+    if not isinstance(snapshot, Mapping):
+        return None
+    record = snapshot.get("record", snapshot)
+    if not isinstance(record, Mapping):
+        return None
+    content = str(record.get("content") or "").strip()
+    title = str(record.get("title") or "").strip()
+    summary = str(record.get("summary") or "").strip().lower()
+    score = 0.0
+    if title:
+        score += 1.0
+    if summary and not summary.startswith(("covers ", "added ", "updated ")):
+        score += 1.0
+    content_length = len(content)
+    if 0 < content_length <= 1600:
+        score += 1.0
+    elif content_length <= 3000:
+        score += 0.5
+    if re.search(r"(?:/[\w.-]+|#[0-9]+|[A-Z]{2,}-[0-9]+|\b(?:commit|error|exception)\b)", content, re.IGNORECASE):
+        score += 1.0
+    return round(score / 4.0, 3)
 
 
 def _neutral_query_reason(

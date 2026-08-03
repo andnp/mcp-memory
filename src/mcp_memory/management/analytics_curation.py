@@ -77,7 +77,8 @@ def build_curation_metrics(
         runner.fetchall(
             """
             SELECT run_id, operation, status, retrieval_regression_count, zero_result_change,
-                   payload_size_change, useful_work, created_at
+                   payload_size_change, useful_work, content_quality_improved,
+                   content_quality_delta, created_at
             FROM curation_quality_evidence
             """
         )
@@ -212,6 +213,9 @@ def build_curation_metrics(
         and _text(row.get("operation"), "") not in {"create_link", "remove_link"}
     ]
     useful_work_count = sum(1 for row in evaluated_quality if row.get("useful_work") in (1, True))
+    content_quality = [
+        row for row in quality if row.get("content_quality_improved") is not None
+    ]
 
     history_event_count = len(events)
     restorable_event_count = sum(
@@ -269,6 +273,16 @@ def build_curation_metrics(
             payload_size_change=sum(_integer(row.get("payload_size_change")) for row in evaluated_quality),
             useful_work_count=useful_work_count,
             useful_work_rate=_ratio(useful_work_count, len(evaluated_quality)),
+            content_evaluated_action_count=len(content_quality),
+            content_quality_improved_count=sum(
+                1 for row in content_quality if row.get("content_quality_improved") in (1, True)
+            ),
+            content_quality_regression_count=sum(
+                1 for row in content_quality if row.get("content_quality_improved") in (0, False)
+            ),
+            content_quality_delta=sum(
+                _number(row.get("content_quality_delta")) for row in content_quality
+            ),
         ),
         verified_yield=verified_yield,
         verified_receipt_count=verified_receipts,
@@ -384,6 +398,17 @@ def _integer(value: object) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _number(value: object) -> float:
+    if isinstance(value, bool) or value is None:
+        return 0.0
+    if not isinstance(value, (int, float, str)):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _json_non_negative_int(value: object) -> int:

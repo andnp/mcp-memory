@@ -28,7 +28,9 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     after_ranked_ids_json, retrieval_regression_count,
                     zero_result_change, payload_size_change, useful_work, created_at,
                     retrieval_utility_delta, acceptance_met, neutral_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    , content_quality_score_before, content_quality_score_after,
+                    content_quality_delta, content_quality_improved
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, action_id) DO UPDATE SET
                     operation = excluded.operation,
                     affected_memory_ids_json = excluded.affected_memory_ids_json,
@@ -44,7 +46,11 @@ class SQLiteCurationQualityStore(CurationQualityRepository):
                     created_at = excluded.created_at,
                     retrieval_utility_delta = excluded.retrieval_utility_delta,
                     acceptance_met = excluded.acceptance_met,
-                    neutral_reason = excluded.neutral_reason
+                    neutral_reason = excluded.neutral_reason,
+                    content_quality_score_before = excluded.content_quality_score_before,
+                    content_quality_score_after = excluded.content_quality_score_after,
+                    content_quality_delta = excluded.content_quality_delta,
+                    content_quality_improved = excluded.content_quality_improved
                 """,
                 _values(evidence),
             )
@@ -85,7 +91,9 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     after_ranked_ids_json, retrieval_regression_count,
                     zero_result_change, payload_size_change, useful_work, created_at,
                     retrieval_utility_delta, acceptance_met, neutral_reason
-                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
+                    , content_quality_score_before, content_quality_score_after,
+                    content_quality_delta, content_quality_improved
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (run_id, action_id) DO UPDATE SET
                     operation = EXCLUDED.operation,
                     affected_memory_ids_json = EXCLUDED.affected_memory_ids_json,
@@ -101,7 +109,11 @@ class PostgresCurationQualityStore(CurationQualityRepository):
                     created_at = EXCLUDED.created_at,
                     retrieval_utility_delta = EXCLUDED.retrieval_utility_delta,
                     acceptance_met = EXCLUDED.acceptance_met,
-                    neutral_reason = EXCLUDED.neutral_reason
+                    neutral_reason = EXCLUDED.neutral_reason,
+                    content_quality_score_before = EXCLUDED.content_quality_score_before,
+                    content_quality_score_after = EXCLUDED.content_quality_score_after,
+                    content_quality_delta = EXCLUDED.content_quality_delta,
+                    content_quality_improved = EXCLUDED.content_quality_improved
                 """,
                 _values(evidence),
             )
@@ -148,6 +160,10 @@ def _values(evidence: CurationQualityEvidence) -> tuple[object, ...]:
         evidence.retrieval_utility_delta,
         None if evidence.acceptance_met is None else int(evidence.acceptance_met),
         evidence.neutral_reason,
+        evidence.content_quality_score_before,
+        evidence.content_quality_score_after,
+        evidence.content_quality_delta,
+        None if evidence.content_quality_improved is None else int(evidence.content_quality_improved),
     )
 
 
@@ -170,6 +186,10 @@ def _from_row(row: Any) -> CurationQualityEvidence:
         retrieval_utility_delta=_optional_float(_row_value(row, "retrieval_utility_delta")),
         acceptance_met=_optional_bool(_row_value(row, "acceptance_met")),
         neutral_reason=_optional_text(_row_value(row, "neutral_reason")),
+        content_quality_score_before=_optional_float(_row_value(row, "content_quality_score_before")),
+        content_quality_score_after=_optional_float(_row_value(row, "content_quality_score_after")),
+        content_quality_delta=_optional_float(_row_value(row, "content_quality_delta")),
+        content_quality_improved=_optional_bool(_row_value(row, "content_quality_improved")),
     )
 
 
@@ -192,6 +212,10 @@ def _from_postgres_row(row: tuple[object, ...]) -> CurationQualityEvidence:
         retrieval_utility_delta=_optional_float(_row_at(row, 14)),
         acceptance_met=_optional_bool(_row_at(row, 15)),
         neutral_reason=_optional_text(_row_at(row, 16)),
+        content_quality_score_before=_optional_float(_row_at(row, 17)),
+        content_quality_score_after=_optional_float(_row_at(row, 18)),
+        content_quality_delta=_optional_float(_row_at(row, 19)),
+        content_quality_improved=_optional_bool(_row_at(row, 20)),
     )
 
 

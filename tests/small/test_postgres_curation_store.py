@@ -126,6 +126,11 @@ def test_postgres_migration_adds_quality_acceptance_evidence() -> None:
     assert "ADD COLUMN IF NOT EXISTS acceptance_met INTEGER" in statements
     assert "ADD COLUMN IF NOT EXISTS neutral_reason TEXT" in statements
 
+    content_migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 23)
+    assert content_migration.name == "add_curation_content_quality_evidence"
+    content_statements = " ".join(content_migration.statements)
+    assert "ADD COLUMN IF NOT EXISTS content_quality_delta DOUBLE PRECISION" in content_statements
+
 
 def test_postgres_migration_adds_memory_references() -> None:
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 18)

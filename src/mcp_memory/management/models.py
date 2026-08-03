@@ -1138,6 +1138,10 @@ class CurationQualityMetricsPayload(BaseModel):
     payload_size_change: int = 0
     useful_work_count: int = 0
     useful_work_rate: float = 0.0
+    content_evaluated_action_count: int = 0
+    content_quality_improved_count: int = 0
+    content_quality_regression_count: int = 0
+    content_quality_delta: float = 0.0
 
 
 class CurationMetricsPayload(BaseModel):

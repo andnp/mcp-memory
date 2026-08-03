@@ -39,6 +39,10 @@ def test_fresh_schema_contains_curation_tables_indexes_and_version(tmp_path: Pat
             "retrieval_utility_delta",
             "acceptance_met",
             "neutral_reason",
+            "content_quality_score_before",
+            "content_quality_score_after",
+            "content_quality_delta",
+            "content_quality_improved",
         } <= quality_columns
         indexes = {
             row[1] for row in connection.execute("PRAGMA index_list(curation_action_receipts)").fetchall()

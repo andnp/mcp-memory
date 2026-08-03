@@ -786,6 +786,10 @@ POSTGRES_MIGRATIONS = (
                 retrieval_utility_delta DOUBLE PRECISION,
                 acceptance_met INTEGER,
                 neutral_reason TEXT,
+                content_quality_score_before DOUBLE PRECISION,
+                content_quality_score_after DOUBLE PRECISION,
+                content_quality_delta DOUBLE PRECISION,
+                content_quality_improved INTEGER,
                 PRIMARY KEY (run_id, action_id),
                 FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
             )
@@ -811,6 +815,16 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS retrieval_utility_delta DOUBLE PRECISION",
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS acceptance_met INTEGER",
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS neutral_reason TEXT",
+        ),
+    ),
+    PostgresMigration(
+        version=23,
+        name="add_curation_content_quality_evidence",
+        statements=(
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS content_quality_score_before DOUBLE PRECISION",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS content_quality_score_after DOUBLE PRECISION",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS content_quality_delta DOUBLE PRECISION",
+            "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS content_quality_improved INTEGER",
         ),
     ),
 )

@@ -93,6 +93,10 @@ class _PostgresQualityConnection:
                 retrieval_utility_delta REAL,
                 acceptance_met INTEGER,
                 neutral_reason TEXT,
+                content_quality_score_before REAL,
+                content_quality_score_after REAL,
+                content_quality_delta REAL,
+                content_quality_improved INTEGER,
                 PRIMARY KEY (run_id, action_id)
             )
             """
