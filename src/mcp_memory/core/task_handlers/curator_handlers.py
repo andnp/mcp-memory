@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext, TaskRuntimeContext
@@ -54,46 +55,25 @@ async def handle_memory_curator_task(
             },
         }
 
-    claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
+    claimed_review_items = await asyncio.to_thread(
+        _claim_curator_review_work_batch,
+        ctx,
+        task=task,
+        limit=1,
+    )
     claimed_review_item = claimed_review_items[0] if claimed_review_items else None
     campaign_hypothesis = campaign_hypothesis_from_payload(
         task.data
         if task.data.get("campaign_hypothesis") is not None or claimed_review_item is None
         else claimed_review_item.payload
     )
-    if claimed_review_item is not None:
-        seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
-        if seed_records:
-            seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
-        else:
-            complete_work_item(ctx, claimed_review_item.id)
-            claimed_review_item = None
-            seed_batch = acquire_curator_candidates(
-                ctx,
-                CuratorCandidateRequest(
-                    task_id=task.id,
-                    workspace_id=task.workspace_id,
-                    requested_strategy=task.data.get("strategy"),
-                    campaign_hypothesis=campaign_hypothesis,
-                ),
-            )
-            seed_records = seed_batch.records
-    else:
-        seed_batch = acquire_curator_candidates(
-            ctx,
-            CuratorCandidateRequest(
-                task_id=task.id,
-                workspace_id=task.workspace_id,
-                requested_strategy=task.data.get("strategy"),
-                campaign_hypothesis=campaign_hypothesis,
-            ),
-        )
-        seed_records = seed_batch.records
-
-    sampled_records = seed_records
-    if claimed_review_item is None:
-        support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
-        seed_records = sampled_records + support_records
+    seed_batch, sampled_records, seed_records, claimed_review_item = await asyncio.to_thread(
+        _prepare_curator_seed_context,
+        ctx,
+        task,
+        claimed_review_item,
+        campaign_hypothesis,
+    )
 
     claimed_family_key = (
         claimed_review_item.family_key
@@ -150,6 +130,48 @@ def _mutation_budget_override(task: TaskRecord) -> CurationMutationBudget | None
     if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 0:
         raise ValueError("max_accepted_mutations must be a non-negative integer")
     return CurationMutationBudget(max_accepted_mutations=raw_limit)
+
+
+def _prepare_curator_seed_context(
+    ctx: ApplicationContext,
+    task: TaskRecord,
+    claimed_review_item: Any,
+    campaign_hypothesis: Any,
+) -> tuple[Any, list[Any], list[Any], Any]:
+    if claimed_review_item is not None:
+        seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
+        if seed_records:
+            seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
+        else:
+            complete_work_item(ctx, claimed_review_item.id)
+            claimed_review_item = None
+            seed_batch = acquire_curator_candidates(
+                ctx,
+                CuratorCandidateRequest(
+                    task_id=task.id,
+                    workspace_id=task.workspace_id,
+                    requested_strategy=task.data.get("strategy"),
+                    campaign_hypothesis=campaign_hypothesis,
+                ),
+            )
+            seed_records = seed_batch.records
+    else:
+        seed_batch = acquire_curator_candidates(
+            ctx,
+            CuratorCandidateRequest(
+                task_id=task.id,
+                workspace_id=task.workspace_id,
+                requested_strategy=task.data.get("strategy"),
+                campaign_hypothesis=campaign_hypothesis,
+            ),
+        )
+        seed_records = seed_batch.records
+
+    sampled_records = seed_records
+    if claimed_review_item is None:
+        support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
+        seed_records = sampled_records + support_records
+    return seed_batch, sampled_records, seed_records, claimed_review_item
 
 
 def _claim_curator_review_work_batch(
