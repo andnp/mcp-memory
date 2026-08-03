@@ -13,6 +13,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     complete_work_item,
     work_item_result_metadata,
 )
+from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
@@ -121,12 +122,22 @@ async def handle_memory_curator_task(
         ctx,
         task,
         provider=provider,
+        mutation_budget=_mutation_budget_override(task),
         seed_batch=seed_batch,
         sampled_records=sampled_records,
         seed_records=seed_records,
         claimed_work_item=claimed_review_item,
         work_item_metadata=work_item_metadata,
     )
+
+
+def _mutation_budget_override(task: TaskRecord) -> CurationMutationBudget | None:
+    raw_limit = task.data.get("max_accepted_mutations")
+    if raw_limit is None:
+        return None
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 0:
+        raise ValueError("max_accepted_mutations must be a non-negative integer")
+    return CurationMutationBudget(max_accepted_mutations=raw_limit)
 
 
 def _claim_curator_review_work_batch(

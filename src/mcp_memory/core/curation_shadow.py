@@ -13,6 +13,7 @@ from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFrontier, CurationHarnessConfig
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_quality import CurationQualitySampler
+from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import (
@@ -33,6 +34,7 @@ async def run_curator_verified_campaign(
     task: TaskRecord,
     *,
     provider: Any,
+    mutation_budget: CurationMutationBudget | None = None,
     seed_batch: Any,
     sampled_records: list[Any],
     seed_records: list[Any],
@@ -98,6 +100,7 @@ async def run_curator_verified_campaign(
         work_items=ctx.work_items,
         config=CurationHarnessConfig(
             provider=provider_trust,
+            mutation_budget=mutation_budget or CurationMutationBudget(),
             execute_accepted_actions=True,
             require_authoritative_disclosure_context=require_policy,
         ),
