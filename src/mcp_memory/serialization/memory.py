@@ -32,6 +32,21 @@ def memory_record_payload(record: MemoryRecord) -> dict:
     }
 
 
+def internal_mutation_record_payload(record: MemoryRecord) -> dict:
+    """Compact receipt for internal mutation follow-up."""
+    return {
+        "id": record.id,
+        "memory_ref": format_memory_ref(getattr(record, "memory_ref", None)),
+        "title": record.title,
+        "summary": record.summary,
+        "type": record.type,
+        "status": record.status,
+        "updated_at": record.updated_at,
+        "workspace_ids": list(record.workspace_ids),
+        "tags": list(record.tags),
+    }
+
+
 _AUTO_LINK_PREFIX = "Auto-linked from shared tags"
 
 
