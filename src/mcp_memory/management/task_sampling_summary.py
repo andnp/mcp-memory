@@ -20,6 +20,10 @@ UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT = 0.20
 UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE = 2.0
 UTILITY_PRIOR_QUALITY_WEIGHT = 0.85
 UTILITY_PRIOR_QUALITY_REGRESSION_SCALE = 2.0
+SAMPLER_PRIORITY_MIN_SAMPLE = 4.0
+SAMPLER_PRIORITY_OPPORTUNITY_SCALE = 32.0
+SAMPLER_PRIORITY_YIELD_SCALE = 4.0
+SAMPLER_PRIORITY_RECENCY_SCALE = 20.0
 UNKNOWN_SELECTOR_MODE = "unspecified"
 UNKNOWN_SELECTOR_STRATEGY = "unknown"
 SAMPLER_OUTCOME_QUALITY_PASS = "quality_pass"
@@ -215,6 +219,8 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 quality_pass_runs=row.quality_pass_runs,
                 quality_failure_runs=row.quality_failure_runs,
                 provider_failure_runs=row.provider_failure_runs,
+                sampler_priority_score=_selection_priority_score(row),
+                sampler_priority_explanation=_selection_priority_explanation(row),
             )
             for row in sorted(utility_rows.values(), key=lambda item: (item.task_name, -item.runs, item.strategy_used))
         ],
@@ -348,28 +354,86 @@ def selection_utility_prior_scores(
             continue
         if allowed and row.strategy_used not in allowed:
             continue
-        priors[row.strategy_used] = _utility_prior_score(row)
+        priors[row.strategy_used] = _selection_priority_score(row)
     return priors
 
 
 def _utility_prior_score(row: SelectionStrategyUtilityPayload) -> float:
-    if row.quality_evidence_runs > 0:
-        useful_rate = _clamp01(row.useful_work_count / row.quality_evidence_runs)
-        regression_penalty = _clamp01(row.retrieval_regression_count / row.quality_evidence_runs / UTILITY_PRIOR_QUALITY_REGRESSION_SCALE)
-        zero_result_penalty = _clamp01(max(row.zero_result_change, 0) / row.quality_evidence_runs / UTILITY_PRIOR_QUALITY_REGRESSION_SCALE)
-        quality_score = _clamp01(useful_rate - regression_penalty - zero_result_penalty)
-        return round(_clamp01(UTILITY_PRIOR_QUALITY_WEIGHT * quality_score - UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT * _clamp01(row.no_op_rate)), 4)
-    mutation_rate = _clamp01(row.mutation_rate)
-    mutations_per_run = _clamp01(row.mutations_per_run / UTILITY_PRIOR_MUTATIONS_PER_RUN_SCALE)
-    mutations_per_tool_call = _clamp01(row.mutations_per_tool_call or 0.0)
-    no_op_rate = _clamp01(row.no_op_rate)
-    score = (
-        UTILITY_PRIOR_MUTATION_RATE_WEIGHT * mutation_rate
-        + UTILITY_PRIOR_MUTATIONS_PER_RUN_WEIGHT * mutations_per_run
-        + UTILITY_PRIOR_MUTATIONS_PER_TOOL_CALL_WEIGHT * mutations_per_tool_call
-        - UTILITY_PRIOR_NO_OP_PENALTY_WEIGHT * no_op_rate
+    return _selection_priority_score(row)
+
+
+def _selection_priority_score(row: _UtilityAccumulator | SelectionStrategyUtilityPayload) -> float:
+    passing_waves = max(row.quality_pass_runs, 0)
+    quality_failures = max(row.quality_failure_runs, 0)
+    observed_quality_waves = passing_waves + quality_failures
+    quality_pass_rate = (passing_waves + 1.0) / (observed_quality_waves + 2.0)
+    accepted_per_passing_wave = (max(row.productive_mutations, 0) + 1.0) / (passing_waves + 2.0)
+    average_candidate_count = _average_candidate_count(row)
+    opportunity = (
+        _clamp01(average_candidate_count / SAMPLER_PRIORITY_OPPORTUNITY_SCALE)
+        if average_candidate_count is not None
+        else 0.5
     )
-    return round(_clamp01(score), 4)
+    coverage = (
+        _clamp01(row.quality_evidence_runs / row.runs)
+        if row.runs > 0 and row.quality_evidence_runs > 0
+        else 0.5
+    )
+    recency = _clamp01(row.runs / SAMPLER_PRIORITY_RECENCY_SCALE)
+    exploration = _clamp01((1.0 / max(row.runs, 0.0)) ** 0.5)
+    regression_risk = (
+        _clamp01(
+            (
+                max(row.retrieval_regression_count, 0)
+                + max(row.zero_result_change, 0)
+            )
+            / max(row.quality_evidence_runs, 1)
+        )
+        if row.quality_evidence_runs > 0
+        else 0.0
+    )
+    sample_confidence = _clamp01(observed_quality_waves / SAMPLER_PRIORITY_MIN_SAMPLE)
+    score = (
+        0.15 * opportunity
+        + 0.30 * quality_pass_rate
+        + 0.25 * _clamp01(accepted_per_passing_wave / SAMPLER_PRIORITY_YIELD_SCALE)
+        + 0.10 * coverage
+        + 0.05 * recency
+        + 0.10 * exploration
+        - 0.20 * regression_risk
+    )
+    return round(_clamp01((1.0 - sample_confidence) * 0.5 + sample_confidence * score), 4)
+
+
+def _selection_priority_explanation(row: _UtilityAccumulator | SelectionStrategyUtilityPayload) -> str:
+    passing_waves = max(row.quality_pass_runs, 0)
+    quality_failures = max(row.quality_failure_runs, 0)
+    quality_rate = (passing_waves + 1.0) / (passing_waves + quality_failures + 2.0)
+    yield_rate = (max(row.productive_mutations, 0) + 1.0) / (passing_waves + 2.0)
+    regression_risk = (
+        (
+            max(row.retrieval_regression_count, 0)
+            + max(row.zero_result_change, 0)
+        )
+        / max(row.quality_evidence_runs, 1)
+        if row.quality_evidence_runs > 0
+        else 0.0
+    )
+    return (
+        f"quality_pass_rate={quality_rate:.3f}; "
+        f"productive_mutations_per_pass={yield_rate:.3f}; "
+        f"coverage={_clamp01(row.quality_evidence_runs / row.runs) if row.runs else 0.5:.3f}; "
+        f"regression_risk={_clamp01(regression_risk):.3f}; "
+        f"exploration_bonus={_clamp01((1.0 / max(row.runs, 1.0)) ** 0.5):.3f}"
+    )
+
+
+def _average_candidate_count(row: _UtilityAccumulator | SelectionStrategyUtilityPayload) -> float | None:
+    if isinstance(row, _UtilityAccumulator):
+        if row.candidate_count_observations <= 0:
+            return None
+        return row.candidate_count_total / row.candidate_count_observations
+    return row.average_candidate_count
 
 
 def _clamp01(value: float) -> float:
