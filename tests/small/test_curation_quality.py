@@ -730,6 +730,100 @@ def test_quality_sampler_excludes_unrelated_explicit_zero_result_searches(db_man
     assert search.calls in (None, [])
 
 
+@pytest.mark.parametrize("mode", [CampaignTargetMode.RANK, CampaignTargetMode.TOP_K])
+def test_quality_sampler_resolves_absent_explicit_goal_from_exact_query(
+    db_manager,
+    mode: CampaignTargetMode,
+) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    event_id = uuid4()
+    memory_id = uuid4()
+    noise_id = uuid4()
+    receipt = _receipt(run.run_id, event_id=event_id, applied_at=now).model_copy(
+        update={"affected_ids": [memory_id]}
+    )
+    connection = db_manager.get_connection()
+    connection.executemany(
+        """
+        INSERT INTO memories (
+            id, title, content, type, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                str(value),
+                "title",
+                "content",
+                "observation",
+                "active",
+                now.isoformat(),
+                now.isoformat(),
+            )
+            for value in (memory_id, noise_id)
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text,
+            result_rank, result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "goal-query",
+                "external",
+                "search",
+                str(noise_id),
+                "find target",
+                1,
+                1,
+                (now - timedelta(minutes=1)).isoformat(),
+            ),
+            (
+                "unrelated-query",
+                "external",
+                "search",
+                str(memory_id),
+                "other query",
+                1,
+                1,
+                (now - timedelta(minutes=1)).isoformat(),
+            ),
+        ],
+    )
+    connection.commit()
+    search = _Search([_context(str(memory_id))])
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=search,
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=[receipt],
+        campaign_hypothesis=CampaignHypothesis(
+            query="find target",
+            expected_memory_ids=[memory_id],
+            target_mode=mode,
+            top_k=1,
+            minimum_improvement=1.0,
+        ),
+    )
+
+    assert evidence[0].status == "evaluated"
+    assert evidence[0].query_id == "goal-query"
+    assert evidence[0].before_ranked_memory_ids == [noise_id]
+    assert evidence[0].after_ranked_memory_ids == [memory_id]
+    assert evidence[0].useful_work is True
+    assert evidence[0].acceptance_met is True
+    assert search.calls == ["find target"]
+
+
 def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)
