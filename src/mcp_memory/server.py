@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 _REQUEST_WORKSPACE_ROOT_KEY = "__workspace_root"
 _REQUEST_SESSION_ID_KEY = "__session_id"
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS = 60.0
-_DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD = 2
 _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_POLL_SLICE_SECONDS = 0.1
 _HOOK_TRANSPORT_HEALTH_PROBE_TIMEOUT_SECONDS = 0.2
 _REQUEST_RECOVERY_RETRY_COUNT = 2
@@ -80,8 +79,6 @@ class MCPServer:
         )
         self._daemon: object | None = None
         self._daemon_recovery_task: asyncio.Task[None] | None = None
-        self._daemon_recovery_force_restart_requested = False
-        self._consecutive_client_timeout_failures = 0
         self._tool_path_prefix = tool_path_prefix
         self._session_id: str | None = None
         self._session_started = False
@@ -167,17 +164,10 @@ class MCPServer:
 
         try:
             response = await request_with_wrapped_timeout()
-            self._consecutive_client_timeout_failures = 0
             return response
         except _ClientRequestTimeout as exc:
-            self._consecutive_client_timeout_failures += 1
             self._daemon = None
-            self._start_background_daemon_recovery(
-                force_restart=(
-                    self._consecutive_client_timeout_failures
-                    >= _DAEMON_BACKED_MCP_CLIENT_TIMEOUT_ESCALATION_THRESHOLD
-                )
-            )
+            self._start_background_daemon_recovery()
             raise TimeoutError("mcp_client_request_timed_out") from exc.__cause__
         except _DaemonRequestTimeout as exc:
             cause = exc.__cause__
@@ -197,10 +187,7 @@ class MCPServer:
             return recovery_method(path, payload, timeout_deadline=timeout_deadline)
         return recovery_method(path, payload)
 
-    def _start_background_daemon_recovery(self, *, force_restart: bool = False) -> None:
-        self._daemon_recovery_force_restart_requested = (
-            self._daemon_recovery_force_restart_requested or force_restart
-        )
+    def _start_background_daemon_recovery(self) -> None:
         if self._daemon_recovery_task is not None and not self._daemon_recovery_task.done():
             return
         recovery_task = asyncio.create_task(self._refresh_daemon_metadata_in_background())
@@ -209,14 +196,7 @@ class MCPServer:
 
     async def _refresh_daemon_metadata_in_background(self) -> None:
         try:
-            while True:
-                force_restart = self._daemon_recovery_force_restart_requested
-                self._daemon_recovery_force_restart_requested = False
-                if force_restart:
-                    await asyncio.to_thread(stop_daemon)
-                self._daemon = await asyncio.to_thread(ensure_daemon_started)
-                if not self._daemon_recovery_force_restart_requested:
-                    break
+            self._daemon = await asyncio.to_thread(ensure_daemon_started)
         except Exception as exc:  # pragma: no cover - exercised via log assertion paths if needed
             logger.warning(
                 "Background daemon metadata recovery failed after client timeout",
@@ -253,8 +233,7 @@ class MCPServer:
                     },
                 )
                 self._daemon = None
-                self._consecutive_client_timeout_failures = 0
-                self._start_background_daemon_recovery(force_restart=True)
+                self._start_background_daemon_recovery()
 
     async def _monitor_daemon_health(self) -> None:
         while True:

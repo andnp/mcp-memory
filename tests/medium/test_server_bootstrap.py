@@ -573,7 +573,7 @@ async def test_mcp_server_successful_background_recovery_updates_cached_daemon(m
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_successful_request_resets_consecutive_client_timeout_state(monkeypatch) -> None:
+async def test_mcp_server_successful_request_after_timeout_succeeds(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     request_stall = threading.Event()
     recovered_daemon = object()
@@ -601,12 +601,9 @@ async def test_mcp_server_successful_request_resets_consecutive_client_timeout_s
 
     await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
 
-    assert server._consecutive_client_timeout_failures == 1
-
     payload = await server._request_daemon_json_with_client_timeout("/internal/tools", None)
 
     assert payload == {"tools": []}
-    assert server._consecutive_client_timeout_failures == 0
 
 
 @pytest.mark.asyncio
@@ -625,16 +622,14 @@ async def test_mcp_server_sync_timeout_does_not_count_as_client_timeout(monkeypa
         await server._request_daemon_json_with_client_timeout("/internal/tools", None)
 
     assert server._daemon is daemon
-    assert server._consecutive_client_timeout_failures == 0
     assert server._daemon_recovery_task is None
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_restart(monkeypatch) -> None:
+async def test_mcp_server_repeated_client_timeouts_refresh_without_stopping_daemon(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     request_stall = threading.Event()
     ensure_calls: list[bool] = []
-    stop_calls: list[bool] = []
     refreshed_daemons = [object(), object()]
 
     def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
@@ -645,17 +640,12 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
         ensure_calls.append(True)
         return refreshed_daemons[len(ensure_calls) - 1]
 
-    def successful_stop():
-        stop_calls.append(True)
-        return None
-
     monkeypatch.setattr(
         "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
         0.01,
     )
     monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
     monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", successful_recovery)
-    monkeypatch.setattr("mcp_memory.server.stop_daemon", successful_stop)
 
     server._daemon = object()
     with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
@@ -664,7 +654,6 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
     await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
 
     assert ensure_calls == [True]
-    assert stop_calls == []
 
     server._daemon = object()
     with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
@@ -672,7 +661,6 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
 
     await asyncio.wait_for(cast(asyncio.Task[None], server._daemon_recovery_task), timeout=1)
 
-    assert stop_calls == [True]
     assert ensure_calls == [
         True,
         True,
@@ -681,17 +669,13 @@ async def test_mcp_server_second_consecutive_client_timeout_escalates_to_forced_
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts_after_current_attempt(monkeypatch) -> None:
+async def test_mcp_server_recovery_coalesces_inflight_timeout(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     request_stall = threading.Event()
     first_recovery_started = threading.Event()
     allow_first_recovery = threading.Event()
-    second_recovery_started = threading.Event()
-    allow_second_recovery = threading.Event()
-    stop_called = threading.Event()
     ensure_calls: list[bool] = []
-    stop_calls: list[bool] = []
-    recovered_daemons = [object(), object()]
+    recovered_daemon = object()
 
     def blocking_request(_path: str, _payload: dict | None) -> dict[str, object]:
         request_stall.wait(0.05)
@@ -699,18 +683,9 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
 
     def staged_recovery():
         ensure_calls.append(True)
-        if len(ensure_calls) == 1:
-            first_recovery_started.set()
-            allow_first_recovery.wait(1)
-        else:
-            second_recovery_started.set()
-            allow_second_recovery.wait(1)
-        return recovered_daemons[len(ensure_calls) - 1]
-
-    def successful_stop():
-        stop_calls.append(True)
-        stop_called.set()
-        return None
+        first_recovery_started.set()
+        allow_first_recovery.wait(1)
+        return recovered_daemon
 
     monkeypatch.setattr(
         "mcp_memory.server._DAEMON_BACKED_MCP_CLIENT_TIMEOUT_SECONDS",
@@ -718,7 +693,6 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
     )
     monkeypatch.setattr(server, "_request_json_with_recovery", blocking_request)
     monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", staged_recovery)
-    monkeypatch.setattr("mcp_memory.server.stop_daemon", successful_stop)
 
     server._daemon = object()
     with pytest.raises(TimeoutError, match="mcp_client_request_timed_out"):
@@ -734,18 +708,10 @@ async def test_mcp_server_escalation_requested_during_inflight_recovery_restarts
     assert server._daemon_recovery_task is first_recovery_task
 
     allow_first_recovery.set()
-    assert await asyncio.to_thread(stop_called.wait, 1)
-    assert await asyncio.to_thread(second_recovery_started.wait, 1)
-
-    allow_second_recovery.set()
     await asyncio.wait_for(cast(asyncio.Task[None], first_recovery_task), timeout=1)
 
-    assert stop_calls == [True]
-    assert ensure_calls == [
-        True,
-        True,
-    ]
-    assert server._daemon is recovered_daemons[-1]
+    assert ensure_calls == [True]
+    assert server._daemon is recovered_daemon
 
 
 @pytest.mark.asyncio
@@ -787,11 +753,10 @@ async def test_mcp_server_failed_background_recovery_logs_warning(monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_force_recovery(monkeypatch) -> None:
+async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_recovery(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     sentinel_daemon = object()
     server._daemon = sentinel_daemon
-    server._consecutive_client_timeout_failures = 3
 
     recovery_started = threading.Event()
     allow_recovery = threading.Event()
@@ -803,7 +768,6 @@ async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_force_recover
         return refreshed_daemon
 
     monkeypatch.setattr("mcp_memory.server.ensure_daemon_started", fake_recovery)
-    monkeypatch.setattr("mcp_memory.server.stop_daemon", lambda *a, **kw: None)
 
     # Simulate a large CLOCK_BOOTTIME jump on the second call (machine slept for 60s).
     boottime_calls = [0]
@@ -827,7 +791,6 @@ async def test_mcp_server_suspend_monitor_clears_daemon_and_starts_force_recover
         assert await asyncio.to_thread(recovery_started.wait, 1)
         # While recovery is in-flight, daemon is cleared.
         assert server._daemon is None
-        assert server._consecutive_client_timeout_failures == 0
         # A recovery task was scheduled.
         assert server._daemon_recovery_task is not None
     finally:
