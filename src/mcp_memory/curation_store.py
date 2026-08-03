@@ -105,6 +105,11 @@ class CurationCandidateState(CurationStoreModel):
     last_run_id: UUID | None = None
     escalation_count: int = Field(default=0, ge=0)
     last_escalated_strategy: str | None = None
+    last_considered_at: datetime | None = None
+    last_considered_strategy: str | None = None
+    last_mutation_family: str | None = None
+    last_mutated_at: datetime | None = None
+    coverage_evidence_json: dict[str, Any] = Field(default_factory=dict)
 
 
 _RUN_TRANSITIONS: dict[CurationRunState, frozenset[CurationRunState]] = {
@@ -477,8 +482,10 @@ class SQLiteCurationStore:
                 INSERT INTO curation_candidate_state (
                     memory_id, last_observed_revision_token, disposition,
                     consecutive_no_op_count, cooldown_until, last_disposition_reason,
-                    last_frontier_key, last_run_id, escalation_count, last_escalated_strategy
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_frontier_key, last_run_id, escalation_count, last_escalated_strategy,
+                    last_considered_at, last_considered_strategy, last_mutation_family,
+                    last_mutated_at, coverage_evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     last_observed_revision_token = excluded.last_observed_revision_token,
                     disposition = excluded.disposition,
@@ -489,6 +496,11 @@ class SQLiteCurationStore:
                     last_run_id = excluded.last_run_id,
                     escalation_count = excluded.escalation_count,
                     last_escalated_strategy = excluded.last_escalated_strategy
+                    ,last_considered_at = excluded.last_considered_at
+                    ,last_considered_strategy = excluded.last_considered_strategy
+                    ,last_mutation_family = excluded.last_mutation_family
+                    ,last_mutated_at = excluded.last_mutated_at
+                    ,coverage_evidence_json = excluded.coverage_evidence_json
                 """,
                 _candidate_values(state),
             )
@@ -659,6 +671,11 @@ def _candidate_values(state: CurationCandidateState) -> tuple[object, ...]:
         _uuid_text(state.last_run_id),
         state.escalation_count,
         state.last_escalated_strategy,
+        _datetime_text(state.last_considered_at),
+        state.last_considered_strategy,
+        state.last_mutation_family,
+        _datetime_text(state.last_mutated_at),
+        _json_text(state.coverage_evidence_json),
     )
 
 
@@ -674,4 +691,9 @@ def _candidate_from_row(row: sqlite3.Row) -> CurationCandidateState:
         last_run_id=None if row["last_run_id"] is None else UUID(str(row["last_run_id"])),
         escalation_count=int(row["escalation_count"]),
         last_escalated_strategy=row["last_escalated_strategy"],
+        last_considered_at=_datetime_value(row["last_considered_at"]),
+        last_considered_strategy=row["last_considered_strategy"],
+        last_mutation_family=row["last_mutation_family"],
+        last_mutated_at=_datetime_value(row["last_mutated_at"]),
+        coverage_evidence_json=json.loads(row["coverage_evidence_json"] or "{}"),
     )

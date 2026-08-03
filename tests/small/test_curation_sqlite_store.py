@@ -22,6 +22,16 @@ def test_fresh_schema_contains_curation_tables_indexes_and_version(tmp_path: Pat
             row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
         assert {"curation_runs", "curation_action_receipts", "curation_candidate_state"} <= tables
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(curation_candidate_state)").fetchall()
+        }
+        assert {
+            "last_considered_at",
+            "last_considered_strategy",
+            "last_mutation_family",
+            "last_mutated_at",
+            "coverage_evidence_json",
+        } <= columns
         indexes = {
             row[1] for row in connection.execute("PRAGMA index_list(curation_action_receipts)").fetchall()
         }

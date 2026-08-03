@@ -68,7 +68,9 @@ class FakeConnection:
                 memory_id TEXT PRIMARY KEY, last_observed_revision_token TEXT,
                 disposition TEXT NOT NULL, consecutive_no_op_count INTEGER NOT NULL,
                 cooldown_until TEXT, last_disposition_reason TEXT, last_frontier_key TEXT,
-                last_run_id TEXT, escalation_count INTEGER NOT NULL, last_escalated_strategy TEXT
+                last_run_id TEXT, escalation_count INTEGER NOT NULL, last_escalated_strategy TEXT,
+                last_considered_at TEXT, last_considered_strategy TEXT, last_mutation_family TEXT,
+                last_mutated_at TEXT, coverage_evidence_json TEXT NOT NULL DEFAULT '{}'
             );
             """
         )
@@ -107,7 +109,7 @@ def _sqlite_query(query: str) -> str:
 
 
 def test_postgres_migration_adds_curation_ledger_as_additive_version() -> None:
-    assert POSTGRES_SCHEMA_VERSION == 19
+    assert POSTGRES_SCHEMA_VERSION == 21
     migration = next(migration for migration in POSTGRES_MIGRATIONS if migration.version == 12)
     assert migration.version == 12
     assert migration.name == "add_curation_ledger"

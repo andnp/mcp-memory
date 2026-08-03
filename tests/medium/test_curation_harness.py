@@ -882,6 +882,7 @@ def test_specialist_route_persists_escalated_candidate_state(db_manager: Databas
         run_id=run_id,
         frontier_key=context.frontier_fingerprint,
         strategy=frontier.strategy,
+        mutation_family=frontier.family,
         reason_code="needs_different_specialist",
         receipts=(),
     )
@@ -891,6 +892,8 @@ def test_specialist_route_persists_escalated_candidate_state(db_manager: Databas
     assert state.disposition.value == "escalated"
     assert state.escalation_count == 1
     assert state.last_escalated_strategy == frontier.strategy
+    assert state.last_considered_strategy == frontier.strategy
+    assert state.coverage_evidence_json["reason"] == "needs_different_specialist"
     assert state.last_frontier_key == context.frontier_fingerprint
     assert state.last_run_id == run_id
 

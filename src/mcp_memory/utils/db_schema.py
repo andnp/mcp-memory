@@ -553,6 +553,11 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     create_curation_ledger_schema(conn)
     ensure_column(conn, "curation_action_receipts", "intent_hash", "TEXT")
     ensure_column(conn, "curation_action_receipts", "verification_descriptor_json", "TEXT")
+    ensure_column(conn, "curation_candidate_state", "last_considered_at", "TEXT")
+    ensure_column(conn, "curation_candidate_state", "last_considered_strategy", "TEXT")
+    ensure_column(conn, "curation_candidate_state", "last_mutation_family", "TEXT")
+    ensure_column(conn, "curation_candidate_state", "last_mutated_at", "TEXT")
+    ensure_column(conn, "curation_candidate_state", "coverage_evidence_json", "TEXT NOT NULL DEFAULT '{}'")
 
 
 def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
@@ -611,7 +616,12 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             last_frontier_key TEXT,
             last_run_id TEXT,
             escalation_count INTEGER NOT NULL DEFAULT 0,
-            last_escalated_strategy TEXT
+            last_escalated_strategy TEXT,
+            last_considered_at TEXT,
+            last_considered_strategy TEXT,
+            last_mutation_family TEXT,
+            last_mutated_at TEXT,
+            coverage_evidence_json TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS curation_quality_evidence (

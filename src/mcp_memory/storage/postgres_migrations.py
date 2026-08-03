@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 19
+POSTGRES_SCHEMA_VERSION = 21
 
 
 @dataclass(frozen=True)
@@ -788,6 +788,17 @@ POSTGRES_MIGRATIONS = (
             )
             """,
             "CREATE INDEX IF NOT EXISTS idx_curation_quality_evidence_created_at ON curation_quality_evidence(created_at DESC, run_id, action_id)",
+        ),
+    ),
+    PostgresMigration(
+        version=21,
+        name="add_curation_candidate_coverage",
+        statements=(
+            "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_considered_at TEXT",
+            "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_considered_strategy TEXT",
+            "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_mutation_family TEXT",
+            "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS last_mutated_at TEXT",
+            "ALTER TABLE curation_candidate_state ADD COLUMN IF NOT EXISTS coverage_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb",
         ),
     ),
 )

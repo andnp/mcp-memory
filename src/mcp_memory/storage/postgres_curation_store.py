@@ -265,8 +265,10 @@ class PostgresCurationStore:
                     INSERT INTO curation_candidate_state (
                         memory_id, last_observed_revision_token, disposition,
                         consecutive_no_op_count, cooldown_until, last_disposition_reason,
-                        last_frontier_key, last_run_id, escalation_count, last_escalated_strategy
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        last_frontier_key, last_run_id, escalation_count, last_escalated_strategy,
+                        last_considered_at, last_considered_strategy, last_mutation_family,
+                        last_mutated_at, coverage_evidence_json
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (memory_id) DO UPDATE SET
                         last_observed_revision_token = EXCLUDED.last_observed_revision_token,
                         disposition = EXCLUDED.disposition,
@@ -276,7 +278,12 @@ class PostgresCurationStore:
                         last_frontier_key = EXCLUDED.last_frontier_key,
                         last_run_id = EXCLUDED.last_run_id,
                         escalation_count = EXCLUDED.escalation_count,
-                        last_escalated_strategy = EXCLUDED.last_escalated_strategy
+                    last_escalated_strategy = EXCLUDED.last_escalated_strategy
+                    ,last_considered_at = EXCLUDED.last_considered_at
+                    ,last_considered_strategy = EXCLUDED.last_considered_strategy
+                    ,last_mutation_family = EXCLUDED.last_mutation_family
+                    ,last_mutated_at = EXCLUDED.last_mutated_at
+                    ,coverage_evidence_json = EXCLUDED.coverage_evidence_json
                     """,
                     _candidate_values(state),
                 )
@@ -325,7 +332,9 @@ FROM curation_action_receipts
 _CANDIDATE_SELECT = """
 SELECT memory_id, last_observed_revision_token, disposition, consecutive_no_op_count,
        cooldown_until, last_disposition_reason, last_frontier_key, last_run_id,
-       escalation_count, last_escalated_strategy
+       escalation_count, last_escalated_strategy, last_considered_at,
+       last_considered_strategy, last_mutation_family, last_mutated_at,
+       coverage_evidence_json
 FROM curation_candidate_state
 """
 
@@ -428,6 +437,11 @@ def _candidate_values(state: CurationCandidateState) -> tuple[object, ...]:
         _uuid_text(state.last_run_id),
         state.escalation_count,
         state.last_escalated_strategy,
+        _datetime_text(state.last_considered_at),
+        state.last_considered_strategy,
+        state.last_mutation_family,
+        _datetime_text(state.last_mutated_at),
+        _json_text(state.coverage_evidence_json),
     )
 
 
@@ -494,6 +508,11 @@ def _candidate_from_row(row: tuple[object, ...]) -> CurationCandidateState:
         last_run_id=None if row[7] is None else UUID(str(row[7])),
         escalation_count=int(str(row[8])),
         last_escalated_strategy=None if row[9] is None else str(row[9]),
+        last_considered_at=_datetime_value(row[10]),
+        last_considered_strategy=None if row[11] is None else str(row[11]),
+        last_mutation_family=None if row[12] is None else str(row[12]),
+        last_mutated_at=_datetime_value(row[13]),
+        coverage_evidence_json=cast(dict[str, Any], _json_value(row[14], default={})),
     )
 
 

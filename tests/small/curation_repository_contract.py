@@ -185,6 +185,11 @@ def assert_curation_repository_contract(make_repository: RepositoryFactory) -> N
         last_run_id=run.run_id,
         escalation_count=1,
         last_escalated_strategy="cold",
+        last_considered_at=datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        last_considered_strategy="cold-storage",
+        last_mutation_family="curator",
+        last_mutated_at=datetime(2026, 1, 1, 0, 2, tzinfo=UTC),
+        coverage_evidence_json={"reason": "unchanged", "source": "cold-storage"},
     )
     assert repository.put_candidate_state(candidate) == candidate
     assert repository.get_candidate_state(memory_id) == candidate
