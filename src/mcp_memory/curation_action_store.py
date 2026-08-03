@@ -65,6 +65,14 @@ class CurationActionFatalError(CurationActionError):
     """The action or transaction callback violated a non-retryable contract."""
 
 
+class CurationActionContractError(CurationActionFatalError):
+    """The planner supplied an action that can be repaired before execution."""
+
+    def __init__(self, message: str, *, code: str = "action_contract") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class CurationActionInjectedFailure(CurationActionFatalError):
     """Failure raised by the test-only transaction stage hook."""
 
@@ -1086,6 +1094,7 @@ def _action_intent_hash(
 
 __all__ = [
     "CurationActionError",
+    "CurationActionContractError",
     "CurationActionFatalError",
     "CurationActionInjectedFailure",
     "CurationActionStaleError",

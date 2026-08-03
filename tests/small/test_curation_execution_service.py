@@ -38,7 +38,12 @@ from mcp_memory.core.curation_validation import (
     AcceptedCurationAction,
     CurationValidationResult,
 )
-from mcp_memory.core.ports.curation import CurationActionFatalError
+from mcp_memory.core.ports.curation import (
+    CurationActionContractError,
+    CurationActionFatalError,
+    CurationActionStaleError,
+    CurationActionTransientError,
+)
 from mcp_memory.curation_store import (
     CurationActionReceipt,
     CurationReceiptState,
@@ -311,6 +316,36 @@ def test_invalid_action_receipt_does_not_block_valid_action() -> None:
     assert executor.executed == [INVALID_ACTION_ID, VALID_ACTION_ID]
     assert store.transitioned is not None
     assert store.transitioned.rejection_codes == ["action_fatal"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_code"),
+    [
+        (CurationActionContractError("invalid precondition", code="invalid_precondition"), "invalid_precondition"),
+        (CurationActionStaleError("stale token"), "stale_precondition"),
+        (CurationActionTransientError("busy"), "action_transient"),
+    ],
+)
+def test_recoverable_action_failures_become_isolated_receipts(
+    failure: BaseException,
+    error_code: str,
+) -> None:
+    run_id = UUID("00000000-0000-0000-0000-000000000010")
+    service = _service(
+        _ExecutionStore(),
+        _ExecutionExecutor({INVALID_ACTION_ID: failure}),
+        _ExecutionVerifier(),
+    )
+
+    outcome, reason, _state, receipts = service.execute(
+        run_id=run_id,
+        executing=_run(run_id),
+        validation=_validation(_normalize_action(INVALID_ACTION_ID)),
+        context=_context(),
+    )
+
+    assert (outcome, reason) == (CurationRunOutcome.DEFERRED, "all_actions_rejected")
+    assert receipts[0].error_code == error_code
 
 
 def test_policy_rejection_is_durable_and_all_invalid_actions_defer() -> None:

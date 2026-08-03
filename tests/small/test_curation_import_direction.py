@@ -1,8 +1,8 @@
 """Keep curator application code dependent on ports, not adapters."""
 import ast
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 FORBIDDEN = {
     "mcp_memory.curation_store",
@@ -41,9 +41,12 @@ ALLOWED_COMPATIBILITY_IMPORTS = {
     ("curation.py", "mcp_memory.curation_store", "CurationRun"),
     ("curation.py", "mcp_memory.curation_store", "CurationRunOutcome"),
     ("curation.py", "mcp_memory.curation_store", "CurationRunState"),
+    ("curation.py", "mcp_memory.curation_action_store", "CurationActionContractError"),
     ("curation.py", "mcp_memory.curation_action_store", "CurationActionFatalError"),
     ("curation.py", "mcp_memory.curation_action_store", "CurationActionStore"),
+    ("curation.py", "mcp_memory.curation_action_store", "CurationActionStaleError"),
     ("curation.py", "mcp_memory.curation_action_store", "CurationTransaction"),
+    ("curation.py", "mcp_memory.curation_action_store", "CurationActionTransientError"),
     ("curation.py", "mcp_memory.curation_action_store", "MutationResult"),
     ("maintenance.py", "mcp_memory.relational.search", "MaintenanceReadRepositoryLike"),
     ("work_items.py", "mcp_memory.work_item_store", "COMPATIBILITY_GROUP_STRUCTURAL_REVIEW"),

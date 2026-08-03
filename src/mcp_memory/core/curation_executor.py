@@ -27,6 +27,7 @@ from mcp_memory.core.curation_models import (
 )
 from mcp_memory.core.curation_policy import PolicyDecision, evaluate_curation_action
 from mcp_memory.core.ports.curation import (
+    CurationActionContractError,
     CurationActionFatalError,
     CurationActionReceipt,
     CurationActionStore,
@@ -150,8 +151,9 @@ class CurationExecutor:
         for endpoint_id in endpoint_ids:
             token = action.preconditions.record_tokens.get(endpoint_id)
             if not token:
-                raise CurationActionFatalError(
-                    f"create_link requires an expected record token for {endpoint_id}"
+                raise CurationActionContractError(
+                    f"create_link requires an expected record token for {endpoint_id}",
+                    code="missing_record_token",
                 )
             expected_tokens[str(endpoint_id)] = token
 
@@ -261,7 +263,10 @@ class CurationExecutor:
         source_token = action.preconditions.record_tokens.get(action.source_id)
         target_token = action.preconditions.record_tokens.get(action.target_id)
         if not source_token or not target_token:
-            raise CurationActionFatalError("remove_link requires expected record tokens for both endpoints")
+            raise CurationActionContractError(
+                "remove_link requires expected record tokens for both endpoints",
+                code="missing_record_token",
+            )
 
         link_type = action.link_type.strip()
         context = (action.context or "").strip()
@@ -316,13 +321,19 @@ class CurationExecutor:
             raise CurationPolicyRejection(decision)
 
         if action.canonical_id in action.source_ids:
-            raise CurationActionFatalError("merge_memories source_ids must not include canonical_id")
+            raise CurationActionContractError(
+                "merge_memories source_ids must not include canonical_id",
+                code="invalid_merge_targets",
+            )
 
         expected_tokens: dict[str, str] = {}
         for memory_id in merge_ids:
             token = action.preconditions.record_tokens.get(memory_id)
             if not token:
-                raise CurationActionFatalError(f"merge_memories requires an expected record token for {memory_id}")
+                raise CurationActionContractError(
+                    f"merge_memories requires an expected record token for {memory_id}",
+                    code="missing_record_token",
+                )
             expected_tokens[str(memory_id)] = token
 
         def apply(transaction: CurationTransaction) -> MutationResult:
@@ -680,7 +691,7 @@ def _record_verification_descriptor(action: NormalizeMemoryAction | RewriteMemor
 
 
 def _reject_missing_or_conflicting_token(message: str) -> NoReturn:
-    raise CurationActionFatalError(message)
+    raise CurationActionContractError(message, code="invalid_record_token")
 
 
 def _sorted_unique(values: Iterable[object]) -> list[str]:
@@ -703,7 +714,10 @@ def _normalized_split_children(children: Sequence[ClaimMapping]) -> list[dict[st
     for child in children:
         output = child.output.strip()
         if not output:
-            raise CurationActionFatalError("split_memory requires non-empty child output")
+            raise CurationActionContractError(
+                "split_memory requires non-empty child output",
+                code="invalid_split_child",
+            )
         title = output.splitlines()[0].strip() or output
         normalized_children.append({"title": title, "content": output})
     return normalized_children
@@ -726,7 +740,10 @@ def _require_exact_link_evidence(action: CreateLinkAction, *, link_type: str, co
             and (link.context or "").strip() == context
         ):
             return
-    raise CurationActionFatalError("create_link requires exact endpoint, type, and context evidence")
+    raise CurationActionContractError(
+        "create_link requires exact endpoint, type, and context evidence",
+        code="missing_link_evidence",
+    )
 
 
 def _require_create_link_preconditions(
@@ -737,8 +754,9 @@ def _require_create_link_preconditions(
     normalized_type = _normalize_link_type(link_type)
     for assertion in action.preconditions.absent_links:
         if getattr(assertion, "context", None) is not None:
-            raise CurationActionFatalError(
-                "create_link absent-link precondition must omit relationship context"
+            raise CurationActionContractError(
+                "create_link absent-link precondition must omit relationship context",
+                code="invalid_absent_link_precondition",
             )
         if (
             assertion.source_id == action.source_id
@@ -746,7 +764,10 @@ def _require_create_link_preconditions(
             and _normalize_link_type(assertion.link_type) == normalized_type
         ):
             return
-    raise CurationActionFatalError("create_link requires an exact absent-link precondition")
+    raise CurationActionContractError(
+        "create_link requires an exact absent-link precondition",
+        code="missing_absent_link_precondition",
+    )
 
 
 def _normalize_link_type(link_type: str) -> str:

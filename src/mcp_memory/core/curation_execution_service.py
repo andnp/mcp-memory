@@ -23,7 +23,10 @@ from mcp_memory.core.curation_models import (
 from mcp_memory.core.curation_validation import CurationValidationResult
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.ports.curation import (
+    CurationActionContractError,
     CurationActionFatalError,
+    CurationActionStaleError,
+    CurationActionTransientError,
     CurationActionReceipt,
     CurationReceiptState,
     CurationRepository,
@@ -32,6 +35,8 @@ from mcp_memory.core.ports.curation import (
 )
 
 _ACTION_FATAL_ERROR_CODE = "action_fatal"
+_ACTION_STALE_ERROR_CODE = "stale_precondition"
+_ACTION_TRANSIENT_ERROR_CODE = "action_transient"
 _POLICY_REJECTION_ERROR_CODE = "policy_rejected"
 
 
@@ -127,6 +132,12 @@ class CurationExecutionService:
             return self._execute_action(action, run_id, memory_types, context)
         except CurationPolicyRejection:
             return self._rejected_receipt(action, run_id, _POLICY_REJECTION_ERROR_CODE)
+        except CurationActionContractError as error:
+            return self._rejected_receipt(action, run_id, error.code)
+        except CurationActionStaleError:
+            return self._rejected_receipt(action, run_id, _ACTION_STALE_ERROR_CODE)
+        except CurationActionTransientError:
+            return self._rejected_receipt(action, run_id, _ACTION_TRANSIENT_ERROR_CODE)
         except CurationActionFatalError:
             return self._rejected_receipt(action, run_id, _ACTION_FATAL_ERROR_CODE)
 
