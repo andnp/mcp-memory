@@ -312,6 +312,126 @@ def test_quality_sampler_persists_no_query_without_positive_quality(db_manager) 
     assert search.calls in (None, [])
 
 
+def test_quality_sampler_accepts_coherent_multi_action_wave(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    memory_ids = [uuid4(), uuid4()]
+    goal_id = uuid4()
+    connection = db_manager.get_connection()
+    for index, memory_id in enumerate(memory_ids, start=1):
+        connection.execute(
+            """
+            INSERT INTO memories (id, title, content, type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(memory_id), "title", "content", "fact", now.isoformat(), now.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO memory_tool_events (
+                invocation_id, caller_kind, event_kind, memory_id, query_text,
+                result_rank, result_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "wave-query",
+                "user",
+                "search",
+                str(memory_id),
+                "wave retrieval",
+                index,
+                2,
+                (now - timedelta(minutes=1)).isoformat(),
+            ),
+        )
+    connection.commit()
+    receipts = [
+        _receipt(
+            run.run_id,
+            event_id=uuid4(),
+            applied_at=now,
+        ).model_copy(update={"affected_ids": [memory_id]})
+        for memory_id in memory_ids
+    ]
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([_context(str(goal_id)), _context(str(memory_ids[0]))]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(
+        run=run,
+        receipts=receipts,
+        campaign_hypothesis=CampaignHypothesis(
+            query="wave retrieval",
+            expected_memory_ids=[goal_id],
+            target_mode=CampaignTargetMode.TOP_K,
+            minimum_improvement=0.1,
+        ),
+    )
+
+    assert len(evidence) == 2
+    assert {item.wave_id for item in evidence} != {None}
+    assert {item.wave_status for item in evidence} == {"accepted"}
+    assert {item.productive_mutation_count for item in evidence} == {2}
+    assert evidence[0].wave_action_ids == evidence[1].wave_action_ids
+
+
+def test_quality_sampler_rejects_wave_when_one_action_regresses(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    SQLiteCurationStore(db_manager).create_run(run)
+    target, collateral = uuid4(), uuid4()
+    connection = db_manager.get_connection()
+    for memory_id in (target, collateral):
+        connection.execute(
+            """
+            INSERT INTO memories (id, title, content, type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(memory_id), "title", "content", "fact", now.isoformat(), now.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO memory_tool_events (
+                invocation_id, caller_kind, event_kind, memory_id, query_text,
+                result_rank, result_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"query-{memory_id}",
+                "user",
+                "search",
+                str(memory_id),
+                "wave regression",
+                1,
+                1,
+                (now - timedelta(minutes=1)).isoformat(),
+            ),
+        )
+    connection.commit()
+    receipts = [
+        _receipt(run.run_id, event_id=uuid4(), applied_at=now).model_copy(
+            update={"affected_ids": [memory_id]}
+        )
+        for memory_id in (target, collateral)
+    ]
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([_context(str(collateral))]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(run=run, receipts=receipts)
+
+    assert evidence
+    assert {item.wave_status for item in evidence} == {"rejected"}
+    assert {item.productive_mutation_count for item in evidence} == {0}
+
+
 def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)
