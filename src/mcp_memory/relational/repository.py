@@ -1357,6 +1357,16 @@ def _quality_signal_clause(quality_signal: str | None) -> tuple[str, list[object
             "LENGTH(COALESCE(memories.content, '')) >= ?",
             [_DEFAULT_QUALITY_OVERSIZED_MIN_CHARS],
         ),
+        "raw_ingress_count": (
+            "(memories.metadata LIKE '%\"created_via_ingest\": true%' "
+            "AND memories.type IN ('journal', 'observation') "
+            "AND (NOT EXISTS (SELECT 1 FROM memory_tags raw_untagged "
+            "WHERE raw_untagged.memory_id = memories.id) "
+            "OR LENGTH(COALESCE(memories.content, '')) > 1600 "
+            "OR LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'covers %' "
+            "OR LOWER(TRIM(COALESCE(memories.summary, ''))) LIKE 'added %'))",
+            [],
+        ),
     }
     if signal is None:
         return "(" + " OR ".join(clause for clause, _ in clauses.values()) + ")", [

@@ -223,7 +223,11 @@ def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
                     "last_surfaced_at": "2026-01-01T00:00:00+00:00",
                     "content_size_chars": 22,
                     "size_band": "target",
-                    "retrieval_friction_flags": ["generic_summary", "untagged_observation"],
+                    "retrieval_friction_flags": [
+                        "generic_summary",
+                        "untagged_observation",
+                        "raw_ingress",
+                    ],
                     "selection_reason": "selected=quality-signal",
                     "selection_signals": {"quality_signal_share": 0.5},
                     "selection_scores": {"quality-signal": 0.7},
@@ -246,7 +250,11 @@ def test_planner_prompt_includes_bounded_curator_selection_metadata() -> None:
     )
     seed = payload["context"]["seeds"][0]
 
-    assert seed["retrieval_friction_flags"] == ["generic_summary", "untagged_observation"]
+    assert seed["retrieval_friction_flags"] == [
+        "generic_summary",
+        "untagged_observation",
+        "raw_ingress",
+    ]
     assert seed["read_count"] == 2
     assert seed["last_surfaced_at"] == "2026-01-01T00:00:00+00:00"
     assert seed["content_size_chars"] == 22

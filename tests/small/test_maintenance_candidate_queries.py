@@ -135,6 +135,15 @@ def test_quality_signal_queries_cover_each_persisted_signal(db_manager) -> None:
     )
     _create(
         repository,
+        "raw-ingress",
+        content="x" * 1_601,
+        memory_type="observation",
+        tags=["specific"],
+        metadata={"created_via_ingest": True},
+        updated_at="2026-01-04T12:00:00+00:00",
+    )
+    _create(
+        repository,
         "clean-observation",
         memory_type="observation",
         tags=["specific"],
@@ -149,6 +158,7 @@ def test_quality_signal_queries_cover_each_persisted_signal(db_manager) -> None:
         "added-summary",
         "untagged-observation",
         "quality-oversized",
+        "raw-ingress",
     }
     assert [record.id for record in repository.query_quality_signal_candidates(
         quality_signal="untagged_observation_count"
@@ -156,6 +166,9 @@ def test_quality_signal_queries_cover_each_persisted_signal(db_manager) -> None:
     assert [record.id for record in repository.query_quality_signal_candidates(
         quality_signal="generic_summary"
     )] == ["generic-summary", "added-summary"]
+    assert [record.id for record in repository.query_quality_signal_candidates(
+        quality_signal="raw_ingress"
+    )] == ["raw-ingress"]
 
 
 def test_seeded_random_candidates_are_reproducible_and_tie_broken(db_manager) -> None:

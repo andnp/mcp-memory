@@ -25,6 +25,7 @@ _QUALITY_SIGNAL_ALIASES = {
     "generic_summary": "generic_summary_count",
     "untagged_observation": "untagged_observation_count",
     "oversized": "oversized_memory_count",
+    "raw_ingress": "raw_ingress_count",
 }
 
 

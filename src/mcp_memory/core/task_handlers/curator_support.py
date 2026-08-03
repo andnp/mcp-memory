@@ -519,6 +519,17 @@ def retrieval_friction_flags(record) -> list[str]:
         flags.append("thin_split_child")
     if is_oversized_curator_memory(record):
         flags.append("oversized_blob")
+    if (
+        isinstance(metadata, dict)
+        and metadata.get("created_via_ingest") is True
+        and record.type in {"journal", "observation"}
+        and (
+            not record.tags
+            or len(record.content.strip()) > 1600
+            or normalized_summary.startswith(("covers ", "added "))
+        )
+    ):
+        flags.append("raw_ingress")
     return flags
 
 

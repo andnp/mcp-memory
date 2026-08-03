@@ -7,9 +7,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.curation_store import CandidateDisposition, CurationCandidateState, SQLiteCurationStore
-from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.curation_models import CampaignHypothesis, CampaignRetrievalProblem
+from mcp_memory.core.task_handlers.constants import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
@@ -19,9 +18,13 @@ from mcp_memory.core.task_handlers.curator_support import (
     select_curator_support_records,
 )
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.curation_store import (
+    CandidateDisposition,
+    CurationCandidateState,
+    SQLiteCurationStore,
+)
 from mcp_memory.mutation_history import MutationActorKind
 from mcp_memory.relational.repository import RelationalMemoryRecord
-
 
 pytestmark = pytest.mark.small
 
@@ -32,14 +35,16 @@ def _record(
     updated_at: str,
     tags: list[str] | None = None,
     summary: str | None = None,
+    content: str | None = None,
+    memory_type: str = "fact",
     metadata: dict[str, object] | None = None,
 ) -> RelationalMemoryRecord:
     return RelationalMemoryRecord(
         id=memory_id,
         title=memory_id,
-        content=f"Durable content for {memory_id}.",
+        content=content or f"Durable content for {memory_id}.",
         summary=summary or f"Summary for {memory_id}.",
-        type="fact",
+        type=memory_type,
         status="active",
         created_at=updated_at,
         updated_at=updated_at,
@@ -189,6 +194,19 @@ def test_retrieval_friction_flags_match_generic_summary_forms() -> None:
 
     assert "generic_summary" in retrieval_friction_flags(covers)
     assert "generic_summary" in retrieval_friction_flags(added)
+
+
+def test_retrieval_friction_flags_mark_raw_ingress_quality() -> None:
+    record = _record(
+        "raw-ingress",
+        updated_at="2026-01-01T00:00:00+00:00",
+        content="x" * 1_601,
+        tags=["specific"],
+        memory_type="observation",
+        metadata={"created_via_ingest": True},
+    )
+
+    assert "raw_ingress" in retrieval_friction_flags(record)
 
 
 def test_retrieval_friction_flags_low_conversion_high_exposure() -> None:

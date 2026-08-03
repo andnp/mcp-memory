@@ -633,6 +633,7 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "planner_contract": [
             "The primary objective is to improve durable memory quality, not to minimize action count or maximize retention.",
             "Diagnose each seed for focused scope, conclusion-first wording, concrete evidence, title and summary specificity, stale status prose, duplication, and missing relationships before deciding.",
+            "Treat raw_ingress as a likely system1-created record: normalize weak metadata, and use rewrite_memory when the body itself is raw, status-shaped, or combines unrelated takeaways.",
             "Use support and exploratory records as active repair candidates. Any record visible in context may be modified; only initial seeds require exactly one disposition.",
             "Prefer a coherent set of mutations when several changes together improve a local memory cluster, even if one isolated change would be incomplete.",
             "Retain a seed only when it is already focused and durable, or when the available evidence does not support a specific improvement hypothesis.",
@@ -703,7 +704,10 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "1600 characters or less, and split multi-takeaway content above 3000 "
         "characters. A quality_feedback field marks a previous curator mutation as a "
         "measured retrieval regression: do not repeat that mutation blindly; investigate "
-        "and propose a different targeted repair when evidence supports one. Preserve "
+        "and propose a different targeted repair when evidence supports one. Treat "
+        "raw_ingress as a likely system1-created record: normalize weak metadata, and "
+        "use rewrite_memory when the body itself is raw, status-shaped, or combines "
+        "unrelated takeaways. Preserve "
         "exact search anchors and concrete entities; retain only when no evidence-backed "
         "repair hypothesis survives investigation. If no visible canonical is appropriate, retain the memory instead "
         "of inventing an ID.\n"
