@@ -68,13 +68,12 @@ def _runtime_not_initialized_response(name: str) -> list[TextContent]:
     )
 
 
-def _unknown_tool_response(name: str, arguments: dict) -> list[TextContent]:
+def _unknown_tool_response(name: str) -> list[TextContent]:
     return text_response(
         {
             "status": "error",
             "error": "unknown_tool",
             "tool": name,
-            "arguments": arguments,
         }
     )
 
@@ -92,7 +91,7 @@ async def _dispatch_tool(
 
     service = service_resolver().get(name)
     if service is None:
-        return _unknown_tool_response(name, arguments)
+        return _unknown_tool_response(name)
 
     response = await call_service(service, ctx, arguments)
     if on_success is not None:

@@ -32,7 +32,7 @@ from mcp_memory.mcp.validation import (
     string_list,
     validate_ingest_mutation_payload,
 )
-from mcp_memory.serialization import memory_record_payload
+from mcp_memory.serialization import internal_mutation_record_payload
 
 
 __all__ = [
@@ -126,7 +126,7 @@ def internal_append_to_existing_memory_for_ingest_service(ctx: ApplicationContex
         mutation=True,
     )
     _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[updated.id])
-    payload: dict[str, object] = {"status": "ok", "record": memory_record_payload(updated), "handled_entry_ids": entry_ids}
+    payload: dict[str, object] = {"status": "ok", "record": internal_mutation_record_payload(updated), "handled_entry_ids": entry_ids}
     if warnings:
         payload["warnings"] = warnings
     return payload
@@ -189,7 +189,7 @@ def internal_create_memory_record_for_ingest_service(ctx: ApplicationContext, ar
         mutation=True,
     )
     _record_touched_memory_ids(ctx, task_id=task_id, memory_ids=[record.id])
-    payload: dict[str, object] = {"status": "ok", "record": memory_record_payload(record), "handled_entry_ids": entry_ids}
+    payload: dict[str, object] = {"status": "ok", "record": internal_mutation_record_payload(record), "handled_entry_ids": entry_ids}
     if warnings:
         payload["warnings"] = warnings
     return payload

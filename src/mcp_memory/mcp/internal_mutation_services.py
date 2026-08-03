@@ -14,7 +14,7 @@ from mcp_memory.mcp.internal_service_support import (
     _normalize_tags,
 )
 from mcp_memory.mcp.validation import optional_object, optional_string, optional_bool, require_string, string_list
-from mcp_memory.serialization import memory_record_payload
+from mcp_memory.serialization import internal_mutation_record_payload
 
 
 def _maybe_record_ingest_tool_invocation(ctx: ApplicationContext, arguments: dict[str, Any], *, tool_name: str) -> None:
@@ -80,7 +80,7 @@ def internal_append_memory_content_service(ctx: ApplicationContext, arguments: d
         return {"status": "error", "error": "memory_not_found"}
     _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_append_memory_content")
     _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
-    payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(updated)}
+    payload: dict[str, Any] = {"status": "ok", "record": internal_mutation_record_payload(updated)}
     if warnings:
         payload["warnings"] = warnings
     return payload
@@ -96,7 +96,7 @@ def internal_archive_memory_record_service(ctx: ApplicationContext, arguments: d
         return {"status": "error", "error": "memory_not_found"}
     _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_archive_memory_record")
     _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
-    return {"status": "ok", "record": memory_record_payload(updated)}
+    return {"status": "ok", "record": internal_mutation_record_payload(updated)}
 
 
 
@@ -149,8 +149,8 @@ def internal_merge_memory_into_canonical_service(ctx: ApplicationContext, argume
     )
     return {
         "status": "ok",
-        "canonical": memory_record_payload(updated),
-        "archived": None if archived is None else memory_record_payload(archived),
+        "canonical": internal_mutation_record_payload(updated),
+        "archived": None if archived is None else internal_mutation_record_payload(archived),
     }
 
 
@@ -268,9 +268,9 @@ def internal_split_memory_record_service(ctx: ApplicationContext, arguments: dic
 
     return {
         "status": "ok",
-        "original": memory_record_payload(refreshed_original or original),
-        "created": [memory_record_payload(record) for record in created_records],
-        "archived": None if archived is None else memory_record_payload(archived),
+        "original": internal_mutation_record_payload(refreshed_original or original),
+        "created": [internal_mutation_record_payload(record) for record in created_records],
+        "archived": None if archived is None else internal_mutation_record_payload(archived),
     }
 
 
@@ -304,7 +304,7 @@ def internal_create_memory_record_service(ctx: ApplicationContext, arguments: di
         _enqueue_summary_task(ctx, record.id, list(record.workspace_ids))
     _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_create_memory_record")
     _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[record.id])
-    payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(record)}
+    payload: dict[str, Any] = {"status": "ok", "record": internal_mutation_record_payload(record)}
     if warnings:
         payload["warnings"] = warnings
     return payload
@@ -367,7 +367,7 @@ def internal_update_memory_record_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "memory_not_found"}
     _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_update_memory_record")
     _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[updated.id])
-    payload: dict[str, Any] = {"status": "ok", "record": memory_record_payload(updated)}
+    payload: dict[str, Any] = {"status": "ok", "record": internal_mutation_record_payload(updated)}
     if warnings:
         payload["warnings"] = warnings
     return payload
@@ -394,7 +394,7 @@ def internal_delete_memory_record_service(ctx: ApplicationContext, arguments: di
         return {"status": "error", "error": "memory_not_found"}
     _maybe_record_ingest_tool_invocation(ctx, arguments, tool_name="internal_delete_memory_record")
     _maybe_record_ingest_touched_memory_ids(ctx, arguments, memory_ids=[deleted.id])
-    return {"status": "ok", "deleted": memory_record_payload(deleted)}
+    return {"status": "ok", "deleted": internal_mutation_record_payload(deleted)}
 
 
 
