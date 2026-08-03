@@ -37,7 +37,7 @@ from mcp_memory.curation_quality_store import (
 )
 
 
-CURATOR_MAX_FEEDBACK_ITERATIONS = 3
+CURATOR_MAX_FEEDBACK_ITERATIONS = 2
 
 
 async def run_curator_verified_campaign(
