@@ -66,6 +66,27 @@ def test_classify_selector_run_prefers_unknown_over_fake_certainty() -> None:
     assert classify_selector_run(RunResultMetadataPayload(claimed_work_item_count=None))[0] == UNKNOWN_CLASSIFICATION
 
 
+def test_classify_selector_run_reports_priority_score_selection() -> None:
+    payload = build_selector_stats_payload(
+        [
+            _run(
+                task_id="priority-1",
+                task_name="memory-curator",
+                completed_at=90.0,
+                claimed_work_item_count=0,
+                strategy_used="semantic",
+                strategy_selection_mode="priority_scores_with_exploration",
+                strategy_selection_reason="selected=semantic; priority_score=0.0200; exploration=bounded",
+            )
+        ],
+        window_hours=1,
+        run_limit=10,
+        now=100.0,
+    )
+
+    assert payload.outcome_rows[0].reason_family == "priority_scores"
+
+
 def test_build_selector_stats_payload_rolls_up_classifications_and_outcomes() -> None:
     payload = build_selector_stats_payload(
         [

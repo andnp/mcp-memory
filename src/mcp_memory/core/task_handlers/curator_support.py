@@ -64,15 +64,6 @@ CURATOR_ALLOWED_STRATEGIES = (
     BOUNDED_NOISE_STRATEGY,
     QUALITY_SIGNAL_STRATEGY,
 )
-CURATOR_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 2,
-    ANOMALY_STRATEGY: 3,
-    COLD_STORAGE_STRATEGY: 2,
-    NEVER_SURFACED_STRATEGY: 2,
-    ORPHAN_LOW_SUPPORT_STRATEGY: 2,
-    BOUNDED_NOISE_STRATEGY: 1,
-    QUALITY_SIGNAL_STRATEGY: 2,
-}
 _CURATOR_BACKEND_STRATEGIES = (
     "retrieval-quality",
     "oversized/thin",
@@ -250,7 +241,6 @@ def _select_curator_seed_batch(
         task,
         [record for record in candidates if record.id not in goal_ids],
         allowed_strategies=CURATOR_ALLOWED_STRATEGIES,
-        strategy_weights=CURATOR_STRATEGY_WEIGHTS,
         limit=min(len(candidates), max(limit, CURATOR_MAX_SEED_RECORDS) * CURATOR_CANDIDATE_POOL_MULTIPLIER),
         support_counts=build_support_counts(ctx, candidates),
     )

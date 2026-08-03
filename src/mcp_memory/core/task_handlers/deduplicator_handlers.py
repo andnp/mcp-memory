@@ -354,11 +354,6 @@ DEDUPLICATOR_ALLOWED_STRATEGIES = (
     ANOMALY_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
 )
-DEDUPLICATOR_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 4,
-    ANOMALY_STRATEGY: 2,
-    COOLDOWN_ESCAPE_STRATEGY: 2,
-}
 
 _DEDUPLICATOR_READ_ONLY_TOOL_NAMES = {
     "mcp_mcp-memory-internal_task_complete",
@@ -408,7 +403,6 @@ def select_deduplicator_seed_batch(
         deduplicator_task,
         candidates,
         allowed_strategies=DEDUPLICATOR_ALLOWED_STRATEGIES,
-        strategy_weights=DEDUPLICATOR_STRATEGY_WEIGHTS,
         limit=min(len(candidates), DEDUPLICATOR_MAX_SEED_RECORDS * 2),
         support_counts=support_counts_for_candidates(ctx, candidates),
     )

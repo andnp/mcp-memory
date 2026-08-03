@@ -1,40 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import re
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from random import Random
-import time
-import re
 from statistics import median
-from typing import Any, Callable, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
 
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_:-]+")
 
-CURATOR_TASK_NAME = "memory-curator"
-DEDUPLICATOR_TASK_NAME = "deduplicator"
-TAXONOMIST_TASK_NAME = "taxonomist"
-GRAPH_LINKER_TASK_NAME = "graph-linker"
-CONFLICT_DETECTOR_TASK_NAME = "conflict-detector"
-DEFRAGMENTER_TASK_NAME = "defragmenter"
-CURATOR_COLD_TAIL_SECONDS = 30 * 24 * 60 * 60
-TAXONOMIST_COLD_TAIL_SECONDS = 30 * 24 * 60 * 60
-GRAPH_LINKER_CLUSTER_THRESHOLD = 0.2
-GRAPH_LINKER_BRIDGE_THRESHOLD = 0.12
-CONFLICT_FRONTIER_THRESHOLD = 0.18
 CURATOR_LOW_SUPPORT_THRESHOLD = 1
-CURATOR_LOW_READ_THRESHOLD = 3
-CURATOR_LARGE_CANDIDATE_MIN_CHARS = 1200
-CURATOR_OVERSIZED_MULTIPLIER = 1.75
-CURATOR_LENGTH_OUTLIER_RATIO = 0.75
-CURATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
-DEDUPLICATOR_LARGE_FACT_MIN_CHARS = 1200
-DEDUPLICATOR_OVERSIZED_MULTIPLIER = 1.6
-DEDUPLICATOR_LENGTH_OUTLIER_RATIO = 0.7
-DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
-SELECTION_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
-SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
 SELECTION_EXPLORATION_BONUS = 0.02
 
 SEMANTIC_STRATEGY = "semantic"
@@ -124,8 +102,6 @@ class RouletteProvider(Generic[T]):
         cooldown_window_seconds: float = 21600.0,
         now_timestamp: float | None = None,
     ) -> None:
-        self._task_name = task_name
-        self._task_id = task_id
         self._candidates = list(candidates)
         self._support_counts = support_counts or {}
         self._strategy_prior_scores = dict(strategy_prior_scores or {})
@@ -133,24 +109,11 @@ class RouletteProvider(Generic[T]):
         self._cooldown_window_seconds = max(cooldown_window_seconds, 0.0)
         self._now_timestamp = time.time() if now_timestamp is None else now_timestamp
 
-    def choose_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-        strategy_weights: dict[str, int] | None = None,
-    ) -> str:
-        if not allowed_strategies:
-            raise ValueError("allowed_strategies must be non-empty")
-        weights = [max(int((strategy_weights or {}).get(strategy, 1)), 0) for strategy in allowed_strategies]
-        if not any(weights):
-            return self._rng.choice(list(allowed_strategies))
-        return self._rng.choices(list(allowed_strategies), weights=weights, k=1)[0]
-
     def get_batch(
         self,
         *,
         strategy: str | None,
         allowed_strategies: tuple[str, ...],
-        strategy_weights: dict[str, int] | None = None,
         limit: int,
     ) -> SamplingBatch[T]:
         if not self._candidates or limit <= 0:
@@ -172,19 +135,16 @@ class RouletteProvider(Generic[T]):
         if strategy_used is None:
             strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
-                strategy_weights,
             )
         elif strategy_used not in ALL_STRATEGIES:
             fallback_reason = "unknown_requested_strategy"
             strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
-                strategy_weights,
             )
         elif strategy_used not in allowed_strategies:
             fallback_reason = "disallowed_requested_strategy"
             strategy_used, selection_mode, selection_reason, selection_scores, selection_signals = self._select_strategy(
                 allowed_strategies,
-                strategy_weights,
             )
         else:
             selection_mode = "requested_strategy"
@@ -210,147 +170,42 @@ class RouletteProvider(Generic[T]):
     def _select_strategy(
         self,
         allowed_strategies: tuple[str, ...],
-        strategy_weights: dict[str, int] | None,
     ) -> tuple[str, str | None, str | None, dict[str, float] | None, dict[str, float] | None]:
-        if self._task_name == CURATOR_TASK_NAME:
-            return self._choose_curator_strategy(allowed_strategies)
-        if self._task_name == DEDUPLICATOR_TASK_NAME:
-            return self._choose_deduplicator_strategy(allowed_strategies)
-        if self._task_name == TAXONOMIST_TASK_NAME:
-            return self._choose_taxonomist_strategy(allowed_strategies)
-        if self._task_name == DEFRAGMENTER_TASK_NAME:
-            return self._choose_defragmenter_strategy(allowed_strategies)
-        if self._task_name == GRAPH_LINKER_TASK_NAME:
-            return self._choose_graph_linker_strategy(allowed_strategies)
-        if self._task_name == CONFLICT_DETECTOR_TASK_NAME:
-            return self._choose_conflict_detector_strategy(allowed_strategies)
-        return (
-            self.choose_strategy(allowed_strategies, strategy_weights),
-            "seeded_random",
-            None,
-            None,
-            None,
-        )
-
-    def _choose_curator_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals, applied_utility_priors = self._curator_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors=applied_utility_priors,
-        )
-
-    def _choose_deduplicator_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals, applied_utility_priors = self._deduplicator_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors=applied_utility_priors,
-        )
-
-    def _choose_taxonomist_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals, applied_utility_priors = self._taxonomist_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors=applied_utility_priors,
-        )
-
-    def _choose_graph_linker_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals = self._graph_linker_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors={},
-        )
-
-    def _choose_defragmenter_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals = self._defragmenter_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors={},
-        )
-
-    def _choose_conflict_detector_strategy(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        scores, signals = self._conflict_detector_strategy_scores(allowed_strategies)
-        return self._finalize_deterministic_strategy_choice(
-            allowed_strategies,
-            scores=scores,
-            signals=signals,
-            applied_utility_priors={},
-        )
-
-    def _finalize_deterministic_strategy_choice(
-        self,
-        allowed_strategies: tuple[str, ...],
-        *,
-        scores: dict[str, float],
-        signals: dict[str, float],
-        applied_utility_priors: dict[str, float],
-    ) -> tuple[str, str, str, dict[str, float], dict[str, float]]:
-        exploration_scores = (
-            {
-                strategy: min(
-                    max(scores.get(strategy, 0.0) + self._rng.random() * SELECTION_EXPLORATION_BONUS, 0.0),
-                    1.0,
-                )
+        priority_scores = {
+            strategy: round(min(max(self._strategy_prior_scores[strategy], 0.0), 1.0), 4)
+            for strategy in allowed_strategies
+            if strategy in self._strategy_prior_scores
+        }
+        if priority_scores:
+            selection_scores = {
+                strategy: priority_scores.get(strategy, SELECTION_EXPLORATION_BONUS)
                 for strategy in allowed_strategies
             }
-            if applied_utility_priors
-            else scores
-        )
-        strategy_used = min(
-            allowed_strategies,
-            key=lambda strategy: (-exploration_scores[strategy], allowed_strategies.index(strategy), strategy),
-        )
-        rounded_scores = {strategy: round(exploration_scores[strategy], 3) for strategy in allowed_strategies}
-        rounded_signals = {signal_name: round(signal_value, 3) for signal_name, signal_value in sorted(signals.items())}
-        dominant_signals = ", ".join(
-            f"{signal_name}={signal_value:.3f}"
-            for signal_name, signal_value in sorted(signals.items(), key=lambda item: (-item[1], item[0]))[:3]
-        )
-        selection_mode = "deterministic_scores"
-        selection_reason = f"selected={strategy_used}; signals={dominant_signals}"
-        if applied_utility_priors:
-            selection_mode = "deterministic_scores_with_utility_priors"
-            compact_priors = ",".join(
-                f"{strategy}:{score:.2f}"
-                for strategy, score in sorted(
-                    applied_utility_priors.items(),
-                    key=lambda item: (-item[1], item[0]),
-                )[:3]
+            strategy_used = min(
+                allowed_strategies,
+                key=lambda strategy: (-selection_scores[strategy], allowed_strategies.index(strategy)),
             )
-            selection_reason = f"{selection_reason}; utility_priors={compact_priors}"
+            is_exploration = strategy_used not in priority_scores
+            selection_mode = "priority_scores_with_exploration" if is_exploration else "priority_scores"
+            selection_reason = (
+                f"selected={strategy_used}; priority_score={selection_scores[strategy_used]:.4f}; "
+                f"exploration={'bounded' if is_exploration else 'none'}"
+            )
+            return (
+                strategy_used,
+                selection_mode,
+                selection_reason,
+                {strategy: round(selection_scores[strategy], 4) for strategy in allowed_strategies},
+                None,
+            )
+
+        strategy_used = BOUNDED_NOISE_STRATEGY if BOUNDED_NOISE_STRATEGY in allowed_strategies else allowed_strategies[0]
         return (
             strategy_used,
-            selection_mode,
-            selection_reason,
-            rounded_scores,
-            rounded_signals,
+            "bounded_exploration",
+            f"selected={strategy_used}; fallback=no_priority_feedback; exploration=bounded",
+            {strategy: SELECTION_EXPLORATION_BONUS for strategy in allowed_strategies},
+            None,
         )
 
     def _build_selector_feature_snapshot(
@@ -445,366 +300,8 @@ class RouletteProvider(Generic[T]):
     def _share_for_records(self, records: Sequence[T], predicate: Callable[[T], bool]) -> float:
         if not records:
             return 0.0
-        matches = 0
-        for record in records:
-            if predicate(record):
-                matches += 1
-        return round(matches / len(records), 4)
+        return round(sum(predicate(record) for record in records) / len(records), 4)
 
-    def _curator_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        candidate_count = len(self._candidates)
-        lengths = [len(item.content.strip()) for item in self._candidates]
-        median_length = median(lengths) if lengths else 0.0
-        oversized_threshold = max(median_length * CURATOR_OVERSIZED_MULTIPLIER, CURATOR_LARGE_CANDIDATE_MIN_CHARS)
-        outlier_threshold = max(median_length * CURATOR_LENGTH_OUTLIER_RATIO, 400.0)
-
-        oversized_share = self._share(
-            1
-            for item in self._candidates
-            if len(item.content.strip()) >= oversized_threshold
-        )
-        length_outlier_share = self._share(
-            1
-            for item in self._candidates
-            if abs(len(item.content.strip()) - median_length) >= outlier_threshold
-        ) if median_length > 0 else 0.0
-        never_surfaced_share = self._share(1 for item in self._candidates if item.last_surfaced_at is None)
-        never_accessed_share = self._share(1 for item in self._candidates if item.last_accessed_at is None)
-        cold_tail_share = self._share(
-            1
-            for item in self._candidates
-            if self._is_older_than(item.last_accessed_at, CURATOR_COLD_TAIL_SECONDS)
-        )
-        low_support_share = self._share(
-            1
-            for item in self._candidates
-            if self._support_counts.get(item.id, 0) <= CURATOR_LOW_SUPPORT_THRESHOLD
-        )
-        retrieval_friction_share = self._share(
-            1
-            for item in self._candidates
-            if item.last_surfaced_at is not None and item.read_count <= CURATOR_LOW_READ_THRESHOLD
-        )
-        from mcp_memory.core.task_handlers.curator_support import retrieval_friction_flags
-
-        quality_signal_share = self._share(
-            1 for item in self._candidates if retrieval_friction_flags(item)
-        )
-        semantic_cluster_share = self._semantic_cluster_share() if candidate_count > 1 else 0.0
-
-        signals = {
-            "never_surfaced_share": never_surfaced_share,
-            "low_support_share": low_support_share,
-            "never_accessed_share": never_accessed_share,
-            "cold_tail_share": cold_tail_share,
-            "oversized_share": oversized_share,
-            "length_outlier_share": length_outlier_share,
-            "retrieval_friction_share": retrieval_friction_share,
-            "quality_signal_share": quality_signal_share,
-            "semantic_cluster_share": semantic_cluster_share,
-        }
-
-        dominant_signal = max(signals.values(), default=0.0)
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == ANOMALY_STRATEGY:
-                scores[strategy] = (
-                    0.55 * oversized_share
-                    + 0.35 * length_outlier_share
-                    + 0.10 * retrieval_friction_share
-                )
-            elif strategy == COLD_STORAGE_STRATEGY:
-                scores[strategy] = (
-                    0.60 * cold_tail_share
-                    + 0.25 * never_accessed_share
-                    + 0.15 * retrieval_friction_share
-                )
-            elif strategy == NEVER_SURFACED_STRATEGY:
-                scores[strategy] = 0.80 * never_surfaced_share + 0.20 * retrieval_friction_share
-            elif strategy == ORPHAN_LOW_SUPPORT_STRATEGY:
-                scores[strategy] = (
-                    0.65 * low_support_share
-                    + 0.20 * retrieval_friction_share
-                    + 0.15 * never_surfaced_share
-                )
-            elif strategy == SEMANTIC_STRATEGY:
-                scores[strategy] = (
-                    0.75 * semantic_cluster_share
-                    + 0.15 * retrieval_friction_share
-                    + 0.10 * (1.0 - min(oversized_share, 1.0))
-                )
-            elif strategy == BOUNDED_NOISE_STRATEGY:
-                scores[strategy] = 0.08 + 0.22 * (1.0 - dominant_signal)
-            elif strategy == QUALITY_SIGNAL_STRATEGY:
-                scores[strategy] = (
-                    0.70 * quality_signal_share
-                    + 0.20 * retrieval_friction_share
-                    + 0.10 * oversized_share
-                )
-            else:
-                scores[strategy] = 0.0
-        applied_utility_priors = {
-            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
-            for strategy in allowed_strategies
-            if strategy in self._strategy_prior_scores
-        }
-        if not applied_utility_priors:
-            return scores, signals, {}
-
-        blended_scores = {
-            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
-            for strategy in allowed_strategies
-        }
-        return blended_scores, signals, applied_utility_priors
-
-    def _deduplicator_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        fact_candidates = [item for item in self._candidates if item.type == "fact"]
-        fact_lengths = [len(item.content.strip()) for item in fact_candidates]
-        median_length = median(fact_lengths) if fact_lengths else 0.0
-        oversized_threshold = max(median_length * DEDUPLICATOR_OVERSIZED_MULTIPLIER, DEDUPLICATOR_LARGE_FACT_MIN_CHARS)
-        outlier_threshold = max(median_length * DEDUPLICATOR_LENGTH_OUTLIER_RATIO, 300.0)
-
-        semantic_overlap_share = (
-            self._semantic_cluster_share(threshold=DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD)
-            if len(self._candidates) > 1
-            else 0.0
-        )
-        large_fact_share = self._typed_share(
-            fact_candidates,
-            lambda item: len(item.content.strip()) >= oversized_threshold,
-        )
-        fact_length_outlier_share = self._typed_share(
-            fact_candidates,
-            lambda item: abs(len(item.content.strip()) - median_length) >= outlier_threshold,
-        ) if median_length > 0 else 0.0
-        size_anomaly_pressure = 0.65 * large_fact_share + 0.35 * fact_length_outlier_share
-        cooldown_pressure_share = self._share(1 for item in self._candidates if self._is_in_cooldown(item))
-
-        signals = {
-            "semantic_overlap_share": semantic_overlap_share,
-            "size_anomaly_pressure": size_anomaly_pressure,
-            "cooldown_pressure_share": cooldown_pressure_share,
-        }
-
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == SEMANTIC_STRATEGY:
-                scores[strategy] = (
-                    0.72 * semantic_overlap_share
-                    + 0.18 * (1.0 - min(size_anomaly_pressure, 1.0))
-                    + 0.10 * (1.0 - min(cooldown_pressure_share, 1.0))
-                )
-            elif strategy == ANOMALY_STRATEGY:
-                scores[strategy] = (
-                    0.70 * size_anomaly_pressure
-                    + 0.20 * semantic_overlap_share
-                    + 0.10 * (1.0 - min(cooldown_pressure_share, 1.0))
-                )
-            elif strategy == COOLDOWN_ESCAPE_STRATEGY:
-                scores[strategy] = (
-                    0.75 * cooldown_pressure_share
-                    + 0.15 * semantic_overlap_share
-                    + 0.10 * (1.0 - min(size_anomaly_pressure, 1.0))
-                )
-            else:
-                scores[strategy] = 0.0
-
-        applied_utility_priors = {
-            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
-            for strategy in allowed_strategies
-            if strategy in self._strategy_prior_scores
-        }
-        if not applied_utility_priors:
-            return scores, signals, {}
-
-        blended_scores = {
-            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
-            for strategy in allowed_strategies
-        }
-        return blended_scores, signals, applied_utility_priors
-
-    def _taxonomist_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-        never_surfaced_share = self._share(1 for item in self._candidates if item.last_surfaced_at is None)
-        never_accessed_share = self._share(1 for item in self._candidates if item.last_accessed_at is None)
-        cold_tail_or_never_accessed_share = self._share(
-            1
-            for item in self._candidates
-            if item.last_accessed_at is None
-            or self._is_older_than(item.last_accessed_at, TAXONOMIST_COLD_TAIL_SECONDS)
-        )
-
-        dominant_signal = max(never_surfaced_share, cold_tail_or_never_accessed_share)
-        frontier_gap = abs(never_surfaced_share - cold_tail_or_never_accessed_share)
-        low_signal_share = 1.0 - dominant_signal
-        flat_frontier_share = 1.0 - frontier_gap
-
-        signals = {
-            "never_surfaced_share": never_surfaced_share,
-            "cold_tail_or_never_accessed_share": cold_tail_or_never_accessed_share,
-            "never_accessed_share": never_accessed_share,
-            "low_signal_share": low_signal_share,
-            "flat_frontier_share": flat_frontier_share,
-        }
-
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == NEVER_SURFACED_STRATEGY:
-                scores[strategy] = 0.85 * never_surfaced_share + 0.15 * never_accessed_share
-            elif strategy == COLD_STORAGE_STRATEGY:
-                scores[strategy] = (
-                    0.75 * cold_tail_or_never_accessed_share
-                    + 0.25 * never_accessed_share
-                )
-            elif strategy == BOUNDED_NOISE_STRATEGY:
-                scores[strategy] = 0.05 + 0.35 * low_signal_share * flat_frontier_share
-            else:
-                scores[strategy] = 0.0
-
-        applied_utility_priors = {
-            strategy: min(max(self._strategy_prior_scores.get(strategy, 0.0), 0.0), 1.0)
-            for strategy in allowed_strategies
-            if strategy in self._strategy_prior_scores
-        }
-        if not applied_utility_priors:
-            return scores, signals, {}
-
-        blended_scores = {
-            strategy: self._blend_utility_prior_score(scores.get(strategy, 0.0), applied_utility_priors.get(strategy))
-            for strategy in allowed_strategies
-        }
-        return blended_scores, signals, applied_utility_priors
-
-    def _graph_linker_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float]]:
-        semantic_cluster_share = self._semantic_cluster_share(threshold=GRAPH_LINKER_CLUSTER_THRESHOLD)
-        low_support_adjacent_share = self._share(
-            1
-            for item in self._candidates
-            if self._best_neighbor_similarity(item) >= GRAPH_LINKER_BRIDGE_THRESHOLD
-            and self._support_counts.get(item.id, 0) <= CURATOR_LOW_SUPPORT_THRESHOLD
-        )
-        low_signal_share = 1.0 - max(semantic_cluster_share, low_support_adjacent_share)
-
-        signals = {
-            "semantic_cluster_share": semantic_cluster_share,
-            "low_support_adjacent_share": low_support_adjacent_share,
-            "low_signal_share": low_signal_share,
-        }
-
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == SEMANTIC_STRATEGY:
-                scores[strategy] = (
-                    0.70 * semantic_cluster_share
-                    + 0.20 * (1.0 - min(low_support_adjacent_share, 1.0))
-                    + 0.10 * (1.0 - min(low_signal_share, 1.0))
-                )
-            elif strategy == GRAPH_BRIDGE_STRATEGY:
-                scores[strategy] = (
-                    0.75 * low_support_adjacent_share
-                    + 0.15 * semantic_cluster_share
-                    + 0.10 * (1.0 - min(low_signal_share, 1.0))
-                )
-            elif strategy == BOUNDED_NOISE_STRATEGY:
-                scores[strategy] = 0.06 + 0.28 * low_signal_share
-            else:
-                scores[strategy] = 0.0
-        return scores, signals
-    def _defragmenter_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float]]:
-        semantic_cluster_share = self._semantic_cluster_share()
-        low_support_share = self._share(
-            1
-            for item in self._candidates
-            if self._support_counts.get(item.id, 0) <= CURATOR_LOW_SUPPORT_THRESHOLD
-        )
-        never_accessed_share = self._share(1 for item in self._candidates if item.last_accessed_at is None)
-        cold_tail_share = self._share(
-            1
-            for item in self._candidates
-            if self._is_older_than(item.last_accessed_at, CURATOR_COLD_TAIL_SECONDS)
-        )
-
-        signals = {
-            "semantic_cluster_share": semantic_cluster_share,
-            "low_support_share": low_support_share,
-            "never_accessed_share": never_accessed_share,
-            "cold_tail_share": cold_tail_share,
-        }
-
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == SEMANTIC_STRATEGY:
-                scores[strategy] = 0.80 * semantic_cluster_share + 0.20 * (1.0 - min(low_support_share, 1.0))
-            elif strategy == ORPHAN_LOW_SUPPORT_STRATEGY:
-                scores[strategy] = 0.75 * low_support_share + 0.15 * semantic_cluster_share + 0.10 * never_accessed_share
-            elif strategy == COLD_STORAGE_STRATEGY:
-                scores[strategy] = 0.70 * cold_tail_share + 0.30 * never_accessed_share
-            else:
-                scores[strategy] = 0.0
-        return scores, signals
-
-    def _conflict_detector_strategy_scores(
-        self,
-        allowed_strategies: tuple[str, ...],
-    ) -> tuple[dict[str, float], dict[str, float]]:
-        semantic_overlap_share = self._semantic_cluster_share(threshold=DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD)
-        conflict_frontier_share = self._share(
-            1
-            for item in self._candidates
-            if self._best_conflict_signal(item) >= CONFLICT_FRONTIER_THRESHOLD
-        )
-        never_surfaced_share = self._share(1 for item in self._candidates if item.last_surfaced_at is None)
-
-        signals = {
-            "conflict_frontier_share": conflict_frontier_share,
-            "semantic_overlap_share": semantic_overlap_share,
-            "never_surfaced_share": never_surfaced_share,
-        }
-
-        scores: dict[str, float] = {}
-        for strategy in allowed_strategies:
-            if strategy == CONFLICT_FRONTIER_STRATEGY:
-                scores[strategy] = (
-                    0.75 * conflict_frontier_share
-                    + 0.15 * semantic_overlap_share
-                    + 0.10 * never_surfaced_share
-                )
-            elif strategy == SEMANTIC_STRATEGY:
-                scores[strategy] = (
-                    0.65 * semantic_overlap_share
-                    + 0.25 * (1.0 - min(conflict_frontier_share, 1.0))
-                    + 0.10 * (1.0 - min(never_surfaced_share, 1.0))
-                )
-            elif strategy == NEVER_SURFACED_STRATEGY:
-                scores[strategy] = (
-                    0.80 * never_surfaced_share
-                    + 0.10 * (1.0 - min(conflict_frontier_share, 1.0))
-                    + 0.10 * (1.0 - min(semantic_overlap_share, 1.0))
-                )
-            else:
-                scores[strategy] = 0.0
-        return scores, signals
-
-    def _blend_utility_prior_score(self, live_score: float, prior_score: float | None) -> float:
-        if prior_score is None:
-            return live_score
-        shift = (prior_score - 0.5) * SELECTION_UTILITY_PRIOR_BLEND_WEIGHT
-        shift = min(max(shift, -SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT), SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT)
-        return live_score + shift
 
     def _rank_candidates(self, strategy: str) -> list[T]:
         if strategy == SEMANTIC_STRATEGY:
@@ -929,22 +426,6 @@ class RouletteProvider(Generic[T]):
             default=0.0,
         )
 
-    def _semantic_cluster_share(self, *, threshold: float = CURATOR_SEMANTIC_CLUSTER_THRESHOLD) -> float:
-        return self._share(
-            1
-            for item in self._candidates
-            if self._best_neighbor_similarity(item) >= threshold
-        )
-
-    def _typed_share(self, items: Sequence[T], predicate: Callable[[T], bool]) -> float:
-        if not items:
-            return 0.0
-        matches = 0
-        for item in items:
-            if predicate(item):
-                matches += 1
-        return matches / len(items)
-
     def _best_conflict_signal(self, item: T) -> float:
         return max(
             (
@@ -976,21 +457,6 @@ class RouletteProvider(Generic[T]):
         if updated_timestamp is None:
             return False
         return self._now_timestamp - updated_timestamp < self._cooldown_window_seconds
-
-    def _is_older_than(self, value: str | None, age_seconds: float) -> bool:
-        parsed = _parse_iso_timestamp(value)
-        if parsed is None:
-            return False
-        return self._now_timestamp - parsed >= age_seconds
-
-    def _share(self, matches: Iterable[object]) -> float:
-        count = 0
-        for _ in matches:
-            count += 1
-        if not self._candidates:
-            return 0.0
-        return count / len(self._candidates)
-
 
 def _parse_iso_timestamp(value: str | None) -> float | None:
     if value is None:

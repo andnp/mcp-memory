@@ -41,21 +41,11 @@ GRAPH_LINKER_ALLOWED_STRATEGIES = (
     GRAPH_BRIDGE_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
 )
-GRAPH_LINKER_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 3,
-    GRAPH_BRIDGE_STRATEGY: 3,
-    BOUNDED_NOISE_STRATEGY: 1,
-}
 CONFLICT_DETECTOR_ALLOWED_STRATEGIES = (
     SEMANTIC_STRATEGY,
     CONFLICT_FRONTIER_STRATEGY,
     NEVER_SURFACED_STRATEGY,
 )
-CONFLICT_DETECTOR_STRATEGY_WEIGHTS = {
-    SEMANTIC_STRATEGY: 3,
-    CONFLICT_FRONTIER_STRATEGY: 3,
-    NEVER_SURFACED_STRATEGY: 1,
-}
 
 
 def apply_graph_link_proposals(
@@ -343,7 +333,6 @@ def _sample_graph_link_candidates(
         workspace_id=workspace_id,
         allowed_types=None,
         allowed_strategies=GRAPH_LINKER_ALLOWED_STRATEGIES,
-        strategy_weights=GRAPH_LINKER_STRATEGY_WEIGHTS,
     )
 
 
@@ -359,7 +348,6 @@ def _sample_conflict_candidates(
         workspace_id=workspace_id,
         allowed_types={"fact", "plan"},
         allowed_strategies=CONFLICT_DETECTOR_ALLOWED_STRATEGIES,
-        strategy_weights=CONFLICT_DETECTOR_STRATEGY_WEIGHTS,
     )
 
 
@@ -370,7 +358,6 @@ def _sample_relationship_review_candidates(
     workspace_id: str | None,
     allowed_types: set[str] | None,
     allowed_strategies: tuple[str, ...],
-    strategy_weights: dict[str, int],
 ):
     assert ctx.repository is not None
     review_workspace_id = workspace_id if workspace_id is not None else _resolve_workspace_id(ctx, task)
@@ -386,7 +373,6 @@ def _sample_relationship_review_candidates(
         task,
         all_candidates,
         allowed_strategies=allowed_strategies,
-        strategy_weights=strategy_weights,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
         support_counts=support_counts_for_candidates(ctx, all_candidates),
     )

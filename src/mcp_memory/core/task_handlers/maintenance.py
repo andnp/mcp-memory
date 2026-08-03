@@ -51,7 +51,6 @@ async def handle_defragmenter_task(
         task,
         all_candidates,
         allowed_strategies=_defragmenter_support.DEFRAGMENTER_ALLOWED_STRATEGIES,
-        strategy_weights=_defragmenter_support.DEFRAGMENTER_STRATEGY_WEIGHTS,
         limit=min(len(all_candidates), DEFAULT_AGENT_SCAN_LIMIT),
         support_counts=_curator_support.build_support_counts(ctx, all_candidates),
     )

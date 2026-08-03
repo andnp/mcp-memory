@@ -16,6 +16,8 @@ def test_sampling_payload_merges_strategy_metadata_and_result_metrics() -> None:
         strategy_selection_mode="deterministic_scores",
         strategy_selection_reason="selected=semantic",
         strategy_selection_scores={"semantic": 0.75, "anomaly": 0.2},
+        sampler_priority_score=0.75,
+        sampler_priority_explanation="quality_pass_rate=0.800",
         selector_feature_snapshot={
             "strategy_signals": {"semantic_overlap_share": 0.8},
             "candidate_population": {
@@ -49,6 +51,8 @@ def test_sampling_payload_merges_strategy_metadata_and_result_metrics() -> None:
         "strategy_selection_mode": "deterministic_scores",
         "strategy_selection_reason": "selected=semantic",
         "strategy_selection_scores": {"semantic": 0.75, "anomaly": 0.2},
+        "sampler_priority_score": 0.75,
+        "sampler_priority_explanation": "quality_pass_rate=0.800",
         "selector_feature_snapshot": {
             "strategy_signals": {"semantic_overlap_share": 0.8},
             "candidate_population": {

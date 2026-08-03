@@ -8,8 +8,7 @@ from mcp_memory.core.sampling import RouletteProvider, SamplingBatch
 from mcp_memory.management.task_sampling_summary import build_selection_strategy_priority_feedback
 
 
-SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT = 100
-UTILITY_PRIOR_TASK_NAMES = frozenset({"memory-curator", "deduplicator", "taxonomist"})
+SELECTION_PRIORITY_RECENT_RUN_LIMIT = 100
 
 
 def requested_sampling_strategy(task: Any) -> str | None:
@@ -31,7 +30,6 @@ def sample_maintenance_candidates(
     candidates: list,
     *,
     allowed_strategies: tuple[str, ...],
-    strategy_weights: dict[str, int],
     limit: int,
     support_counts: dict[str, int] | None = None,
 ) -> SamplingBatch:
@@ -59,10 +57,12 @@ def sample_maintenance_candidates(
     ).get_batch(
         strategy=requested_strategy,
         allowed_strategies=allowed_strategies,
-        strategy_weights=strategy_weights,
         limit=limit,
     )
     priority_score, priority_explanation = priority_feedback.get(batch.strategy_used, (None, None))
+    if priority_score is None and batch.strategy_selection_scores is not None:
+        priority_score = batch.strategy_selection_scores.get(batch.strategy_used)
+        priority_explanation = batch.strategy_selection_reason
     return replace(
         batch,
         sampler_priority_score=priority_score,
@@ -76,14 +76,12 @@ def _selection_strategy_priority_feedback(
     task_name: str,
     allowed_strategies: tuple[str, ...],
 ) -> dict[str, tuple[float, str]]:
-    if task_name not in UTILITY_PRIOR_TASK_NAMES:
-        return {}
     from mcp_memory.management.agent_run_reporting import build_recent_agent_runs
 
     recent_runs = build_recent_agent_runs(
         ctx.db_manager,
         ctx.workspace_id,
-        limit=SELECTION_UTILITY_PRIOR_RECENT_RUN_LIMIT,
+        limit=SELECTION_PRIORITY_RECENT_RUN_LIMIT,
         detail_level="compact",
     )
     if not recent_runs:
@@ -93,22 +91,6 @@ def _selection_strategy_priority_feedback(
         task_name=task_name,
         allowed_strategies=allowed_strategies,
     )
-
-
-def _selection_strategy_prior_scores(
-    ctx: ApplicationContext,
-    *,
-    task_name: str,
-    allowed_strategies: tuple[str, ...],
-) -> dict[str, float] | None:
-    feedback = _selection_strategy_priority_feedback(
-        ctx,
-        task_name=task_name,
-        allowed_strategies=allowed_strategies,
-    )
-    scores = {strategy: score for strategy, (score, _) in feedback.items()}
-    return scores or None
-
 
 def sampling_payload(
     batch: SamplingBatch,

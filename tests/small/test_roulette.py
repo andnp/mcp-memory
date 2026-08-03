@@ -7,10 +7,8 @@ import pytest
 from mcp_memory.core.sampling import (
     ANOMALY_STRATEGY,
     BOUNDED_NOISE_STRATEGY,
-    CONFLICT_FRONTIER_STRATEGY,
     COLD_STORAGE_STRATEGY,
     COOLDOWN_ESCAPE_STRATEGY,
-    GRAPH_BRIDGE_STRATEGY,
     NEVER_SURFACED_STRATEGY,
     ORPHAN_LOW_SUPPORT_STRATEGY,
     RouletteProvider,
@@ -73,61 +71,54 @@ def test_roulette_strategy_choice_is_seeded_and_reproducible() -> None:
     assert [record.id for record in first.records] == [record.id for record in second.records]
 
 
-def test_curator_strategy_selection_is_deterministic_and_signal_driven_without_request() -> None:
-    candidates = [
-        _FakeRecord(
-            id="never-1",
-            title="Alpha One",
-            content="alpha",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="never-2",
-            title="Zeta Two",
-            content="beta",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-    ]
+def test_automatic_selection_uses_bounded_exploration_without_feedback() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
 
-    first = RouletteProvider(task_name="memory-curator", task_id="task-a", candidates=candidates).get_batch(
+    batch = RouletteProvider(task_name="memory-curator", task_id="task-explore", candidates=candidates).get_batch(
         strategy=None,
-        allowed_strategies=(
-            SEMANTIC_STRATEGY,
-            ANOMALY_STRATEGY,
-            COLD_STORAGE_STRATEGY,
-            NEVER_SURFACED_STRATEGY,
-            ORPHAN_LOW_SUPPORT_STRATEGY,
-            BOUNDED_NOISE_STRATEGY,
-        ),
-        limit=1,
-    )
-    second = RouletteProvider(task_name="memory-curator", task_id="task-b", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(
-            SEMANTIC_STRATEGY,
-            ANOMALY_STRATEGY,
-            COLD_STORAGE_STRATEGY,
-            NEVER_SURFACED_STRATEGY,
-            ORPHAN_LOW_SUPPORT_STRATEGY,
-            BOUNDED_NOISE_STRATEGY,
-        ),
+        allowed_strategies=(SEMANTIC_STRATEGY, BOUNDED_NOISE_STRATEGY),
         limit=1,
     )
 
-    assert first.strategy_used == NEVER_SURFACED_STRATEGY
-    assert second.strategy_used == NEVER_SURFACED_STRATEGY
-    assert first.strategy_selection_mode == "deterministic_scores"
-    assert second.strategy_selection_mode == "deterministic_scores"
-    assert first.strategy_selection_scores is not None
-    assert first.strategy_selection_scores[NEVER_SURFACED_STRATEGY] > first.strategy_selection_scores[COLD_STORAGE_STRATEGY]
-    assert first.strategy_selection_reason is not None
-    assert "never_surfaced_share" in first.strategy_selection_reason
-    assert first.selector_feature_snapshot is not None
-    assert first.selector_feature_snapshot["strategy_signals"]["never_surfaced_share"] == 1.0
-    assert first.selector_feature_snapshot["candidate_population"]["count"] == 2
-    assert first.selector_feature_snapshot["selected_population"]["count"] == 1
-    assert first.selector_feature_snapshot["candidate_population"]["metrics"]["content_chars"]["p50"] == 4.5
-    assert first.selector_feature_snapshot["candidate_population"]["shares"]["never_surfaced_share"] == 1.0
+    assert batch.strategy_used == BOUNDED_NOISE_STRATEGY
+    assert batch.strategy_selection_mode == "bounded_exploration"
+    assert batch.strategy_selection_scores == {SEMANTIC_STRATEGY: 0.02, BOUNDED_NOISE_STRATEGY: 0.02}
+    assert batch.strategy_selection_reason == (
+        "selected=bounded-noise; fallback=no_priority_feedback; exploration=bounded"
+    )
+
+
+def test_priority_scores_select_the_best_sampler_and_explore_missing_feedback() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
+
+    scored = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-priority",
+        candidates=candidates,
+        strategy_prior_scores={SEMANTIC_STRATEGY: 0.25, ANOMALY_STRATEGY: 0.8},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, ANOMALY_STRATEGY),
+        limit=1,
+    )
+    exploring = RouletteProvider(
+        task_name="memory-curator",
+        task_id="task-untested",
+        candidates=candidates,
+        strategy_prior_scores={SEMANTIC_STRATEGY: 0.0},
+    ).get_batch(
+        strategy=None,
+        allowed_strategies=(SEMANTIC_STRATEGY, ANOMALY_STRATEGY),
+        limit=1,
+    )
+
+    assert scored.strategy_used == ANOMALY_STRATEGY
+    assert scored.strategy_selection_mode == "priority_scores"
+    assert scored.strategy_selection_scores == {SEMANTIC_STRATEGY: 0.25, ANOMALY_STRATEGY: 0.8}
+    assert "priority_score=0.8000" in (scored.strategy_selection_reason or "")
+    assert exploring.strategy_used == ANOMALY_STRATEGY
+    assert exploring.strategy_selection_mode == "priority_scores_with_exploration"
+    assert exploring.strategy_selection_scores == {SEMANTIC_STRATEGY: 0.0, ANOMALY_STRATEGY: 0.02}
 
 
 def test_roulette_selector_snapshot_captures_candidate_and_selected_feature_stats() -> None:
@@ -259,153 +250,19 @@ def test_curator_explicit_requested_strategy_still_wins_when_valid() -> None:
     assert batch.strategy_selection_mode == "requested_strategy"
 
 
-def test_curator_invalid_requested_strategy_falls_back_to_deterministic_selection() -> None:
-    candidates = [
-        _FakeRecord(
-            id="never-1",
-            title="Alpha One",
-            content="alpha",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="never-2",
-            title="Zeta Two",
-            content="beta",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-    ]
+def test_invalid_requested_strategy_falls_back_to_bounded_exploration() -> None:
+    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
 
-    batch = RouletteProvider(task_name="memory-curator", task_id="task-invalid-curator", candidates=candidates).get_batch(
+    batch = RouletteProvider(task_name="memory-curator", task_id="task-invalid", candidates=candidates).get_batch(
         strategy="totally-not-real",
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
+        allowed_strategies=(SEMANTIC_STRATEGY, BOUNDED_NOISE_STRATEGY),
         limit=1,
     )
 
     assert batch.requested_strategy == "totally-not-real"
-    assert batch.strategy_used == NEVER_SURFACED_STRATEGY
+    assert batch.strategy_used == BOUNDED_NOISE_STRATEGY
     assert batch.strategy_fallback_reason == "unknown_requested_strategy"
-    assert batch.strategy_selection_mode == "deterministic_scores"
-
-
-def test_curator_utility_priors_can_shift_strategy_choice_when_live_scores_are_close() -> None:
-    candidates = [
-        _FakeRecord(
-            id="mixed-1",
-            title="Alpha One",
-            content="alpha",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-            last_surfaced_at=None,
-            read_count=5,
-        ),
-        _FakeRecord(
-            id="mixed-2",
-            title="Beta Two",
-            content="beta",
-            last_accessed_at="2026-02-01T00:00:00+00:00",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-            read_count=5,
-        ),
-    ]
-
-    without_priors = RouletteProvider(task_name="memory-curator", task_id="task-live-only", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
-        limit=1,
-    )
-    with_priors = RouletteProvider(
-        task_name="memory-curator",
-        task_id="task-live-with-priors",
-        candidates=candidates,
-        strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
-        now_timestamp=1_776_211_200.0,
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY),
-        limit=1,
-    )
-
-    assert without_priors.strategy_used == NEVER_SURFACED_STRATEGY
-    assert with_priors.strategy_used == COLD_STORAGE_STRATEGY
-    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
-    assert with_priors.strategy_selection_reason is not None
-    assert "utility_priors=" in with_priors.strategy_selection_reason
-
-
-def test_taxonomist_prefers_never_surfaced_when_signal_dominates() -> None:
-    candidates = [
-        _FakeRecord(
-            id="never-1",
-            title="Needs tags one",
-            content="alpha",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="never-2",
-            title="Needs tags two",
-            content="beta",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="surfaced-old",
-            title="Old surfaced",
-            content="gamma",
-            last_accessed_at="2026-01-01T00:00:00+00:00",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-        ),
-    ]
-
-    batch = RouletteProvider(task_name="taxonomist", task_id="task-never", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-
-    assert batch.strategy_used == NEVER_SURFACED_STRATEGY
-    assert batch.strategy_selection_mode == "deterministic_scores"
-    assert batch.strategy_selection_reason is not None
-    assert "never_surfaced_share" in batch.strategy_selection_reason
-
-
-def test_taxonomist_utility_priors_can_shift_close_strategy_choice() -> None:
-    candidates = [
-        _FakeRecord(
-            id="mixed-1",
-            title="Needs tags one",
-            content="alpha",
-            last_accessed_at="2026-03-31T00:00:00+00:00",
-            last_surfaced_at=None,
-        ),
-        _FakeRecord(
-            id="mixed-2",
-            title="Old taxonomy",
-            content="beta",
-            last_accessed_at="2026-02-01T00:00:00+00:00",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-        ),
-    ]
-
-    without_priors = RouletteProvider(task_name="taxonomist", task_id="task-live-only", candidates=candidates, now_timestamp=1_776_211_200.0).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-    with_priors = RouletteProvider(
-        task_name="taxonomist",
-        task_id="task-live-with-priors",
-        candidates=candidates,
-        strategy_prior_scores={COLD_STORAGE_STRATEGY: 1.0, NEVER_SURFACED_STRATEGY: 0.0},
-        now_timestamp=1_776_211_200.0,
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, NEVER_SURFACED_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-
-    assert without_priors.strategy_used == NEVER_SURFACED_STRATEGY
-    assert with_priors.strategy_used == COLD_STORAGE_STRATEGY
-    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
-    assert with_priors.strategy_selection_reason is not None
-    assert "utility_priors=" in with_priors.strategy_selection_reason
+    assert batch.strategy_selection_mode == "bounded_exploration"
 
 
 def test_taxonomist_explicit_requested_strategy_still_wins_when_valid() -> None:
@@ -436,138 +293,6 @@ def test_taxonomist_explicit_requested_strategy_still_wins_when_valid() -> None:
     assert batch.strategy_selection_mode == "requested_strategy"
 
 
-def test_graph_linker_prefers_graph_bridge_for_low_support_adjacent_clusters() -> None:
-    candidates = [
-        _FakeRecord(id="a", title="Alpha service", content="alpha dependency latency service"),
-        _FakeRecord(id="b", title="Alpha client", content="alpha dependency client latency"),
-        _FakeRecord(id="c", title="Gamma topic", content="gamma unrelated topic"),
-    ]
-
-    batch = RouletteProvider(
-        task_name="graph-linker",
-        task_id="task-bridge",
-        candidates=candidates,
-        support_counts={"a": 0, "b": 0, "c": 4},
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(SEMANTIC_STRATEGY, GRAPH_BRIDGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-
-    assert batch.strategy_used == GRAPH_BRIDGE_STRATEGY
-    assert batch.strategy_selection_mode == "deterministic_scores"
-    assert batch.strategy_selection_reason is not None
-    assert "low_support_adjacent_share" in batch.strategy_selection_reason
-
-
-def test_defragmenter_prefers_orphan_low_support_for_thin_low_support_records() -> None:
-    candidates = [
-        _FakeRecord(id="a", title="Auth note", content="auth cleanup note"),
-        _FakeRecord(id="b", title="Auth follow-up", content="auth cleanup follow up"),
-        _FakeRecord(id="c", title="Large stable doc", content="stable " * 200, read_count=9),
-    ]
-
-    batch = RouletteProvider(
-        task_name="defragmenter",
-        task_id="task-defrag",
-        candidates=candidates,
-        support_counts={"a": 0, "b": 0, "c": 3},
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, SEMANTIC_STRATEGY, ORPHAN_LOW_SUPPORT_STRATEGY),
-        limit=1,
-    )
-
-    assert batch.strategy_used == ORPHAN_LOW_SUPPORT_STRATEGY
-    assert batch.strategy_selection_mode == "deterministic_scores"
-    assert batch.strategy_selection_reason is not None
-    assert "low_support_share" in batch.strategy_selection_reason
-
-
-def test_conflict_detector_uses_deterministic_signal_scoring_without_request() -> None:
-    candidates = [
-        _FakeRecord(
-            id="a",
-            title="Feature flag enabled",
-            content="feature flag enabled by default for rollout",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="b",
-            title="Feature flag disabled",
-            content="feature flag disabled by default for rollout",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-        ),
-        _FakeRecord(
-            id="c",
-            title="Billing note",
-            content="billing reminder for invoices",
-            last_surfaced_at="2026-03-20T00:00:00+00:00",
-        ),
-    ]
-
-    batch = RouletteProvider(task_name="conflict-detector", task_id="task-conflict", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(SEMANTIC_STRATEGY, CONFLICT_FRONTIER_STRATEGY, NEVER_SURFACED_STRATEGY),
-        limit=1,
-    )
-
-    assert batch.strategy_used in {SEMANTIC_STRATEGY, CONFLICT_FRONTIER_STRATEGY}
-    assert batch.strategy_selection_mode == "deterministic_scores"
-    assert batch.strategy_selection_reason is not None
-    assert "conflict_frontier_share" in batch.strategy_selection_reason
-
-
-def test_deduplicator_prefers_semantic_when_overlap_signal_dominates() -> None:
-    candidates = [
-        _FakeRecord(id="a", title="Alpha note", content="alpha beta gamma duplicate cluster"),
-        _FakeRecord(id="b", title="Alpha duplicate", content="alpha beta gamma duplicate cluster extra"),
-        _FakeRecord(id="c", title="Gamma note", content="gamma delta"),
-    ]
-
-    batch = RouletteProvider(task_name="deduplicator", task_id="task-overlap", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(SEMANTIC_STRATEGY, ANOMALY_STRATEGY, COOLDOWN_ESCAPE_STRATEGY),
-        limit=1,
-    )
-
-    assert batch.strategy_used == SEMANTIC_STRATEGY
-    assert batch.strategy_selection_mode == "deterministic_scores"
-    assert batch.strategy_selection_reason is not None
-    assert "semantic_overlap_share" in batch.strategy_selection_reason
-
-
-def test_deduplicator_utility_priors_can_shift_close_strategy_choice() -> None:
-    candidates = [
-        _FakeRecord(id="small-a", title="Alpha", content="alpha beta gamma duplicate cluster"),
-        _FakeRecord(id="small-b", title="Alpha copy", content="alpha beta gamma duplicate cluster copy"),
-        _FakeRecord(id="large-a", title="Outlier one", content="x" * 1600),
-        _FakeRecord(id="large-b", title="Monster two", content="y" * 1700),
-    ]
-
-    without_priors = RouletteProvider(task_name="deduplicator", task_id="task-live-only", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(ANOMALY_STRATEGY, SEMANTIC_STRATEGY),
-        limit=1,
-    )
-    with_priors = RouletteProvider(
-        task_name="deduplicator",
-        task_id="task-live-with-priors",
-        candidates=candidates,
-        strategy_prior_scores={ANOMALY_STRATEGY: 0.0, SEMANTIC_STRATEGY: 1.0},
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(ANOMALY_STRATEGY, SEMANTIC_STRATEGY),
-        limit=1,
-    )
-
-    assert without_priors.strategy_used == ANOMALY_STRATEGY
-    assert with_priors.strategy_used == SEMANTIC_STRATEGY
-    assert with_priors.strategy_selection_mode == "deterministic_scores_with_utility_priors"
-    assert with_priors.strategy_selection_reason is not None
-    assert "utility_priors=" in with_priors.strategy_selection_reason
-
-
 def test_deduplicator_explicit_requested_strategy_still_wins_when_valid() -> None:
     candidates = [
         _FakeRecord(id="hot", title="Hot", content="hot", updated_at="1970-01-12T13:45:00+00:00"),
@@ -584,42 +309,6 @@ def test_deduplicator_explicit_requested_strategy_still_wins_when_valid() -> Non
     assert batch.strategy_used == COOLDOWN_ESCAPE_STRATEGY
     assert batch.strategy_fallback_reason is None
     assert batch.strategy_selection_mode == "requested_strategy"
-
-
-def test_non_curator_and_non_deduplicator_strategy_selection_ignores_utility_priors() -> None:
-    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
-
-    without_priors = RouletteProvider(task_name="graph-linker", task_id="same-task", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-    with_priors = RouletteProvider(
-        task_name="graph-linker",
-        task_id="same-task",
-        candidates=candidates,
-        strategy_prior_scores={COLD_STORAGE_STRATEGY: 0.0, BOUNDED_NOISE_STRATEGY: 1.0},
-    ).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        limit=1,
-    )
-
-    assert with_priors.strategy_used == without_priors.strategy_used
-    assert with_priors.strategy_selection_mode == without_priors.strategy_selection_mode
-
-
-def test_roulette_weighted_strategy_mix_can_force_one_strategy() -> None:
-    candidates = [_FakeRecord(id="a", title="Alpha", content="alpha")]
-
-    batch = RouletteProvider(task_name="deduplicator", task_id="task-weighted", candidates=candidates).get_batch(
-        strategy=None,
-        allowed_strategies=(COLD_STORAGE_STRATEGY, BOUNDED_NOISE_STRATEGY),
-        strategy_weights={COLD_STORAGE_STRATEGY: 5, BOUNDED_NOISE_STRATEGY: 0},
-        limit=1,
-    )
-
-    assert batch.strategy_used == COLD_STORAGE_STRATEGY
 
 
 def test_roulette_cooldown_escape_deprioritizes_recently_updated_records() -> None:

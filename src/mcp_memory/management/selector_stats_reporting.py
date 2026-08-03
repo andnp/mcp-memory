@@ -307,6 +307,10 @@ def _derive_selector_reason_family(metadata: RunResultMetadataPayload) -> str:
 
     if mode == "requested_strategy" or "requested=" in reason or "requested strategy" in reason:
         return "requested"
+    if any(token in mode for token in ("priority", "exploration")) or any(
+        token in reason for token in ("priority", "exploration")
+    ):
+        return "priority_scores"
     if any(token in mode for token in ("seed", "random", "roulette")) or any(
         token in reason for token in ("seed", "random", "roulette")
     ):
