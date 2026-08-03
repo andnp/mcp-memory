@@ -47,7 +47,12 @@ class CurationMutationBudget:
 class CurationRetryFeedback:
     """Bounded feedback suitable for one planner retry."""
 
-    reason_code: Literal["formatting_only", "schema_invalid", "provider_failed"]
+    reason_code: Literal[
+        "formatting_only",
+        "schema_invalid",
+        "contract_invalid",
+        "provider_failed",
+    ]
     message: str
     fields: tuple[str, ...] = ()
     issue_codes: tuple[str, ...] = ()
@@ -182,7 +187,20 @@ def validate_curation_plan(
         normalized_actions.append(action.model_copy(update={"action_id": expected_id}))
 
     if issues:
-        return CurationValidationResult(plan=None, issues=tuple(issues))
+        return CurationValidationResult(
+            plan=None,
+            issues=tuple(issues),
+            retry_feedback=CurationRetryFeedback(
+                reason_code="contract_invalid",
+                message=(
+                    "Return a plan matching the supplied curation context. Fix: "
+                    + "; ".join(
+                        f"{issue.code}: {issue.message}" for issue in issues
+                    )
+                )[:1000],
+                issue_codes=tuple(str(issue.code) for issue in issues),
+            ),
+        )
     normalized_plan = typed_plan.model_copy(update={"actions": normalized_actions})
     accepted: list[AcceptedCurationAction] = []
     rejected: list[RejectedCurationAction] = []
