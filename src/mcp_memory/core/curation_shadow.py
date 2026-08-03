@@ -113,6 +113,7 @@ async def run_curator_verified_campaign(
                     if hasattr(ctx.db_manager, "get_connection")
                     else PostgresCurationQualityStore(ctx.db_manager)
                 ),
+                candidate_repository=ctx.curation,
                 sample_rate=1.0,
             )
         ),

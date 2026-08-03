@@ -453,12 +453,6 @@ class CurationDryRunHarness:
         if terminal is None:
             raise RuntimeError(f"curation run {run_id} was not persisted")
 
-        quality_evidence = (
-            ()
-            if self._quality_sampler is None
-            else self._quality_sampler.evaluate(run=terminal, receipts=receipts)
-        )
-
         self._persist_candidate_outcomes(
             plan=plan,
             validation=validation,
@@ -468,6 +462,12 @@ class CurationDryRunHarness:
             strategy=frontier.strategy,
             reason_code=reason_code,
             receipts=receipts,
+        )
+
+        quality_evidence = (
+            ()
+            if self._quality_sampler is None
+            else self._quality_sampler.evaluate(run=terminal, receipts=receipts)
         )
 
         work_item = self._work_item_service.decide(outcome, reason_code, latest)

@@ -20,7 +20,10 @@ from mcp_memory.core.curation_evaluation import (
 )
 from mcp_memory.core.curation_models import CurationModel
 from mcp_memory.core.ports.curation import (
+    CandidateDisposition,
     CurationActionReceipt,
+    CurationCandidateState,
+    CurationRepository,
     CurationReceiptState,
     CurationRun,
 )
@@ -72,6 +75,7 @@ class CurationQualitySampler:
         db_manager: Any,
         search: CurationQualitySearch,
         repository: CurationQualityRepository,
+        candidate_repository: CurationRepository | None = None,
         sample_rate: float = 0.25,
         max_actions: int = 8,
         top_k: int = 5,
@@ -84,6 +88,7 @@ class CurationQualitySampler:
         self._db_manager = db_manager
         self._search = search
         self._repository = repository
+        self._candidate_repository = candidate_repository
         self._sample_rate = sample_rate
         self._max_actions = max_actions
         self._top_k = top_k
@@ -106,7 +111,46 @@ class CurationQualitySampler:
         evidence = tuple(self._evaluate_action(run, receipt) for receipt in selected)
         for item in evidence:
             self._repository.put_quality_evidence(item)
+        if self._candidate_repository is not None:
+            for item, receipt in zip(evidence, selected, strict=True):
+                self._escalate_quality_regression(run, item, receipt)
         return evidence
+
+    def _escalate_quality_regression(
+        self,
+        run: CurationRun,
+        evidence: CurationQualityEvidence,
+        receipt: CurationActionReceipt,
+    ) -> None:
+        candidate_repository = self._candidate_repository
+        if candidate_repository is None or evidence.status != "evaluated" or not (
+            (evidence.retrieval_regression_count or 0) > 0
+            or (evidence.zero_result_change or 0) > 0
+        ):
+            return
+        reason = (
+            "retrieval_regression"
+            if (evidence.retrieval_regression_count or 0) > 0
+            else "zero_result_regression"
+        )
+        for memory_id in self._intended_memory_ids(receipt):
+            previous = candidate_repository.get_candidate_state(memory_id)
+            candidate_repository.put_candidate_state(
+                CurationCandidateState(
+                    memory_id=memory_id,
+                    last_observed_revision_token=(
+                        None if previous is None else previous.last_observed_revision_token
+                    ),
+                    disposition=CandidateDisposition.ESCALATED,
+                    consecutive_no_op_count=0,
+                    cooldown_until=None,
+                    last_disposition_reason=reason,
+                    last_frontier_key=run.frontier_key,
+                    last_run_id=run.run_id,
+                    escalation_count=(0 if previous is None else previous.escalation_count) + 1,
+                    last_escalated_strategy=run.selector_strategy,
+                )
+            )
 
     def _evaluate_action(
         self,
