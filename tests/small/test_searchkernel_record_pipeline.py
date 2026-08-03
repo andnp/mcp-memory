@@ -431,6 +431,7 @@ def test_pipeline_matches_native_graph_expansion_bounds() -> None:
 
     assert kernel_config.max_graph_seeds == 3
     assert kernel_config.max_neighbors_per_seed == 10
+    assert kernel_config.adaptive_graph_enabled is True
 
 
 def test_pipeline_uses_searchkernel_failure_mode() -> None:

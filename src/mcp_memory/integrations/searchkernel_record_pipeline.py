@@ -358,6 +358,7 @@ def build_memory_record_pipeline(
             graph_fusion="max",
             max_graph_seeds=3,
             max_neighbors_per_seed=10,
+            adaptive_graph_enabled=True,
             adaptive_enabled=adaptive_enabled,
             maximum_limit=resolved_config.search_ranking.adaptive_result_max,
             score_ratio_floor=resolved_config.search_ranking.adaptive_result_score_ratio_floor,
