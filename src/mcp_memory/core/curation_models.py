@@ -28,6 +28,12 @@ class LinkAssertion(CurationModel):
     context: str | None = None
 
 
+class AbsentLinkAssertion(CurationModel):
+    source_id: UUID
+    target_id: UUID
+    link_type: str
+
+
 class EvidenceRef(CurationModel):
     memory_id: UUID | None = None
     link: LinkAssertion | None = None
@@ -45,7 +51,7 @@ class ActionPreconditions(CurationModel):
     record_tokens: dict[UUID, str] = Field(default_factory=dict)
     required_statuses: dict[UUID, MemoryStatus] = Field(default_factory=dict)
     required_links: list[LinkAssertion] = Field(default_factory=list)
-    absent_links: list[LinkAssertion] = Field(default_factory=list)
+    absent_links: list[AbsentLinkAssertion] = Field(default_factory=list)
 
 
 class OmittedMaterial(CurationModel):

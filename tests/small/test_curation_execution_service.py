@@ -17,6 +17,7 @@ from mcp_memory.core.curation_execution_service import (
 )
 from mcp_memory.core.curation_executor import CurationPolicyRejection
 from mcp_memory.core.curation_models import (
+    AbsentLinkAssertion,
     ActionPreconditions,
     ClaimManifest,
     CreateLinkAction,
@@ -247,7 +248,7 @@ def test_does_not_hydrate_create_link_context_for_absent_link() -> None:
         ],
         preconditions=ActionPreconditions(
             absent_links=[
-                LinkAssertion(
+                AbsentLinkAssertion(
                     source_id=CANONICAL_ID,
                     target_id=SOURCE_ID,
                     link_type="RELATED",
@@ -258,45 +259,24 @@ def test_does_not_hydrate_create_link_context_for_absent_link() -> None:
 
     hydrated = _hydrate_record_tokens(action, context)
 
-    assert hydrated.preconditions.absent_links[0].context is None
+    assert "context" not in hydrated.preconditions.absent_links[0].model_dump()
     assert set(hydrated.preconditions.record_tokens) == {CANONICAL_ID, SOURCE_ID}
 
 
-def test_preserves_explicit_create_link_absent_context_without_hydration() -> None:
-    context = _context()
-    action = CreateLinkAction(
-        action_id=UUID("00000000-0000-0000-0000-000000000009"),
-        source_id=CANONICAL_ID,
-        target_id=SOURCE_ID,
-        confidence=1,
-        rationale="connect related records",
-        link_type="RELATED",
-        context="The records cover the same operational area.",
-        evidence=[
-            EvidenceRef(
-                link=LinkAssertion(
-                    source_id=CANONICAL_ID,
-                    target_id=SOURCE_ID,
-                    link_type="RELATED",
-                    context="The records cover the same operational area.",
-                )
-            )
-        ],
-        preconditions=ActionPreconditions(
-            absent_links=[
-                LinkAssertion(
-                    source_id=CANONICAL_ID,
-                    target_id=SOURCE_ID,
-                    link_type="RELATED",
-                    context="Different relationship evidence.",
-                )
-            ]
-        ),
-    )
-
-    hydrated = _hydrate_record_tokens(action, context)
-
-    assert hydrated.preconditions.absent_links[0].context == "Different relationship evidence."
+def test_rejects_explicit_create_link_absent_context() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        ActionPreconditions.model_validate(
+            {
+                "absent_links": [
+                    {
+                        "source_id": str(CANONICAL_ID),
+                        "target_id": str(SOURCE_ID),
+                        "link_type": "RELATED",
+                        "context": "Different relationship evidence.",
+                    }
+                ]
+            }
+        )
 
 
 def test_invalid_action_receipt_does_not_block_valid_action() -> None:

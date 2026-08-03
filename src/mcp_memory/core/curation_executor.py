@@ -736,7 +736,7 @@ def _require_create_link_preconditions(
 ) -> None:
     normalized_type = _normalize_link_type(link_type)
     for assertion in action.preconditions.absent_links:
-        if assertion.context is not None:
+        if getattr(assertion, "context", None) is not None:
             raise CurationActionFatalError(
                 "create_link absent-link precondition must omit relationship context"
             )

@@ -6,7 +6,14 @@ import pytest
 
 from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import link_token, record_token
-from mcp_memory.core.curation_models import ActionPreconditions, CreateLinkAction, EvidenceRef, LinkAssertion, NormalizeMemoryAction
+from mcp_memory.core.curation_models import (
+    AbsentLinkAssertion,
+    ActionPreconditions,
+    CreateLinkAction,
+    EvidenceRef,
+    LinkAssertion,
+    NormalizeMemoryAction,
+)
 from mcp_memory.core.mutation_restore import RestoreExecutor
 from mcp_memory.curation_action_store import SQLiteCurationActionStore
 from mcp_memory.curation_store import CurationRun, CurationRunState, SQLiteCurationStore
@@ -190,7 +197,7 @@ def test_create_link_restore_removes_only_the_exact_edge(db_manager: DatabaseMan
         link_type="SUPPORTS",
         context="exact restore edge",
     )
-    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type=edge.link_type)
+    absent = AbsentLinkAssertion(source_id=source_id, target_id=target_id, link_type=edge.link_type)
     action = CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,

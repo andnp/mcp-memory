@@ -14,6 +14,7 @@ from mcp_memory.core.curation_identity import (
 )
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
+    AbsentLinkAssertion,
     ArchiveMemoryAction,
     ClaimManifest,
     ClaimMapping,
@@ -298,7 +299,7 @@ def _link_action(
     link_type: str = "SUPPORTS",
     context: str = "The source records the target as supporting evidence.",
 ) -> CreateLinkAction:
-    assertion = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
+    assertion = AbsentLinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
     evidence = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type, context=context)
     return CreateLinkAction(
         action_id=uuid4(),
@@ -524,7 +525,7 @@ def test_create_link_rejects_context_bearing_absent_precondition_before_mutation
         record_token(target),
     ).model_copy(
         update={
-            "preconditions": ActionPreconditions(
+            "preconditions": ActionPreconditions.model_construct(
                 record_tokens={source_id: record_token(source), target_id: record_token(target)},
                 absent_links=[
                     LinkAssertion(

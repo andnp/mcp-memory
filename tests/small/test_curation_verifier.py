@@ -8,6 +8,7 @@ from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
+    AbsentLinkAssertion,
     ArchiveMemoryAction,
     ClaimMapping,
     ClaimManifest,
@@ -102,7 +103,7 @@ def _link_action(
     link_type: str = "SUPPORTS",
     context: str = "exact typed edge",
 ) -> CreateLinkAction:
-    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
+    absent = AbsentLinkAssertion(source_id=source_id, target_id=target_id, link_type=link_type)
     edge = LinkAssertion(
         source_id=source_id,
         target_id=target_id,

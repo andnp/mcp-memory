@@ -21,6 +21,7 @@ from mcp_memory.core.curation_harness import (
 )
 from mcp_memory.core.curation_identity import record_token
 from mcp_memory.core.curation_models import (
+    AbsentLinkAssertion,
     ActionPreconditions,
     ArchiveMemoryAction,
     ClaimManifest,
@@ -157,7 +158,7 @@ def _create_link_action(source: dict[str, object], target: dict[str, object]) ->
         link_type="SUPPORTS",
         context="The source supports the target.",
     )
-    absent = LinkAssertion(source_id=source_id, target_id=target_id, link_type="SUPPORTS")
+    absent = AbsentLinkAssertion(source_id=source_id, target_id=target_id, link_type="SUPPORTS")
     return CreateLinkAction(
         action_id=uuid4(),
         source_id=source_id,
