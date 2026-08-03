@@ -2174,6 +2174,137 @@ async def test_runtime_task_worker_uses_attempt_heartbeat_to_keep_running_task_a
 
 
 @pytest.mark.asyncio
+async def test_runtime_task_worker_preflights_curator_provider_startup(db_manager, monkeypatch) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="curator-provider-preflight-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    observed_preflight_ids: list[str | None] = []
+
+    def handler(context, queued_task):
+        observed_preflight_ids.append(queue.get_task(queued_task.id).active_request_id)
+        return {"summary": "ok"}
+
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={CURATOR_TASK_NAME: handler},
+        abandoned_task_stale_after_seconds=1.0,
+        curator_provider_startup_grace_seconds=30.0,
+    )
+    monkeypatch.setattr("mcp_memory.core.task_worker.time.time", lambda: 100.0)
+
+    await worker._process_task(claimed)  # noqa: SLF001
+
+    completed = queue.get_task(task.id)
+    assert completed.status == "completed"
+    assert completed.active_request_id is None
+    assert observed_preflight_ids and observed_preflight_ids[0] is not None
+    assert observed_preflight_ids[0].startswith("curator-provider-preflight:")
+    run = queue.list_task_runs(task_id=task.id)[0]
+    assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_preserves_curator_startup_across_reconciliation(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="curator-startup-window-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=None,
+        request_id="curator-provider-preflight:1:100.0",
+        updated_at=100.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+
+    ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={CURATOR_TASK_NAME: lambda context, queued_task: None},
+        abandoned_task_stale_after_seconds=10.0,
+        curator_provider_startup_grace_seconds=30.0,
+    )
+
+    await worker._run_reconciliation_pass(now=110.0, reason="startup")  # noqa: SLF001
+
+    running = queue.get_task(task.id)
+    assert running.status == "running"
+    assert running.active_request_id == "curator-provider-preflight:1:100.0"
+    assert running.updated_at == pytest.approx(110.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_worker_retries_stale_curator_startup_with_auditable_reason(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    attempt_repository = TaskExecutionAttemptRepository(db_manager, workspace_id="workspace-a")
+    task = queue.enqueue(
+        CURATOR_TASK_NAME,
+        workspace_id="workspace-a",
+        available_at=0.0,
+        task_id="curator-stale-startup-task",
+    )
+    claimed = queue.claim_next(now=1.0, workspace_id="workspace-a")
+    assert claimed is not None
+    queue.set_running_process(
+        task.id,
+        subprocess_pid=None,
+        request_id="curator-provider-preflight:1:100.0",
+        updated_at=100.0,
+        execution_epoch=claimed.execution_epoch,
+    )
+    attempt_repository.start_attempt(
+        task_id=task.id,
+        execution_epoch=claimed.execution_epoch,
+        task_name=CURATOR_TASK_NAME,
+        request_id="curator-provider-request",
+        subprocess_pid=None,
+        provider_key="copilot-mini",
+        provider_name="Copilot SDK Agentic",
+        model_name="gpt-5-mini",
+        started_at=100.0,
+    )
+
+    ctx = ApplicationContext(
+        db_manager=db_manager,
+        task_queue=queue,
+        task_execution_attempts=attempt_repository,
+        workspace_id="workspace-a",
+    )
+    worker = RuntimeTaskWorker(
+        ctx,
+        handlers={CURATOR_TASK_NAME: lambda context, queued_task: None},
+        retry_delay_seconds=45.0,
+        abandoned_task_stale_after_seconds=10.0,
+        curator_provider_startup_grace_seconds=20.0,
+    )
+
+    await worker._run_reconciliation_pass(now=130.0, reason="periodic")  # noqa: SLF001
+
+    retried = queue.get_task(task.id)
+    attempt = attempt_repository.get_attempt(task_id=task.id, execution_epoch=claimed.execution_epoch)
+    run = queue.list_task_runs(task_id=task.id)[0]
+    assert retried.status == "pending"
+    assert retried.last_error == "Curator provider startup became stale before an active provider subprocess was observed"
+    assert retried.available_at == pytest.approx(retried.updated_at + 45.0)
+    assert run.status == "retry"
+    assert attempt.status == "error"
+    assert attempt.termination_reason == "curator_provider_startup_timeout"
+
+
+@pytest.mark.asyncio
 async def test_runtime_task_worker_only_excludes_owned_task_epoch(db_manager) -> None:
     queue = SQLiteTaskQueue(db_manager)
     ctx = ApplicationContext(db_manager=db_manager, task_queue=queue, workspace_id="workspace-a")
