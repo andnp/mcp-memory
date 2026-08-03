@@ -326,6 +326,84 @@ def test_quality_sampler_replays_before_after_without_instrumenting_reads(db_man
     assert connection.execute("SELECT COUNT(*) FROM memory_tool_events").fetchone()[0] == before_event_count
 
 
+def test_quality_sampler_escalates_retrieval_regression(db_manager) -> None:
+    now = datetime.now(UTC)
+    run = _run(created_at=now)
+    curation_store = SQLiteCurationStore(db_manager)
+    curation_store.create_run(run)
+    event_id = uuid4()
+    memory_id = uuid4()
+    receipt = CurationActionReceipt(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        operation="rewrite_memory",
+        affected_ids=[memory_id],
+        status=CurationReceiptState.VERIFIED,
+        mutation_event_id=event_id,
+        intent_hash="intent",
+        applied_at=now,
+    )
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO memories (
+            id, title, content, type, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (str(memory_id), "title", "content", "observation", "active", now.isoformat(), now.isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_mutation_events (
+            id, operation, actor_kind, curation_run_id, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (str(event_id), "rewrite_memory", "maintenance", str(run.run_id), "applied", now.isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_tool_events (
+            invocation_id, caller_kind, event_kind, memory_id, query_text, result_rank,
+            result_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("query-regression", "maintenance", "search", str(memory_id), "important", 1, 1, (now - timedelta(minutes=1)).isoformat()),
+    )
+    connection.execute(
+        """
+        INSERT INTO memory_record_revisions (
+            event_id, memory_id, role, before_exists, before_snapshot,
+            after_exists, after_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(event_id),
+            str(memory_id),
+            "target",
+            1,
+            json.dumps({"content": "before"}),
+            1,
+            json.dumps({"record": {"status": "active"}}),
+        ),
+    )
+    connection.commit()
+    sampler = CurationQualitySampler(
+        db_manager=db_manager,
+        search=_Search([]),
+        repository=SQLiteCurationQualityStore(db_manager),
+        candidate_repository=curation_store,
+        sample_rate=1.0,
+    )
+
+    evidence = sampler.evaluate(run=run, receipts=[receipt])
+
+    assert evidence[0].retrieval_regression_count == 1
+    candidate = curation_store.get_candidate_state(memory_id)
+    assert candidate is not None
+    assert candidate.disposition.value == "escalated"
+    assert candidate.last_disposition_reason == "retrieval_regression"
+
+
 def test_quality_sampler_excludes_archived_merge_sources(db_manager) -> None:
     now = datetime.now(UTC)
     run = _run(created_at=now)
