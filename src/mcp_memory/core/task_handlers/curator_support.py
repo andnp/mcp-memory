@@ -226,6 +226,7 @@ def _select_curator_seed_batch(
         support_counts=build_support_counts(ctx, candidates),
     )
     sampled_candidates = sampled_batch.records
+    quality_feedback_candidates = _quality_feedback_candidates(ctx, candidates)
 
     prioritized_candidates = sorted(
         sampled_candidates,
@@ -258,6 +259,7 @@ def _select_curator_seed_batch(
     )
 
     seed_records: list[Any] = []
+    extend_unique_seed_records(seed_records, quality_feedback_candidates, limit)
     oversized_candidates = [record for record in largest_candidates if is_oversized_curator_memory(record)]
     anomaly_candidates = oversized_candidates
     if (
@@ -637,6 +639,19 @@ def _query_curator_backend_candidates(
             seeded_candidates = list(records)
         for record in records:
             candidates_by_id[record.id] = record
+    list_candidate_states = getattr(getattr(ctx, "curation", None), "list_candidate_states", None)
+    if callable(list_candidate_states):
+        escalated_states = cast(
+            list[CurationCandidateState],
+            list_candidate_states(
+                disposition=CandidateDisposition.ESCALATED,
+                limit=CURATOR_MAX_BATCH_RECORDS,
+            ),
+        )
+        for state in escalated_states:
+            record = ctx.repository.get_memory(str(state.memory_id))
+            if record is not None and record.status == "active":
+                candidates_by_id[record.id] = record
 
     retrieval = getattr(ctx, "memory_retrieval", None)
     if retrieval is None and ctx.relational_search is not None:
@@ -665,6 +680,32 @@ def _query_curator_backend_candidates(
                         candidates_by_id[record.id] = record
 
     return filter_curator_candidates(ctx, list(candidates_by_id.values()))
+
+
+def _quality_feedback_candidates(ctx: ApplicationContext, candidates: list[Any]) -> list[Any]:
+    get_state = getattr(getattr(ctx, "curation", None), "get_candidate_state", None)
+    if not callable(get_state):
+        return []
+    feedback_candidates: list[tuple[int, str, Any]] = []
+    for record in candidates:
+        memory_id = _candidate_uuid(record.id)
+        if memory_id is None:
+            continue
+        state = cast(CurationCandidateState | None, get_state(memory_id))
+        if (
+            state is not None
+            and state.disposition is CandidateDisposition.ESCALATED
+            and state.last_disposition_reason in _CURATOR_QUALITY_FEEDBACK_REASONS
+        ):
+            feedback_candidates.append(
+                (
+                    -state.escalation_count,
+                    str(state.last_run_id or ""),
+                    record,
+                )
+            )
+    feedback_candidates.sort(key=lambda item: (item[0], item[1], item[2].id))
+    return [record for _, _, record in feedback_candidates]
 
 
 def _curator_backend_query_limit(

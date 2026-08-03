@@ -4,7 +4,8 @@ import json
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Iterator, cast
+from collections.abc import Iterator, Sequence
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -239,6 +240,22 @@ class PostgresCurationStore:
     def get_candidate_state(self, memory_id: UUID) -> CurationCandidateState | None:
         row = self._fetchone(_CANDIDATE_SELECT + " WHERE memory_id = %s", (str(memory_id),))
         return None if row is None else _candidate_from_row(row)
+
+    def list_candidate_states(
+        self,
+        *,
+        disposition: CandidateDisposition | None = None,
+        limit: int = 100,
+    ) -> Sequence[CurationCandidateState]:
+        bounded_limit = _bounded_limit(limit)
+        query = _CANDIDATE_SELECT
+        params: list[object] = []
+        if disposition is not None:
+            query += " WHERE disposition = %s"
+            params.append(str(disposition))
+        query += " ORDER BY escalation_count DESC, last_run_id DESC LIMIT %s"
+        params.append(bounded_limit)
+        return [_candidate_from_row(row) for row in self._fetchall(query, tuple(params))]
 
     def put_candidate_state(self, state: CurationCandidateState) -> CurationCandidateState:
         with self._transaction() as connection:
