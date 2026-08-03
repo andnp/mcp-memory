@@ -14,16 +14,16 @@ from uuid import UUID
 
 from mcp_memory.core.curation_models import (
     ArchiveMemoryAction,
-    CurationVerificationDescriptor,
-    VerificationStatus,
     ClaimMapping,
     CreateLinkAction,
+    CurationVerificationDescriptor,
     LinkAssertion,
     MergeMemoriesAction,
     NormalizeMemoryAction,
     RemoveLinkAction,
     RewriteMemoryAction,
     SplitMemoryAction,
+    VerificationStatus,
 )
 from mcp_memory.core.curation_policy import PolicyDecision, evaluate_curation_action
 from mcp_memory.core.ports.curation import (
@@ -352,7 +352,7 @@ class CurationExecutor:
                 str(action.canonical_id),
                 title=action.title or canonical.title,
                 content=action.content,
-                summary=action.summary,
+                summary=action.summary if action.summary is not None else canonical.summary,
                 tags=merged_tags,
                 workspace_ids=merged_workspaces,
                 metadata=merged_metadata,
@@ -758,8 +758,8 @@ __all__ = [
     "execute_archive_memory",
     "execute_create_link",
     "execute_merge_memories",
-    "execute_remove_link",
     "execute_normalize_memory",
+    "execute_remove_link",
     "execute_rewrite_memory",
     "execute_split_memory",
 ]

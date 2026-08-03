@@ -618,6 +618,39 @@ def test_merge_updates_canonical_archives_source_and_records_lineage(db_manager:
     assert connection.execute("SELECT COUNT(*) FROM memory_link_revisions").fetchone()[0] == 1
 
 
+def test_merge_preserves_canonical_summary_when_action_omits_one(db_manager: DatabaseManager) -> None:
+    repository, run, canonical_id = _seed(db_manager)
+    source_id = uuid4()
+    repository.create_memory(
+        "Source title",
+        "Source content.",
+        ["workspace"],
+        memory_id=str(source_id),
+        summary="Source summary",
+        tags=["source"],
+        memory_type="fact",
+    )
+    canonical = repository.get_memory(str(canonical_id))
+    source = repository.get_memory(str(source_id))
+    assert canonical is not None and source is not None
+    action = _merge_action(
+        canonical_id,
+        source_id,
+        record_token(canonical),
+        record_token(source),
+    ).model_copy(update={"summary": None})
+
+    CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_merge(
+        action,
+        run_id=run.run_id,
+        memory_types={canonical_id: canonical.type, source_id: source.type},
+    )
+
+    updated_canonical = repository.get_memory(str(canonical_id))
+    assert updated_canonical is not None
+    assert updated_canonical.summary == "Original summary"
+
+
 def test_split_creates_children_and_preserves_original_lineage(db_manager: DatabaseManager) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))
@@ -640,8 +673,8 @@ def test_split_creates_children_and_preserves_original_lineage(db_manager: Datab
         assert isinstance(part_index, int)
         return part_index
 
-    def _metadata_string_list(record: object, key: str) -> list[str]:
-        metadata = getattr(record, "metadata")
+    def _metadata_string_list(record: Any, key: str) -> list[str]:
+        metadata = record.metadata
         value = metadata.get(key)
         assert isinstance(value, list)
         assert all(isinstance(item, str) for item in value)
