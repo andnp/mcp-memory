@@ -82,6 +82,7 @@ class CurationFrontier:
     strategy: str
     seed_reads: tuple[Mapping[str, Any] | AcceptedMaintenanceRead, ...]
     support_reads: tuple[Mapping[str, Any] | AcceptedMaintenanceRead, ...] = ()
+    exploratory_reads: tuple[Mapping[str, Any] | AcceptedMaintenanceRead, ...] = ()
     work_item_id: str | None = None
     task_id: UUID | None = None
     frontier_key: str | None = None
@@ -95,6 +96,7 @@ class CurationFrontier:
         strategy: str,
         seed_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead],
         support_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
+        exploratory_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
         task_id: UUID | None = None,
         frontier_key: str | None = None,
         campaign_hypothesis: CampaignHypothesis | None = None,
@@ -104,6 +106,7 @@ class CurationFrontier:
             strategy=strategy,
             seed_reads=tuple(seed_reads),
             support_reads=tuple(support_reads),
+            exploratory_reads=tuple(exploratory_reads),
             task_id=task_id,
             frontier_key=frontier_key,
             campaign_hypothesis=campaign_hypothesis,
@@ -118,6 +121,7 @@ class CurationFrontier:
         strategy: str,
         seed_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead],
         support_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
+        exploratory_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
         task_id: UUID | None = None,
         frontier_key: str | None = None,
         campaign_hypothesis: CampaignHypothesis | None = None,
@@ -128,6 +132,7 @@ class CurationFrontier:
             strategy=strategy,
             seed_reads=tuple(seed_reads),
             support_reads=tuple(support_reads),
+            exploratory_reads=tuple(exploratory_reads),
             work_item_id=work_item_id,
             task_id=task_id,
             frontier_key=frontier_key,
@@ -157,12 +162,17 @@ def _context_record_counts(
     *,
     source_seed_count: int,
     source_support_count: int,
+    source_exploratory_count: int = 0,
 ) -> dict[str, int]:
     return {
         "included_seed_count": len(context.seeds),
         "included_support_count": len(context.support),
         "omitted_seed_count": max(source_seed_count - len(context.seeds), 0),
         "omitted_support_count": max(source_support_count - len(context.support), 0),
+        "included_exploratory_count": len(context.exploratory),
+        "omitted_exploratory_count": max(
+            source_exploratory_count - len(context.exploratory), 0
+        ),
     }
 
 
@@ -224,6 +234,7 @@ def _assemble_context(
     strategy: str,
     seed_reads: tuple[AcceptedMaintenanceRead, ...],
     support_reads: tuple[AcceptedMaintenanceRead, ...],
+    exploratory_reads: tuple[AcceptedMaintenanceRead, ...],
     provider: ProviderTrust,
     budget: CurationReadBudget,
     protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None,
@@ -241,6 +252,7 @@ def _assemble_context(
 
     selected_seeds = list(seed_reads)
     selected_support = list(support_reads)
+    selected_exploratory = list(exploratory_reads)
     while True:
         try:
             return build_context_packet(
@@ -248,6 +260,7 @@ def _assemble_context(
                 strategy=strategy,
                 seed_reads=selected_seeds,
                 support_reads=selected_support,
+                exploratory_reads=selected_exploratory,
                 provider=provider,
                 budget=budget,
                 protections_by_memory=cast(Any, protections_by_memory),
@@ -256,6 +269,9 @@ def _assemble_context(
                 campaign_hypothesis=campaign_hypothesis,
             )
         except CurationBudgetExhausted:
+            if selected_exploratory:
+                selected_exploratory.pop()
+                continue
             if selected_support:
                 selected_support.pop()
                 continue
@@ -323,6 +339,9 @@ class CurationDryRunHarness:
     async def run(self, frontier: CurationFrontier) -> CurationDryRunResult:
         seed_reads = tuple(_materialize_read(value) for value in frontier.seed_reads)
         support_reads = tuple(_materialize_read(value) for value in frontier.support_reads)
+        exploratory_reads = tuple(
+            _materialize_read(value) for value in frontier.exploratory_reads
+        )
         context_failure: CurationBudgetExhausted | None = None
         try:
             context = _assemble_context(
@@ -330,6 +349,7 @@ class CurationDryRunHarness:
                 strategy=frontier.strategy,
                 seed_reads=seed_reads,
                 support_reads=support_reads,
+                exploratory_reads=exploratory_reads,
                 provider=self._config.provider,
                 budget=self._config.read_budget,
                 protections_by_memory=cast(Any, self._protections_by_memory),
@@ -355,6 +375,7 @@ class CurationDryRunHarness:
             context,
             source_seed_count=len(seed_reads),
             source_support_count=len(support_reads),
+            source_exploratory_count=len(exploratory_reads),
         )
         run_id = uuid4()
         plan_id = uuid4()
@@ -407,6 +428,7 @@ class CurationDryRunHarness:
                 context=CurationContextPacket.from_visible_ids(
                     seed_memory_ids=context.seed_memory_ids,
                     support_memory_ids=context.support_memory_ids,
+                    exploratory_memory_ids=context.exploratory_memory_ids,
                     context_fingerprint=context.context_fingerprint,
                     campaign_hypothesis=context.campaign_hypothesis,
                 ),

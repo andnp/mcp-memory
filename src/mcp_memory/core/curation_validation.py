@@ -245,6 +245,7 @@ def _context_ids(context: CurationContextPacket | Mapping[str, Any] | None) -> s
         return set()
     values = list(_context_values(context, "seeds", "seed_memory_ids"))
     values.extend(_context_values(context, "support", "support_memory_ids"))
+    values.extend(_context_values(context, "exploratory", "exploratory_memory_ids"))
     return {_uuid_text(value) for value in values}
 
 

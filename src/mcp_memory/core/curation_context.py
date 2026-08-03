@@ -40,6 +40,7 @@ class BudgetDimension(StrEnum):
 
     SEED_RECORDS = "seed_records"
     SUPPORT_RECORDS = "support_records"
+    EXPLORATORY_RECORDS = "exploratory_records"
     CONTEXT_CHARACTERS = "context_characters"
     READ_TOOL_CALLS = "read_tool_calls"
     RECORDS_RETURNED = "records_returned"
@@ -81,6 +82,7 @@ class CurationReadBudget:
 
     max_seed_records: int = 16
     max_support_records: int = 8
+    max_exploratory_records: int = 16
     max_context_characters: int = 12_000
     max_read_tool_calls: int = 24
     max_records_returned: int = 32
@@ -90,6 +92,7 @@ class CurationReadBudget:
         for name in (
             "max_seed_records",
             "max_support_records",
+            "max_exploratory_records",
             "max_context_characters",
             "max_read_tool_calls",
             "max_records_returned",
@@ -110,6 +113,7 @@ class CurationReadCounters:
 
     seed_records: int = 0
     support_records: int = 0
+    exploratory_records: int = 0
     context_characters: int = 0
     read_tool_calls: int = 0
     records_returned: int = 0
@@ -119,6 +123,7 @@ class CurationReadCounters:
         return {
             "seed_records": self.seed_records,
             "support_records": self.support_records,
+            "exploratory_records": self.exploratory_records,
             "context_characters": self.context_characters,
             "read_tool_calls": self.read_tool_calls,
             "records_returned": self.records_returned,
@@ -193,6 +198,7 @@ class CurationContextPacket:
     usage: CurationReadCounters
     context_fingerprint: str
     campaign_hypothesis: CampaignHypothesis | None = None
+    exploratory: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def seed_memory_ids(self) -> tuple[str, ...]:
@@ -203,8 +209,20 @@ class CurationContextPacket:
         return tuple(str(record["memory_id"]) for record in self.support)
 
     @property
+    def exploratory_memory_ids(self) -> tuple[str, ...]:
+        return tuple(str(record["memory_id"]) for record in self.exploratory)
+
+    @property
+    def visible_memory_ids(self) -> tuple[str, ...]:
+        return self.seed_memory_ids + self.support_memory_ids + self.exploratory_memory_ids
+
+    @property
+    def initial_seed_memory_ids(self) -> tuple[str, ...]:
+        return self.seed_memory_ids
+
+    @property
     def provider_records(self) -> tuple[Mapping[str, Any], ...]:
-        return self.seeds + self.support
+        return self.seeds + self.support + self.exploratory
 
     def as_dict(self) -> dict[str, Any]:
         """Return a mutable serialization without changing this packet."""
@@ -214,8 +232,11 @@ class CurationContextPacket:
                 "frontier_fingerprint": self.frontier_fingerprint,
                 "seeds": self.seeds,
                 "support": self.support,
+                "exploratory": self.exploratory,
                 "seed_memory_ids": self.seed_memory_ids,
                 "support_memory_ids": self.support_memory_ids,
+                "exploratory_memory_ids": self.exploratory_memory_ids,
+                "visible_memory_ids": self.visible_memory_ids,
                 "record_tokens": self.record_tokens,
                 "graph_tokens": self.graph_tokens,
                 "disclosure": self.disclosure,
@@ -238,6 +259,7 @@ def build_context_packet(
     strategy: str,
     seed_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead],
     support_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
+    exploratory_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
     provider: ProviderTrust,
     budget: CurationReadBudget | None = None,
     protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None = None,
@@ -259,17 +281,23 @@ def build_context_packet(
         raise ValueError("max_record_characters must be non-negative")
     seed_values = tuple(_coerce_read(value) for value in seed_reads)
     support_values = tuple(_coerce_read(value) for value in support_reads)
+    exploratory_values = tuple(_coerce_read(value) for value in exploratory_reads)
     started = clock()
     usage = CurationReadCounters()
     seeds: list[Mapping[str, Any]] = []
     support: list[Mapping[str, Any]] = []
+    exploratory: list[Mapping[str, Any]] = []
     record_tokens: dict[str, str] = {}
     graph_tokens: dict[str, str] = {}
     disclosures: list[Mapping[str, Any]] = []
     omissions: list[Mapping[str, Any]] = []
     seen: set[str] = set()
 
-    for role, values in (("seed", seed_values), ("support", support_values)):
+    for role, values in (
+        ("seed", seed_values),
+        ("support", support_values),
+        ("exploratory", exploratory_values),
+    ):
         for value in values:
             read = _coerce_read(value)
             usage = _advance_read_usage(usage, read, limits, clock() - started)
@@ -277,7 +305,11 @@ def build_context_packet(
             memory_id = _memory_id(raw_record)
             protections = _lookup(protections_by_memory, memory_id)
             sensitive_fields = _lookup(sensitive_fields_by_memory, memory_id)
-            selected_fields = _seed_fields(raw_record) if role == "seed" else _support_fields(raw_record)
+            selected_fields = (
+                _support_fields(raw_record)
+                if role == "support"
+                else _seed_fields(raw_record)
+            )
             result = decide_record_disclosure(
                 {"memory_id": _as_uuid(memory_id), **raw_record},
                 provider=provider,
@@ -325,11 +357,22 @@ def build_context_packet(
                 continue
             next_count = usage.seed_records + (1 if role == "seed" else 0)
             next_support = usage.support_records + (1 if role == "support" else 0)
+            next_exploratory = usage.exploratory_records + (1 if role == "exploratory" else 0)
             _check_limit(
-                BudgetDimension.SEED_RECORDS if role == "seed" else BudgetDimension.SUPPORT_RECORDS,
-                next_count if role == "seed" else next_support,
+                (
+                    BudgetDimension.SEED_RECORDS
+                    if role == "seed"
+                    else BudgetDimension.EXPLORATORY_RECORDS
+                    if role == "support"
+                    else BudgetDimension.SUPPORT_RECORDS
+                ),
+                next_count if role == "seed" else next_support if role == "support" else next_exploratory,
                 0,
-                limits.max_seed_records if role == "seed" else limits.max_support_records,
+                limits.max_seed_records
+                if role == "seed"
+                else limits.max_support_records
+                if role == "support"
+                else limits.max_exploratory_records,
             )
             provider_record, relationship_disclosures = _provider_record(
                 raw_record,
@@ -352,13 +395,20 @@ def build_context_packet(
             usage = CurationReadCounters(
                 seed_records=next_count,
                 support_records=next_support,
+                exploratory_records=next_exploratory,
                 context_characters=usage.context_characters + chars,
                 read_tool_calls=usage.read_tool_calls,
                 records_returned=usage.records_returned,
                 wall_clock_seconds=usage.wall_clock_seconds,
             )
             frozen_record = _freeze(provider_record)
-            (seeds if role == "seed" else support).append(frozen_record)
+            (
+                seeds
+                if role == "seed"
+                else support
+                if role == "support"
+                else exploratory
+            ).append(frozen_record)
             record_tokens[memory_id] = _record_revision_token(raw_record)
             graph_tokens[memory_id] = _graph_revision_token(memory_id, read)
 
@@ -367,6 +417,7 @@ def build_context_packet(
         "frontier_fingerprint": frontier,
         "seeds": seeds,
         "support": support,
+        "exploratory": exploratory,
         "record_tokens": record_tokens,
         "graph_tokens": graph_tokens,
         "disclosure": disclosures,
@@ -383,6 +434,7 @@ def build_context_packet(
         frontier_fingerprint=frontier,
         seeds=tuple(seeds),
         support=tuple(support),
+        exploratory=tuple(exploratory),
         record_tokens=_freeze(record_tokens),
         graph_tokens=_freeze(graph_tokens),
         disclosure=tuple(disclosures),
@@ -449,6 +501,7 @@ def disclosure_audit_manifest(
         "record_counts": {
             "included_seed_count": len(context.seeds),
             "included_support_count": len(context.support),
+            "included_exploratory_count": len(context.exploratory),
             "omitted_seed_count": sum(1 for item in context.omissions if item.get("role") == "seed"),
             "omitted_support_count": sum(1 for item in context.omissions if item.get("role") == "support"),
         },
@@ -857,6 +910,7 @@ def _limits_dict(budget: CurationReadBudget) -> dict[str, int | float]:
     return {
         "max_seed_records": budget.max_seed_records,
         "max_support_records": budget.max_support_records,
+        "max_exploratory_records": budget.max_exploratory_records,
         "max_context_characters": budget.max_context_characters,
         "max_read_tool_calls": budget.max_read_tool_calls,
         "max_records_returned": budget.max_records_returned,

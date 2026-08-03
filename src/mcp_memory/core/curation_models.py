@@ -375,6 +375,7 @@ def campaign_hypothesis_from_payload(payload: Mapping[str, Any] | None) -> Campa
 class CurationContextPacket(CurationModel):
     seed_memory_ids: list[UUID] = Field(default_factory=list)
     support_memory_ids: list[UUID] = Field(default_factory=list)
+    exploratory_memory_ids: list[UUID] = Field(default_factory=list)
     context_fingerprint: str
     campaign_hypothesis: CampaignHypothesis | None = None
 
@@ -384,6 +385,7 @@ class CurationContextPacket(CurationModel):
         *,
         seed_memory_ids: Iterable[UUID | str],
         support_memory_ids: Iterable[UUID | str],
+        exploratory_memory_ids: Iterable[UUID | str] = (),
         context_fingerprint: str,
         campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> CurationContextPacket:
@@ -391,6 +393,10 @@ class CurationContextPacket(CurationModel):
             seed_memory_ids=[value if isinstance(value, UUID) else UUID(str(value)) for value in seed_memory_ids],
             support_memory_ids=[
                 value if isinstance(value, UUID) else UUID(str(value)) for value in support_memory_ids
+            ],
+            exploratory_memory_ids=[
+                value if isinstance(value, UUID) else UUID(str(value))
+                for value in exploratory_memory_ids
             ],
             context_fingerprint=context_fingerprint,
             campaign_hypothesis=campaign_hypothesis,
@@ -446,6 +452,7 @@ class CurationPlan(CurationModel):
 class CurationBudgetUsage(CurationModel):
     seed_records: int = 0
     support_records: int = 0
+    exploratory_records: int = 0
     context_characters: int = 0
     read_tool_calls: int = 0
     records_returned: int = 0

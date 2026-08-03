@@ -140,6 +140,7 @@ def budget_usage(
     return CurationBudgetUsage(
         seed_records=context.usage.seed_records,
         support_records=context.usage.support_records,
+        exploratory_records=context.usage.exploratory_records,
         context_characters=context.usage.context_characters,
         read_tool_calls=context.usage.read_tool_calls,
         records_returned=context.usage.records_returned,
