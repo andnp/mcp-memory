@@ -517,6 +517,7 @@ def filter_curator_candidates(
     now: datetime | None = None,
     suppress_destructive_actions: bool = True,
     preserve_memory_ids: set[str] | frozenset[str] = frozenset(),
+    allow_quality_feedback: bool = False,
 ) -> list[Any]:
     """Apply persisted no-op cooldown and edit stabilization to a candidate pool."""
     curation = getattr(ctx, "curation", None)
@@ -565,7 +566,17 @@ def filter_curator_candidates(
         if record.id in preserve_memory_ids:
             eligible.append(record)
             continue
-        if state is not None and state.cooldown_until is not None and state.cooldown_until > current_time:
+        quality_feedback_cooldown = (
+            state is not None
+            and state.disposition is CandidateDisposition.ESCALATED
+            and state.last_disposition_reason in _CURATOR_QUALITY_FEEDBACK_REASONS
+        )
+        if (
+            state is not None
+            and state.cooldown_until is not None
+            and state.cooldown_until > current_time
+            and not (allow_quality_feedback and quality_feedback_cooldown)
+        ):
             continue
         if suppress_destructive_actions and _has_recent_stabilizing_edit(ctx, memory_id, current_time):
             continue
@@ -681,7 +692,11 @@ def _query_curator_backend_candidates(
             if record is not None and record.status == "active":
                 candidates_by_id[record.id] = record
 
-    return filter_curator_candidates(ctx, list(candidates_by_id.values()))
+    return filter_curator_candidates(
+        ctx,
+        list(candidates_by_id.values()),
+        allow_quality_feedback=requested_sampling_strategy(task) == QUALITY_SIGNAL_STRATEGY,
+    )
 
 
 def _is_explicit_campaign_hypothesis(hypothesis: CampaignHypothesis | None) -> bool:

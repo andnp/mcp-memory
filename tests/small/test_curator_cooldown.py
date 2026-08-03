@@ -160,6 +160,30 @@ def test_quality_feedback_candidates_are_prioritized(db_manager) -> None:
     assert feedback["escalation_count"] == 2
 
 
+def test_failed_quality_repairs_cool_down_until_quality_route(db_manager) -> None:
+    repository = _Repository()
+    record = _record(uuid4())
+    ctx = _context(db_manager, repository)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    ctx.curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=UUID(record.id),
+            last_observed_revision_token=curator_candidate_revision_token(ctx, record),
+            disposition=CandidateDisposition.ESCALATED,
+            cooldown_until=now + timedelta(hours=6),
+            last_disposition_reason="retrieval_regression",
+        )
+    )
+
+    assert filter_curator_candidates(ctx, [record], now=now) == []
+    assert filter_curator_candidates(
+        ctx,
+        [record],
+        now=now,
+        allow_quality_feedback=True,
+    ) == [record]
+
+
 def test_acceptance_failure_is_quality_feedback_for_retry(db_manager) -> None:
     record = _record(uuid4())
     ctx = _context(db_manager, _Repository())

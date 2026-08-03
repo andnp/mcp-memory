@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -134,6 +134,43 @@ def test_seed_uses_global_bounded_queries_without_task_workspace_filter() -> Non
     assert all("workspace_id" not in call for call in repository.calls)
     assert all(call["seed"] == "curator-whole-corpus-task" for call in repository.calls)
     assert batch.records[0].workspace_ids == ["workspace-other"]
+
+
+def test_quality_signal_route_can_revisit_cooled_failed_repair(db_manager) -> None:
+    candidate_id = str(uuid4())
+    record = _record(candidate_id, updated_at="2020-01-01T00:00:00+00:00")
+    repository = _BackendRepository({
+        "retrieval-quality": [],
+        "cold-storage": [],
+        "never-surfaced": [],
+        "oversized/thin": [],
+        "orphan/low-support": [],
+        "quality-signal": [record],
+        "seeded-random": [],
+    })
+    curation = SQLiteCurationStore(db_manager)
+    ctx: Any = SimpleNamespace(
+        repository=repository,
+        relational_search=None,
+        db_manager=None,
+        workspace_id=None,
+        curation=curation,
+        mutation_history=None,
+    )
+    curation.put_candidate_state(
+        CurationCandidateState(
+            memory_id=UUID(candidate_id),
+            last_observed_revision_token=curator_candidate_revision_token(ctx, record),
+            disposition=CandidateDisposition.ESCALATED,
+            cooldown_until=datetime.now(UTC) + timedelta(hours=6),
+            last_disposition_reason="retrieval_regression",
+        )
+    )
+
+    assert select_curator_seed_batch(ctx, _task("semantic"), seed_limit=1).records == []
+    quality_batch = select_curator_seed_batch(ctx, _task("quality-signal"), seed_limit=1)
+
+    assert [item.id for item in quality_batch.records] == [candidate_id]
 
 
 def test_retrieval_friction_flags_match_generic_summary_forms() -> None:

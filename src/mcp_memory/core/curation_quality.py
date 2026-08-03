@@ -8,7 +8,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -97,6 +97,8 @@ class CurationQualitySearch(Protocol):
 
 class CurationQualitySampler:
     """Capture one replay case per sampled, genuinely applied action."""
+
+    _QUALITY_REGRESSION_COOLDOWN = timedelta(hours=6)
 
     def __init__(
         self,
@@ -261,7 +263,7 @@ class CurationQualitySampler:
                     ),
                     disposition=CandidateDisposition.ESCALATED,
                     consecutive_no_op_count=0,
-                    cooldown_until=None,
+                    cooldown_until=self._clock() + self._QUALITY_REGRESSION_COOLDOWN,
                     last_disposition_reason=reason,
                     last_frontier_key=run.frontier_key,
                     last_run_id=run.run_id,
