@@ -12,6 +12,7 @@ from mcp_memory.core.curation_context import (
 )
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_harness import CurationPlannerTools
+from mcp_memory.core.curation_planning_service import CurationPlanningInput, plan_and_validate
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -33,7 +34,7 @@ from mcp_memory.core.curation_planner import (
     _build_planner_prompt,
     _request_for_packet,
 )
-from mcp_memory.core.curation_validation import CurationRetryFeedback
+from mcp_memory.core.curation_validation import CurationMutationBudget, CurationRetryFeedback
 from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
 
@@ -335,6 +336,67 @@ def test_planner_prompt_preserves_schema_retry_diagnostics() -> None:
         "expected_fields": ["run_id", "plan_id"],
         "received_fields": ["schema_version"],
     }
+
+
+@pytest.mark.asyncio
+async def test_planning_retries_provider_failure_with_bounded_error_feedback() -> None:
+    seed_id = uuid4()
+    context = build_context_packet(
+        family="curator",
+        strategy="quality-signal",
+        seed_reads=[
+            AcceptedMaintenanceRead(
+                {
+                    "id": seed_id,
+                    "title": "A focused memory",
+                    "content": "Authoritative content",
+                    "summary": "A focused summary.",
+                    "type": "observation",
+                    "status": "active",
+                    "tags": [],
+                    "workspace_ids": [],
+                }
+            )
+        ],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+    request = _request_for_packet(context, run_id=uuid4())
+
+    class _RetryingPlanner:
+        def __init__(self) -> None:
+            self.feedback: list[Any] = []
+            self.inner = FakeCurationPlanner(
+                [
+                    FakePlannerScenario(
+                        failure=CurationPlannerProviderError(
+                            "assistant completion was not usable",
+                            reason_code="provider_failed",
+                        )
+                    ),
+                    FakePlannerScenario(plan=_plan(request, seed_id)),
+                ]
+            )
+
+        async def create_plan(self, request, tools):
+            self.feedback.append(tools.retry_feedback)
+            return await self.inner.create_plan(request, tools)
+
+    planner = _RetryingPlanner()
+    result = await plan_and_validate(
+        planner,
+        CurationPlanningInput(
+            request=request,
+            context=context,
+            mutation_budget=CurationMutationBudget(),
+        ),
+    )
+
+    assert result.plan is not None
+    assert planner.inner.calls == 2
+    assert result.retry_reason == "provider_failed"
+    assert planner.feedback[0] is None
+    assert planner.feedback[1].reason_code == "provider_failed"
+    assert "assistant completion was not usable" in planner.feedback[1].message
 
 
 @pytest.mark.asyncio
