@@ -302,12 +302,19 @@ def project_sampler_outcome(run: AgentRunHistoryPayload) -> SamplerOutcomeProjec
             provider_failure=False,
         )
     if metadata.quality_evidence_runs:
-        quality_passed = (
+        explicit_quality_passed = (
             metadata.quality_acceptance_met is True
             and metadata.quality_rejected_count == 0
             and metadata.retrieval_regression_count == 0
             and metadata.zero_result_change <= 0
         )
+        persisted_quality_passed = (
+            metadata.curation_outcome in {"applied", "quality_override"}
+            and metadata.quality_acceptance_met is not False
+            and metadata.quality_neutral_count == 0
+            and metadata.quality_rejected_count == 0
+        )
+        quality_passed = explicit_quality_passed or persisted_quality_passed
         return SamplerOutcomeProjection(
             outcome=SAMPLER_OUTCOME_QUALITY_PASS if quality_passed else SAMPLER_OUTCOME_QUALITY_FAILURE,
             productive_mutations=mutations if quality_passed else 0,
