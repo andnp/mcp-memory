@@ -243,7 +243,17 @@ def frontier_fingerprint(family: str, strategy: str, seed_ids: Sequence[Any]) ->
 
 
 def context_fingerprint(packet: Mapping[str, Any]) -> str:
-    allowed = {"frontier_fingerprint", "seeds", "support", "record_tokens", "graph_tokens", "disclosure", "omissions", "limits"}
+    allowed = {
+        "frontier_fingerprint",
+        "seeds",
+        "support",
+        "record_tokens",
+        "graph_tokens",
+        "disclosure",
+        "omissions",
+        "limits",
+        "campaign_hypothesis",
+    }
     return canonical_token(
         {"schema_version": SCHEMA_VERSION, **{key: packet[key] for key in sorted(allowed) if key in packet}}
     )

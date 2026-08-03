@@ -26,6 +26,7 @@ from mcp_memory.core.curation_identity import (
     graph_token,
     record_token,
 )
+from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.mutation_history import ProtectionMode
 
 
@@ -191,6 +192,7 @@ class CurationContextPacket:
     limits: Mapping[str, int | float]
     usage: CurationReadCounters
     context_fingerprint: str
+    campaign_hypothesis: CampaignHypothesis | None = None
 
     @property
     def seed_memory_ids(self) -> tuple[str, ...]:
@@ -221,6 +223,11 @@ class CurationContextPacket:
                 "limits": self.limits,
                 "usage": self.usage.as_dict(),
                 "context_fingerprint": self.context_fingerprint,
+                "campaign_hypothesis": (
+                    None
+                    if self.campaign_hypothesis is None
+                    else self.campaign_hypothesis.model_dump(mode="json")
+                ),
             }
         )
 
@@ -237,6 +244,7 @@ def build_context_packet(
     sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None = None,
     max_record_characters: int | None = None,
     require_authoritative_disclosure_context: bool = False,
+    campaign_hypothesis: CampaignHypothesis | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> CurationContextPacket:
     """Build one bounded packet from accepted maintenance reads.
@@ -364,6 +372,11 @@ def build_context_packet(
         "disclosure": disclosures,
         "omissions": omissions,
         "limits": _limits_dict(limits),
+        "campaign_hypothesis": (
+            None
+            if campaign_hypothesis is None
+            else campaign_hypothesis.model_dump(mode="json")
+        ),
     }
     fingerprint = context_fingerprint(packet_fields)
     return CurationContextPacket(
@@ -377,6 +390,7 @@ def build_context_packet(
         limits=_freeze(_limits_dict(limits)),
         usage=usage,
         context_fingerprint=fingerprint,
+        campaign_hypothesis=campaign_hypothesis,
     )
 
 

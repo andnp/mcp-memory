@@ -505,6 +505,7 @@ def _request_for_packet(
             plan_id=uuid4(),
             frontier_key=context_packet.context_fingerprint,
             context_fingerprint=context_packet.context_fingerprint,
+            campaign_hypothesis=context_packet.campaign_hypothesis,
             context=context_packet,
         )
     return CurationPlanningRequest(
@@ -512,10 +513,12 @@ def _request_for_packet(
         plan_id=uuid4(),
         frontier_key=context_packet.frontier_fingerprint,
         context_fingerprint=context_packet.context_fingerprint,
+        campaign_hypothesis=context_packet.campaign_hypothesis,
         context=CurationContextPacket.from_visible_ids(
             seed_memory_ids=context_packet.seed_memory_ids,
             support_memory_ids=context_packet.support_memory_ids,
             context_fingerprint=context_packet.context_fingerprint,
+            campaign_hypothesis=context_packet.campaign_hypothesis,
         ),
     )
 

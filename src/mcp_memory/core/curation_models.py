@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Iterable, Literal
+from typing import Annotated, Any, Iterable, Literal, Mapping
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -302,10 +302,79 @@ class CurationPolicySummary(CurationModel):
     policy_version: str = "1"
 
 
+class CampaignRetrievalProblem(StrEnum):
+    HEURISTIC = "heuristic"
+    RETRIEVAL_QUALITY = "retrieval_quality"
+
+
+class CampaignTargetMode(StrEnum):
+    HEURISTIC = "heuristic"
+    RANK = "rank"
+    TOP_K = "top_k"
+    ZERO_RESULTS = "zero_results"
+
+
+class CampaignAcceptance(CurationModel):
+    target_mode: CampaignTargetMode = CampaignTargetMode.HEURISTIC
+    top_k: int = Field(default=5, ge=1)
+    minimum_improvement: float = Field(default=0.0, ge=0.0)
+
+
+class CampaignHypothesis(CurationModel):
+    """Typed retrieval objective carried by curator campaigns."""
+
+    schema_version: Literal[1] = 1
+    retrieval_problem: CampaignRetrievalProblem = CampaignRetrievalProblem.HEURISTIC
+    expected_memory_ids: list[UUID] = Field(default_factory=list)
+    target_mode: CampaignTargetMode = CampaignTargetMode.HEURISTIC
+    top_k: int = Field(default=5, ge=1)
+    minimum_improvement: float = Field(default=0.0, ge=0.0)
+    acceptance: CampaignAcceptance = Field(default_factory=CampaignAcceptance)
+
+    @model_validator(mode="before")
+    @classmethod
+    def flatten_acceptance(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping) or "acceptance" not in value:
+            return value
+        data = dict(value)
+        acceptance = CampaignAcceptance.model_validate(data.pop("acceptance"))
+        data["acceptance"] = acceptance
+        for name in ("target_mode", "top_k", "minimum_improvement"):
+            data.setdefault(name, getattr(acceptance, name))
+        return data
+
+    @model_validator(mode="after")
+    def unique_expected_memory_ids(self) -> CampaignHypothesis:
+        if len(self.expected_memory_ids) != len(set(self.expected_memory_ids)):
+            raise ValueError("expected_memory_ids must not contain duplicates")
+        self.acceptance = CampaignAcceptance(
+            target_mode=self.target_mode,
+            top_k=self.top_k,
+            minimum_improvement=self.minimum_improvement,
+        )
+        return self
+
+    @classmethod
+    def legacy(cls) -> CampaignHypothesis:
+        return cls()
+
+CurationCampaignHypothesis = CampaignHypothesis
+CurationCampaignAcceptance = CampaignAcceptance
+RetrievalProblem = CampaignRetrievalProblem
+TargetMode = CampaignTargetMode
+
+
+def campaign_hypothesis_from_payload(payload: Mapping[str, Any] | None) -> CampaignHypothesis:
+    if not payload or payload.get("campaign_hypothesis") is None:
+        return CampaignHypothesis.legacy()
+    return CampaignHypothesis.model_validate(payload["campaign_hypothesis"])
+
+
 class CurationContextPacket(CurationModel):
     seed_memory_ids: list[UUID] = Field(default_factory=list)
     support_memory_ids: list[UUID] = Field(default_factory=list)
     context_fingerprint: str
+    campaign_hypothesis: CampaignHypothesis | None = None
 
     @classmethod
     def from_visible_ids(
@@ -314,6 +383,7 @@ class CurationContextPacket(CurationModel):
         seed_memory_ids: Iterable[UUID | str],
         support_memory_ids: Iterable[UUID | str],
         context_fingerprint: str,
+        campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> CurationContextPacket:
         return cls(
             seed_memory_ids=[value if isinstance(value, UUID) else UUID(str(value)) for value in seed_memory_ids],
@@ -321,6 +391,7 @@ class CurationContextPacket(CurationModel):
                 value if isinstance(value, UUID) else UUID(str(value)) for value in support_memory_ids
             ],
             context_fingerprint=context_fingerprint,
+            campaign_hypothesis=campaign_hypothesis,
         )
 
 
@@ -332,6 +403,7 @@ class CurationPlanningRequest(CurationModel):
     context_fingerprint: str
     policy_summary: CurationPolicySummary = Field(default_factory=CurationPolicySummary)
     context: CurationContextPacket | None = None
+    campaign_hypothesis: CampaignHypothesis | None = None
 
 
 class CurationPlan(CurationModel):

@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_identity import canonical_token
+from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.curation_routing import MaintenanceFamily
 from mcp_memory.core.curation_validation import CurationSpecialistRoute
 from mcp_memory.core.sampling import SamplingBatch
@@ -239,6 +240,7 @@ def enqueue_review_work_item(
     strategy_used: str | None,
     candidate_count: int | None = None,
     extra_payload: dict[str, Any] | None = None,
+    campaign_hypothesis: CampaignHypothesis | None = None,
 ) -> tuple[Any, bool]:
     work_items = getattr(ctx, "work_items", None)
     if work_items is None:
@@ -251,6 +253,8 @@ def enqueue_review_work_item(
     }
     if candidate_count is not None:
         payload["candidate_count"] = candidate_count
+    if campaign_hypothesis is not None:
+        payload["campaign_hypothesis"] = campaign_hypothesis.model_dump(mode="json")
     if extra_payload:
         payload.update(extra_payload)
     return work_items.enqueue_unique(
@@ -296,6 +300,7 @@ def work_item_result_metadata(
     seed_records: list[Any],
     claimed_work_item: Any | None = None,
     created_work_item: Any | None = None,
+    campaign_hypothesis: CampaignHypothesis | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "work_item_family": family_key,
@@ -307,6 +312,8 @@ def work_item_result_metadata(
         metadata["claimed_work_item_id"] = claimed_work_item.id
     if created_work_item is not None:
         metadata["created_work_item_id"] = created_work_item.id
+    if campaign_hypothesis is not None:
+        metadata["campaign_hypothesis"] = campaign_hypothesis.model_dump(mode="json")
     return metadata
 
 

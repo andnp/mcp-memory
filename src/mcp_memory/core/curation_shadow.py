@@ -14,6 +14,7 @@ from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFron
 from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.core.curation_models import CampaignHypothesis
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import (
@@ -35,6 +36,7 @@ async def run_curator_verified_campaign(
     *,
     provider: Any,
     mutation_budget: CurationMutationBudget | None = None,
+    campaign_hypothesis: CampaignHypothesis | None = None,
     seed_batch: Any,
     sampled_records: list[Any],
     seed_records: list[Any],
@@ -86,6 +88,7 @@ async def run_curator_verified_campaign(
         ),
         "support_reads": (_record_read(record) for record in support_records),
         "task_id": _task_uuid(task.id),
+        "campaign_hypothesis": campaign_hypothesis,
     }
     frontier = (
         CurationFrontier.claimed(claimed_work_item.id, **frontier_args)

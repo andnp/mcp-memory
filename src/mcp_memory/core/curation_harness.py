@@ -20,6 +20,7 @@ from mcp_memory.core.curation_context import (
 from mcp_memory.core.curation_identity import candidate_revision_token
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
 from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
     CurationBudgetUsage,
     CurationContextPacket,
     CurationPlan,
@@ -84,6 +85,7 @@ class CurationFrontier:
     work_item_id: str | None = None
     task_id: UUID | None = None
     frontier_key: str | None = None
+    campaign_hypothesis: CampaignHypothesis | None = None
 
     @classmethod
     def direct(
@@ -95,6 +97,7 @@ class CurationFrontier:
         support_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
         task_id: UUID | None = None,
         frontier_key: str | None = None,
+        campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> CurationFrontier:
         return cls(
             family=family,
@@ -103,6 +106,7 @@ class CurationFrontier:
             support_reads=tuple(support_reads),
             task_id=task_id,
             frontier_key=frontier_key,
+            campaign_hypothesis=campaign_hypothesis,
         )
 
     @classmethod
@@ -116,6 +120,7 @@ class CurationFrontier:
         support_reads: Iterable[Mapping[str, Any] | AcceptedMaintenanceRead] = (),
         task_id: UUID | None = None,
         frontier_key: str | None = None,
+        campaign_hypothesis: CampaignHypothesis | None = None,
     ) -> CurationFrontier:
         work_item_id = work_item.id if not isinstance(work_item, str) else work_item
         return cls(
@@ -126,6 +131,7 @@ class CurationFrontier:
             work_item_id=work_item_id,
             task_id=task_id,
             frontier_key=frontier_key,
+            campaign_hypothesis=campaign_hypothesis,
         )
 
 
@@ -223,6 +229,7 @@ def _assemble_context(
     protections_by_memory: Mapping[UUID | str, set[ProtectionMode] | frozenset[ProtectionMode]] | None,
     sensitive_fields_by_memory: Mapping[UUID | str, set[str] | frozenset[str]] | None,
     require_authoritative_disclosure_context: bool,
+    campaign_hypothesis: CampaignHypothesis | None = None,
 ) -> ImmutableCurationContextPacket:
     """Build the largest deterministic packet that fits the read budget.
 
@@ -246,6 +253,7 @@ def _assemble_context(
                 protections_by_memory=cast(Any, protections_by_memory),
                 sensitive_fields_by_memory=cast(Any, sensitive_fields_by_memory),
                 require_authoritative_disclosure_context=require_authoritative_disclosure_context,
+                campaign_hypothesis=campaign_hypothesis,
             )
         except CurationBudgetExhausted:
             if selected_support:
@@ -327,6 +335,7 @@ class CurationDryRunHarness:
                 protections_by_memory=cast(Any, self._protections_by_memory),
                 sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
                 require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+                campaign_hypothesis=frontier.campaign_hypothesis,
             )
         except CurationBudgetExhausted as error:
             context_failure = error
@@ -340,6 +349,7 @@ class CurationDryRunHarness:
                 protections_by_memory=cast(Any, self._protections_by_memory),
                 sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
                 require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+                campaign_hypothesis=frontier.campaign_hypothesis,
             )
         context_record_counts = _context_record_counts(
             context,
@@ -393,10 +403,12 @@ class CurationDryRunHarness:
                 plan_id=plan_id,
                 frontier_key=frontier_key,
                 context_fingerprint=context.context_fingerprint,
+                campaign_hypothesis=context.campaign_hypothesis,
                 context=CurationContextPacket.from_visible_ids(
                     seed_memory_ids=context.seed_memory_ids,
                     support_memory_ids=context.support_memory_ids,
                     context_fingerprint=context.context_fingerprint,
+                    campaign_hypothesis=context.campaign_hypothesis,
                 ),
             )
             plan, validation, envelopes, retry_reason, failure = await self._plan(

@@ -14,6 +14,9 @@ from mcp_memory.core.task_handlers.maintenance_work_items import (
     work_item_result_metadata,
 )
 from mcp_memory.core.curation_validation import CurationMutationBudget
+from mcp_memory.core.curation_models import (
+    campaign_hypothesis_from_payload,
+)
 from mcp_memory.core.task_handlers.curator_support import (
     CuratorCandidateRequest,
     acquire_curator_candidates,
@@ -53,6 +56,11 @@ async def handle_memory_curator_task(
 
     claimed_review_items = _claim_curator_review_work_batch(ctx, task=task, limit=1)
     claimed_review_item = claimed_review_items[0] if claimed_review_items else None
+    campaign_hypothesis = campaign_hypothesis_from_payload(
+        task.data
+        if task.data.get("campaign_hypothesis") is not None or claimed_review_item is None
+        else claimed_review_item.payload
+    )
     if claimed_review_item is not None:
         seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
         if seed_records:
@@ -96,6 +104,7 @@ async def handle_memory_curator_task(
         seed_source="claimed_review_work_item" if claimed_review_item is not None else "direct_sampling",
         seed_records=seed_records,
         claimed_work_item=claimed_review_item,
+        campaign_hypothesis=campaign_hypothesis,
     )
     work_item_metadata.update(
         campaign_metadata(
@@ -123,6 +132,7 @@ async def handle_memory_curator_task(
         task,
         provider=provider,
         mutation_budget=_mutation_budget_override(task),
+        campaign_hypothesis=campaign_hypothesis,
         seed_batch=seed_batch,
         sampled_records=sampled_records,
         seed_records=seed_records,

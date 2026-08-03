@@ -6,6 +6,10 @@ from pydantic import TypeAdapter, ValidationError
 from mcp_memory.core.curation_models import (
     ActionPreconditions,
     ArchiveMemoryAction,
+    CampaignAcceptance,
+    CampaignHypothesis,
+    CampaignRetrievalProblem,
+    CampaignTargetMode,
     ClaimManifest,
     ClaimMapping,
     CreateLinkAction,
@@ -26,6 +30,7 @@ from mcp_memory.core.curation_models import (
     RetentionReason,
     RewriteMemoryAction,
     SplitMemoryAction,
+    campaign_hypothesis_from_payload,
 )
 
 
@@ -107,6 +112,24 @@ def test_context_packet_canonicalizes_visible_ids() -> None:
 
     assert context.seed_memory_ids == [seed]
     assert context.support_memory_ids == [support]
+
+
+def test_campaign_hypothesis_is_typed_and_legacy_payloads_are_deterministic() -> None:
+    expected = uuid4()
+    hypothesis = CampaignHypothesis(
+        retrieval_problem=CampaignRetrievalProblem.RETRIEVAL_QUALITY,
+        expected_memory_ids=[expected],
+        acceptance=CampaignAcceptance(
+            target_mode=CampaignTargetMode.TOP_K,
+            top_k=3,
+            minimum_improvement=0.2,
+        ),
+    )
+
+    assert hypothesis.expected_memory_ids == [expected]
+    assert hypothesis.acceptance.top_k == 3
+    assert campaign_hypothesis_from_payload({"campaign_hypothesis": hypothesis.model_dump(mode="json")}) == hypothesis
+    assert campaign_hypothesis_from_payload({}) == CampaignHypothesis.legacy()
 
 
 def test_archive_action_is_typed_and_has_no_delete_sibling() -> None:

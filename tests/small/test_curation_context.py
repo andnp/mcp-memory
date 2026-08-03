@@ -11,6 +11,7 @@ from mcp_memory.core.curation_context import (
     build_context_packet,
 )
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
+from mcp_memory.core.curation_models import CampaignHypothesis, CampaignRetrievalProblem
 from mcp_memory.mutation_history import ProtectionMode
 
 
@@ -103,6 +104,30 @@ def test_equivalent_packet_maps_have_same_fingerprint() -> None:
     )
     assert first.context_fingerprint == second.context_fingerprint
     assert first.frontier_fingerprint == second.frontier_fingerprint
+
+
+def test_context_carries_campaign_hypothesis_into_metadata_and_identity() -> None:
+    hypothesis = CampaignHypothesis(
+        retrieval_problem=CampaignRetrievalProblem.RETRIEVAL_QUALITY,
+        expected_memory_ids=[SEED_ID],
+    )
+    packet = build_context_packet(
+        family="curator",
+        strategy="recent",
+        seed_reads=[AcceptedMaintenanceRead(_record(SEED_ID, "same"))],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+        campaign_hypothesis=hypothesis,
+    )
+
+    assert packet.campaign_hypothesis == hypothesis
+    assert packet.as_dict()["campaign_hypothesis"] == hypothesis.model_dump(mode="json")
+    without_hypothesis = build_context_packet(
+        family="curator",
+        strategy="recent",
+        seed_reads=[AcceptedMaintenanceRead(_record(SEED_ID, "same"))],
+        provider=ProviderTrust(ProviderTrustClass.LOCAL),
+    )
+    assert packet.context_fingerprint != without_hypothesis.context_fingerprint
 
 
 def test_budget_exhaustion_is_typed_and_deterministic() -> None:
