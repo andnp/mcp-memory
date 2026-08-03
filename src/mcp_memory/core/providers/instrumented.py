@@ -378,7 +378,12 @@ class InstrumentedAIProvider:
     def supports_agentic(self) -> bool:
         return callable(getattr(self._provider, "run_agent", None))
 
-    async def open_agent_session(self, *, allowed_tool_names: tuple[str, ...] | None = None):
+    async def open_agent_session(
+        self,
+        *,
+        allowed_tool_names: tuple[str, ...] | None = None,
+        tools: list[Any] | None = None,
+    ):
         provider = self._provider
         binder = getattr(provider, "with_observer", None)
         if callable(binder):
@@ -392,9 +397,10 @@ class InstrumentedAIProvider:
         opener = getattr(provider, "open_agent_session", None)
         if not callable(opener):
             raise RuntimeError("agentic_session_not_supported")
-        session = await cast(
-            Callable[..., Awaitable[Any]], opener
-        )(allowed_tool_names=allowed_tool_names)
+        opener_kwargs: dict[str, Any] = {"allowed_tool_names": allowed_tool_names}
+        if tools is not None:
+            opener_kwargs["tools"] = tools
+        session = await cast(Callable[..., Awaitable[Any]], opener)(**opener_kwargs)
         return _InstrumentedAgenticSession(self, session)
 
     async def ask_json(

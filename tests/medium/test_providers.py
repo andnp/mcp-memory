@@ -295,6 +295,37 @@ async def test_instrumented_provider_records_each_persistent_session_turn(db_man
 
 
 @pytest.mark.asyncio
+async def test_instrumented_provider_forwards_native_session_tools(db_manager) -> None:
+    class _Session:
+        async def close(self) -> None:
+            return None
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.tools = None
+
+        async def open_agent_session(self, *, allowed_tool_names=None, tools=None):
+            del allowed_tool_names
+            self.tools = tools
+            return _Session()
+
+    provider_impl = _Provider()
+    provider = InstrumentedAIProvider(
+        provider_impl,
+        usage_repository=ProviderUsageRepository(db_manager, workspace_id="workspace-a"),
+        provider_key="copilot-sdk",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    )
+    native_tool = object()
+
+    session = await provider.open_agent_session(tools=[native_tool])
+    await session.close()
+
+    assert provider_impl.tools == [native_tool]
+
+
+@pytest.mark.asyncio
 async def test_instrumented_provider_reports_agentic_capability_from_wrapped_provider(db_manager) -> None:
     class _JsonOnlyProvider:
         async def ask(self, prompt: str) -> dict[str, object]:
