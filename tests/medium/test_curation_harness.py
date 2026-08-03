@@ -435,6 +435,21 @@ def test_quality_override_requires_soft_rejection_only(db_manager) -> None:
     assert override[1] == "Measured utility remains positive."
     assert override[2]["threshold"] == 0.90
 
+    rewrite_receipt = receipt.model_copy(
+        update={"action_id": uuid4(), "operation": "rewrite_memory"}
+    )
+    rewrite_evidence = evidence.model_copy(
+        update={
+            "action_id": rewrite_receipt.action_id,
+            "operation": rewrite_receipt.operation,
+        }
+    )
+    assert harness._quality_override(
+        outcome=CurationRunOutcome.APPLIED,
+        receipts=(rewrite_receipt,),
+        quality_evidence=(rewrite_evidence,),
+    ) is not None
+
     blocked = harness._quality_override(
         outcome=CurationRunOutcome.APPLIED,
         receipts=(receipt,),

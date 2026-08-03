@@ -641,7 +641,6 @@ class CurationDryRunHarness:
             or any(receipt.status is not CurationReceiptState.VERIFIED for receipt in receipts)
             or any(getattr(evidence, "acceptance_met", None) is False for evidence in quality_evidence)
             or any(getattr(evidence, "wave_status", None) != "rejected" for evidence in quality_evidence)
-            or any(receipt.operation != "normalize_memory" for receipt in receipts)
         ):
             return None
         judge_evidence = cast(
