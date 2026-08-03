@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import re
-from typing import Any, cast
+from typing import Any, Callable, cast
 from uuid import UUID
 
 from mcp_memory.context import ApplicationContext
@@ -34,6 +34,7 @@ from mcp_memory.core.task_handlers.maintenance_framework import (
 )
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.integrations.memory_retrieval import build_memory_retrieval_facade
+from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 
 
 def _sampling_task_id(task: Any) -> str:
@@ -54,6 +55,8 @@ CURATOR_MAX_TITLE_CHARS = 80
 CURATOR_MAX_SUMMARY_CHARS = 220
 CURATOR_MAX_TAGS = 6
 CURATOR_LOW_READ_REVIEW_THRESHOLD = 3
+CURATOR_LOW_CONVERSION_EXPOSURE_THRESHOLD = 3
+CURATOR_LOW_CONVERSION_MAX_RATE = 0.25
 CURATOR_THIN_SPLIT_CHILD_MAX_CHARS = 800
 CURATOR_ALLOWED_STRATEGIES = (
     SEMANTIC_STRATEGY,
@@ -498,6 +501,20 @@ def retrieval_friction_flags(record) -> list[str]:
     if getattr(record, "last_surfaced_at", None) and record.read_count <= CURATOR_LOW_READ_REVIEW_THRESHOLD:
         flags.append("surfaced_low_read")
     metadata = getattr(record, "metadata", {})
+    retrieval_stats = metadata.get("retrieval_engagement", {}) if isinstance(metadata, dict) else {}
+    search_count = retrieval_stats.get("search_count") if isinstance(retrieval_stats, dict) else None
+    converted_search_count = (
+        retrieval_stats.get("converted_search_count") if isinstance(retrieval_stats, dict) else None
+    )
+    if isinstance(search_count, int) and search_count >= CURATOR_LOW_CONVERSION_EXPOSURE_THRESHOLD:
+        conversion_rate = (
+            0.0
+            if not isinstance(converted_search_count, int)
+            else converted_search_count / search_count
+        )
+        if conversion_rate <= CURATOR_LOW_CONVERSION_MAX_RATE:
+            flags.append("low_read_conversion")
+    metadata = getattr(record, "metadata", {})
     if isinstance(metadata, dict) and metadata.get("split_from_memory_id") and len(record.content.strip()) <= CURATOR_THIN_SPLIT_CHILD_MAX_CHARS:
         flags.append("thin_split_child")
     if is_oversized_curator_memory(record):
@@ -694,6 +711,29 @@ def _query_curator_backend_candidates(
             record = ctx.repository.get_memory(str(state.memory_id))
             if record is not None and record.status == "active":
                 candidates_by_id[record.id] = record
+
+    telemetry = getattr(ctx, "retrieval_telemetry", None)
+    engagement_stats: Callable[[list[str]], dict[str, dict[str, int]]] | None = getattr(
+        telemetry, "engagement_stats", None
+    )
+    if not callable(engagement_stats):
+        telemetry = RetrievalTelemetryRepository(
+            getattr(ctx, "db_manager", None),
+            workspace_id=getattr(ctx, "workspace_id", None),
+            storage_backend=getattr(ctx, "storage_backend", None),
+        )
+        engagement_stats = telemetry.engagement_stats
+    if engagement_stats is None:
+        stats = {}
+    else:
+        stats = engagement_stats(list(candidates_by_id))
+    for record in candidates_by_id.values():
+        engagement = stats.get(record.id)
+        if engagement:
+            record.metadata["retrieval_engagement"] = {
+                "search_count": engagement["search_count"],
+                "converted_search_count": engagement["converted_search_count"],
+            }
 
     return filter_curator_candidates(
         ctx,

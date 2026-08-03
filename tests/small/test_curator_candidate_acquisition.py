@@ -32,6 +32,7 @@ def _record(
     updated_at: str,
     tags: list[str] | None = None,
     summary: str | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> RelationalMemoryRecord:
     return RelationalMemoryRecord(
         id=memory_id,
@@ -48,6 +49,7 @@ def _record(
         last_surfaced_at=None,
         workspace_ids=["workspace-other"],
         tags=tags or [],
+        metadata=metadata or {},
     )
 
 
@@ -187,6 +189,21 @@ def test_retrieval_friction_flags_match_generic_summary_forms() -> None:
 
     assert "generic_summary" in retrieval_friction_flags(covers)
     assert "generic_summary" in retrieval_friction_flags(added)
+
+
+def test_retrieval_friction_flags_low_conversion_high_exposure() -> None:
+    record = _record(
+        "low-conversion",
+        updated_at="2026-01-01T00:00:00+00:00",
+        metadata={
+            "retrieval_engagement": {
+                "search_count": 6,
+                "converted_search_count": 1,
+            }
+        },
+    )
+
+    assert "low_read_conversion" in retrieval_friction_flags(record)
 
 
 def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:

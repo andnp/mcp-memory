@@ -37,6 +37,9 @@ from mcp_memory.curation_quality_store import (
 )
 
 
+CURATOR_MAX_ITERATIONS = 3
+
+
 async def run_curator_verified_campaign(
     ctx: ApplicationContext,
     task: TaskRecord,
@@ -139,13 +142,16 @@ async def run_curator_verified_campaign(
     )
     provider_trust, protections, sensitive_fields, require_policy = _disclosure_context(ctx, planner_provider, context_records)
     memory_types = {UUID(record.id): record.type for record in context_records}
+    configured_budget = mutation_budget or CurationMutationBudget()
+    cumulative_proposed = 0
+    cumulative_accepted = 0
     harness = CurationDryRunHarness(
         curation_store=ctx.curation,
         planner=planner,
         work_items=ctx.work_items,
         config=CurationHarnessConfig(
             provider=provider_trust,
-            mutation_budget=mutation_budget or CurationMutationBudget(),
+            mutation_budget=configured_budget,
             execute_accepted_actions=True,
             require_authoritative_disclosure_context=require_policy,
         ),
@@ -174,15 +180,31 @@ async def run_curator_verified_campaign(
     )
     try:
         result = await harness.run(frontier)
-        correction_turns = 0
+        correction_turns = 1
+        termination_reason = "initial_result"
         while (
             session is not None
             and result.result.outcome is CurationRunOutcome.QUALITY_REJECTED
-            and correction_turns < 2
+            and correction_turns < CURATOR_MAX_ITERATIONS
         ):
-            correction_turns += 1
+            cumulative_proposed += _proposed_action_count(result)
+            cumulative_accepted += int(
+                getattr(result.result, "verified_action_count", len(result.result.receipts))
+            )
+            remaining_budget = _remaining_mutation_budget(
+                configured_budget,
+                cumulative_proposed=cumulative_proposed,
+                cumulative_accepted=cumulative_accepted,
+            )
+            if remaining_budget.max_accepted_mutations == 0 or remaining_budget.max_proposed_actions == 0:
+                termination_reason = "cumulative_budget_exhausted"
+                break
             feedback = _quality_feedback_payload(result)
+            if not feedback["retryable"]:
+                termination_reason = "safety_termination"
+                break
             cast(Any, planner).set_quality_feedback(feedback)
+            harness._config.mutation_budget = remaining_budget
             refreshed = _refresh_records(ctx, [*seed_records, *exploratory_records])
             if refreshed:
                 frontier = _frontier_with_refreshed_records(
@@ -191,6 +213,9 @@ async def run_curator_verified_campaign(
                     sampled_count=len(sampled_records),
                 )
             result = await harness.run(frontier)
+            correction_turns += 1
+        if result.result.outcome is CurationRunOutcome.QUALITY_REJECTED and termination_reason == "initial_result":
+            termination_reason = "iteration_limit"
     except Exception:
         if claimed_work_item is not None:
             release_work_item(ctx, claimed_work_item.id)
@@ -232,16 +257,40 @@ async def run_curator_verified_campaign(
             "record_count": len(exploratory_reads),
             "reason": investigation.reason,
         },
+        curation_iterations=correction_turns,
+        curation_iteration_termination=termination_reason,
+        curation_cumulative_budget={
+            "proposed_actions": cumulative_proposed + _proposed_action_count(result),
+            "accepted_mutations": cumulative_accepted
+            + int(getattr(result.result, "verified_action_count", len(result.result.receipts))),
+            "max_proposed_actions": configured_budget.max_proposed_actions,
+            "max_accepted_mutations": configured_budget.max_accepted_mutations,
+        },
     )
 
 
 def _quality_feedback_payload(result: Any) -> dict[str, object]:
-    evidence = result.result.quality_evidence
+    evidence = [
+        item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+        for item in result.result.quality_evidence
+    ]
+    unsafe_rejections = {
+        "verification_failed",
+        "protected_target",
+        "policy_denied",
+        "disclosure_denied",
+        "budget_exhausted",
+    }
+    rejection_codes = set(getattr(result.result, "rejection_codes", ()))
+    retryable = bool(evidence) and not rejection_codes.intersection(unsafe_rejections) and not any(
+        item.get("neutral_reason") in {"incomplete_replay", "no_trusted_query"}
+        or item.get("wave_status") == "conflict"
+        for item in evidence
+        if isinstance(item, dict)
+    )
     return {
-        "latest_failed_live_run": {
-            "diagnosis": "normalize+split campaign, retrieval utility delta -1.2, one top-k retrieval loss, no content gain, mixed-wave restore unsupported",
-            "evidence": evidence,
-        },
+        "retryable": retryable,
+        "latest_failed_live_run": {"evidence": evidence},
         "required_response": [
             "Challenge weak split evidence.",
             "Preserve exact search anchors and concrete entities.",
@@ -249,6 +298,23 @@ def _quality_feedback_payload(result: Any) -> dict[str, object]:
             "Use measured feedback to change strategy rather than repeat.",
         ],
     }
+
+
+def _proposed_action_count(result: Any) -> int:
+    plan = getattr(getattr(result, "validation", None), "plan", None)
+    return 0 if plan is None else len(plan.actions)
+
+
+def _remaining_mutation_budget(
+    budget: CurationMutationBudget,
+    *,
+    cumulative_proposed: int,
+    cumulative_accepted: int,
+) -> CurationMutationBudget:
+    return CurationMutationBudget(
+        max_proposed_actions=max(budget.max_proposed_actions - cumulative_proposed, 0),
+        max_accepted_mutations=max(budget.max_accepted_mutations - cumulative_accepted, 0),
+    )
 
 
 def _refresh_records(ctx: ApplicationContext, records: list[Any]) -> list[Any]:
@@ -462,7 +528,11 @@ def _record_read(
             "status": record.status,
             "tags": list(record.tags),
             "workspace_ids": list(getattr(record, "workspace_ids", ())),
-            "metadata": dict(getattr(record, "metadata", {})),
+            "metadata": {
+                **dict(getattr(record, "metadata", {})),
+                "curation_read_source": "authoritative",
+                "mutation_eligible": True,
+            },
             **{
                 key: selection[key]
                 for key in (
