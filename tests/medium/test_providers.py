@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections import deque
+from typing import Self
 
 import pytest
 
@@ -54,6 +55,29 @@ async def test_copilot_sdk_provider_returns_parsed_json(monkeypatch) -> None:
     assert factory.client.create_session_calls[0]["model"] == "gpt-5.4-mini"
     assert session.sent_prompts == ["summarize these memories"]
     assert session.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_provider_heartbeats_during_client_startup(monkeypatch) -> None:
+    session = FakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content='{"actions": []}', message_id="startup"))])
+    )
+
+    class SlowClient(FakeCopilotClient):
+        async def __aenter__(self) -> Self:
+            await asyncio.sleep(0.03)
+            return self
+
+    factory = _patch_copilot_client(monkeypatch, SlowClient(session=session))
+    monkeypatch.setattr(copilot_sdk_module, "PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS", 0.005)
+    events: list[object] = []
+
+    provider = CopilotSDKProvider(model="gpt-5.4-mini", max_retries=0, timeout_seconds=1).with_observer(events.append)
+    result = await provider.ask("wait for startup")
+
+    assert result == {"actions": []}
+    assert any(isinstance(event, ProviderAttemptHeartbeatEvent) for event in events)
+    assert factory.client.session.disconnected is True
 
 
 @pytest.mark.asyncio
