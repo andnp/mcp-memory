@@ -552,6 +552,8 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
             "Each seed memory must have exactly one disposition: it appears in an action's affected IDs or in retained, never both; action source, target, canonical, and child-source IDs all count as affected.",
             "Prefer one conclusion-first takeaway with concrete evidence; target 1600 characters or less, and split content above 3000 characters when it contains multiple takeaways.",
             "Treat selection signals and retrieval-friction flags as review clues, not proof; inspect the record content and relationships before mutating.",
+            "A quality_feedback field means a previous curator mutation caused a measured retrieval regression; treat the record as a failed repair, retain it by default, and do not repeat a broad split, normalize, rewrite, or merge without a specific evidence-backed repair.",
+            "For quality-feedback records, preserve exact search anchors, concrete entities, and the current durable meaning; if no targeted repair is clearly justified, put the seed in retained.",
             "When no visible canonical is appropriate, make a retention decision instead of inventing an ID or proposing a merge, link, or normalize action against one.",
             "These constraints are fail-closed: an action with an ID absent from context is invalid and must not be executed.",
         ],
@@ -590,7 +592,11 @@ def _build_planner_prompt(request: CurationPlanningRequest, tools: CurationReadT
         "or in retained, never both; any action source, target, canonical, or "
         "child-source ID counts as acted on. Use one conclusion-first takeaway with concrete evidence, target "
         "1600 characters or less, and split multi-takeaway content above 3000 "
-        "characters. If no visible canonical is appropriate, retain the memory instead "
+        "characters. A quality_feedback field marks a previous curator mutation as a "
+        "measured retrieval regression: retain that record by default and do not repeat "
+        "a broad split, normalize, rewrite, or merge without a specific evidence-backed "
+        "repair. Preserve exact search anchors and concrete entities; if no targeted "
+        "repair is clearly justified, put the seed in retained. If no visible canonical is appropriate, retain the memory instead "
         "of inventing an ID.\n"
         + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )

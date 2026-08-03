@@ -41,6 +41,7 @@ CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
 CURATOR_MAX_BATCH_RECORDS = 24
 CURATOR_MAX_MEMORY_CHARS = 3000
 CURATOR_MAX_SUPPORT_RECORDS = 8
+CURATOR_MAX_QUALITY_FEEDBACK_SEEDS = 1
 CURATOR_LARGEST_MEMORY_PASS_INTERVAL = 3
 CURATOR_STABILIZATION_WINDOW_SECONDS = 3600.0
 CURATOR_RETRIEVAL_FRICTION_SEED_RECORDS = 4
@@ -259,7 +260,11 @@ def _select_curator_seed_batch(
     )
 
     seed_records: list[Any] = []
-    extend_unique_seed_records(seed_records, quality_feedback_candidates, limit)
+    extend_unique_seed_records(
+        seed_records,
+        quality_feedback_candidates,
+        min(limit, CURATOR_MAX_QUALITY_FEEDBACK_SEEDS),
+    )
     oversized_candidates = [record for record in largest_candidates if is_oversized_curator_memory(record)]
     anomaly_candidates = oversized_candidates
     if (
@@ -299,6 +304,7 @@ def curator_seed_payload_item(
     selection_reason: str | None = None,
     selection_signals: dict[str, float] | None = None,
     selection_scores: dict[str, float] | None = None,
+    quality_feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary_source = record.summary or record.content
     retrieval_flags = retrieval_friction_flags(record)
@@ -316,6 +322,7 @@ def curator_seed_payload_item(
         "selection_reason": selection_reason,
         "selection_signals": dict(selection_signals or {}),
         "selection_scores": dict(selection_scores or {}),
+        "quality_feedback": dict(quality_feedback or {}),
         "title": truncate_text(record.title, CURATOR_MAX_TITLE_CHARS),
         "summary": truncate_text(summary_source, CURATOR_MAX_SUMMARY_CHARS),
         "tags": list(record.tags[:CURATOR_MAX_TAGS]),
@@ -706,6 +713,28 @@ def _quality_feedback_candidates(ctx: ApplicationContext, candidates: list[Any])
             )
     feedback_candidates.sort(key=lambda item: (item[0], item[1], item[2].id))
     return [record for _, _, record in feedback_candidates]
+
+
+def curator_quality_feedback(ctx: ApplicationContext, record: Any) -> dict[str, Any] | None:
+    get_state = getattr(getattr(ctx, "curation", None), "get_candidate_state", None)
+    if not callable(get_state):
+        return None
+    memory_id = _candidate_uuid(record.id)
+    if memory_id is None:
+        return None
+    state = cast(CurationCandidateState | None, get_state(memory_id))
+    if (
+        state is None
+        or state.disposition is not CandidateDisposition.ESCALATED
+        or state.last_disposition_reason not in _CURATOR_QUALITY_FEEDBACK_REASONS
+    ):
+        return None
+    return {
+        "reason": state.last_disposition_reason,
+        "escalation_count": state.escalation_count,
+        "last_run_id": str(state.last_run_id) if state.last_run_id is not None else None,
+        "last_strategy": state.last_escalated_strategy,
+    }
 
 
 def _curator_backend_query_limit(

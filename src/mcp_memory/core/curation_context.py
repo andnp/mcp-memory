@@ -505,6 +505,7 @@ def _seed_fields(record: Mapping[str, Any]) -> tuple[str, ...]:
             "selection_reason",
             "selection_signals",
             "selection_scores",
+            "quality_feedback",
         )
         if field in record
     )

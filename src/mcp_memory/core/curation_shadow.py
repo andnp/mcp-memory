@@ -15,7 +15,10 @@ from mcp_memory.core.curation_planner import InstrumentedCurationPlanner
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.task_handlers.curator_support import curator_seed_payload_item
+from mcp_memory.core.task_handlers.curator_support import (
+    curator_quality_feedback,
+    curator_seed_payload_item,
+)
 from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
 from mcp_memory.core.ports.tasks import TaskRecord
 from mcp_memory.mutation_history import ProtectionMode, is_protection_active
@@ -75,6 +78,7 @@ async def run_curator_verified_campaign(
                 selection_reason=seed_batch.strategy_selection_reason,
                 selection_signals=_strategy_signals(seed_batch),
                 selection_scores=seed_batch.strategy_selection_scores,
+                quality_feedback=curator_quality_feedback(ctx, record),
             )
             for record in sampled_records
         ),
@@ -266,12 +270,14 @@ def _record_read(
     selection_reason: str | None = None,
     selection_signals: dict[str, float] | None = None,
     selection_scores: dict[str, float] | None = None,
+    quality_feedback: dict[str, Any] | None = None,
 ) -> AcceptedMaintenanceRead:
     selection = curator_seed_payload_item(
         record,
         selection_reason=selection_reason,
         selection_signals=selection_signals,
         selection_scores=selection_scores,
+        quality_feedback=quality_feedback,
     )
     return AcceptedMaintenanceRead(
         record={
@@ -296,6 +302,7 @@ def _record_read(
                     "selection_reason",
                     "selection_signals",
                     "selection_scores",
+                    "quality_feedback",
                 )
             },
         }
