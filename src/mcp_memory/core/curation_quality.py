@@ -194,7 +194,10 @@ class CurationQualitySampler:
         aggregate_retrieval_utility = sum(
             item.retrieval_utility_delta or 0.0 for item in evaluated
         )
-        content_gain = any(item.content_quality_improved is True for item in raw)
+        content_gain = any(
+            item.content_quality_improved is True or item.useful_work is True
+            for item in raw
+        )
         wave_acceptance = bool(
             (evaluated or content_evaluated)
             and complete_receipts
@@ -210,13 +213,18 @@ class CurationQualitySampler:
                 )
             )
         )
-        wave_status = (
-            "accepted"
-            if wave_acceptance
-            else "neutral"
-            if not quality_observations
-            else "rejected"
+        heuristic_regression = any(
+            (item.retrieval_regression_count or 0) > 0
+            or (item.zero_result_change or 0) > 0
+            or (item.content_quality_delta is not None and item.content_quality_delta < 0)
+            for item in raw
         )
+        if wave_acceptance:
+            wave_status = "accepted"
+        elif not quality_observations or (explicit is None and not heuristic_regression):
+            wave_status = "neutral"
+        else:
+            wave_status = "rejected"
         productive = len(receipts) if wave_acceptance else 0
         action_ids = [receipt.action_id for receipt in receipts]
         return tuple(
@@ -331,7 +339,7 @@ class CurationQualitySampler:
             return CurationQualityEvidence(
                 status=(
                     "content_evaluated"
-                    if content.improved is not None
+                    if content.improved is True
                     else "no_query"
                 ),
                 neutral_reason=(
