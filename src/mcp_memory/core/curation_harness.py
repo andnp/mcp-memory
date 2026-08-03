@@ -46,6 +46,7 @@ from mcp_memory.core.curation_planning_service import (
     plan_and_validate,
 )
 from mcp_memory.core.curation_quality import CurationQualitySampler
+from mcp_memory.core.mutation_restore import RestoreWaveResult, restore_wave
 from mcp_memory.core.curation_run_outcomes import (
     build_run_result,
     budget_usage as project_budget_usage,
@@ -68,7 +69,7 @@ from mcp_memory.core.ports.curation import (
     CurationRun,
     CurationRunState,
 )
-from mcp_memory.mutation_history import ProtectionMode
+from mcp_memory.mutation_history import MutationHistoryStore, ProtectionMode
 from mcp_memory.core.ports.work_items import WorkItemRecordLike
 
 WorkItemAction = _WorkItemAction
@@ -151,6 +152,7 @@ class CurationDryRunResult:
     work_item: CurationWorkItemDecision
     planner_attempts: int
     specialist_work_items: tuple[WorkItemRecordLike, ...] = ()
+    restore_result: dict[str, object] | None = None
 
     @property
     def outcome(self) -> CurationRunOutcome:
@@ -178,6 +180,16 @@ def _context_record_counts(
             ),
         )
     return counts
+
+
+def _restore_result_payload(result: RestoreWaveResult) -> dict[str, object]:
+    return {
+        "status": result.status.value,
+        "target_event_ids": [str(event_id) for event_id in result.target_event_ids],
+        "restored_event_ids": [str(event_id) for event_id in result.restored_event_ids],
+        "conflict_reason": result.conflict_reason,
+        "results": [item.model_dump(mode="json") for item in result.results],
+    }
 
 
 def _materialize_read(
@@ -314,6 +326,8 @@ class CurationDryRunHarness:
         verifier: CurationVerifier | None = None,
         work_item_service: CurationWorkItemService | None = None,
         quality_sampler: CurationQualitySampler | None = None,
+        restore_action_store: Any | None = None,
+        mutation_history: MutationHistoryStore | None = None,
     ) -> None:
         self._curation_store = curation_store
         self._planner = planner
@@ -327,6 +341,8 @@ class CurationDryRunHarness:
         self._executor = executor
         self._verifier = verifier
         self._quality_sampler = quality_sampler
+        self._restore_action_store = restore_action_store
+        self._mutation_history = mutation_history
         self._execution_service = CurationExecutionService(
             curation_store=curation_store,
             executor=executor,
@@ -485,12 +501,6 @@ class CurationDryRunHarness:
             )
         else:
             receipts = ()
-        terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
-        if terminal is None:
-            terminal = self._curation_store.get_run(run_id)
-        if terminal is None:
-            raise RuntimeError(f"curation run {run_id} was not persisted")
-
         self._persist_candidate_outcomes(
             plan=plan,
             validation=validation,
@@ -502,16 +512,31 @@ class CurationDryRunHarness:
             reason_code=reason_code,
             receipts=receipts,
         )
-
         quality_evidence = (
             ()
             if self._quality_sampler is None
             else self._quality_sampler.evaluate(
-                run=terminal,
+                run=self._curation_store.get_run(run_id) or executing,
                 receipts=receipts,
                 campaign_hypothesis=frontier.campaign_hypothesis,
             )
         )
+        restore_result = self._restore_rejected_wave(
+            run_id=run_id,
+            receipts=receipts,
+            quality_evidence=quality_evidence,
+        )
+        if restore_result is not None:
+            outcome = CurationRunOutcome.QUALITY_REJECTED
+            reason_code = "quality_wave_rejected"
+            if "quality_wave_rejected" not in rejection_codes:
+                rejection_codes.append("quality_wave_rejected")
+
+        terminal = self._curation_store.terminalize_run(run_id, terminal_state, outcome)
+        if terminal is None:
+            terminal = self._curation_store.get_run(run_id)
+        if terminal is None:
+            raise RuntimeError(f"curation run {run_id} was not persisted")
 
         work_item = self._work_item_service.decide(
             outcome,
@@ -547,6 +572,7 @@ class CurationDryRunHarness:
             quality_evidence=[
                 evidence.model_dump(mode="json") for evidence in quality_evidence
             ],
+            restore_result=restore_result,
         )
         return CurationDryRunResult(
             run=terminal,
@@ -556,7 +582,76 @@ class CurationDryRunHarness:
             work_item=work_item,
             planner_attempts=len(envelopes),
             specialist_work_items=specialist_work_items,
+            restore_result=restore_result,
         )
+
+    def _restore_rejected_wave(
+        self,
+        *,
+        run_id: UUID,
+        receipts: tuple[CurationActionReceipt, ...],
+        quality_evidence: tuple[Any, ...],
+    ) -> dict[str, object] | None:
+        rejected = [
+            evidence
+            for evidence in quality_evidence
+            if getattr(evidence, "wave_status", None) == "rejected"
+        ]
+        if not rejected:
+            return None
+        if self._restore_action_store is None or self._mutation_history is None:
+            return {"status": "unavailable", "reason": "restore_storage_unavailable"}
+
+        wave_action_ids = {
+            action_id
+            for evidence in rejected
+            for action_id in getattr(evidence, "wave_action_ids", ())
+        }
+        mutated_receipts = tuple(
+            receipt
+            for receipt in receipts
+            if receipt.status is CurationReceiptState.VERIFIED
+            and receipt.mutation_event_id is not None
+        )
+        if wave_action_ids != {receipt.action_id for receipt in mutated_receipts}:
+            return {"status": "conflict", "reason": "quality_wave_not_fully_sampled"}
+        if any(receipt.operation != "normalize_memory" for receipt in mutated_receipts):
+            return {"status": "conflict", "reason": "unsupported_restore_wave_family"}
+
+        event_ids = tuple(
+            receipt.mutation_event_id
+            for receipt in mutated_receipts
+            if receipt.mutation_event_id is not None
+        )
+        expected_record_tokens: dict[UUID, str] = {}
+        for event_id in event_ids:
+            for revision in self._mutation_history.get_record_revisions(event_id):
+                if revision.after_token is not None:
+                    expected_record_tokens[revision.memory_id] = revision.after_token
+        restore_run_id = uuid4()
+        result = restore_wave(
+            self._restore_action_store,
+            self._mutation_history,
+            event_ids,
+            expected_record_tokens=expected_record_tokens,
+            run_id=restore_run_id,
+            idempotency_key=f"quality-rejection:{run_id}",
+            curation_store=self._curation_store,
+        )
+        if self._curation_store.get_run(restore_run_id) is not None:
+            restore_outcome = (
+                CurationRunOutcome.APPLIED
+                if result.status.value in {"applied", "already_applied"}
+                else CurationRunOutcome.VERIFICATION_FAILED
+            )
+            self._curation_store.terminalize_run(
+                restore_run_id,
+                CurationRunState.EXECUTING,
+                restore_outcome,
+            )
+        payload = _restore_result_payload(result)
+        payload["run_id"] = str(restore_run_id)
+        return payload
 
     async def _plan(
         self,

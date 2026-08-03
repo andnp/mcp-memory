@@ -47,6 +47,8 @@ class CurationWorkItemService:
     ) -> CurationWorkItemDecision:
         if outcome is CurationRunOutcome.BUDGET_EXHAUSTED:
             return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, self._no_op_cooldown_seconds)
+        if any(_wave_status(item) == "rejected" for item in quality_evidence):
+            return CurationWorkItemDecision(WorkItemAction.DEFER, "quality_wave_rejected")
         if (
             _is_explicit_campaign(campaign_hypothesis)
             and outcome in (
@@ -99,3 +101,11 @@ def _acceptance_met(evidence: object) -> bool | None:
     else:
         value = getattr(evidence, "acceptance_met", None)
     return value if isinstance(value, bool) else None
+
+
+def _wave_status(evidence: object) -> str | None:
+    if isinstance(evidence, Mapping):
+        value = evidence.get("wave_status")
+    else:
+        value = getattr(evidence, "wave_status", None)
+    return value if isinstance(value, str) else None

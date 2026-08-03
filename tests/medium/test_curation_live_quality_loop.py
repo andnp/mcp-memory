@@ -575,7 +575,7 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
             object(),
         )
 
-        assert result["curation_outcome"] == "partially_applied"
+        assert result["curation_outcome"] == "quality_rejected"
         assert result["mutations"] == 1
         assert "action_fatal" in result["curation_rejection_codes"]
         campaign = result["curation_campaign_result"]
@@ -589,13 +589,14 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
         stored_receipts = runtime.curation.list_receipts(UUID(result["curation_run_id"]))
         assert [receipt.status.value for receipt in stored_receipts] == ["rejected", "verified"]
         assert stored_receipts[0].error_code == "action_fatal"
-        assert runtime.repository.get_memory(valid.id).summary == "A recovered live curation summary."
+        assert runtime.repository.get_memory(valid.id).summary == "Generic summary."
+        assert campaign["restore_result"]["status"] == "applied"
         assert runtime.repository.get_links(source.id, direction="outgoing") == []
 
         run = runtime.curation.get_run(UUID(result["curation_run_id"]))
         assert run is not None
         assert run.state.value == "terminal"
-        assert run.outcome.value == "partially_applied"
+        assert run.outcome.value == "quality_rejected"
         assert "action_fatal" in run.rejection_codes
         valid_state = runtime.curation.get_candidate_state(UUID(valid.id))
         source_state = runtime.curation.get_candidate_state(UUID(source.id))

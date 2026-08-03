@@ -248,7 +248,9 @@ class CurationQualitySampler:
                         None if previous is None else previous.last_considered_at
                     ),
                     last_considered_strategy=(
-                        None if previous is None else previous.last_considered_strategy
+                        run.selector_strategy
+                        if previous is None or previous.last_considered_strategy is None
+                        else previous.last_considered_strategy
                     ),
                     last_mutation_family=(
                         None if previous is None else previous.last_mutation_family

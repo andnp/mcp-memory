@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID, uuid4, uuid5
 
@@ -15,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from mcp_memory.core.curation_identity import SCHEMA_VERSION, canonical_json
 from mcp_memory.core.curation_models import ActionPreconditions, LinkAssertion
 from mcp_memory.curation_action_store import CurationActionStaleError, MutationResult
-from mcp_memory.curation_store import CurationRepository, CurationRun, CurationRunState
+from mcp_memory.curation_store import (
+    CurationReceiptState,
+    CurationRepository,
+    CurationRun,
+    CurationRunState,
+)
 from mcp_memory.mutation_history import (
     LinkRevision,
     MutationEvent,
@@ -233,6 +239,7 @@ def restore_wave(
     expected_link_tokens: Mapping[str, str] | None = None,
     run_id: UUID | None = None,
     idempotency_key: str = "wave",
+    curation_store: CurationRepository | None = None,
 ) -> RestoreWaveResult:
     """Restore a coherent normalize-only wave in reverse history order.
 
@@ -303,6 +310,7 @@ def restore_wave(
         result = RestoreExecutor(
             action_store,
             history_store,
+            curation_store=curation_store,
         ).execute(request, run_id=run_id)
         results.append(result)
         if result.status is not RestoreResultStatus.APPLIED:
@@ -485,6 +493,18 @@ class RestoreExecutor:
             event_id=receipt.mutation_event_id,
             target_event_id=request.target_event_id,
         )
+        if self._curation_store is not None:
+            self._curation_store.transition_receipt(
+                restore_run_id,
+                restore_action_id,
+                CurationReceiptState.APPLIED_UNVERIFIED,
+                receipt.model_copy(
+                    update={
+                        "status": CurationReceiptState.VERIFIED,
+                        "verified_at": datetime.now(UTC),
+                    }
+                ),
+            )
         return self._finish(request, request_id, result)
 
     def execute_restore(

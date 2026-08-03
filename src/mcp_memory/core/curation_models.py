@@ -489,6 +489,7 @@ class MutationReceipt(CurationModel):
 class CurationRunOutcome(StrEnum):
     APPLIED = "applied"
     PARTIALLY_APPLIED = "partially_applied"
+    QUALITY_REJECTED = "quality_rejected"
     NO_OP = "no_op"
     INVALID_PLAN = "invalid_plan"
     STALE_PLAN = "stale_plan"
@@ -514,6 +515,7 @@ class CurationRunResult(CurationModel):
     productive_mutation_count: int = 0
     affected_memory_count: int = 0
     quality_evidence: list[dict[str, object]] = Field(default_factory=list)
+    restore_result: dict[str, object] | None = None
 
 
 def _action_memory_ids(action: CurationAction) -> set[UUID]:

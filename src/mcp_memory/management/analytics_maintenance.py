@@ -317,6 +317,7 @@ def _curation_valid_plan(result: TaskResultView) -> bool:
         "no_op",
         "stale_plan",
         "verification_failed",
+        "quality_rejected",
         "deferred",
     }
 

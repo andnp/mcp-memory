@@ -187,6 +187,7 @@ def build_run_result(
     failure: CurationPlannerError | BaseException | None = None,
     envelopes: list[PlannerExecutionEnvelope[Any]] | None = None,
     quality_evidence: list[dict[str, object]] | None = None,
+    restore_result: dict[str, object] | None = None,
 ) -> CurationRunResult:
     evidence = list(quality_evidence or [])
     return CurationRunResult(
@@ -212,4 +213,5 @@ def build_run_result(
         ),
         affected_memory_count=count_affected_memory_ids(receipts),
         quality_evidence=evidence,
+        restore_result=restore_result,
     )
