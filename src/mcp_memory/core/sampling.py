@@ -32,6 +32,7 @@ DEDUPLICATOR_SEMANTIC_CLUSTER_THRESHOLD = 0.2
 SELECTION_UTILITY_PRIOR_BLEND_WEIGHT = 0.35
 SELECTION_UTILITY_PRIOR_MAX_SCORE_SHIFT = 0.12
 SELECTION_EXPLORATION_BONUS = 0.02
+SELECTION_EXPLORATION_NEUTRAL_SCORE = 0.5
 
 SEMANTIC_STRATEGY = "semantic"
 COLD_STORAGE_STRATEGY = "cold-storage"
@@ -210,6 +211,20 @@ class RouletteProvider(Generic[T]):
                 strategy: priority_scores.get(strategy, SELECTION_EXPLORATION_BONUS)
                 for strategy in allowed_strategies
             }
+            untested_strategies = tuple(strategy for strategy in allowed_strategies if strategy not in priority_scores)
+            if (
+                self._task_name == CURATOR_TASK_NAME
+                and untested_strategies
+                and max(priority_scores.values()) < SELECTION_EXPLORATION_NEUTRAL_SCORE
+            ):
+                strategy_used = untested_strategies[self._rng.randrange(len(untested_strategies))]
+                return (
+                    strategy_used,
+                    "priority_scores_with_exploration",
+                    f"selected={strategy_used}; priority_score={selection_scores[strategy_used]:.4f}; exploration=bounded_untested",
+                    {strategy: round(selection_scores[strategy], 4) for strategy in allowed_strategies},
+                    None,
+                )
             strategy_used = min(
                 allowed_strategies,
                 key=lambda strategy: (-selection_scores[strategy], allowed_strategies.index(strategy)),
