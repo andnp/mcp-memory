@@ -117,6 +117,43 @@ class _CampaignJSONProvider:
         }
 
 
+class _RetentionProvider:
+    provider_trust_class = "local"
+
+    async def ask_json(self, prompt: str) -> dict[str, object]:
+        payload = json.loads(prompt.split("\n", 1)[1])
+        request = payload["request"]
+        seed_ids = [seed["memory_id"] for seed in payload["context"]["seeds"]]
+        return {
+            "run_id": request["run_id"],
+            "plan_id": request["plan_id"],
+            "frontier_key": request["frontier_key"],
+            "context_fingerprint": request["context_fingerprint"],
+            "seed_memory_ids": seed_ids,
+            "actions": [],
+            "retained": [
+                {
+                    "memory_id": memory_id,
+                    "reason": "already_focused",
+                    "rationale": "retain the focused record",
+                }
+                for memory_id in seed_ids
+            ],
+            "rationale": "retain the focused records",
+        }
+
+
+class _RetentionInvestigator:
+    def with_allowed_tool_names(self, names: tuple[str, ...]) -> _RetentionInvestigator:
+        del names
+        return self
+
+    async def run_agent(self, prompt: str) -> SimpleNamespace:
+        del prompt
+        parsed = {"rounds": 1, "tool_calls": 1, "record_ids": []}
+        return SimpleNamespace(parsed=parsed, raw_text=json.dumps(parsed))
+
+
 def _task(runtime, task_id: str) -> TaskRecord:
     return TaskRecord(
         id=task_id,
@@ -290,6 +327,42 @@ async def test_default_verified_campaign_reports_authoritative_counts(
         assert runtime.work_items.get_item(item.id).status == "completed"
         assert runtime.work_items.list_items(family_key="graph_link_review") == []
         assert runtime.repository.get_links(source.id, direction="outgoing")
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_retained_campaign_reports_planner_no_op_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None
+
+    try:
+        provider = _RetentionProvider()
+        runtime.ai_json_provider = provider
+        runtime.ai_agent_provider = _RetentionInvestigator()
+        record = runtime.repository.create_memory(
+            title="Focused record",
+            content="The record already has a durable conclusion.",
+            summary="A focused conclusion.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert record is not None
+        result = await handle_memory_curator_task(
+            runtime,
+            _task(runtime, "curator-retention-task"),
+            object(),
+        )
+
+        assert result["curation_outcome"] == "no_op"
+        assert result["curation_no_op_reason"] == "planner_retained"
     finally:
         runtime.close()
 
