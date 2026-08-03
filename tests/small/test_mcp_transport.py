@@ -29,7 +29,6 @@ async def test_dispatch_memory_tool_rejects_unknown_tool_name() -> None:
     payload = _payload(await transport.dispatch_memory_tool(ApplicationContext(), "typo_tool", {"query": "auth"}))
 
     assert payload == {
-        "arguments": {"query": "auth"},
         "error": "unknown_tool",
         "status": "error",
         "tool": "typo_tool",
@@ -116,7 +115,6 @@ async def test_internal_dispatch_unknown_tool_does_not_record_tracker_counts() -
     snapshot = tracker.snapshot_task("task-1")
 
     assert payload == {
-        "arguments": {},
         "error": "unknown_tool",
         "status": "error",
         "tool": "missing_internal_tool",

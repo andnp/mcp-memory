@@ -609,9 +609,6 @@ def test_internal_task_complete_returns_completion_ack(db_manager) -> None:
 
     assert payload == {
         "status": "ok",
-        "task_id": "curator-task-1",
-        "task_name": "memory-curator",
-        "summary": "Completed one merge and one retag.",
         "completion_recorded": True,
     }
 
@@ -713,8 +710,5 @@ def test_task_complete_alias_returns_completion_ack(db_manager) -> None:
 
     assert payload == {
         "status": "ok",
-        "task_id": "curator-task-2",
-        "task_name": "memory-curator",
-        "summary": "Completed one archive.",
         "completion_recorded": True,
     }

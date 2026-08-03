@@ -944,7 +944,10 @@ async def test_call_internal_memory_tool_can_append_and_archive(monkeypatch, tmp
         appended_payload = json.loads(append_result[0].text)
         archived_payload = json.loads(archive_result[0].text)
         assert appended_payload["status"] == "ok"
-        assert "deterministic fixtures" in appended_payload["record"]["content"]
+        updated = runtime.repository.get_memory(record.id)
+        assert updated is not None and "deterministic fixtures" in updated.content
+        assert "content" not in appended_payload["record"]
+        assert "metadata" not in appended_payload["record"]
         assert archived_payload["record"]["status"] == "archived"
     finally:
         runtime.close()
@@ -1007,10 +1010,13 @@ async def test_call_internal_memory_tool_can_append_workspace_ids_and_metadata(m
         payload = json.loads(append_result[0].text)
 
         assert payload["status"] == "ok"
-        assert "deterministic fixtures" in payload["record"]["content"]
+        updated = runtime.repository.get_memory(record.id)
+        assert updated is not None and "deterministic fixtures" in updated.content
         assert set(payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
-        assert payload["record"]["metadata"]["appended_entry_ids"] == [1, 2]
-        assert payload["record"]["metadata"]["ingest_task_id"] == "ingest-agentic-task"
+        assert "content" not in payload["record"]
+        assert "metadata" not in payload["record"]
+        assert updated.metadata["appended_entry_ids"] == [1, 2]
+        assert updated.metadata["ingest_task_id"] == "ingest-agentic-task"
     finally:
         runtime.close()
 
@@ -1208,18 +1214,23 @@ async def test_call_internal_ingest_tools_preserve_ingest_invariants(monkeypatch
 
         append_payload = json.loads(append_result[0].text)
         create_payload = json.loads(create_result[0].text)
+        appended = runtime.repository.get_memory(existing.id)
+        created = runtime.repository.get_memory(create_payload["record"]["id"])
+        assert appended is not None and created is not None
         assert append_payload["status"] == "ok"
-        assert "deterministic fixtures" in append_payload["record"]["content"]
+        assert "deterministic fixtures" in appended.content
         assert set(append_payload["record"]["workspace_ids"]) == {runtime.workspace_id, "workspace-b"}
-        assert append_payload["record"]["metadata"]["appended_entry_ids"] == [1, 2]
-        assert append_payload["record"]["metadata"]["appended_via_ingest"] is True
-        assert append_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
+        assert append_payload["handled_entry_ids"] == [2]
+        assert appended.metadata["appended_entry_ids"] == [1, 2]
+        assert appended.metadata["appended_via_ingest"] is True
+        assert appended.metadata["ingest_task_id"] == "ingest-maintenance-task"
         assert append_payload["record"]["tags"] == ["testing"]
 
         assert create_payload["status"] == "ok"
-        assert create_payload["record"]["metadata"]["created_via_ingest"] is True
-        assert create_payload["record"]["metadata"]["source_entry_ids"] == [3, 4]
-        assert create_payload["record"]["metadata"]["ingest_task_id"] == "ingest-maintenance-task"
+        assert create_payload["handled_entry_ids"] == [3, 4]
+        assert created.metadata["created_via_ingest"] is True
+        assert created.metadata["source_entry_ids"] == [3, 4]
+        assert created.metadata["ingest_task_id"] == "ingest-maintenance-task"
         assert create_payload["record"]["tags"] == ["pytest"]
         assert create_payload["record"]["summary"]
         assert runtime.task_queue.find_open_task("summarize-memory", runtime.workspace_id or "global") is None
@@ -1261,6 +1272,8 @@ async def test_call_internal_memory_tool_can_create_update_link_and_delete(monke
             "internal_update_memory_record",
             {"memory_id": created_id, "content": "Prefer deterministic pytest fixtures.", "tags": ["testing", "pytest"]},
         )
+        updated = runtime.repository.get_memory(created_id)
+        assert updated is not None and updated.content == "Prefer deterministic pytest fixtures."
         create_link_result = await call_internal_memory_tool(
             runtime,
             "internal_create_memory_link",
@@ -1289,7 +1302,7 @@ async def test_call_internal_memory_tool_can_create_update_link_and_delete(monke
         delete_payload = json.loads(delete_result[0].text)
 
         assert created_payload["status"] == "ok"
-        assert update_payload["record"]["content"] == "Prefer deterministic pytest fixtures."
+        assert "content" not in update_payload["record"]
         assert update_payload["record"]["tags"] == ["pytest", "testing"]
         assert create_link_payload["status"] == "ok"
         assert archive_payload["record"]["status"] == "archived"
@@ -1426,12 +1439,17 @@ async def test_call_internal_memory_tool_can_split_memory_record(monkeypatch, tm
         first_links = runtime.repository.get_links(first_child_id)
         second_links = runtime.repository.get_links(second_child_id)
         archived_original = runtime.repository.get_memory(original.id)
-        first_metadata = payload["created"][0]["metadata"]
-        second_metadata = payload["created"][1]["metadata"]
-        original_metadata = payload["original"]["metadata"]
+        first_record = runtime.repository.get_memory(first_child_id)
+        second_record = runtime.repository.get_memory(second_child_id)
+        original_record = runtime.repository.get_memory(original.id)
+        assert first_record is not None and second_record is not None and original_record is not None
+        first_metadata = first_record.metadata
+        second_metadata = second_record.metadata
+        original_metadata = original_record.metadata
 
         assert payload["status"] == "ok"
         assert len(payload["created"]) == 2
+        assert all("content" not in child and "metadata" not in child for child in payload["created"])
         assert payload["archived"]["status"] == "archived"
         assert archived_original is not None and archived_original.status == "archived"
         assert any(link.target_id == original.id and link.link_type == "DEPENDS_ON" for link in first_links)
