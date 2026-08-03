@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
+from mcp_memory.context import ApplicationContext
+from mcp_memory.core.sampling import SamplingBatch
+from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, curator_handlers
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.mutation_history import Protection, ProtectionMode
-from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
-
+from mcp_memory.work_item_store import (
+    EXECUTION_LANE_AGENTIC,
+    WORK_FAMILY_MEMORY_CURATION_REVIEW,
+)
 
 pytestmark = pytest.mark.medium
 
@@ -172,6 +180,39 @@ async def test_default_campaign_uses_verified_executor_and_completes_claimed_wor
         assert runtime.work_items.get_item(item.id).status == "completed"
     finally:
         runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_curator_preparation_does_not_block_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_acquire(*args: object, **kwargs: object) -> SamplingBatch[Any]:
+        del args, kwargs
+        started.set()
+        release.wait(timeout=1.0)
+        return SamplingBatch(
+            requested_strategy=None,
+            strategy_used="none",
+            strategy_fallback_reason=None,
+            candidate_count=0,
+            records=[],
+        )
+
+    monkeypatch.setattr(curator_handlers, "_claim_curator_review_work_batch", lambda *args, **kwargs: [])
+    monkeypatch.setattr(curator_handlers, "acquire_curator_candidates", slow_acquire)
+
+    ctx = ApplicationContext(repository=object(), workspace_id="workspace-a")
+    task = _task(SimpleNamespace(workspace_id="workspace-a"), "slow-curator-preparation")
+    pending = asyncio.create_task(handle_memory_curator_task(ctx, task, object()))
+
+    assert await asyncio.to_thread(started.wait, 1.0)
+    await asyncio.sleep(0)
+    assert not pending.done()
+
+    release.set()
+    result = await pending
+    assert result["reason"] == "no_seed_records"
 
 
 @pytest.mark.asyncio
