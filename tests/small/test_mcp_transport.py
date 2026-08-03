@@ -35,6 +35,24 @@ async def test_dispatch_memory_tool_rejects_unknown_tool_name() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_dispatch_memory_tool_omits_success_status() -> None:
+    def _ok_service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        return {"status": "ok", "results": []}
+
+    payload = _payload(
+        await transport._dispatch_tool(
+            ApplicationContext(),
+            "search_memory_records",
+            {},
+            service_resolver=lambda: {"search_memory_records": _ok_service},
+            compact_success=True,
+        )
+    )
+
+    assert payload == {"results": []}
+
+
 @pytest.mark.parametrize(
     ("error", "exception"),
     [

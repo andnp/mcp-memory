@@ -21,13 +21,24 @@ def text_response(payload: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, sort_keys=True))]
 
 
+def _compact_public_success_payload(payload: dict) -> dict:
+    if payload.get("status") != "ok":
+        return payload
+    return {key: value for key, value in payload.items() if key != "status"}
+
+
 def _call_service_sync(
     service: Callable[..., dict],
     ctx: ApplicationContext,
     arguments: dict,
+    *,
+    compact_success: bool = False,
 ) -> list[TextContent]:
     try:
-        return text_response(service(ctx, arguments))
+        payload = service(ctx, arguments)
+        return text_response(
+            _compact_public_success_payload(payload) if compact_success else payload
+        )
     except FileNotFoundError as exc:
         return text_response(
             {"status": "error", "error": "file_not_found", "detail": str(exc)}
@@ -38,10 +49,21 @@ def _call_service_sync(
         )
 
 
-async def call_service(service: ToolService, ctx: ApplicationContext, arguments: dict) -> list[TextContent]:
+async def call_service(
+    service: ToolService,
+    ctx: ApplicationContext,
+    arguments: dict,
+    *,
+    compact_success: bool = False,
+) -> list[TextContent]:
     if inspect.iscoroutinefunction(service):
         try:
-            return text_response(await service(ctx, arguments))
+            payload = await service(ctx, arguments)
+            return text_response(
+                _compact_public_success_payload(payload)
+                if compact_success
+                else payload
+            )
         except FileNotFoundError as exc:
             return text_response(
                 {"status": "error", "error": "file_not_found", "detail": str(exc)}
@@ -55,6 +77,7 @@ async def call_service(service: ToolService, ctx: ApplicationContext, arguments:
         cast(Callable[..., dict], service),
         ctx,
         arguments,
+        compact_success=compact_success,
     )
 
 
@@ -85,6 +108,7 @@ async def _dispatch_tool(
     *,
     service_resolver: ToolServiceResolver,
     on_success: ToolSuccessRecorder | None = None,
+    compact_success: bool = False,
 ) -> list[TextContent]:
     if not isinstance(ctx, ApplicationContext):
         return _runtime_not_initialized_response(name)
@@ -93,7 +117,12 @@ async def _dispatch_tool(
     if service is None:
         return _unknown_tool_response(name)
 
-    response = await call_service(service, ctx, arguments)
+    response = await call_service(
+        service,
+        ctx,
+        arguments,
+        compact_success=compact_success,
+    )
     if on_success is not None:
         on_success(ctx, name, arguments)
     return response
@@ -204,6 +233,7 @@ async def dispatch_memory_tool(
         name,
         arguments,
         service_resolver=tool_services,
+        compact_success=True,
     )
 
 

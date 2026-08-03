@@ -101,4 +101,4 @@ async def test_call_memory_tool_offloads_sync_service_work(monkeypatch) -> None:
 
     assert await asyncio.wait_for(ticker, timeout=0.2) == "tick"
     payload = json.loads((await tool_task)[0].text)
-    assert payload == {"status": "ok"}
+    assert payload == {}

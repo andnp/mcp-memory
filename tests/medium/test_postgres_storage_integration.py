@@ -412,12 +412,12 @@ async def test_postgres_integration_public_memory_tools_work_through_real_runtim
         )
 
         assert record_payload["status"] == "recorded"
-        assert search_payload["status"] == "ok"
+        assert "status" not in search_payload
         assert any(
             result["memory_ref"] == f"mem-{memory_record.memory_ref}"
             for result in search_payload["results"]
         )
-        assert read_payload["status"] == "ok"
+        assert "status" not in read_payload
         assert read_payload["record"]["memory_ref"] == f"mem-{memory_record.memory_ref}"
         assert read_payload["record"]["content"] == "This memory should be searchable through the public MCP tools."
 

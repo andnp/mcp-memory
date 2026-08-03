@@ -136,7 +136,7 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
             )[0].text
         )
 
-        assert payload["status"] == "ok"
+        assert "status" not in payload
         assert payload["timing_ms"]["total"] >= 0.0
         assert payload["results"][0]["workspace_ids"] == [runtime.workspace_id or "workspace-local"]
         assert payload["results"][0]["score"] >= 0.0
@@ -187,7 +187,7 @@ async def test_relational_runtime_search_debug_reports_kernel_diagnostics(
             )[0].text
         )
 
-        assert payload["status"] == "ok"
+        assert "status" not in payload
         assert len(payload["results"]) == 5
         assert payload["search_diagnostics"]["timing_ms"] == {
             "total": payload["timing_ms"]["total"]
