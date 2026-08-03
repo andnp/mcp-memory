@@ -116,6 +116,27 @@ def test_revision_or_adjacency_change_resets_noop_eligibility(db_manager, change
     assert state.cooldown_until is None
 
 
+def test_quality_feedback_escalation_survives_revision_change(db_manager) -> None:
+    repository = _Repository()
+    record = _record(uuid4())
+    ctx = _context(db_manager, repository)
+    state = CurationCandidateState(
+        memory_id=UUID(record.id),
+        last_observed_revision_token="stale-token",
+        disposition=CandidateDisposition.ESCALATED,
+        last_disposition_reason="retrieval_regression",
+        escalation_count=1,
+    )
+    ctx.curation.put_candidate_state(state)
+
+    assert filter_curator_candidates(ctx, [record]) == [record]
+    updated = ctx.curation.get_candidate_state(UUID(record.id))
+    assert updated is not None
+    assert updated.disposition is CandidateDisposition.ESCALATED
+    assert updated.last_disposition_reason == "retrieval_regression"
+    assert updated.last_observed_revision_token == curator_candidate_revision_token(ctx, record)
+
+
 def test_recent_human_and_cross_family_edits_stabilize_candidates(db_manager) -> None:
     repository = _Repository()
     record = _record(uuid4())

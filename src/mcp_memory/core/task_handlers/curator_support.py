@@ -107,6 +107,9 @@ _CURATOR_NON_MUTATING_SUMMARY_FRAGMENTS = (
     "without mutations",
     "declined",
 )
+_CURATOR_QUALITY_FEEDBACK_REASONS = frozenset(
+    {"retrieval_regression", "zero_result_regression"}
+)
 
 
 @dataclass(frozen=True)
@@ -502,7 +505,21 @@ def filter_curator_candidates(
         identity = curator_candidate_revision_token(ctx, record)
         state = cast(CurationCandidateState | None, get_state(memory_id))
         if state is not None and state.last_observed_revision_token != identity:
-            if callable(put_state):
+            if (
+                callable(put_state)
+                and state.disposition is CandidateDisposition.ESCALATED
+                and state.last_disposition_reason in _CURATOR_QUALITY_FEEDBACK_REASONS
+            ):
+                put_state(
+                    state.model_copy(
+                        update={
+                            "last_observed_revision_token": identity,
+                            "cooldown_until": None,
+                            "consecutive_no_op_count": 0,
+                        }
+                    )
+                )
+            elif callable(put_state):
                 put_state(
                     state.model_copy(
                         update={
