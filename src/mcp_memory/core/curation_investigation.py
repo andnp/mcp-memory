@@ -109,14 +109,7 @@ async def run_curator_investigation(
 def _investigation_prompt(
     seed_records: list[Any], *, task_id: str, limits: CurationInvestigationLimits
 ) -> str:
-    seed_context = [
-        {
-            "memory_id": str(getattr(record, "id", "")),
-            "title": str(getattr(record, "title", "")),
-            "summary": str(getattr(record, "summary", "")),
-        }
-        for record in seed_records
-    ]
+    seed_context: list[dict[str, str]] = []
     payload = {
         "task_id": task_id,
         "limits": {
@@ -129,9 +122,20 @@ def _investigation_prompt(
         "seed_records": seed_context,
         "available_tools": list(READ_ONLY_CURATOR_INVESTIGATION_TOOLS),
     }
+    for record in seed_records:
+        candidate = {
+            "memory_id": str(getattr(record, "id", "")),
+            "title": str(getattr(record, "title", ""))[:80],
+            "summary": str(getattr(record, "summary", ""))[:220],
+        }
+        candidate_context = [*seed_context, candidate]
+        payload["seed_records"] = candidate_context
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        if len(encoded) > limits.max_context_characters:
+            break
+        seed_context.append(candidate)
+    payload["seed_records"] = seed_context
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    if len(encoded) > limits.max_context_characters:
-        encoded = encoded[: limits.max_context_characters]
     return (
         "You are a read-only curator investigator. Use only the listed internal tools. "
         "Do not mutate records, links, work items, or task state. Stop within the stated "

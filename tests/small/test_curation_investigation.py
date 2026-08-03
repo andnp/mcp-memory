@@ -64,6 +64,23 @@ async def test_investigation_scopes_tools_and_bounds_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_investigation_prompt_remains_valid_when_seed_context_is_bounded() -> None:
+    provider = _Investigator({"rounds": 1, "tool_calls": 1})
+    record = type("Record", (), {"id": "record-a", "title": "t" * 500, "summary": "s" * 500})()
+
+    await run_curator_investigation(
+        provider,
+        seed_records=[record, record],
+        task_id="task-1",
+        limits=CurationInvestigationLimits(max_context_characters=500),
+    )
+
+    payload = json.loads(provider.prompt.split("\n", 1)[1])
+    assert len(json.dumps(payload, separators=(",", ":"))) <= 500
+    assert len(payload["seed_records"]) <= 1
+
+
+@pytest.mark.asyncio
 async def test_investigation_rejects_reported_budget_overrun_and_large_result() -> None:
     overrun = _Investigator({"rounds": 3, "tool_calls": 1, "record_ids": ["id"]})
     result = await run_curator_investigation(
