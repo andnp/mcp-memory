@@ -125,7 +125,6 @@ async def run_curator_verified_campaign(
             session=session,
         )
     )
-    cumulative_tool_calls = investigation.tool_calls
     exploratory_records, exploratory_reads = _investigated_reads(
         ctx, investigation, seed_records
     )
@@ -207,6 +206,7 @@ async def run_curator_verified_campaign(
     )
     try:
         result = await harness.run(frontier)
+        cumulative_tool_calls = _authoritative_read_tool_calls(result)
         correction_turns = 0
         termination_reason = "initial_result"
         while (
@@ -238,7 +238,6 @@ async def run_curator_verified_campaign(
                 limits=investigation_limits,
                 session=session,
             )
-            cumulative_tool_calls += investigation.tool_calls
             newly_read_records, newly_read_context = _investigated_reads(
                 ctx, investigation, seed_records
             )
@@ -274,6 +273,7 @@ async def run_curator_verified_campaign(
             for record in newly_read_records:
                 memory_types[UUID(record.id)] = record.type
             next_result = await harness.run(frontier)
+            cumulative_tool_calls += _authoritative_read_tool_calls(next_result)
             correction_turns += 1
             if (
                 next_result.result.outcome is CurationRunOutcome.NO_OP
@@ -342,6 +342,11 @@ async def run_curator_verified_campaign(
 def _proposed_action_count(result: Any) -> int:
     plan = getattr(getattr(result, "validation", None), "plan", None)
     return 0 if plan is None else len(plan.actions)
+
+
+def _authoritative_read_tool_calls(result: Any) -> int:
+    budget_usage = getattr(getattr(result, "result", None), "budget_usage", None)
+    return int(getattr(budget_usage, "read_tool_calls", 0))
 
 
 def _remaining_mutation_budget(

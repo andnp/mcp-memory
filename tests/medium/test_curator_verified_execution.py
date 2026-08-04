@@ -201,6 +201,7 @@ async def test_default_campaign_uses_verified_executor_and_completes_claimed_wor
         assert result["execution_mode"] == "curation_verified_campaign"
         assert result["curation_outcome"] == "applied"
         assert result["mutations"] == 1
+        assert result["tool_calls_executed"] == 2
         assert result["curation_investigation"] == {
             "status": "completed",
             "rounds": 1,
