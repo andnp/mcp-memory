@@ -26,6 +26,10 @@ def test_ai_config_rejects_unknown_provider() -> None:
         AIConfig(provider="mystery")
 
 
+def test_ai_config_defaults_to_available_model() -> None:
+    assert AIConfig().model == "gpt-5.6-luna"
+
+
 def test_memory_config_rejects_invalid_checkpoint_interval() -> None:
     with pytest.raises(ValueError, match="checkpoint_interval_ops"):
         MemoryConfig(checkpoint_interval_ops=0)
@@ -61,9 +65,9 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.provider_routing.model_burst_call_limit == 2
     assert loaded.provider_routing.model_burst_window_seconds == 300.0
     assert loaded.provider_routing.profiles["copilot-strong"].provider == "copilot-sdk"
-    assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.4-mini"
+    assert loaded.provider_routing.profiles["copilot-strong"].model == "gpt-5.6-luna"
     assert loaded.provider_routing.profiles["copilot-mini"].provider == "copilot-sdk"
-    assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5-mini"
+    assert loaded.provider_routing.profiles["copilot-mini"].model == "gpt-5.6-luna"
     assert loaded.storage.backend == "sqlite"
     assert loaded.storage.sqlite.path == ""
     assert loaded.storage.postgres.pool_min == 1

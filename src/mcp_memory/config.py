@@ -77,7 +77,7 @@ class MemoryConfig:
 @dataclass
 class AIConfig:
     provider: str = "none"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-luna"
     timeout_seconds: float = 900.0
     max_retries: int = 0
     provider_trust_class: str | None = None
@@ -512,13 +512,13 @@ def _default_provider_routing_data() -> dict[str, Any]:
         "profiles": {
             "copilot-strong": {
                 "provider": "copilot-sdk",
-                "model": "gpt-5.4-mini",
+                "model": "gpt-5.6-luna",
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },
             "copilot-mini": {
                 "provider": "copilot-sdk",
-                "model": "gpt-5-mini",
+                "model": "gpt-5.6-luna",
                 "timeout_seconds": 900,
                 "max_retries": 0,
             },

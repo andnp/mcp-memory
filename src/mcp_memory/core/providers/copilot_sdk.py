@@ -72,7 +72,7 @@ class CopilotSDKProvider:
     def __init__(
         self,
         *,
-        model: str = "gpt-5.4-mini",
+        model: str = "gpt-5.6-luna",
         timeout_seconds: float = 60.0,
         max_retries: int = 1,
         cwd: str | None = None,
@@ -252,7 +252,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
     def __init__(
         self,
         *,
-        model: str = "gpt-5.4-mini",
+        model: str = "gpt-5.6-luna",
         timeout_seconds: float = 60.0,
         max_retries: int = 1,
         cwd: str | None = None,
