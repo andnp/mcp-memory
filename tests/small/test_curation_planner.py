@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -32,6 +33,7 @@ from mcp_memory.core.curation_planner import (
     CurationPlanSubmissionBuffer,
     FakeCurationPlanner,
     FakePlannerScenario,
+    IncrementalCurationPlanState,
     InstrumentedCurationPlanner,
     PlannerExecutionStatus,
     SessionCurationPlanner,
@@ -147,6 +149,88 @@ def test_planner_prompt_includes_only_bounded_retry_feedback_when_present() -> N
     assert retry["retry_feedback"]["reason_code"] == "formatting_only"
     assert len(retry["retry_feedback"]["message"]) == 1000
     assert retry["retry_feedback"]["message"].startswith("fix the JSON")
+
+
+def test_incremental_plan_state_supports_action_revisions() -> None:
+    seed_id = uuid4()
+    other_seed_id = uuid4()
+    request = _request(seed_id)
+    state = IncrementalCurationPlanState(max_proposed_actions=2)
+    state.begin(request, seed_memory_ids=(seed_id, other_seed_id))
+    action = NormalizeMemoryAction(
+        action_id=uuid4(),
+        target_id=seed_id,
+        summary="A focused summary.",
+        confidence=0.9,
+        rationale="make the target specific",
+    )
+    state.add_action(action)
+    with pytest.raises(ValueError, match="already been proposed"):
+        state.add_action(action)
+
+    replacement = action.model_copy(update={"summary": "A more specific summary."})
+    state.replace_action(replacement)
+    state.remove_action(replacement.action_id)
+    state.add_retention(
+        RetentionDecision(
+            memory_id=seed_id,
+            reason=RetentionReason.ALREADY_FOCUSED,
+            rationale="retain the focused target",
+        )
+    )
+    state.add_retention(
+        RetentionDecision(
+            memory_id=other_seed_id,
+            reason=RetentionReason.ALREADY_FOCUSED,
+            rationale="retain the supporting target",
+        )
+    )
+    plan = state.build(rationale="incremental test plan")
+
+    assert plan.actions == []
+    assert [item.memory_id for item in plan.retained] == [seed_id, other_seed_id]
+
+
+@pytest.mark.asyncio
+async def test_session_planner_assembles_incremental_tool_plan() -> None:
+    seed_id = uuid4()
+    other_seed_id = uuid4()
+    request = _request(seed_id)
+    state = IncrementalCurationPlanState(max_proposed_actions=4)
+
+    class _Session:
+        async def run_agent(self, prompt: str) -> AgenticRunResult:
+            assert "propose_curation_action" in prompt
+            state.add_action(
+                NormalizeMemoryAction(
+                    action_id=uuid4(),
+                    target_id=seed_id,
+                    summary="A focused summary.",
+                    confidence=0.9,
+                    rationale="make the target specific",
+                )
+            )
+            state.add_retention(
+                RetentionDecision(
+                    memory_id=other_seed_id,
+                    reason=RetentionReason.ALREADY_FOCUSED,
+                    rationale="retain the supporting target",
+                )
+            )
+            return AgenticRunResult(status="success", raw_text="incremental rationale")
+
+    planner = SessionCurationPlanner(cast(Any, _Session()), plan_state=state)
+    result = await planner.create_plan(
+        request,
+        CurationPlannerTools(
+            context=cast(Any, SimpleNamespace(seed_memory_ids=(seed_id, other_seed_id)))
+        ),
+    )
+
+    assert result.plan is not None
+    assert len(result.plan.actions) == 1
+    assert result.plan.retained[0].memory_id == other_seed_id
+    assert result.plan.rationale == "incremental rationale"
 
 
 @pytest.mark.asyncio
