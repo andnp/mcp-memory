@@ -357,7 +357,7 @@ async def test_retained_campaign_reports_planner_no_op_reason(
 
 
 @pytest.mark.asyncio
-async def test_local_manual_review_protection_denies_normalize_before_any_write(
+async def test_local_manual_review_protection_does_not_veto_normalize(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -396,12 +396,12 @@ async def test_local_manual_review_protection_denies_normalize_before_any_write(
         result = await handle_memory_curator_task(runtime, _task(runtime, "curator-protected-task"), object())
 
         refreshed = runtime.repository.get_memory(record.id)
-        assert result["curation_outcome"] == "deferred"
-        assert "manual_review_required" in result["curation_rejection_codes"]
-        assert refreshed is not None and refreshed.summary == record.summary
-        assert runtime.work_items.get_item(item.id).status == "deferred"
+        assert result["curation_outcome"] == "applied"
+        assert result["curation_rejection_codes"] == []
+        assert refreshed is not None and refreshed.summary == "A durable authentication conclusion."
+        assert runtime.work_items.get_item(item.id).status == "completed"
         connection = runtime.db_manager.get_connection()
         for table in ("memory_mutation_events", "memory_record_revisions", "embedding_repair_queue", "curation_action_receipts"):
-            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
     finally:
         runtime.close()
