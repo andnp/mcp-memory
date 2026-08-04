@@ -45,6 +45,13 @@ def _plan(seed, run_id, plan_id, frontier, context, **kwargs):
     )
 
 
+def test_default_mutation_budget_allows_broad_campaigns() -> None:
+    budget = CurationMutationBudget()
+
+    assert budget.max_proposed_actions == 256
+    assert budget.max_accepted_mutations == 256
+
+
 def test_validation_binds_identities_and_context() -> None:
     run_id, plan_id, seed = uuid4(), uuid4(), uuid4()
     request = _request(run_id, plan_id, "frontier", "context")
