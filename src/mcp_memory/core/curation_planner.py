@@ -820,6 +820,7 @@ def _build_planner_prompt(
             "Treat raw_ingress as a likely system1-created record: normalize weak metadata, and use rewrite_memory when the body itself is raw, status-shaped, or combines unrelated takeaways.",
             "Use support and exploratory records as active repair candidates. Any record visible in context may be modified; only initial seeds require exactly one disposition.",
             "Prefer a coherent set of mutations when several changes together improve a local memory cluster, even if one isolated change would be incomplete.",
+            "Review the full visible context before stopping; when several independent, evidence-backed improvements exist, propose them in the same turn and use the available action budget rather than stopping after the first valid mutation.",
             "Retain a seed only when it is already focused and durable, or when the available evidence does not support a specific improvement hypothesis.",
             "Every target_id, source_id, canonical_id, source_ids entry, and retained memory_id must refer to a memory visible in context.",
             "seed_memory_ids is required and must exactly equal the initial context seed IDs; every seed must receive exactly one disposition.",
@@ -897,7 +898,10 @@ def _build_planner_prompt(
         "unrelated takeaways. Preserve "
         "exact search anchors and concrete entities; retain only when no evidence-backed "
         "repair hypothesis survives investigation. If no visible canonical is appropriate, retain the memory instead "
-        "of inventing an ID."
+        "of inventing an ID. Review the full visible context before stopping; when "
+        "several independent, evidence-backed improvements exist, propose them in "
+        "the same turn and use the available action budget rather than stopping "
+        "after the first valid mutation. Do not manufacture work for focused records."
     )
     if submission_tool_name is not None:
         instruction += (
