@@ -40,11 +40,11 @@ from mcp_memory.retrieval_telemetry_store import RetrievalTelemetryRepository
 def _sampling_task_id(task: Any) -> str:
     return task.task_id if hasattr(task, "task_id") else task.id
 
-CURATOR_MAX_SEED_RECORDS = 16
+CURATOR_MAX_SEED_RECORDS = 24
 CURATOR_SIZE_ANOMALY_SEED_RECORDS = 6
 CURATOR_RECENCY_SEED_RECORDS = 4
 CURATOR_CANDIDATE_POOL_MULTIPLIER = 3
-CURATOR_MAX_BATCH_RECORDS = 24
+CURATOR_MAX_BATCH_RECORDS = 32
 CURATOR_MAX_MEMORY_CHARS = 3000
 CURATOR_MAX_SUPPORT_RECORDS = 8
 CURATOR_MAX_QUALITY_FEEDBACK_SEEDS = 1

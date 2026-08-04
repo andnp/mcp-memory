@@ -20,6 +20,16 @@ SUPPORT_ID = UUID("00000000-0000-0000-0000-000000000002")
 EXPLORATORY_ID = UUID("00000000-0000-0000-0000-000000000003")
 
 
+def test_default_curation_read_budget_supports_broad_context() -> None:
+    budget = CurationReadBudget()
+
+    assert budget.max_seed_records == 24
+    assert budget.max_support_records == 12
+    assert budget.max_exploratory_records == 24
+    assert budget.max_context_characters == 48_000
+    assert budget.max_records_returned == 64
+
+
 def _record(memory_id: UUID, content: str) -> dict[str, object]:
     return {
         "id": memory_id,

@@ -80,12 +80,12 @@ ContextBudgetExceeded = CurationBudgetExhausted
 class CurationReadBudget:
     """Typed limits for one in-memory context construction."""
 
-    max_seed_records: int = 16
-    max_support_records: int = 8
-    max_exploratory_records: int = 16
-    max_context_characters: int = 12_000
+    max_seed_records: int = 24
+    max_support_records: int = 12
+    max_exploratory_records: int = 24
+    max_context_characters: int = 48_000
     max_read_tool_calls: int = 24
-    max_records_returned: int = 32
+    max_records_returned: int = 64
     max_wall_clock_seconds: float = 30.0
 
     def __post_init__(self) -> None:
