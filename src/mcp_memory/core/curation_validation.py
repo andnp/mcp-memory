@@ -33,8 +33,8 @@ from mcp_memory.mutation_history import ProtectionMode
 class CurationMutationBudget:
     """Independent limits for proposed and eventually accepted mutations."""
 
-    max_proposed_actions: int = 24
-    max_accepted_mutations: int = 16
+    max_proposed_actions: int = 256
+    max_accepted_mutations: int = 256
 
     def __post_init__(self) -> None:
         for name in ("max_proposed_actions", "max_accepted_mutations"):
