@@ -274,7 +274,7 @@ def _create_record(runtime: Any, title: str, summary: str) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_live_campaign_applies_policy_allowed_action_blocks_protected_action_and_records_outcomes(
+async def test_live_campaign_applies_protected_action_and_records_outcomes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -305,11 +305,11 @@ async def test_live_campaign_applies_policy_allowed_action_blocks_protected_acti
             object(),
         )
 
-        assert result["curation_outcome"] == "partially_applied"
-        assert result["mutations"] == 1
-        assert "manual_review_required" in result["curation_rejection_codes"]
+        assert result["curation_outcome"] == "applied"
+        assert result["mutations"] == 2
+        assert result["curation_rejection_codes"] == []
         assert runtime.repository.get_memory(applied.id).summary == "A specific live curation summary."
-        assert runtime.repository.get_memory(protected.id).summary == protected.summary
+        assert runtime.repository.get_memory(protected.id).summary == "A protected live curation summary."
 
         context_seed = provider.payloads[0]["context"]["seeds"][0]
         assert context_seed["selection_reason"] == "selected=quality-signal"
@@ -322,8 +322,8 @@ async def test_live_campaign_applies_policy_allowed_action_blocks_protected_acti
         no_op_state = store.get_candidate_state(UUID(no_op.id))
         assert applied_state is not None and applied_state.disposition.value == "actioned"
         assert applied_state.last_disposition_reason == "verified_receipt"
-        assert protected_state is not None and protected_state.disposition.value == "escalated"
-        assert protected_state.last_disposition_reason == "manual_review_required"
+        assert protected_state is not None and protected_state.disposition.value == "actioned"
+        assert protected_state.last_disposition_reason == "verified_receipt"
         assert no_op_state is not None and no_op_state.disposition.value == "cooldown"
         assert no_op_state.last_disposition_reason == "already_focused"
 
@@ -576,8 +576,10 @@ async def test_live_campaign_rejects_create_link_without_exact_evidence_or_absen
         assert result["mutations"] == 0
         campaign = result["curation_campaign_result"]
         assert campaign["mutation_count"] == 0
-        assert campaign["receipts"] == []
-        assert "evidence_required" in result["curation_rejection_codes"]
+        assert len(campaign["receipts"]) == 1
+        assert campaign["receipts"][0]["status"] == "rejected"
+        assert campaign["receipts"][0]["error_code"] == "missing_link_evidence"
+        assert "missing_link_evidence" in result["curation_rejection_codes"]
         assert runtime.repository.get_links(source.id, direction="outgoing") == []
         connection = runtime.db_manager.get_connection()
         assert connection.execute(
@@ -588,12 +590,12 @@ async def test_live_campaign_rejects_create_link_without_exact_evidence_or_absen
         ).fetchone()[0] == 0
         assert connection.execute(
             "SELECT COUNT(*) FROM curation_action_receipts"
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 1
         for memory_id in (source.id, target.id):
             state = runtime.curation.get_candidate_state(UUID(memory_id))
             assert state is not None
             assert state.disposition.value == "escalated"
-            assert state.last_disposition_reason == "evidence_required"
+            assert state.last_disposition_reason == "missing_link_evidence"
     finally:
         runtime.close()
 
