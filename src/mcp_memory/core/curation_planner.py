@@ -16,9 +16,11 @@ from mcp_memory.core.curation_context import (
     CurationContextPacket as ImmutableCurationContextPacket,
 )
 from mcp_memory.core.curation_models import (
+    CurationAction,
     CurationContextPacket,
     CurationPlan,
     CurationPlanningRequest,
+    RetentionDecision,
 )
 from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.providers.interfaces import AgenticSession, ProviderJSONCall
@@ -152,6 +154,52 @@ class CurationPlanSubmissionBuffer:
         payload = self.payload
         self.payload = None
         return payload
+
+
+@dataclass(slots=True)
+class IncrementalCurationPlanBuilder:
+    """Accumulate a typed plan without mutating memory storage."""
+
+    request: CurationPlanningRequest
+    seed_memory_ids: tuple[UUID, ...]
+    _actions: list[CurationAction] = field(default_factory=list)
+    _retained: list[RetentionDecision] = field(default_factory=list)
+
+    def add_action(self, action: CurationAction) -> None:
+        if any(existing.action_id == action.action_id for existing in self._actions):
+            raise ValueError(f"action {action.action_id} has already been proposed")
+        self._actions.append(action)
+
+    def replace_action(self, action: CurationAction) -> None:
+        for index, existing in enumerate(self._actions):
+            if existing.action_id == action.action_id:
+                self._actions[index] = action
+                return
+        raise ValueError(f"action {action.action_id} has not been proposed")
+
+    def remove_action(self, action_id: UUID) -> None:
+        for index, action in enumerate(self._actions):
+            if action.action_id == action_id:
+                del self._actions[index]
+                return
+        raise ValueError(f"action {action_id} has not been proposed")
+
+    def add_retention(self, decision: RetentionDecision) -> None:
+        if any(existing.memory_id == decision.memory_id for existing in self._retained):
+            raise ValueError(f"memory {decision.memory_id} already has a retention decision")
+        self._retained.append(decision)
+
+    def build(self, *, rationale: str) -> CurationPlan:
+        return CurationPlan(
+            plan_id=self.request.plan_id,
+            run_id=self.request.run_id,
+            frontier_key=self.request.frontier_key,
+            context_fingerprint=self.request.context_fingerprint,
+            actions=list(self._actions),
+            retained=list(self._retained),
+            rationale=rationale,
+            seed_memory_ids=list(self.seed_memory_ids),
+        )
 
 
 class CancellationScope(Protocol):
