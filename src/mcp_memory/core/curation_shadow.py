@@ -116,6 +116,7 @@ async def run_curator_verified_campaign(
             session=session,
         )
     )
+    cumulative_tool_calls = investigation.tool_calls
     submission_buffer.consume()
     exploratory_records, exploratory_reads = _investigated_reads(
         ctx, investigation, seed_records
@@ -228,6 +229,7 @@ async def run_curator_verified_campaign(
                 limits=investigation_limits,
                 session=session,
             )
+            cumulative_tool_calls += investigation.tool_calls
             newly_read_records, newly_read_context = _investigated_reads(
                 ctx, investigation, seed_records
             )
@@ -295,7 +297,7 @@ async def run_curator_verified_campaign(
         summary=None if plan is None else plan.rationale,
         execution_mode="curation_verified_campaign",
         claimed_work_item_count=1 if claimed_work_item is not None else 0,
-        tool_calls_executed=0,
+        tool_calls_executed=cumulative_tool_calls,
         mutations=campaign_result["mutation_count"],
         curation_run_id=str(result.run.run_id),
         curation_plan_id=str(result.result.plan_id),
