@@ -194,8 +194,6 @@ async def run_curator_verified_campaign(
                 sample_rate=1.0,
             )
         ),
-        restore_action_store=action_store,
-        mutation_history=getattr(ctx, "mutation_history", None),
     )
     try:
         result = await harness.run(frontier)

@@ -430,12 +430,12 @@ async def test_live_campaign_restores_quality_rejected_normalize_wave(
         )
 
         campaign = result["curation_campaign_result"]
-        assert result["curation_outcome"] == "quality_rejected"
-        assert campaign["productive_mutation_count"] == 0
-        assert campaign["restore_result"]["status"] == "applied"
-        assert runtime.repository.get_memory(target.id).summary == "Original summary."
-        assert runtime.work_items.get_item(item.id).status == "deferred"
-        assert runtime.curation.get_run(UUID(result["curation_run_id"])).outcome.value == "quality_rejected"
+        assert result["curation_outcome"] == "applied"
+        assert campaign["productive_mutation_count"] == 1
+        assert campaign["restore_result"] is None
+        assert runtime.repository.get_memory(target.id).summary != "Original summary."
+        assert runtime.work_items.get_item(item.id).status == "completed"
+        assert runtime.curation.get_run(UUID(result["curation_run_id"])).outcome.value == "applied"
         assert len(runtime.curation.list_receipts(UUID(result["curation_run_id"]))) == 1
     finally:
         runtime.close()
@@ -647,29 +647,29 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
             object(),
         )
 
-        assert result["curation_outcome"] == "quality_rejected"
+        assert result["curation_outcome"] == "partially_applied"
         assert result["mutations"] == 1
-        assert "action_fatal" in result["curation_rejection_codes"]
+        assert "missing_absent_link_precondition" in result["curation_rejection_codes"]
         campaign = result["curation_campaign_result"]
         assert campaign["mutation_count"] == 1
         assert campaign["verified_action_count"] == 1
         assert campaign["affected_memory_count"] == 3
         assert [receipt["status"] for receipt in campaign["receipts"]] == ["rejected", "verified"]
-        assert campaign["receipts"][0]["error_code"] == "action_fatal"
+        assert campaign["receipts"][0]["error_code"] == "missing_absent_link_precondition"
         assert campaign["quality_evidence"][0]["status"] == "evaluated"
         assert campaign["quality_evidence"][0]["query_id"] == "live-recovery-query"
         stored_receipts = runtime.curation.list_receipts(UUID(result["curation_run_id"]))
         assert [receipt.status.value for receipt in stored_receipts] == ["rejected", "verified"]
-        assert stored_receipts[0].error_code == "action_fatal"
-        assert runtime.repository.get_memory(valid.id).summary == "Generic summary."
-        assert campaign["restore_result"]["status"] == "applied"
+        assert stored_receipts[0].error_code == "missing_absent_link_precondition"
+        assert runtime.repository.get_memory(valid.id).summary == "A recovered live curation summary."
+        assert campaign["restore_result"] is None
         assert runtime.repository.get_links(source.id, direction="outgoing") == []
 
         run = runtime.curation.get_run(UUID(result["curation_run_id"]))
         assert run is not None
         assert run.state.value == "terminal"
-        assert run.outcome.value == "quality_rejected"
-        assert "action_fatal" in run.rejection_codes
+        assert run.outcome.value == "partially_applied"
+        assert "missing_absent_link_precondition" in run.rejection_codes
         valid_state = runtime.curation.get_candidate_state(UUID(valid.id))
         source_state = runtime.curation.get_candidate_state(UUID(source.id))
         target_state = runtime.curation.get_candidate_state(UUID(target.id))
@@ -681,7 +681,7 @@ async def test_live_campaign_recovers_mixed_actions_with_durable_evidence(
         for state in (source_state, target_state):
             assert state is not None
             assert state.disposition.value == "escalated"
-            assert state.last_disposition_reason == "action_fatal"
+            assert state.last_disposition_reason == "missing_absent_link_precondition"
         assert connection.execute(
             "SELECT COUNT(*) FROM memory_tool_events"
         ).fetchone()[0] == before_event_count

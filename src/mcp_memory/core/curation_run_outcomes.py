@@ -41,7 +41,7 @@ def classify_outcome(
     validation: CurationValidationResult | None,
     failure: CurationPlannerError | BaseException | None,
 ) -> tuple[CurationRunOutcome, str]:
-    if isinstance(failure, CurationPlannerCancelledError) or isinstance(failure, asyncio.CancelledError):
+    if isinstance(failure, (CurationPlannerCancelledError, asyncio.CancelledError)):
         return CurationRunOutcome.CANCELLED, "provider_cancelled"
     if failure is not None:
         if isinstance(failure, CurationPlannerSchemaError):
@@ -205,16 +205,7 @@ def build_run_result(
         budget_usage=budget_usage,
         context_record_counts=context_record_counts,
         verified_action_count=count_verified_receipts(receipts),
-        productive_mutation_count=max(
-            (
-                int(value)
-                for item in evidence
-                if isinstance(item, dict)
-                for value in (item.get("productive_mutation_count", 0),)
-                if isinstance(value, (int, float))
-            ),
-            default=0,
-        ),
+        productive_mutation_count=count_verified_receipts(receipts),
         affected_memory_count=count_affected_memory_ids(receipts),
         quality_evidence=evidence,
         restore_result=restore_result,

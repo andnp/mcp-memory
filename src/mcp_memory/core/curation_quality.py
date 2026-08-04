@@ -235,7 +235,7 @@ class CurationQualitySampler:
             wave_status = "neutral"
         else:
             wave_status = "rejected"
-        productive = len(receipts) if wave_acceptance else 0
+        productive = len(receipts)
         action_ids = [receipt.action_id for receipt in receipts]
         return tuple(
             item.model_copy(

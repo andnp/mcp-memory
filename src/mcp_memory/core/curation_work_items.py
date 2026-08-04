@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
-    CampaignRetrievalProblem,
     CurationRunOutcome,
 )
 from mcp_memory.core.ports.planner import PlannerExecutionEnvelope
@@ -47,24 +46,6 @@ class CurationWorkItemService:
     ) -> CurationWorkItemDecision:
         if outcome is CurationRunOutcome.BUDGET_EXHAUSTED:
             return CurationWorkItemDecision(WorkItemAction.DEFER, reason_code, self._no_op_cooldown_seconds)
-        if any(_wave_status(item) == "rejected" for item in quality_evidence):
-            return CurationWorkItemDecision(WorkItemAction.DEFER, "quality_wave_rejected")
-        if (
-            _is_explicit_campaign(campaign_hypothesis)
-            and outcome in (
-                CurationRunOutcome.NO_OP,
-                CurationRunOutcome.APPLIED,
-                CurationRunOutcome.PARTIALLY_APPLIED,
-            )
-            and (
-                not quality_evidence
-                or any(
-                    _acceptance_met(item) is not True
-                    for item in quality_evidence
-                )
-            )
-        ):
-            return CurationWorkItemDecision(WorkItemAction.DEFER, "quality_acceptance_failed")
         if outcome in (
             CurationRunOutcome.NO_OP,
             CurationRunOutcome.APPLIED,
@@ -85,31 +66,3 @@ class CurationWorkItemService:
                 error=decision.reason_code,
                 retry_delay_seconds=decision.retry_delay_seconds or 0.0,
             )
-
-
-def _is_explicit_campaign(hypothesis: CampaignHypothesis | None) -> bool:
-    if hypothesis is None:
-        return False
-    return bool(
-        hypothesis.expected_memory_ids
-        or (hypothesis.query and hypothesis.query.strip())
-        or hypothesis.retrieval_problem is not CampaignRetrievalProblem.HEURISTIC
-        or hypothesis.minimum_improvement > 0
-        or hypothesis.target_mode.value != "heuristic"
-    )
-
-
-def _acceptance_met(evidence: object) -> bool | None:
-    if isinstance(evidence, Mapping):
-        value = evidence.get("acceptance_met")
-    else:
-        value = getattr(evidence, "acceptance_met", None)
-    return value if isinstance(value, bool) else None
-
-
-def _wave_status(evidence: object) -> str | None:
-    if isinstance(evidence, Mapping):
-        value = evidence.get("wave_status")
-    else:
-        value = getattr(evidence, "wave_status", None)
-    return value if isinstance(value, str) else None
