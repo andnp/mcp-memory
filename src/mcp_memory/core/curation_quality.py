@@ -81,6 +81,15 @@ class _ContentQualityComparison:
     improved: bool | None = None
 
 
+def _total_utility_delta(
+    *,
+    retrieval: float | None,
+    content: float | None,
+    engagement: float | None,
+) -> float:
+    return sum(value or 0.0 for value in (retrieval, content, engagement))
+
+
 class CurationQualityRepository(Protocol):
     def put_quality_evidence(self, evidence: CurationQualityEvidence) -> CurationQualityEvidence: ...
 
@@ -410,6 +419,11 @@ class CurationQualitySampler:
                 cutoff=receipt.applied_at or self._clock(),
             )
         )
+        engagement_delta = (
+            None
+            if not engagement
+            else float(cast(float, engagement["utility_delta"]))
+        )
         if after_results_by_query is None:
             after_contexts = self._search.search_memories_for_maintenance(
                 query_text,
@@ -473,16 +487,18 @@ class CurationQualitySampler:
                 (
                     report.useful_work_count > 0
                     or content.improved is True
+                    or _total_utility_delta(
+                        retrieval=case.retrieval_utility_delta,
+                        content=content.delta,
+                        engagement=engagement_delta,
+                    )
+                    > 0.0
                 )
                 if case.neutral_reason is None
                 else content.improved
             ),
             retrieval_utility_delta=case.retrieval_utility_delta,
-            engagement_utility_delta=(
-                None
-                if not engagement
-                else float(cast(float, engagement["utility_delta"]))
-            ),
+            engagement_utility_delta=engagement_delta,
             engagement_evidence=(
                 {}
                 if not engagement

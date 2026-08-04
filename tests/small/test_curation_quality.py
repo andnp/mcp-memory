@@ -20,6 +20,7 @@ from mcp_memory.core.curation_quality import (
     CurationQualityEvidence,
     CurationQualitySampler,
     _acceptance_met,
+    _total_utility_delta,
 )
 from mcp_memory.core.curation_work_items import CurationWorkItemService, WorkItemAction
 from mcp_memory.curation_quality_store import (
@@ -364,6 +365,14 @@ def test_quality_sampler_uses_bounded_read_backed_engagement(db_manager) -> None
     assert evidence["weak_negative"] == 1
     assert evidence["unknown"] == 0
     assert engagement["utility_delta"] == pytest.approx(-0.07)
+
+
+def test_quality_sampler_counts_net_positive_utility_as_useful_work() -> None:
+    assert _total_utility_delta(
+        retrieval=-0.0666666667,
+        content=0.0,
+        engagement=0.11,
+    ) > 0.0
 
 
 def test_quality_sampler_accepts_content_improvement_without_search_query(db_manager) -> None:
