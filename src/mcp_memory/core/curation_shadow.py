@@ -219,9 +219,6 @@ async def run_curator_verified_campaign(
                 termination_reason = "cumulative_budget_exhausted"
                 break
             feedback = _quality_feedback_payload(result)
-            if not feedback["retryable"]:
-                termination_reason = "safety_termination"
-                break
             cast(Any, planner).set_quality_feedback(feedback)
             harness._config.mutation_budget = remaining_budget
             investigation = await run_curator_investigation(

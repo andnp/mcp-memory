@@ -46,36 +46,36 @@ def test_neutral_only_feedback_does_not_look_like_safety_failure() -> None:
         {"neutral_reason": "no_trusted_query", "wave_status": "accepted"},
     )
 
-    assert _quality_feedback_payload(result)["retryable"] is False
-    assert _feedback_termination_reason(result) == "neutral_evidence"
+    assert _quality_feedback_payload(result)["retryable"] is True
+    assert _feedback_termination_reason(result) is None
 
 
-def test_unsafe_rejection_still_stops_feedback() -> None:
+def test_unsafe_rejection_does_not_stop_feedback() -> None:
     result = _result(
         {"neutral_reason": None, "wave_status": "accepted"},
         rejection_codes=("protected_target",),
     )
 
-    assert _quality_feedback_payload(result)["retryable"] is False
-    assert _feedback_termination_reason(result) == "safety_termination"
+    assert _quality_feedback_payload(result)["retryable"] is True
+    assert _feedback_termination_reason(result) is None
 
 
-def test_policy_rejection_still_stops_feedback_without_quality_evidence() -> None:
+def test_policy_rejection_does_not_stop_feedback_without_quality_evidence() -> None:
     result = _result(
         outcome="deferred",
         rejection_codes=("contradictory_facts",),
     )
 
-    assert _quality_feedback_payload(result)["retryable"] is False
-    assert _feedback_termination_reason(result) == "safety_termination"
+    assert _quality_feedback_payload(result)["retryable"] is True
+    assert _feedback_termination_reason(result) is None
 
 
-def test_all_accepted_positive_evidence_converges() -> None:
+def test_all_accepted_positive_evidence_still_allows_another_wave() -> None:
     result = _result(
         {"neutral_reason": None, "wave_status": "accepted"},
     )
 
-    assert _feedback_termination_reason(result) == "converged"
+    assert _feedback_termination_reason(result) is None
 
 
 def test_repairable_action_failure_retries_without_quality_evidence() -> None:
