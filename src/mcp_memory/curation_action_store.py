@@ -37,9 +37,7 @@ from mcp_memory.curation_store import (
 from mcp_memory.mutation_history import (
     MutationActorKind,
     MutationEventStatus,
-    ProtectionMode,
     RevisionRole,
-    is_protection_active,
 )
 from mcp_memory.core.ports.memory import MemoryLink, MemoryRecord
 
@@ -155,7 +153,6 @@ class _MutationResultData:
 _SUMMARY_UNSET = object()
 _VALID_MEMORY_TYPES = frozenset({"journal", "plan", "fact", "observation", "reflection"})
 _VALID_MEMORY_STATUSES = frozenset({"active", "stale", "degraded", "archived"})
-_DESTRUCTIVE_OPERATIONS = frozenset({"archive_memory", "delete_memory", "merge_memories", "split_memory"})
 class SQLiteCurationActionStore:
     """Apply one action atomically using a dedicated SQLite connection.
 
@@ -281,7 +278,6 @@ class SQLiteCurationActionStore:
             before_records = self._read_records(connection, normalized_targets)
             self._check_tokens(connection, before_records, normalized_targets, normalized_tokens)
             self._check_preconditions(connection, normalized_targets, preconditions)
-            self._check_protections(connection, normalized_targets, None)
             before_links = self._read_related_links(connection, set(normalized_targets))
 
             transaction = _SQLiteCurationTransaction(
@@ -296,7 +292,6 @@ class SQLiteCurationActionStore:
             result_operation = result.operation.strip()
             if normalized_operation is not None and result_operation != normalized_operation:
                 raise CurationActionFatalError("action operation does not match mutation result")
-            self._check_protections(connection, normalized_targets, result.operation)
             self._fail_stage("after_domain_mutation")
 
             after_ids = _canonical_target_ids([*normalized_targets, *transaction.touched_ids])
@@ -465,31 +460,6 @@ class SQLiteCurationActionStore:
                 )
                 if present != should_exist:
                     raise CurationActionStaleError("link precondition is stale")
-
-    def _check_protections(self, connection: sqlite3.Connection, target_ids: Sequence[str], operation: str | None) -> None:
-        destructive = operation is not None and operation in _DESTRUCTIVE_OPERATIONS
-        now = datetime.now(UTC)
-        placeholders = ",".join("?" for _ in target_ids)
-        rows = connection.execute(
-            f"SELECT memory_id, mode, expires_at FROM memory_protections WHERE memory_id IN ({placeholders})",
-            list(target_ids),
-        ).fetchall()
-        for row in rows:
-            if not is_protection_active(row[2], now=now):
-                continue
-            mode = str(row[1])
-            if mode == ProtectionMode.NO_AUTONOMOUS_MUTATION.value:
-                raise CurationActionFatalError(f"autonomous mutation is protected for {row[0]!r}")
-            if mode == ProtectionMode.MANUAL_REVIEW_REQUIRED.value and operation in {
-                "normalize_memory",
-                "create_link",
-            }:
-                raise CurationActionFatalError(f"manual review is required for {row[0]!r}")
-            if destructive and mode in {
-                ProtectionMode.NO_AUTONOMOUS_DESTRUCTIVE_CHANGE.value,
-                ProtectionMode.PINNED_ACTIVE.value,
-            }:
-                raise CurationActionFatalError(f"destructive mutation is protected for {row[0]!r}")
 
     def _write_repair_intents(
         self,
