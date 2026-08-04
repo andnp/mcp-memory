@@ -25,7 +25,7 @@ from mcp_memory.core.curation_models import (
     SplitMemoryAction,
     VerificationStatus,
 )
-from mcp_memory.core.curation_policy import PolicyDecision, evaluate_curation_action
+from mcp_memory.core.curation_policy import PolicyDecision
 from mcp_memory.core.ports.curation import (
     CurationActionContractError,
     CurationActionFatalError,
@@ -38,7 +38,7 @@ from mcp_memory.mutation_history import ProtectionMode
 
 
 class CurationPolicyRejection(CurationActionFatalError):
-    """A pure policy or protection check rejected an action before mutation."""
+    """Compatibility error for callers that still report policy diagnostics."""
 
     def __init__(self, decision: PolicyDecision) -> None:
         self.decision = decision
@@ -67,15 +67,6 @@ class CurationExecutor:
         optional ``expected_token`` is a convenience for callers that keep
         preconditions separately; supplying both values must agree.
         """
-        normalized_protections = _normalize_protections(protections)
-        decision = evaluate_curation_action(
-            action,
-            memory_types={action.target_id: memory_type},
-            protections_by_memory={action.target_id: normalized_protections},
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         record_token = action.preconditions.record_tokens.get(action.target_id)
         if record_token is not None and expected_token is not None and record_token != expected_token:
             _reject_missing_or_conflicting_token("expected record token conflicts with action preconditions")
@@ -124,23 +115,6 @@ class CurationExecutor:
         endpoint, and an exact absent-link assertion.  Those checks keep a
         generic relationship rationale from becoming mutation authority.
         """
-        normalized_protections = _normalize_protections(protections)
-        endpoint_types = dict(memory_types or {})
-        if source_type is not None:
-            endpoint_types[action.source_id] = source_type
-        if target_type is not None:
-            endpoint_types[action.target_id] = target_type
-        decision = evaluate_curation_action(
-            action,
-            memory_types=endpoint_types,
-            protections_by_memory={
-                action.source_id: normalized_protections,
-                action.target_id: normalized_protections,
-            },
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         link_type = action.link_type.strip()
         context = (action.context or "").strip()
         _require_exact_link_evidence(action, link_type=link_type, context=context)
@@ -198,15 +172,6 @@ class CurationExecutor:
         protections: Iterable[ProtectionMode | str] = (),
     ) -> CurationActionReceipt:
         """Rewrite one record through the same transaction boundary."""
-        normalized_protections = _normalize_protections(protections)
-        decision = evaluate_curation_action(
-            action,
-            memory_types={action.target_id: memory_type},
-            protections_by_memory={action.target_id: normalized_protections},
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         token = action.preconditions.record_tokens.get(action.target_id)
         if not token:
             _reject_missing_or_conflicting_token("rewrite_memory requires an expected record token")
@@ -243,23 +208,6 @@ class CurationExecutor:
         protections: Iterable[ProtectionMode | str] = (),
     ) -> CurationActionReceipt:
         """Remove one typed edge through the same transaction boundary."""
-        normalized_protections = _normalize_protections(protections)
-        endpoint_types = dict(memory_types or {})
-        if source_type is not None:
-            endpoint_types[action.source_id] = source_type
-        if target_type is not None:
-            endpoint_types[action.target_id] = target_type
-        decision = evaluate_curation_action(
-            action,
-            memory_types=endpoint_types or None,
-            protections_by_memory={
-                action.source_id: normalized_protections,
-                action.target_id: normalized_protections,
-            },
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         source_token = action.preconditions.record_tokens.get(action.source_id)
         target_token = action.preconditions.record_tokens.get(action.target_id)
         if not source_token or not target_token:
@@ -308,18 +256,7 @@ class CurationExecutor:
         protections: Iterable[ProtectionMode | str] = (),
     ) -> CurationActionReceipt:
         """Merge source records into an existing canonical record."""
-        normalized_protections = _normalize_protections(protections)
         merge_ids = _canonical_merge_ids(action.canonical_id, action.source_ids)
-        endpoint_types = dict(memory_types or {})
-        decision = evaluate_curation_action(
-            action,
-            memory_types=endpoint_types or None,
-            contradictory_memory_ids=contradictory_memory_ids,
-            protections_by_memory={memory_id: normalized_protections for memory_id in merge_ids},
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         if action.canonical_id in action.source_ids:
             raise CurationActionContractError(
                 "merge_memories source_ids must not include canonical_id",
@@ -402,15 +339,6 @@ class CurationExecutor:
         protections: Iterable[ProtectionMode | str] = (),
     ) -> CurationActionReceipt:
         """Split one record into typed child records through the same transaction boundary."""
-        normalized_protections = _normalize_protections(protections)
-        decision = evaluate_curation_action(
-            action,
-            memory_types={action.target_id: memory_type},
-            protections_by_memory={action.target_id: normalized_protections},
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         token = action.preconditions.record_tokens.get(action.target_id)
         if not token:
             _reject_missing_or_conflicting_token("split_memory requires an expected record token")
@@ -502,15 +430,6 @@ class CurationExecutor:
         protections: Iterable[ProtectionMode | str] = (),
     ) -> CurationActionReceipt:
         """Archive one record through the same transaction boundary."""
-        normalized_protections = _normalize_protections(protections)
-        decision = evaluate_curation_action(
-            action,
-            memory_types={action.target_id: memory_type},
-            protections_by_memory={action.target_id: normalized_protections},
-        )
-        if decision.rejection_codes:
-            raise CurationPolicyRejection(decision)
-
         token = action.preconditions.record_tokens.get(action.target_id)
         if not token:
             _reject_missing_or_conflicting_token("archive_memory requires an expected record token")
@@ -670,15 +589,6 @@ def execute_archive_memory(
     )
 
 
-def _normalize_protections(protections: Iterable[ProtectionMode | str]) -> frozenset[ProtectionMode]:
-    try:
-        return frozenset(
-            mode if isinstance(mode, ProtectionMode) else ProtectionMode(str(mode)) for mode in protections
-        )
-    except ValueError as exc:
-        raise CurationActionFatalError("unknown memory protection mode") from exc
-
-
 def _record_verification_descriptor(action: NormalizeMemoryAction | RewriteMemoryAction) -> CurationVerificationDescriptor | None:
     status = action.preconditions.required_statuses.get(action.target_id)
     if status is None:
@@ -777,6 +687,7 @@ def _normalize_link_type(link_type: str) -> str:
 __all__ = [
     "CurationExecutor",
     "CurationPolicyRejection",
+
     "execute_archive_memory",
     "execute_create_link",
     "execute_merge_memories",

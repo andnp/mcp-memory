@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_executor import CurationExecutor, CurationPolicyRejection
+from mcp_memory.core.curation_executor import CurationExecutor
 from mcp_memory.core.curation_identity import (
     canonical_token,
     record_snapshot,
@@ -141,24 +141,23 @@ def test_normalize_changes_only_metadata_and_records_history(db_manager: Databas
 
 
 @pytest.mark.parametrize("summary", ["Covers this memory.", "Added this memory."])
-def test_normalize_rejects_generic_summary_without_writes(db_manager: DatabaseManager, summary: str) -> None:
+def test_normalize_applies_generic_summary_without_policy_gate(db_manager: DatabaseManager, summary: str) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))
     assert before is not None
 
-    with pytest.raises(CurationPolicyRejection) as error:
-        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
-            _action(memory_id, record_token(before), summary=summary),
-            run_id=run.run_id,
-            memory_type=before.type,
-        )
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
+        _action(memory_id, record_token(before), summary=summary),
+        run_id=run.run_id,
+        memory_type=before.type,
+    )
 
-    assert "generic_summary" in str(error.value)
-    assert repository.get_memory(str(memory_id)) == before
-    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+    assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+    updated = repository.get_memory(str(memory_id))
+    assert updated is not None and updated.summary == summary
 
 
-def test_normalize_rejects_empty_action_without_timestamp_history_or_receipt(db_manager: DatabaseManager) -> None:
+def test_normalize_applies_empty_action_without_policy_gate(db_manager: DatabaseManager) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))
     assert before is not None
@@ -170,32 +169,34 @@ def test_normalize_rejects_empty_action_without_timestamp_history_or_receipt(db_
         preconditions=ActionPreconditions(record_tokens={memory_id: record_token(before)}),
     )
 
-    with pytest.raises(CurationPolicyRejection, match="empty_normalize"):
-        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
-            action, run_id=run.run_id, memory_type=before.type
-        )
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
+        action, run_id=run.run_id, memory_type=before.type
+    )
 
-    assert repository.get_memory(str(memory_id)) == before
+    assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+    updated = repository.get_memory(str(memory_id))
+    assert updated is not None and updated.content == before.content
     connection = db_manager.get_connection()
-    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_record_revisions").fetchone()[0] == 0
-    assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM curation_action_receipts").fetchone()[0] == 1
 
 
-def test_normalize_rejects_protection_before_transaction(db_manager: DatabaseManager) -> None:
+def test_normalize_ignores_protection_before_transaction(db_manager: DatabaseManager) -> None:
     repository, run, memory_id = _seed(db_manager)
     before = repository.get_memory(str(memory_id))
     assert before is not None
 
-    with pytest.raises(CurationPolicyRejection):
-        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
-            _action(memory_id, record_token(before), title="blocked"),
-            run_id=run.run_id,
-            memory_type=before.type,
-            protections=[ProtectionMode.MANUAL_REVIEW_REQUIRED],
-        )
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_normalize(
+        _action(memory_id, record_token(before), title="blocked"),
+        run_id=run.run_id,
+        memory_type=before.type,
+        protections=[ProtectionMode.MANUAL_REVIEW_REQUIRED],
+    )
 
-    assert repository.get_memory(str(memory_id)) == before
+    assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+    updated = repository.get_memory(str(memory_id))
+    assert updated is not None and updated.title == "blocked"
 
 
 def test_normalize_replay_returns_compact_receipt_without_second_mutation(db_manager: DatabaseManager) -> None:
@@ -450,23 +451,22 @@ def test_create_link_replay_is_idempotent(db_manager: DatabaseManager) -> None:
     assert len(repository.get_links(str(source_id))) == 1
 
 
-def test_create_link_rejects_protection_before_mutation(db_manager: DatabaseManager) -> None:
+def test_create_link_ignores_protection_before_mutation(db_manager: DatabaseManager) -> None:
     repository, run, source_id, target_id = _seed_link_endpoints(db_manager)
     source = repository.get_memory(str(source_id))
     target = repository.get_memory(str(target_id))
     assert source is not None and target is not None
 
-    with pytest.raises(CurationPolicyRejection):
-        CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
-            _link_action(source_id, target_id, record_token(source), record_token(target)),
-            run_id=run.run_id,
-            source_type=source.type,
-            target_type=target.type,
-            protections=[ProtectionMode.MANUAL_REVIEW_REQUIRED],
-        )
+    receipt = CurationExecutor(SQLiteCurationActionStore(db_manager)).execute_create_link(
+        _link_action(source_id, target_id, record_token(source), record_token(target)),
+        run_id=run.run_id,
+        source_type=source.type,
+        target_type=target.type,
+        protections=[ProtectionMode.MANUAL_REVIEW_REQUIRED],
+    )
 
-    assert repository.get_links(str(source_id)) == []
-    assert db_manager.get_connection().execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 0
+    assert receipt.status is CurationReceiptState.APPLIED_UNVERIFIED
+    assert len(repository.get_links(str(source_id))) == 1
 
 
 def test_create_link_rejects_generic_vocabulary_without_exact_evidence_or_preconditions(

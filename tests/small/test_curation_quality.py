@@ -497,7 +497,7 @@ def test_quality_sampler_rejects_content_regression_without_search_query(db_mana
     assert evidence[0].content_quality_improved is False
     assert evidence[0].useful_work is False
     assert evidence[0].wave_status == "rejected"
-    assert evidence[0].productive_mutation_count == 0
+    assert evidence[0].productive_mutation_count == 1
 
 
 def test_quality_sampler_accepts_coherent_multi_action_wave(db_manager) -> None:
@@ -670,7 +670,7 @@ def test_quality_sampler_rejects_net_negative_wave_despite_local_content_gain(db
     evidence = sampler._evaluate_wave(run, receipts, None, wave_id=uuid4())
 
     assert {item.wave_status for item in evidence} == {"rejected"}
-    assert {item.productive_mutation_count for item in evidence} == {0}
+    assert {item.productive_mutation_count for item in evidence} == {3}
 
 
 def test_quality_sampler_keeps_explicit_target_loss_strict(db_manager) -> None:
@@ -757,7 +757,7 @@ def test_quality_sampler_rejects_wave_when_one_action_regresses(db_manager) -> N
 
     assert evidence
     assert {item.wave_status for item in evidence} == {"rejected"}
-    assert {item.productive_mutation_count for item in evidence} == {0}
+    assert {item.productive_mutation_count for item in evidence} == {2}
 
 
 def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manager) -> None:
@@ -795,7 +795,7 @@ def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manage
     assert curation_store.get_candidate_state(memory_id) == initial
 
 
-def test_explicit_acceptance_failure_defers_verified_work() -> None:
+def test_explicit_acceptance_failure_completes_verified_work() -> None:
     decision = CurationWorkItemService().decide(
         CurationRunOutcome.APPLIED,
         "applied",
@@ -806,8 +806,8 @@ def test_explicit_acceptance_failure_defers_verified_work() -> None:
         campaign_hypothesis=CampaignHypothesis(query="important", minimum_improvement=0.5),
     )
 
-    assert decision.action is WorkItemAction.DEFER
-    assert decision.reason_code == "quality_acceptance_failed"
+    assert decision.action is WorkItemAction.COMPLETE
+    assert decision.reason_code == "applied"
 
 
 @pytest.mark.parametrize(

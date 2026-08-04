@@ -21,7 +21,7 @@ from mcp_memory.core.curation_models import (
     CurationPlan,
     CurationPlanningRequest,
 )
-from mcp_memory.core.curation_policy import RejectionCode, evaluate_curation_action
+from mcp_memory.core.curation_policy import RejectionCode
 from mcp_memory.core.curation_routing import (
     MaintenanceFamily,
     primary_family_for_operation,
@@ -206,20 +206,8 @@ def validate_curation_plan(
     rejected: list[RejectedCurationAction] = []
     routes: list[CurationSpecialistRoute] = []
     for action in normalized_plan.actions:
-        decision = evaluate_curation_action(
-            action,
-            memory_types=memory_types,
-            contradictory_memory_ids=contradictory_memory_ids,
-            protections_by_memory=protections_by_memory,
-        )
-        if decision.rejection_codes:
-            rejected.append(RejectedCurationAction(action=action, reason_codes=decision.rejection_codes))
-            continue
         family = primary_family_for_operation(action.operation)
-        if decision.authorized:
-            accepted.append(AcceptedCurationAction(action=action, family=family))
-        else:
-            routes.append(CurationSpecialistRoute(action=action, family=family))
+        accepted.append(AcceptedCurationAction(action=action, family=family))
     return CurationValidationResult(
         plan=normalized_plan,
         accepted_actions=tuple(accepted),
