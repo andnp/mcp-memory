@@ -165,6 +165,10 @@ class IncrementalCurationPlanBuilder:
     _actions: list[CurationAction] = field(default_factory=list)
     _retained: list[RetentionDecision] = field(default_factory=list)
 
+    @property
+    def action_count(self) -> int:
+        return len(self._actions)
+
     def add_action(self, action: CurationAction) -> None:
         if any(existing.action_id == action.action_id for existing in self._actions):
             raise ValueError(f"action {action.action_id} has already been proposed")
@@ -200,6 +204,48 @@ class IncrementalCurationPlanBuilder:
             rationale=rationale,
             seed_memory_ids=list(self.seed_memory_ids),
         )
+
+
+@dataclass(slots=True)
+class IncrementalCurationPlanState:
+    """Session-owned state shared by incremental planning tools."""
+
+    max_proposed_actions: int | None = None
+    builder: IncrementalCurationPlanBuilder | None = None
+
+    def begin(
+        self,
+        request: CurationPlanningRequest,
+        *,
+        seed_memory_ids: tuple[UUID, ...],
+    ) -> None:
+        self.builder = IncrementalCurationPlanBuilder(request, seed_memory_ids)
+
+    def require_builder(self) -> IncrementalCurationPlanBuilder:
+        if self.builder is None:
+            raise RuntimeError("incremental curation plan has not started")
+        return self.builder
+
+    def add_action(self, action: CurationAction) -> None:
+        builder = self.require_builder()
+        if (
+            self.max_proposed_actions is not None
+            and builder.action_count >= self.max_proposed_actions
+        ):
+            raise ValueError("proposed action budget is exhausted")
+        builder.add_action(action)
+
+    def replace_action(self, action: CurationAction) -> None:
+        self.require_builder().replace_action(action)
+
+    def remove_action(self, action_id: UUID) -> None:
+        self.require_builder().remove_action(action_id)
+
+    def add_retention(self, decision: RetentionDecision) -> None:
+        self.require_builder().add_retention(decision)
+
+    def build(self, *, rationale: str) -> CurationPlan:
+        return self.require_builder().build(rationale=rationale)
 
 
 class CancellationScope(Protocol):
@@ -470,7 +516,8 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
         self,
         session: AgenticSession,
         *,
-        submission_buffer: CurationPlanSubmissionBuffer,
+        submission_buffer: CurationPlanSubmissionBuffer | None = None,
+        plan_state: IncrementalCurationPlanState | None = None,
         provider_key: str = "agentic-session",
         provider_name: str = "agentic-session",
         model_name: str = "agentic-session",
@@ -478,6 +525,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
     ) -> None:
         self._session = session
         self._submission_buffer = submission_buffer
+        self._plan_state = plan_state
         self._provider_key = provider_key
         self._provider_name = provider_name
         self._model_name = model_name
@@ -496,11 +544,26 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
     async def create_plan(
         self, request: CurationPlanningRequest, tools: CurationReadTools
     ) -> PlannerExecutionEnvelope[CurationPlan]:
-        prompt = _build_planner_prompt(
-            request,
-            tools,
-            submission_tool_name="submit_curation_plan",
-        )
+        if self._plan_state is not None:
+            context = getattr(tools, "context", None)
+            seed_memory_ids = tuple(getattr(context, "seed_memory_ids", ()))
+            self._plan_state.begin(request, seed_memory_ids=seed_memory_ids)
+            prompt = _build_planner_prompt(
+                request,
+                tools,
+                incremental_tool_names=(
+                    "propose_curation_action",
+                    "replace_curation_action",
+                    "remove_curation_action",
+                    "retain_curation_memory",
+                ),
+            )
+        else:
+            prompt = _build_planner_prompt(
+                request,
+                tools,
+                submission_tool_name="submit_curation_plan",
+            )
         if self._quality_feedback is not None:
             prompt += "\nMeasured quality feedback:\n" + json.dumps(
                 self._quality_feedback, sort_keys=True, default=str
@@ -529,7 +592,54 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                 premium_request=True,
             )
             return self._translate_call(request, call)
-        submission = self._submission_buffer.consume()
+        if self._plan_state is not None:
+            raw_text = getattr(result, "raw_text", None)
+            rationale = (
+                raw_text.strip()[:2000]
+                if isinstance(raw_text, str) and raw_text.strip()
+                else "Incremental plan assembled from typed curation actions."
+            )
+            try:
+                plan = self._plan_state.build(rationale=rationale)
+            except ValueError as exc:
+                envelope = PlannerExecutionEnvelope[None](
+                    plan=None,
+                    provider_key=self._provider_key,
+                    model_name=self._model_name,
+                    request_id=str(uuid4()),
+                    attempt=1,
+                    started_at=started_at,
+                    completed_at=self._clock(),
+                    status=PlannerExecutionStatus.SCHEMA_FAILED,
+                    reason_code="schema_invalid",
+                    premium_request=True,
+                    metadata={"error": str(exc)},
+                )
+                raise CurationPlannerSchemaError(
+                    "incremental curation plan is incomplete",
+                    validation_issues=(
+                        CurationPlannerSchemaIssue(
+                            code="invalid_incremental_plan",
+                            message=str(exc),
+                        ),
+                    ),
+                    expected_fields=_expected_plan_fields(),
+                    envelope=envelope,
+                ) from exc
+            return PlannerExecutionEnvelope(
+                plan=plan,
+                provider_key=self._provider_key,
+                model_name=self._model_name,
+                request_id=str(uuid4()),
+                attempt=1,
+                started_at=started_at,
+                completed_at=self._clock(),
+                premium_request=True,
+            )
+        submission_buffer = self._submission_buffer
+        if submission_buffer is None:
+            raise RuntimeError("legacy curation submission buffer is unavailable")
+        submission = submission_buffer.consume()
         parsed = None if submission is None else dict(submission)
         self.override_confidence = _bounded_override_confidence(
             None if parsed is None else parsed.get("override_confidence")
@@ -686,6 +796,7 @@ def _build_planner_prompt(
     tools: CurationReadTools,
     *,
     submission_tool_name: str | None = None,
+    incremental_tool_names: tuple[str, ...] | None = None,
 ) -> str:
     context = getattr(tools, "context", None)
     if context is None:
@@ -701,7 +812,7 @@ def _build_planner_prompt(
     payload = {
         "request": request.model_dump(mode="json"),
         "context": context_payload,
-        "available_tools": [],
+        "available_tools": list(incremental_tool_names or ()),
         "schema": CurationPlan.model_json_schema(),
         "planner_contract": [
             "The primary objective is to improve durable memory quality, not to minimize action count or maximize retention.",
@@ -792,6 +903,14 @@ def _build_planner_prompt(
         instruction += (
             f" Call the {submission_tool_name} tool exactly once with the complete plan; "
             "the tool submission is authoritative and assistant text is not parsed as a plan."
+        )
+    elif incremental_tool_names is not None:
+        instruction += (
+            " Build the plan incrementally using the typed MCP tools. Call "
+            "propose_curation_action once per mutation, retain_curation_memory once "
+            "per retained seed, and use replace_curation_action or "
+            "remove_curation_action when correcting an earlier proposal. Do not "
+            "return a complete JSON plan; the tool calls are authoritative."
         )
     return instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 

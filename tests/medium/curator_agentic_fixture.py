@@ -40,16 +40,27 @@ class _AgenticCuratorSession:
                     for memory_id in plan.get("seed_memory_ids", [])
                 ],
             }
-        tool = next(tool for tool in self._tools if tool.name == "submit_curation_plan")
-        assert tool.handler is not None
-        result = tool.handler(
-            ToolInvocation(
-                tool_name=tool.name,
-                arguments={"plan": plan},
+        propose = next(tool for tool in self._tools if tool.name == "propose_curation_action")
+        retain = next(tool for tool in self._tools if tool.name == "retain_curation_memory")
+        assert propose.handler is not None and retain.handler is not None
+        for action in plan.get("actions", []):
+            result = propose.handler(
+                ToolInvocation(
+                    tool_name=propose.name,
+                    arguments={"action": action},
+                )
             )
-        )
-        if inspect.isawaitable(result):
-            await result
+            if inspect.isawaitable(result):
+                await result
+        for decision in plan.get("retained", []):
+            result = retain.handler(
+                ToolInvocation(
+                    tool_name=retain.name,
+                    arguments={"decision": decision},
+                )
+            )
+            if inspect.isawaitable(result):
+                await result
         return AgenticRunResult(status="success", raw_text=json.dumps(plan))
 
     async def close(self) -> None:

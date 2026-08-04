@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
+from pydantic import TypeAdapter, ValidationError
+
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_context import AcceptedMaintenanceRead, CurationReadBudget
 from mcp_memory.core.curation_disclosure import ProviderTrust, ProviderTrustClass
@@ -24,11 +26,18 @@ from mcp_memory.core.curation_investigation import (
 )
 from mcp_memory.core.curation_planner import (
     CurationPlanSubmissionBuffer,
+    IncrementalCurationPlanState,
     SessionCurationPlanner,
 )
 from mcp_memory.core.curation_quality import CurationQualitySampler
 from mcp_memory.core.curation_validation import CurationMutationBudget
-from mcp_memory.core.curation_models import CampaignHypothesis, CurationPlan, CurationRunOutcome
+from mcp_memory.core.curation_models import (
+    CampaignHypothesis,
+    CurationAction,
+    CurationPlan,
+    CurationRunOutcome,
+    RetentionDecision,
+)
 from mcp_memory.core.curation_verifier import CurationVerifier
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.curator_support import (
@@ -102,10 +111,10 @@ async def run_curator_verified_campaign(
         )
 
     session = None
-    submission_buffer = CurationPlanSubmissionBuffer()
+    plan_state = IncrementalCurationPlanState()
     session = await cast(Callable[..., Awaitable[Any]], opener)(
         allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
-        tools=[_curation_plan_submission_tool(submission_buffer)],
+        tools=_incremental_curation_tools(plan_state),
     )
     investigation = (
         await run_curator_investigation(
@@ -117,7 +126,6 @@ async def run_curator_verified_campaign(
         )
     )
     cumulative_tool_calls = investigation.tool_calls
-    submission_buffer.consume()
     exploratory_records, exploratory_reads = _investigated_reads(
         ctx, investigation, seed_records
     )
@@ -125,7 +133,7 @@ async def run_curator_verified_campaign(
 
     planner = SessionCurationPlanner(
         session,
-        submission_buffer=submission_buffer,
+        plan_state=plan_state,
         provider_key=str(getattr(agentic_provider, "_provider_key", "curation-session")),
         provider_name=str(getattr(agentic_provider, "_provider_name", "curation-session")),
         model_name=str(getattr(agentic_provider, "_model_name", "curation-session")),
@@ -160,6 +168,7 @@ async def run_curator_verified_campaign(
     )
     memory_types = {UUID(record.id): record.type for record in context_records}
     configured_budget = mutation_budget or CurationMutationBudget()
+    plan_state.max_proposed_actions = configured_budget.max_proposed_actions
     cumulative_proposed = 0
     cumulative_accepted = 0
     harness = CurationDryRunHarness(
@@ -458,6 +467,115 @@ def _curation_plan_submission_tool(buffer: CurationPlanSubmissionBuffer) -> Any:
         skip_permission=True,
         defer="never",
     )
+
+
+def _incremental_curation_tools(state: IncrementalCurationPlanState) -> list[Any]:
+    from copilot.tools import Tool, ToolInvocation, ToolResult
+
+    action_adapter = TypeAdapter(CurationAction)
+
+    def propose(invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.arguments
+        payload = arguments.get("action") if isinstance(arguments, dict) else None
+        try:
+            action = action_adapter.validate_python(payload)
+            state.add_action(action)
+        except ValidationError as error:
+            return ToolResult(
+                text_result_for_llm=f"Action rejected as structurally invalid: {error}"
+            )
+        except (RuntimeError, ValueError) as error:
+            return ToolResult(text_result_for_llm=f"Action not added: {error}")
+        return ToolResult(text_result_for_llm="Curation action added to the pending plan.")
+
+    def replace(invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.arguments
+        payload = arguments.get("action") if isinstance(arguments, dict) else None
+        try:
+            action = action_adapter.validate_python(payload)
+            state.replace_action(action)
+        except ValidationError as error:
+            return ToolResult(
+                text_result_for_llm=f"Replacement rejected as structurally invalid: {error}"
+            )
+        except (RuntimeError, ValueError) as error:
+            return ToolResult(text_result_for_llm=f"Replacement not applied: {error}")
+        return ToolResult(text_result_for_llm="Curation action replaced in the pending plan.")
+
+    def remove(invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.arguments
+        raw_action_id = arguments.get("action_id") if isinstance(arguments, dict) else None
+        try:
+            state.remove_action(UUID(str(raw_action_id)))
+        except (RuntimeError, ValueError) as error:
+            return ToolResult(text_result_for_llm=f"Action not removed: {error}")
+        return ToolResult(text_result_for_llm="Curation action removed from the pending plan.")
+
+    def retain(invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.arguments
+        payload = arguments.get("decision") if isinstance(arguments, dict) else None
+        try:
+            decision = RetentionDecision.model_validate(payload)
+            state.add_retention(decision)
+        except ValidationError as error:
+            return ToolResult(
+                text_result_for_llm=f"Retention decision rejected as invalid: {error}"
+            )
+        except (RuntimeError, ValueError) as error:
+            return ToolResult(text_result_for_llm=f"Retention decision not added: {error}")
+        return ToolResult(text_result_for_llm="Retention decision added to the pending plan.")
+
+    action_schema = TypeAdapter(CurationAction).json_schema()
+    return [
+        Tool(
+            name="propose_curation_action",
+            description="Add one typed mutation action to the pending curation plan.",
+            parameters={
+                "type": "object",
+                "properties": {"action": action_schema},
+                "required": ["action"],
+            },
+            handler=propose,
+            skip_permission=True,
+            defer="never",
+        ),
+        Tool(
+            name="replace_curation_action",
+            description="Replace one previously proposed action using the same action_id.",
+            parameters={
+                "type": "object",
+                "properties": {"action": action_schema},
+                "required": ["action"],
+            },
+            handler=replace,
+            skip_permission=True,
+            defer="never",
+        ),
+        Tool(
+            name="remove_curation_action",
+            description="Remove one previously proposed action by action_id.",
+            parameters={
+                "type": "object",
+                "properties": {"action_id": {"type": "string", "format": "uuid"}},
+                "required": ["action_id"],
+            },
+            handler=remove,
+            skip_permission=True,
+            defer="never",
+        ),
+        Tool(
+            name="retain_curation_memory",
+            description="Record one seed memory as intentionally retained without mutation.",
+            parameters={
+                "type": "object",
+                "properties": {"decision": RetentionDecision.model_json_schema()},
+                "required": ["decision"],
+            },
+            handler=retain,
+            skip_permission=True,
+            defer="never",
+        ),
+    ]
 
 
 def _disclosure_context(
