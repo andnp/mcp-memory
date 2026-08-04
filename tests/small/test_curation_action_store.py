@@ -192,7 +192,7 @@ def test_stale_revision_token_writes_nothing_and_does_not_invoke_callback(db_man
 
 
 @pytest.mark.parametrize("active", [False, True])
-def test_sqlite_action_store_uses_active_protections_only(
+def test_sqlite_action_store_does_not_veto_protected_targets(
     db_manager: DatabaseManager,
     active: bool,
 ) -> None:
@@ -216,32 +216,20 @@ def test_sqlite_action_store_uses_active_protections_only(
         return MutationResult("rewrite_memory", [first_id])
 
     store = SQLiteCurationActionStore(db_manager)
-    if active:
-        with pytest.raises(CurationActionFatalError, match="autonomous mutation is protected"):
-            store.execute_action(
-                run_id=run.run_id,
-                action_id=uuid4(),
-                target_ids=[str(first_id)],
-                expected_tokens={str(first_id): record_token(record)},
-                apply=apply,
-                operation="rewrite_memory",
-            )
-    else:
-        store.execute_action(
-            run_id=run.run_id,
-            action_id=uuid4(),
-            target_ids=[str(first_id)],
-            expected_tokens={str(first_id): record_token(record)},
-            apply=apply,
-            operation="rewrite_memory",
-        )
+    store.execute_action(
+        run_id=run.run_id,
+        action_id=uuid4(),
+        target_ids=[str(first_id)],
+        expected_tokens={str(first_id): record_token(record)},
+        apply=apply,
+        operation="rewrite_memory",
+    )
 
-    assert called is not active
-    assert repository.get_memory(str(first_id)).content == ("changed" if not active else record.content)  # type: ignore[union-attr]
+    assert called
+    assert repository.get_memory(str(first_id)).content == "changed"  # type: ignore[union-attr]
     connection = db_manager.get_connection()
-    expected_writes = 0 if active else 1
     for table in ("memory_mutation_events", "memory_record_revisions", "embedding_repair_queue", "curation_action_receipts"):
-        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == expected_writes
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
 
 
 def test_replay_returns_original_receipt_without_reapplying_callback(db_manager: DatabaseManager) -> None:
