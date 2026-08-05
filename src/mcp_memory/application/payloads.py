@@ -42,6 +42,9 @@ def build_read_payload(
     include_relationships: bool,
     include_superseded: bool,
     include_metadata: bool,
+    summary_only: bool = False,
+    content_offset: int = 0,
+    content_limit: int | None = None,
 ) -> dict[str, object]:
     relationships_payload = {
         direction: [agent_link_payload(link) for link in links]
@@ -63,6 +66,18 @@ def build_read_payload(
             else agent_memory_record_payload(result.record)
         ),
     }
+    record_payload = payload["record"]
+    if isinstance(record_payload, dict):
+        if summary_only:
+            record_payload.pop("content", None)
+            record_payload["summary"] = result.record.summary or result.record.content[:220]
+        elif content_limit is not None:
+            content = result.record.content
+            chunk = content[content_offset : content_offset + content_limit]
+            record_payload["content"] = chunk
+            record_payload["content_offset"] = content_offset
+            record_payload["content_total_chars"] = len(content)
+            record_payload["content_has_more"] = content_offset + len(chunk) < len(content)
     if include_relationships:
         payload["relationships"] = relationships_payload
     if include_superseded:

@@ -102,3 +102,35 @@ def test_batch_read_deduplicates_references_and_enforces_bound(db_manager) -> No
             context,
             {"memory_refs": [f"mem-{index}" for index in range(1, 22)]},
         )
+
+
+def test_read_supports_summary_and_bounded_content_projections(db_manager) -> None:
+    context, repository = _context(db_manager)
+    record = repository.create_memory(
+        title="Projection memory",
+        content="0123456789" * 20,
+        summary="Compact projection summary.",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+
+    summary = read_memory_record_service(
+        context,
+        {"memory_id": f"mem-{record.memory_ref}", "summary_only": True},
+    )
+    chunk = read_memory_record_service(
+        context,
+        {
+            "memory_id": f"mem-{record.memory_ref}",
+            "content_offset": 5,
+            "content_limit": 10,
+        },
+    )
+
+    assert summary["record"] == {
+        "memory_ref": f"mem-{record.memory_ref}",
+        "title": "Projection memory",
+        "summary": "Compact projection summary.",
+    }
+    assert chunk["record"]["content"] == "5678901234"
+    assert chunk["record"]["content_has_more"] is True

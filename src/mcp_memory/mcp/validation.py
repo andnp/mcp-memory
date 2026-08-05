@@ -32,6 +32,15 @@ def optional_positive_int(arguments: dict[str, Any], field_name: str, default: i
     return value
 
 
+def optional_nonnegative_int(arguments: dict[str, Any], field_name: str, default: int) -> int:
+    value = arguments.get(field_name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return value
+
+
 def string_list(
     arguments: dict[str, Any],
     field_name: str,
