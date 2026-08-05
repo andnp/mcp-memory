@@ -1,0 +1,4 @@
+interface:
+  display_name: "Read-only Search Dogfooding"
+  short_description: "Validate search with bounded corpus-only evidence"
+  default_prompt: "Use $search-readonly-dogfooding to run a bounded read-only search dogfooding pass."
