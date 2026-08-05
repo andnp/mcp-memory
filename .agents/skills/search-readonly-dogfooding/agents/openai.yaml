@@ -1,4 +1,4 @@
 interface:
   display_name: "Live Search Dogfooding"
   short_description: "Subjectively evaluate live search results"
-  default_prompt: "Use $search-readonly-dogfooding to search the live corpus and report what was useful, noisy, missing, or wrong."
+  default_prompt: "Use $search-readonly-dogfooding by delegating a read-only subagent to search the live corpus and report what was useful, noisy, missing, or wrong."
