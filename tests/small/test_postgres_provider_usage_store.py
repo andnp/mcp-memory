@@ -79,6 +79,13 @@ class FakeCursor:
                     "reason_category": arguments[12],
                     "reason_code": arguments[13],
                     "retry_delay_seconds": arguments[14],
+                    "input_tokens": arguments[15],
+                    "output_tokens": arguments[16],
+                    "cached_input_tokens": arguments[17],
+                    "cache_write_tokens": arguments[18],
+                    "reasoning_tokens": arguments[19],
+                    "total_tokens": arguments[20],
+                    "token_usage_source": arguments[21],
                 }
             )
             return
@@ -110,6 +117,13 @@ class FakeCursor:
                 "started_at": arguments[17],
                 "completed_at": arguments[18],
                 "duration_seconds": arguments[19],
+                "input_tokens": arguments[20],
+                "output_tokens": arguments[21],
+                "cached_input_tokens": arguments[22],
+                "cache_write_tokens": arguments[23],
+                "reasoning_tokens": arguments[24],
+                "total_tokens": arguments[25],
+                "token_usage_source": arguments[26],
             }
             if existing is None:
                 payload["id"] = self._state.next_conversation_id
@@ -118,7 +132,7 @@ class FakeCursor:
             else:
                 existing.update(payload)
             return
-        if normalized.startswith("SELECT id, request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds FROM ai_conversations"):
+        if normalized.startswith("SELECT id, request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds"):
             rows = list(self._state.ai_conversations)
             clauses = normalized.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)[0] if " WHERE " in normalized else ""
             params_list = list(arguments)
@@ -182,7 +196,7 @@ class FakeCursor:
                 count += 1
             self.rowcount = count
             return
-        if normalized.startswith("SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code FROM provider_usage"):
+        if normalized.startswith("SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code"):
             rows = list(self._state.provider_usage)
             if " WHERE workspace_id = %s" in normalized:
                 workspace_id = arguments[0]
@@ -197,6 +211,13 @@ class FakeCursor:
                     row["duration_seconds"],
                     row["created_at"],
                     row["reason_code"],
+                    row.get("input_tokens"),
+                    row.get("output_tokens"),
+                    row.get("cached_input_tokens"),
+                    row.get("cache_write_tokens"),
+                    row.get("reasoning_tokens"),
+                    row.get("total_tokens"),
+                    row.get("token_usage_source"),
                 )
                 for row in rows
             ]
@@ -323,6 +344,13 @@ class FakeCursor:
             row["started_at"],
             row["completed_at"],
             row["duration_seconds"],
+            row.get("input_tokens"),
+            row.get("output_tokens"),
+            row.get("cached_input_tokens"),
+            row.get("cache_write_tokens"),
+            row.get("reasoning_tokens"),
+            row.get("total_tokens"),
+            row.get("token_usage_source"),
         )
 
 
