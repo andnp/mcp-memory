@@ -1,76 +1,81 @@
 ---
 name: search-readonly-dogfooding
-description: Dogfood mcp-memory search with bounded, read-only queries and evidence capture. Use when validating retrieval quality, workspace scope, diagnostics, cache behavior, or released searchkernel integration.
+description: Subjectively evaluate mcp-memory search against the live corpus and report what was useful, noisy, missing, or wrong.
 ---
 
-# Read-only Search Dogfooding
+# Live Search Dogfooding
 
-Use the live memory corpus as the test corpus, but never mutate it during this
-workflow. Do not call `record_thought`, mutation tools, enqueue maintenance, or
-approve curation actions. Search and read only the records needed to support a
-conclusion.
+Use the live memory corpus as the test corpus. This is a hands-on product
+evaluation, not a formal benchmark. Search and read records, then explain
+whether the results would actually help an agent answer its question.
 
-The agent may restart the local daemon when it is stale, unhealthy, or
-explicitly requested: run `uv run mcp-memory daemon restart`, then verify
-`uv run mcp-memory daemon status` reports a running daemon, expected project
-binary, and ready runtime before collecting search evidence. Report restart
-failures as deployment/outage findings rather than negative search results.
+Never mutate the corpus during this workflow. Do not call `record_thought`,
+mutation tools, maintenance enqueue tools, or curation approval tools. Do not
+create test memories.
 
-## Protocol
+## Workflow
 
-1. State the question, time window, intended scope, runtime version, and
-   searchkernel dependency version. Test global behavior without a workspace
-   filter; test isolation with an explicit filter. Treat the caller workspace
-   as ranking context, not isolation.
-2. Run a bounded query matrix covering conceptual terms, synonyms, vague terms,
-   multi-term queries, ordinary filename/symbol/commit text, unrelated
-   controls, and duplicate candidates. Keep each category small and record the
-   exact query strings. Exact memory identifiers are read semantics, not a
-   searchkernel search-quality contract.
-3. Run a baseline without debug, then repeat selected queries with
-   `debug: true`. Repeat cold and warm queries when cache behavior or latency
-   matters. Keep limits bounded and prefer adaptive search unless exact
-   cardinality is the subject of the test.
-4. Verify the search-to-read round trip: pass returned `memory_ref` values
-   directly to single and batch reads, measure read-conversion for selected
-   results, and use `summary_only` or bounded content chunks for large records.
-   Request metadata, relationships, or supersession only when the hypothesis
-   requires them.
-5. Record evidence as a compact table: query, scope/filter, runtime/package
-   version, returned refs, relevant summaries, selected reads, diagnostics,
-   degradation/cache signals, latency samples, and conclusion. Do not copy
-   full memory bodies into reports.
-6. For quality or duplicate hypotheses, report a curator-ready signal with
-   candidate refs, rationale, confidence, and suggested owner. Do not merge,
-   archive, split, collapse, or enqueue results while searching.
-7. After producing the report, launch a read-only triage subagent. It should
-   review the evidence, reproduce the highest-impact findings with bounded
-   searches or health checks, separate observations from hypotheses, classify
-   ownership, identify any release implications, and produce a proposed
-   implementation commit sequence with estimated scope. The subagent must not
-   mutate the corpus, edit code, or implement the plan; review and approve the
-   commit plan before implementation begins.
-8. Separate observed behavior from hypotheses. Classify each actionable gap as
-   searchkernel, mcp-memory, curator/maintenance, or deployment/release work.
-   If an upstream hook is missing, document the exact API gap and reproducible
-   query; an explicitly authorized follow-up may inspect the sibling
-   searchkernel checkout and prepare a release handoff, but dogfooding itself
-   must remain read-only.
-9. Treat any searchkernel search-quality code change as upstream release work:
-   it requires a new PyPI release, an mcp-memory dependency and lockfile
-   update, source/PyPI/runtime verification, and only then attribution of
-   behavior changes to the release. Verify the source commit, published PyPI
-   version, resolved lockfile version, and live runtime version.
+1. State the questions, time window, scope, runtime version, and searchkernel
+   version. Search globally by default. Use an explicit workspace filter only
+   when checking ranking context or isolation.
+2. Pick a small handful of realistic questions from the current task or known
+   corpus topics. Use natural language, synonyms, follow-ups, and
+   multi-concept questions. Exact memory identifiers are read semantics, not a
+   search-quality target.
+3. Search normally. Inspect the top results and read enough returned refs to
+   judge them. Use single or batch reads with bounded content when useful.
+4. For each question, ask:
+   - Did search find the memory I needed?
+   - Were the best results near the top?
+   - Were the summaries specific enough to predict their value?
+   - What was noisy, missing, stale, duplicated, or surprisingly good?
+   - Would I trust these results to answer the question?
+5. Try a paraphrase or follow-up when it helps reveal a quality gap. Use
+   `debug: true`, health checks, and latency samples to explain surprising
+   behavior, not as the main evaluation.
+6. Report concrete evidence without copying full memory bodies: exact queries,
+   returned refs, short summaries, selected reads, and your subjective
+   judgment. Separate observations from hypotheses.
+7. Report curator-ready duplicate or quality signals with candidate refs,
+   rationale, confidence, and suggested owner. Never merge, archive, split,
+   collapse, or enqueue anything while dogfooding.
+8. After the report, launch a read-only triage subagent. It should reproduce
+   the most important findings, distinguish facts from hypotheses, classify
+   ownership, identify release implications, and propose an implementation
+   commit sequence. It must not mutate the corpus, edit code, or implement the
+   plan.
 
-## Evidence rules
+## Report shape
 
-- A search result is evidence of retrieval, not proof that a memory is correct.
-- Distinguish global recall from workspace ranking uplift.
-- Treat kernel failures, cache mismatches, stale fallbacks, partial results, and
-  provenance warnings as first-class findings.
-- Verify claims with a second query or a bounded read when practical.
-- Compare surfaced results with selected reads; retrieval quality is not just
-  candidate count.
-- Report repeated-query latency as samples or a range, not a single anecdote.
-- If the memory transport or search/read tool is unavailable, report the
-  outage explicitly and do not convert missing evidence into a negative result.
+Keep the report short and candid:
+
+- **Good:** what worked and should be preserved.
+- **Bad:** gaps, weak ranking, missing context, noisy results, or poor
+  search-to-read usefulness.
+- **Ugly:** bugs, surprising behavior, repeated failures, or operational issues.
+- **Follow-up:** likely owner (`searchkernel`, `mcp-memory`, curator,
+  deployment/release), confidence, and the next reproduction or implementation
+  step.
+
+Treat a returned result as evidence of retrieval, not proof of correctness.
+Use selected reads to support judgments. If search or read is unavailable,
+report the outage explicitly instead of treating missing evidence as a quality
+failure.
+
+## Runtime and release guardrails
+
+The agent may restart a stale or unhealthy local daemon:
+
+```bash
+uv run mcp-memory daemon restart
+uv run mcp-memory daemon status
+```
+
+Verify the daemon is running, uses the expected project binary, and is ready
+before collecting search evidence. Report restart failures as deployment or
+outage findings.
+
+Searchkernel must remain domain-neutral. If a search-quality change belongs
+upstream, it requires a new PyPI release, an mcp-memory dependency and lockfile
+update, source/PyPI/runtime verification, and only then attribution of the
+behavior change to that release.

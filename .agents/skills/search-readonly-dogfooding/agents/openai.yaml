@@ -1,4 +1,4 @@
 interface:
-  display_name: "Read-only Search Dogfooding"
-  short_description: "Validate search with bounded corpus-only evidence"
-  default_prompt: "Use $search-readonly-dogfooding to run a bounded read-only search dogfooding pass."
+  display_name: "Live Search Dogfooding"
+  short_description: "Subjectively evaluate live search results"
+  default_prompt: "Use $search-readonly-dogfooding to search the live corpus and report what was useful, noisy, missing, or wrong."
