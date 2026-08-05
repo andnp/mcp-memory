@@ -64,9 +64,10 @@ class SharedReadCacheSearchRequest:
     memory_type: str | None
     status: str | None
     include_superseded: bool
+    ranking_workspace_id: str | None = None
 
     def normalized_params(self) -> dict[str, Any]:
-        return {
+        params = {
             "cache_schema_version": _CACHE_SCHEMA_VERSION,
             "query": self.query,
             "workspace_id": self.workspace_id,
@@ -76,6 +77,9 @@ class SharedReadCacheSearchRequest:
             "status": self.status,
             "include_superseded": self.include_superseded,
         }
+        if self.ranking_workspace_id is not None:
+            params["ranking_workspace_id"] = self.ranking_workspace_id
+        return params
 
 
 @dataclass(frozen=True)
@@ -248,11 +252,32 @@ class SharedReadCache:
         return 0 if row is None else _coerce_int(row[0])
 
     def load_search_response(self, request: SharedReadCacheSearchRequest) -> dict[str, Any] | None:
-        row = self._fetchone(
-            "SELECT payload_json FROM cached_search_results WHERE cache_key = ?",
-            (self._search_cache_key(request),),
-        )
-        return self._decode_payload(row[0]) if row is not None else None
+        row = self._fetch_search_row(request, "payload_json")
+        if row is None:
+            return None
+        return self._decode_payload(row[0])
+
+    def _fetch_search_row(
+        self,
+        request: SharedReadCacheSearchRequest,
+        columns: str,
+    ) -> Any:
+        keys = [self._search_cache_key(request), self._legacy_search_cache_key(request)]
+        if request.ranking_workspace_id is None and request.workspace_id is not None:
+            keys.append(
+                self._search_cache_key(
+                    replace(request, ranking_workspace_id=request.workspace_id)
+                )
+            )
+        row = None
+        for key in dict.fromkeys(keys):
+            row = self._fetchone(
+                f"SELECT {columns} FROM cached_search_results WHERE cache_key = ?",
+                (key,),
+            )
+            if row is not None:
+                return row
+        return None
 
     def load_fresh_search_response(
         self,
@@ -260,10 +285,7 @@ class SharedReadCache:
         *,
         ttl_seconds: float,
     ) -> dict[str, Any] | None:
-        row = self._fetchone(
-            "SELECT payload_json, cached_at FROM cached_search_results WHERE cache_key = ?",
-            (self._search_cache_key(request),),
-        )
+        row = self._fetch_search_row(request, "payload_json, cached_at")
         if row is None:
             return None
         payload_json, cached_at = row
@@ -677,6 +699,12 @@ class SharedReadCache:
 
     def _search_cache_key(self, request: SharedReadCacheSearchRequest) -> str:
         normalized = self._serialize_json(request.normalized_params())
+        return sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _legacy_search_cache_key(self, request: SharedReadCacheSearchRequest) -> str:
+        normalized_params = dict(request.normalized_params())
+        normalized_params.pop("ranking_workspace_id", None)
+        normalized = self._serialize_json(normalized_params)
         return sha256(normalized.encode("utf-8")).hexdigest()
 
     def _execute_script(self, script: str) -> None:

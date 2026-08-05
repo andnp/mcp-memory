@@ -130,7 +130,8 @@ def _search_memory_records(
     debug_enabled = arguments["debug"]
     execution_arguments = {
         "query": query,
-        "workspace_id": ctx.workspace_id,
+        "workspace_id": arguments.get("workspace_id"),
+        "ranking_workspace_id": ctx.workspace_id,
         "limit": arguments["limit"],
         "adaptive_limit": arguments.get("adaptive_limit", "limit" not in arguments),
         "memory_type": arguments["memory_type"],
@@ -357,7 +358,8 @@ async def _search_memory_records_async(
         query,
         limit=limit,
         filters={
-            "workspace_id": ctx.workspace_id,
+            "workspace_id": arguments.get("workspace_id"),
+            "_ranking_workspace_id": ctx.workspace_id,
             "memory_type": arguments["memory_type"],
             "status": arguments["status"],
             "include_superseded": arguments["include_superseded"],
@@ -424,6 +426,9 @@ def _read_memory_record(
     include_relationships = arguments["include_relationships"]
     include_superseded = arguments["include_superseded"]
     include_metadata = arguments["include_metadata"]
+    summary_only = arguments.get("summary_only", False)
+    content_offset = arguments.get("content_offset", 0)
+    content_limit = arguments.get("content_limit")
     resolve_memory_id = getattr(ctx.relational_search, "resolve_memory_id", None)
     telemetry_memory_id = memory_id
     if callable(resolve_memory_id):
@@ -435,6 +440,9 @@ def _read_memory_record(
         and not include_relationships
         and not include_superseded
         and not include_metadata
+        and not summary_only
+        and content_offset == 0
+        and content_limit is None
     )
     started_at = perf_counter()
     _increment_shared_read_cache_metric(
@@ -457,6 +465,9 @@ def _read_memory_record(
             include_relationships=include_relationships,
             include_superseded=include_superseded,
             include_metadata=include_metadata,
+            summary_only=summary_only,
+            content_offset=content_offset,
+            content_limit=content_limit,
         )
         telemetry.record_read(
             caller_kind=caller_kind,
@@ -475,6 +486,9 @@ def _read_memory_record(
                     include_relationships=include_relationships,
                     include_superseded=include_superseded,
                     include_metadata=include_metadata,
+                    summary_only=summary_only,
+                    content_offset=content_offset,
+                    content_limit=content_limit,
                 )
         raise
     duration_ms = (perf_counter() - started_at) * 1000.0
@@ -491,6 +505,9 @@ def _read_memory_record(
         include_relationships=include_relationships,
         include_superseded=include_superseded,
         include_metadata=include_metadata,
+        summary_only=summary_only,
+        content_offset=content_offset,
+        content_limit=content_limit,
     )
     if default_external_read_shape and _shared_read_cache_enabled(
         ctx, caller_kind=caller_kind

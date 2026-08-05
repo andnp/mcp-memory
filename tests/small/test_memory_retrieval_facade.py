@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from mcp_memory.core.ports.memory import MemoryRepositoryPort
-from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade
+from mcp_memory.integrations.memory_retrieval import MemoryRetrievalFacade, MemorySearchRequest
 
 
 pytestmark = pytest.mark.small
@@ -136,3 +136,19 @@ def test_read_peek_and_maintenance_delegate_to_native_service() -> None:
         workspace_id="workspace-1",
     ) == ("query", {"workspace_id": "workspace-1"})
     assert facade.resolve_memory_id("mem-1") == "resolved:mem-1"
+
+
+def test_search_request_keeps_scope_filter_separate_from_ranking_context() -> None:
+    pipeline = FakePipeline()
+    facade = _facade(pipeline)
+
+    facade.search_sync(
+        MemorySearchRequest(
+            query="global",
+            workspace_id=None,
+            ranking_workspace_id="workspace-1",
+        )
+    )
+
+    assert pipeline.calls[0][2]["_ranking_workspace_id"] == "workspace-1"
+    assert "workspace_id" not in pipeline.calls[0][2]

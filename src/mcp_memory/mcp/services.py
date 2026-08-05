@@ -164,6 +164,9 @@ def read_memory_records_service(
                 "include_relationships": parsed["include_relationships"],
                 "include_superseded": parsed["include_superseded"],
                 "include_metadata": parsed["include_metadata"],
+                "summary_only": parsed["summary_only"],
+                "content_offset": parsed["content_offset"],
+                "content_limit": parsed["content_limit"],
             },
             caller_kind=caller_kind,
         )

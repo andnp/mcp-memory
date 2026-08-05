@@ -41,7 +41,9 @@ class MemoryRetrievalPort(Protocol):
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
     ) -> RecordSearchOutcome: ...
 
     def search_sync(
@@ -54,7 +56,9 @@ class MemoryRetrievalPort(Protocol):
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
     ) -> RecordSearchOutcome: ...
 
 
@@ -107,7 +111,9 @@ class MemoryRetrievalFacade:
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
     ) -> RecordSearchOutcome:
         if isinstance(request, str):
             request = MemorySearchRequest(
@@ -118,6 +124,7 @@ class MemoryRetrievalFacade:
                 memory_type=memory_type,
                 status=status,
                 include_superseded=include_superseded,
+                ranking_workspace_id=ranking_workspace_id,
             )
         pipeline = self._resolve_pipeline(request.adaptive_limit)
         active_filters = dict(filters or {})
@@ -131,6 +138,8 @@ class MemoryRetrievalFacade:
             active_filters["_ranking_workspace_id"] = request.ranking_workspace_id
         if request.include_superseded or "include_superseded" not in active_filters:
             active_filters["include_superseded"] = request.include_superseded
+        if side_effect_free:
+            active_filters["_side_effect_free"] = True
         return await pipeline.search(
             request.query,
             limit=request.limit,
@@ -147,7 +156,9 @@ class MemoryRetrievalFacade:
         memory_type: str | None = None,
         status: str | None = None,
         include_superseded: bool = False,
+        ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
+        side_effect_free: bool = False,
     ) -> RecordSearchOutcome:
         return _run_async_safely(
             lambda: self.search(
@@ -158,7 +169,9 @@ class MemoryRetrievalFacade:
                 memory_type=memory_type,
                 status=status,
                 include_superseded=include_superseded,
+                ranking_workspace_id=ranking_workspace_id,
                 filters=filters,
+                side_effect_free=side_effect_free,
             )
         )
 

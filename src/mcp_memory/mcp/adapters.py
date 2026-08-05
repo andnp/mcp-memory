@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from mcp_memory.mcp.validation import (
     optional_bool,
+    optional_nonnegative_int,
     optional_positive_int,
     optional_string,
     require_string,
@@ -18,6 +19,7 @@ def parse_search_arguments(arguments: dict) -> dict:
         "query": require_string(arguments, "query"),
         "limit": optional_positive_int(arguments, "limit", 5),
         "adaptive_limit": "limit" not in arguments,
+        "workspace_id": optional_string(arguments, "workspace_id"),
         "memory_type": optional_string(arguments, "memory_type"),
         "status": optional_string(arguments, "status"),
         "include_superseded": optional_bool(arguments, "include_superseded", False),
@@ -35,6 +37,13 @@ def parse_read_arguments(arguments: dict, *, caller_kind: str) -> dict:
             arguments, "include_superseded", caller_kind == "internal"
         ),
         "include_metadata": optional_bool(arguments, "include_metadata", False),
+        "summary_only": optional_bool(arguments, "summary_only", False),
+        "content_offset": optional_nonnegative_int(arguments, "content_offset", 0),
+        "content_limit": (
+            optional_positive_int(arguments, "content_limit", 4_000)
+            if arguments.get("content_limit") is not None
+            else None
+        ),
     }
 
 
@@ -53,4 +62,11 @@ def parse_batch_read_arguments(arguments: dict, *, caller_kind: str) -> dict:
             arguments, "include_superseded", caller_kind == "internal"
         ),
         "include_metadata": optional_bool(arguments, "include_metadata", False),
+        "summary_only": optional_bool(arguments, "summary_only", False),
+        "content_offset": optional_nonnegative_int(arguments, "content_offset", 0),
+        "content_limit": (
+            optional_positive_int(arguments, "content_limit", 4_000)
+            if arguments.get("content_limit") is not None
+            else None
+        ),
     }

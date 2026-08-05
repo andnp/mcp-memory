@@ -33,12 +33,21 @@ def build_search_cache_request(
 ) -> SharedReadCacheSearchRequest:
     return SharedReadCacheSearchRequest(
         query=str(arguments["query"]),
-        workspace_id=ctx.workspace_id,
+        workspace_id=(
+            arguments["workspace_id"]
+            if arguments.get("workspace_id") is not None
+            else ctx.workspace_id
+        ),
         limit=int(arguments["limit"]),
         adaptive_limit=bool(arguments["adaptive_limit"]),
         memory_type=arguments["memory_type"],
         status=arguments["status"],
         include_superseded=bool(arguments["include_superseded"]),
+        ranking_workspace_id=(
+            ctx.workspace_id
+            if arguments.get("workspace_id") is not None
+            else None
+        ),
     )
 
 
@@ -128,6 +137,9 @@ def _compact_cached_read_payload(
     include_relationships: bool,
     include_superseded: bool,
     include_metadata: bool,
+    summary_only: bool = False,
+    content_offset: int = 0,
+    content_limit: int | None = None,
 ) -> dict[str, object]:
     compact_payload = dict(payload)
     compact_payload.pop("related_counts", None)
@@ -137,6 +149,18 @@ def _compact_cached_read_payload(
         compact_payload.pop("superseded", None)
     if not include_metadata:
         _strip_cached_record_noise(compact_payload.get("record"))
+    record = compact_payload.get("record")
+    if isinstance(record, dict):
+        if summary_only:
+            content = str(record.pop("content", ""))
+            record["summary"] = record.get("summary") or content[:220]
+        elif content_limit is not None and isinstance(record.get("content"), str):
+            content = record["content"]
+            chunk = content[content_offset : content_offset + content_limit]
+            record["content"] = chunk
+            record["content_offset"] = content_offset
+            record["content_total_chars"] = len(content)
+            record["content_has_more"] = content_offset + len(chunk) < len(content)
     compact_superseded = compact_payload.get("superseded")
     if not include_metadata and isinstance(compact_superseded, list):
         for record in compact_superseded:
