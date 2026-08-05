@@ -7,6 +7,8 @@ from uuid import uuid4
 import pytest
 
 from mcp_memory.management.analytics_curation import build_curation_metrics
+from mcp_memory.core.curation_quality import CurationQualityEvidence
+from mcp_memory.curation_quality_store import SQLiteCurationQualityStore
 
 
 pytestmark = pytest.mark.small
@@ -138,6 +140,55 @@ def test_curation_metrics_ignore_provider_reported_mutation_counts(db_manager) -
     assert metrics.operation_counts == {}
     assert metrics.verified_receipt_count == 0
     assert metrics.verified_yield == 0.0
+
+
+def test_curation_quality_metrics_separate_neutral_results_and_denominators(db_manager) -> None:
+    now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+    run_id = uuid4()
+    connection = db_manager.get_connection()
+    connection.execute(
+        """
+        INSERT INTO curation_runs (
+            run_id, frontier_key, context_fingerprint, state, outcome, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (str(run_id), "frontier", "fingerprint", "terminal", "applied", now.isoformat()),
+    )
+    quality_store = SQLiteCurationQualityStore(db_manager)
+    for status, operation, useful_work, delta in (
+        ("evaluated", "normalize_memory", True, 0.3),
+        ("evaluated", "rewrite_memory", False, -0.2),
+        ("no_query", "normalize_memory", False, 0.0),
+        ("no_query", "normalize_memory", None, None),
+        ("structural_only", "create_link", None, None),
+    ):
+        quality_store.put_quality_evidence(
+            CurationQualityEvidence(
+                run_id=run_id,
+                action_id=uuid4(),
+                operation=operation,
+                policy_version="test",
+                status=status,
+                useful_work=useful_work,
+                content_quality_delta=delta,
+                content_quality_improved=None if delta is None else delta > 0,
+                created_at=now,
+            )
+        )
+    connection.commit()
+
+    quality = build_curation_metrics(db_manager, window_hours=24, now=now.timestamp()).retrieval_quality
+
+    assert quality.evaluated_action_count == 2
+    assert quality.quality_observed_action_count == 3
+    assert quality.useful_work_count == 1
+    assert quality.useful_work_observed_action_count == 3
+    assert quality.useful_work_rate == pytest.approx(1 / 3, abs=0.0001)
+    assert quality.content_evaluated_action_count == 3
+    assert quality.content_quality_improved_count == 1
+    assert quality.content_quality_neutral_count == 1
+    assert quality.content_quality_regression_count == 1
+    assert quality.content_quality_delta == pytest.approx(0.1)
 
 
 def test_curation_metrics_report_plan_yield_failures_retries_and_categories(db_manager) -> None:

@@ -212,9 +212,18 @@ def build_curation_metrics(
         if row.get("status") == "evaluated"
         and _text(row.get("operation"), "") not in {"create_link", "remove_link"}
     ]
-    useful_work_count = sum(1 for row in evaluated_quality if row.get("useful_work") in (1, True))
+    quality_observed = [
+        row
+        for row in quality
+        if (
+            row in evaluated_quality
+            or row.get("content_quality_delta") is not None
+        )
+    ]
+    useful_work_observed = [row for row in quality_observed if row.get("useful_work") is not None]
+    useful_work_count = sum(1 for row in useful_work_observed if row.get("useful_work") in (1, True))
     content_quality = [
-        row for row in quality if row.get("content_quality_improved") is not None
+        row for row in quality if row.get("content_quality_delta") is not None
     ]
 
     history_event_count = len(events)
@@ -264,6 +273,7 @@ def build_curation_metrics(
         retrieval_quality=CurationQualityMetricsPayload(
             sampled_action_count=len(quality),
             evaluated_action_count=len(evaluated_quality),
+            quality_observed_action_count=len(quality_observed),
             no_query_action_count=sum(1 for row in quality if row.get("status") == "no_query"),
             structural_only_action_count=len(structural_only_quality),
             retrieval_regression_count=sum(
@@ -272,13 +282,17 @@ def build_curation_metrics(
             zero_result_change=sum(_integer(row.get("zero_result_change")) for row in evaluated_quality),
             payload_size_change=sum(_integer(row.get("payload_size_change")) for row in evaluated_quality),
             useful_work_count=useful_work_count,
-            useful_work_rate=_ratio(useful_work_count, len(evaluated_quality)),
+            useful_work_observed_action_count=len(useful_work_observed),
+            useful_work_rate=_ratio(useful_work_count, len(useful_work_observed)),
             content_evaluated_action_count=len(content_quality),
             content_quality_improved_count=sum(
-                1 for row in content_quality if row.get("content_quality_improved") in (1, True)
+                1 for row in content_quality if _number(row.get("content_quality_delta")) > 0
+            ),
+            content_quality_neutral_count=sum(
+                1 for row in content_quality if _number(row.get("content_quality_delta")) == 0
             ),
             content_quality_regression_count=sum(
-                1 for row in content_quality if row.get("content_quality_improved") in (0, False)
+                1 for row in content_quality if _number(row.get("content_quality_delta")) < 0
             ),
             content_quality_delta=sum(
                 _number(row.get("content_quality_delta")) for row in content_quality

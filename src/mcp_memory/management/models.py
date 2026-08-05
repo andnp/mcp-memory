@@ -1155,15 +1155,18 @@ class CurationHistoryMetricsPayload(BaseModel):
 class CurationQualityMetricsPayload(BaseModel):
     sampled_action_count: int = 0
     evaluated_action_count: int = 0
+    quality_observed_action_count: int = 0
     no_query_action_count: int = 0
     structural_only_action_count: int = 0
     retrieval_regression_count: int = 0
     zero_result_change: int = 0
     payload_size_change: int = 0
     useful_work_count: int = 0
+    useful_work_observed_action_count: int = 0
     useful_work_rate: float = 0.0
     content_evaluated_action_count: int = 0
     content_quality_improved_count: int = 0
+    content_quality_neutral_count: int = 0
     content_quality_regression_count: int = 0
     content_quality_delta: float = 0.0
 

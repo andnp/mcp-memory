@@ -90,9 +90,9 @@ class ReplayCaseReport:
 
     @property
     def retrieval_regression(self) -> bool:
-        if self.neutral_reason is not None or self.intended_rank_before is None:
+        if self.neutral_reason is not None:
             return False
-        return self.intended_rank_after is None or self.intended_rank_after > self.intended_rank_before
+        return self.retrieval_utility_delta < 0.0
 
     @property
     def zero_result_change(self) -> int:

@@ -686,6 +686,22 @@ export interface CurationMetricsPayload {
     restore_requests_by_status: Record<string, number>;
     restore_available: boolean;
   };
+  retrieval_quality: {
+    sampled_action_count: number;
+    evaluated_action_count: number;
+    quality_observed_action_count: number;
+    no_query_action_count: number;
+    structural_only_action_count: number;
+    retrieval_regression_count: number;
+    useful_work_count: number;
+    useful_work_observed_action_count: number;
+    useful_work_rate: number;
+    content_evaluated_action_count: number;
+    content_quality_improved_count: number;
+    content_quality_neutral_count: number;
+    content_quality_regression_count: number;
+    content_quality_delta: number;
+  };
   verified_yield: number;
   verified_receipt_count: number;
   terminal_receipt_count: number;

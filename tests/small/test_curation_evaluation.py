@@ -104,3 +104,38 @@ def test_query_replay_marks_neutral_evidence_without_utility_or_regression() -> 
     assert report.retrieval_regression_count == 0
     assert report.useful_work_count == 0
     assert report.retrieval_utility_delta == 0.0
+
+
+def test_query_replay_uses_net_utility_for_retrieval_regressions() -> None:
+    report = evaluate_query_replay(
+        [
+            ReplayCase(
+                query_id="utility-improves",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot(
+                    tuple(ReplayResult(value) for value in ("wanted", "n1", "n2", "n3", "n4"))
+                ),
+                after=ReplaySnapshot(
+                    (ReplayResult("n1"), ReplayResult("wanted"))
+                ),
+                top_k=5,
+            ),
+            ReplayCase(
+                query_id="utility-worsens",
+                intended_memory_ids=("wanted",),
+                before=ReplaySnapshot((ReplayResult("wanted"),)),
+                after=ReplaySnapshot(
+                    (ReplayResult("n1"), ReplayResult("n2"), ReplayResult("wanted"))
+                ),
+                top_k=5,
+            ),
+        ]
+    )
+
+    improving, worsening = report.cases
+    assert improving.intended_rank_change == 1
+    assert improving.retrieval_utility_delta > 0
+    assert improving.retrieval_regression is False
+    assert worsening.retrieval_utility_delta < 0
+    assert worsening.retrieval_regression is True
+    assert report.retrieval_regression_count == 1
