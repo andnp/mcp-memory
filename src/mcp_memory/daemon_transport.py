@@ -398,6 +398,7 @@ class DaemonZmqServer:
                 timeout=request_timeout_seconds,
             )
             tracked_request.execution_ms = (perf_counter() - execution_started_at) * 1000.0
+            response = _attach_transport_diagnostics(response, tracked_request)
             tracked_request.response_status = _response_status(response)
             tracked_request.phase = "dispatched"
             return identity, response, tracked_request.request_id
@@ -641,6 +642,24 @@ def _response_status(response: dict) -> str | None:
     if isinstance(status, str) and status:
         return status
     return None
+
+
+def _attach_transport_diagnostics(
+    response: dict,
+    tracked_request: _TrackedDaemonTransportRequest,
+) -> dict:
+    search_diagnostics = response.get("search_diagnostics")
+    if not isinstance(search_diagnostics, dict):
+        return response
+    enriched_response = dict(response)
+    enriched_diagnostics = dict(search_diagnostics)
+    enriched_diagnostics["transport"] = {
+        "request_id": tracked_request.request_id,
+        "queue_wait_ms": round(max(tracked_request.queue_wait_ms, 0.0), 3),
+        "execution_ms": round(max(tracked_request.execution_ms, 0.0), 3),
+    }
+    enriched_response["search_diagnostics"] = enriched_diagnostics
+    return enriched_response
 
 
 def _dispatch_timeout_payload(path: str, *, timeout_seconds: float) -> dict[str, object]:
