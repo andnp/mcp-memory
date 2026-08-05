@@ -211,6 +211,46 @@ def test_ollama_embedder_embed_delegates_to_provider() -> None:
     mock_provider.embed.assert_called_once_with(["hello"])
 
 
+def test_ollama_embedder_bounds_request_concurrency() -> None:
+    config = EmbeddingsConfig(
+        provider="ollama",
+        model="qwen3-embedding:0.6b",
+        ollama_max_concurrency=2,
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider:
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+                if active == 2:
+                    entered.set()
+            try:
+                assert release.wait(2)
+                return [[0.1, 0.2] for _ in texts]
+            finally:
+                with lock:
+                    active -= 1
+
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider") as provider_cls:
+        provider_cls.return_value = BlockingProvider()
+        embedder = OllamaEmbedder(config)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(embedder.embed, [str(index)]) for index in range(4)]
+            assert entered.wait(2)
+            assert active == 2
+            assert max_active == 2
+            release.set()
+            assert [future.result(timeout=2) for future in futures] == [[[0.1, 0.2]]] * 4
+
+
 def test_ollama_embedder_embed_returns_empty_list_for_no_texts() -> None:
     config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
 
