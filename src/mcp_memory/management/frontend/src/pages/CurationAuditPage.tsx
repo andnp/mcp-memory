@@ -364,10 +364,10 @@ export function CurationAuditPage() {
           <article className="metric-card"><p className="panel-title">No-op runs</p><p className="mt-1 text-lg font-semibold text-text">{curation?.no_op_runs ?? '—'}</p></article>
         </section>
         <section className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <article className="metric-card"><p className="panel-title">Quality-observed actions</p><p className="mt-1 text-lg font-semibold text-text">{curation?.retrieval_quality.quality_observed_action_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">{curation ? `${curation.retrieval_quality.content_quality_neutral_count} neutral content results` : ''}</p></article>
-          <article className="metric-card"><p className="panel-title">Useful work rate</p><p className="mt-1 text-lg font-semibold text-text">{curation ? `${(curation.retrieval_quality.useful_work_rate * 100).toFixed(1)}%` : '—'}</p><p className="mt-1 text-[10px] text-muted">quality-observed denominator</p></article>
-          <article className="metric-card"><p className="panel-title">Content improvements</p><p className="mt-1 text-lg font-semibold text-success">{curation?.retrieval_quality.content_quality_improved_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">delta &gt; 0</p></article>
-          <article className="metric-card"><p className="panel-title">Content regressions</p><p className="mt-1 text-lg font-semibold text-danger">{curation?.retrieval_quality.content_quality_regression_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">delta &lt; 0</p></article>
+          <article className="metric-card"><p className="panel-title">Quality-observed actions</p><p className="mt-1 text-lg font-semibold text-text">{curation?.retrieval_quality?.quality_observed_action_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">{curation?.retrieval_quality ? `${curation.retrieval_quality.content_quality_neutral_count} neutral content results` : ''}</p></article>
+          <article className="metric-card"><p className="panel-title">Useful work rate</p><p className="mt-1 text-lg font-semibold text-text">{curation?.retrieval_quality ? `${(curation.retrieval_quality.useful_work_rate * 100).toFixed(1)}%` : '—'}</p><p className="mt-1 text-[10px] text-muted">quality-observed denominator</p></article>
+          <article className="metric-card"><p className="panel-title">Content improvements</p><p className="mt-1 text-lg font-semibold text-success">{curation?.retrieval_quality?.content_quality_improved_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">delta &gt; 0</p></article>
+          <article className="metric-card"><p className="panel-title">Content regressions</p><p className="mt-1 text-lg font-semibold text-danger">{curation?.retrieval_quality?.content_quality_regression_count ?? '—'}</p><p className="mt-1 text-[10px] text-muted">delta &lt; 0</p></article>
         </section>
       </section>
 
