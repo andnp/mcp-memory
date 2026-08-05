@@ -37,13 +37,20 @@ conclusion.
 6. For quality or duplicate hypotheses, report a curator-ready signal with
    candidate refs, rationale, confidence, and suggested owner. Do not merge,
    archive, split, collapse, or enqueue results while searching.
-7. Separate observed behavior from hypotheses. Classify each actionable gap as
+7. After producing the report, launch a read-only triage subagent. It should
+   review the evidence, reproduce the highest-impact findings with bounded
+   searches or health checks, separate observations from hypotheses, classify
+   ownership, identify any release implications, and produce a proposed
+   implementation commit sequence with estimated scope. The subagent must not
+   mutate the corpus, edit code, or implement the plan; review and approve the
+   commit plan before implementation begins.
+8. Separate observed behavior from hypotheses. Classify each actionable gap as
    searchkernel, mcp-memory, curator/maintenance, or deployment/release work.
    If an upstream hook is missing, document the exact API gap and reproducible
    query; an explicitly authorized follow-up may inspect the sibling
    searchkernel checkout and prepare a release handoff, but dogfooding itself
    must remain read-only.
-8. Treat any searchkernel search-quality code change as upstream release work:
+9. Treat any searchkernel search-quality code change as upstream release work:
    it requires a new PyPI release, an mcp-memory dependency and lockfile
    update, source/PyPI/runtime verification, and only then attribution of
    behavior changes to the release. Verify the source commit, published PyPI
