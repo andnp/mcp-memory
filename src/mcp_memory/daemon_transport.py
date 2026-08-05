@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 import json
 import logging
 import math
 import os
+import time as time_module
+from collections import deque
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-import time as time_module
 from time import perf_counter, time
 from types import TracebackType
 from typing import Any, Awaitable, Callable, cast
@@ -26,7 +26,6 @@ from mcp_memory.daemon_dispatch import (
 from mcp_memory.mcp.handlers import call_internal_memory_tool, call_memory_tool
 from mcp_memory.mcp.internal_tools import get_internal_maintenance_tools
 from mcp_memory.mcp.tools import get_memory_tools
-
 
 logger = logging.getLogger(__name__)
 
@@ -649,17 +648,40 @@ def _attach_transport_diagnostics(
     tracked_request: _TrackedDaemonTransportRequest,
 ) -> dict:
     search_diagnostics = response.get("search_diagnostics")
-    if not isinstance(search_diagnostics, dict):
+    if isinstance(search_diagnostics, dict):
+        enriched_response = dict(response)
+        enriched_diagnostics = dict(search_diagnostics)
+        enriched_diagnostics["transport"] = {
+            "request_id": tracked_request.request_id,
+            "queue_wait_ms": round(max(tracked_request.queue_wait_ms, 0.0), 3),
+            "execution_ms": round(max(tracked_request.execution_ms, 0.0), 3),
+        }
+        enriched_response["search_diagnostics"] = enriched_diagnostics
+        return enriched_response
+
+    contents = response.get("contents")
+    if not isinstance(contents, list):
         return response
-    enriched_response = dict(response)
-    enriched_diagnostics = dict(search_diagnostics)
-    enriched_diagnostics["transport"] = {
-        "request_id": tracked_request.request_id,
-        "queue_wait_ms": round(max(tracked_request.queue_wait_ms, 0.0), 3),
-        "execution_ms": round(max(tracked_request.execution_ms, 0.0), 3),
-    }
-    enriched_response["search_diagnostics"] = enriched_diagnostics
-    return enriched_response
+    for index, content in enumerate(contents):
+        if not isinstance(content, dict) or not isinstance(content.get("text"), str):
+            continue
+        try:
+            tool_payload = json.loads(content["text"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(tool_payload, dict):
+            continue
+        enriched_payload = _attach_transport_diagnostics(tool_payload, tracked_request)
+        if enriched_payload is tool_payload:
+            continue
+        enriched_response = dict(response)
+        enriched_contents = list(contents)
+        enriched_content = dict(content)
+        enriched_content["text"] = json.dumps(enriched_payload, sort_keys=True)
+        enriched_contents[index] = enriched_content
+        enriched_response["contents"] = enriched_contents
+        return enriched_response
+    return response
 
 
 def _dispatch_timeout_payload(path: str, *, timeout_seconds: float) -> dict[str, object]:

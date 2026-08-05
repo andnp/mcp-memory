@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from pathlib import Path
@@ -9,14 +10,19 @@ from typing import Any
 
 import pytest
 
-from mcp_memory.config import resolve_workspace_id
-from mcp_memory.config import Config
+from mcp_memory.config import Config, resolve_workspace_id
 from mcp_memory.context import ApplicationContext
+from mcp_memory.daemon_app import (
+    _context_for_request,
+    _handle_post_tool_use,
+    _request_scope_for_arguments,
+    _workspace_id_for_request_scope,
+    create_daemon_app,
+)
 from mcp_memory.daemon_dispatch import dispatch_management_request
-from mcp_memory.daemon_app import _context_for_request, _handle_post_tool_use, _request_scope_for_arguments, _workspace_id_for_request_scope, create_daemon_app
 from mcp_memory.daemon_models import DaemonMetadata
-from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.management.capabilities import ManagementCapabilities
+from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec
 from mcp_memory.server import MCPServer
 
 
@@ -125,6 +131,37 @@ def test_attach_transport_diagnostics_correlates_debug_search_response() -> None
         "execution_ms": 678.901,
     }
     assert "transport" not in response["search_diagnostics"]
+
+
+def test_attach_transport_diagnostics_updates_serialized_tool_response() -> None:
+    daemon_transport = _daemon_transport_module()
+    tracked_request = daemon_transport._TrackedDaemonTransportRequest(
+        request_id=19,
+        path="/internal/tools/search_memory_records",
+        started_at=0.0,
+        started_at_perf=0.0,
+        execution_ms=12.5,
+    )
+    response = {
+        "contents": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "search_diagnostics": {
+                            "timing_ms": {"total": 12.5},
+                        }
+                    }
+                ),
+            }
+        ]
+    }
+
+    enriched = daemon_transport._attach_transport_diagnostics(response, tracked_request)
+    payload = json.loads(enriched["contents"][0]["text"])
+
+    assert payload["search_diagnostics"]["transport"]["request_id"] == 19
+    assert response["contents"][0]["text"] != enriched["contents"][0]["text"]
 
 
 def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> None:
