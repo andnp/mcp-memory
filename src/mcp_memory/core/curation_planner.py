@@ -59,7 +59,7 @@ class PlannerExecutionEnvelope(Generic[T]):
     admission_status: str | None = None
     retry_delay_seconds: float | None = None
     transcript_ref: str | None = None
-    premium_request: bool | None = None
+    provider_call: bool | None = None
     token_usage: int | None = None
     token_usage_source: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -342,7 +342,7 @@ class InstrumentedCurationPlanner:
                 admission_status=result.admission_status,
                 retry_delay_seconds=result.retry_delay_seconds,
                 transcript_ref=result.transcript_ref,
-                premium_request=result.premium_request,
+                provider_call=result.provider_call,
                 token_usage=result.token_usage,
                 token_usage_source=result.token_usage_source,
                 metadata=result.metadata,
@@ -371,7 +371,7 @@ class InstrumentedCurationPlanner:
                 reason_code="provider_capability_missing",
                 reason_category="routing",
                 admission_status="not_started",
-                premium_request=False,
+                provider_call=False,
             )
         try:
             response = await cast(Callable[[str], Any], ask_json)(prompt)
@@ -395,7 +395,7 @@ class InstrumentedCurationPlanner:
                 reason_category=classification.reason_category,
                 retry_delay_seconds=classification.retry_delay_seconds,
                 admission_status="admitted",
-                premium_request=True,
+                provider_call=True,
             )
         completed_at = self._clock()
         parsed_response: dict[str, Any] | None = response if isinstance(response, dict) else None
@@ -430,7 +430,7 @@ class InstrumentedCurationPlanner:
             raw_text=json.dumps(response, sort_keys=True) if isinstance(response, dict) else str(response),
             parsed=parsed_response,
             admission_status="admitted",
-            premium_request=True,
+            provider_call=True,
         )
 
     def _translate_call(
@@ -498,7 +498,7 @@ class InstrumentedCurationPlanner:
             reason_code="provider_cancelled",
             cancellation_requested=True,
             admission_status="not_started",
-            premium_request=False,
+            provider_call=False,
         )
 
     def _envelope_base(self, call: ProviderJSONCall) -> dict[str, Any]:
@@ -589,7 +589,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                 reason_code="provider_failed",
                 reason_category="execution",
                 admission_status="admitted",
-                premium_request=True,
+                provider_call=True,
             )
             return self._translate_call(request, call)
         if self._plan_state is not None:
@@ -612,7 +612,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                     completed_at=self._clock(),
                     status=PlannerExecutionStatus.SCHEMA_FAILED,
                     reason_code="schema_invalid",
-                    premium_request=True,
+                    provider_call=True,
                     metadata={"error": str(exc)},
                 )
                 raise CurationPlannerSchemaError(
@@ -634,7 +634,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                 attempt=1,
                 started_at=started_at,
                 completed_at=self._clock(),
-                premium_request=True,
+                provider_call=True,
             )
         submission_buffer = self._submission_buffer
         if submission_buffer is None:
@@ -665,7 +665,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
             raw_text=result.raw_text,
             parsed=parsed,
             admission_status="admitted",
-            premium_request=True,
+            provider_call=True,
         )
         return self._translate_call(request, call)
 
@@ -684,7 +684,7 @@ class FakePlannerScenario:
     request_id: str | None = None
     attempt: int = 1
     transcript_ref: str | None = None
-    premium_request: bool | None = None
+    provider_call: bool | None = None
     token_usage: int | None = None
     token_usage_source: str | None = None
     admission_status: str | None = "admitted"
@@ -726,7 +726,7 @@ class FakeCurationPlanner:
             admission_status=scenario.admission_status,
             retry_delay_seconds=scenario.retry_delay_seconds,
             transcript_ref=scenario.transcript_ref,
-            premium_request=scenario.premium_request,
+            provider_call=scenario.provider_call,
             token_usage=scenario.token_usage,
             token_usage_source=scenario.token_usage_source,
         )
@@ -925,6 +925,13 @@ def _envelope_base(
     provider_profile: str | None = None,
     route_available: bool | None = None,
 ) -> dict[str, Any]:
+    token_usage = call.token_usage
+    token_usage_source = call.token_usage_source
+    if call.token_usage_details is not None:
+        if token_usage is None:
+            token_usage = call.token_usage_details.total_tokens
+        if token_usage_source is None:
+            token_usage_source = call.token_usage_details.source
     return {
         "provider_key": call.provider_key,
         "model_name": call.model_name,
@@ -935,9 +942,9 @@ def _envelope_base(
         "admission_status": call.admission_status,
         "retry_delay_seconds": call.retry_delay_seconds,
         "transcript_ref": call.request_id or None,
-        "premium_request": call.premium_request,
-        "token_usage": call.token_usage,
-        "token_usage_source": call.token_usage_source,
+        "provider_call": call.provider_call,
+        "token_usage": token_usage,
+        "token_usage_source": token_usage_source,
         "metadata": {
             "provider_status": call.status,
             "raw_response_recorded": call.raw_text is not None,

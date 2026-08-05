@@ -61,7 +61,7 @@ from mcp_memory.management.reporting_rows import (
     list_scoped_link_rows,
     list_scoped_memory_rows,
     list_task_run_rows_since,
-    summarize_copilot_premium_requests,
+    summarize_token_usage,
 )
 from mcp_memory.management.route_audit import build_task_route_audit
 
@@ -323,11 +323,10 @@ def build_nerd_metrics(
         now=generated_at,
         query_adapter=query_adapter,
     )
-    copilot_premium_usage = summarize_copilot_premium_requests(
-        db_manager,
+    token_usage = summarize_token_usage(
+        provider_usage_repo,
         workspace_id=workspace_id,
         now=generated_at,
-        query_adapter=query_adapter,
     )
 
     stats = [
@@ -346,50 +345,56 @@ def build_nerd_metrics(
         NerdStatPayload(key="provider_p95_latency", label="Provider p95 latency", value=round(throughput_rollups.provider_p95_latency, 4), unit="s"),
         NerdStatPayload(key="provider_failure_rate", label="Provider failure rate", value=round(throughput_rollups.provider_failure_rate, 4), unit="pct"),
         NerdStatPayload(key="provider_skip_rate", label="Provider skip rate", value=round(throughput_rollups.provider_skip_rate, 4), unit="pct"),
-        NerdStatPayload(key="premium_execution_count", label="Premium executions", value=float(throughput_rollups.premium_execution_count), unit="calls"),
+        NerdStatPayload(key="provider_call_count", label="Provider calls attributed to work", value=float(throughput_rollups.provider_call_count), unit="calls"),
         NerdStatPayload(
-            key="copilot_premium_requests_today",
-            label="Copilot premium requests today",
-            value=float(copilot_premium_usage.copilot_premium_requests_today),
-            unit="calls",
+            key="input_tokens_last_day",
+            label="Input tokens last 24h",
+            value=float(token_usage.input_tokens_last_day),
+            unit="tokens",
         ),
         NerdStatPayload(
-            key="copilot_premium_requests_last_day",
-            label="Copilot premium requests last 24h",
-            value=float(copilot_premium_usage.copilot_premium_requests_last_day),
-            unit="calls",
+            key="output_tokens_last_day",
+            label="Output tokens last 24h",
+            value=float(token_usage.output_tokens_last_day),
+            unit="tokens",
+        ),
+        NerdStatPayload(
+            key="total_tokens_last_day",
+            label="Total tokens last 24h",
+            value=float(token_usage.total_tokens_last_day),
+            unit="tokens",
         ),
         NerdStatPayload(key="compatible_batch_calls", label="Compatible batch calls", value=float(throughput_rollups.compatible_batch_calls), unit="calls"),
         NerdStatPayload(
-            key="work_items_per_premium_execution",
-            label="Work items per premium execution",
+            key="work_items_per_provider_call",
+            label="Work items per provider call",
             value=(
                 0.0
-                if throughput_rollups.premium_execution_count <= 0
+                if throughput_rollups.provider_call_count <= 0
                 else round(
-                    throughput_rollups.premium_claimed_work_item_count / throughput_rollups.premium_execution_count,
+                    throughput_rollups.provider_claimed_work_item_count / throughput_rollups.provider_call_count,
                     4,
                 )
             ),
             unit="ratio",
         ),
         NerdStatPayload(
-            key="mutations_per_premium_execution",
-            label="Mutations per premium execution",
+            key="mutations_per_provider_call",
+            label="Mutations per provider call",
             value=(
                 0.0
-                if throughput_rollups.premium_execution_count <= 0
-                else round(throughput_rollups.premium_mutations / throughput_rollups.premium_execution_count, 4)
+                if throughput_rollups.provider_call_count <= 0
+                else round(throughput_rollups.provider_mutations / throughput_rollups.provider_call_count, 4)
             ),
             unit="ratio",
         ),
         NerdStatPayload(
-            key="tool_calls_per_premium_execution",
-            label="Tool calls per premium execution",
+            key="tool_calls_per_provider_call",
+            label="Tool calls per provider call",
             value=(
                 0.0
-                if throughput_rollups.premium_execution_count <= 0
-                else round(throughput_rollups.premium_tool_calls / throughput_rollups.premium_execution_count, 4)
+                if throughput_rollups.provider_call_count <= 0
+                else round(throughput_rollups.provider_tool_calls / throughput_rollups.provider_call_count, 4)
             ),
             unit="ratio",
         ),

@@ -17,7 +17,6 @@ from mcp_memory.management.health_reporting import build_embedding_status
 from mcp_memory.management.models import ExecutionAttemptHealthPayload
 from mcp_memory.management.models import NerdMetricsPayload
 from mcp_memory.management.query_runner import SQLiteManagementQueryAdapter
-from mcp_memory.management.reporting_rows import extract_copilot_premium_requests
 from mcp_memory.core.tasks import SQLiteTaskQueue
 from mcp_memory.embedding_repair_store import SQLiteEmbeddingRepairQueue
 from mcp_memory.management.service import ManagementService
@@ -248,8 +247,8 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert overview.memory_metrics.total_memory_lines == 0
     assert overview.memory_metrics.total_summary_lines == 0
     assert overview.memory_metrics.thought_buffer_entries == 0
-    assert overview.premium_usage.copilot_premium_requests_today == 0
-    assert overview.premium_usage.copilot_premium_requests_last_day == 0
+    assert overview.token_usage.total_tokens_last_day == 0
+    assert overview.token_usage.provider_calls_last_day == 0
     assert overview.queue_diagnostics == []
     assert overview.failed_tasks == []
     assert overview.provider_usage == []
@@ -293,19 +292,7 @@ def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     assert nerd_metrics.provider_latency == []
 
 
-def test_extract_copilot_premium_requests_preserves_fractional_values() -> None:
-    assert extract_copilot_premium_requests(
-        response_text='{"type":"result","usage":{"premiumRequests":0.33}}',
-        parsed_json=None,
-    ) == pytest.approx(0.33)
-
-    assert extract_copilot_premium_requests(
-        response_text='{"type":"message"}\n{"type":"result","usage":{"premiumRequests":1.67}}',
-        parsed_json=None,
-    ) == pytest.approx(1.67)
-
-
-def test_management_service_overview_preserves_fractional_premium_usage(db_manager) -> None:
+def test_management_service_overview_reports_persisted_token_usage(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
     service = _build_management_service(
@@ -317,33 +304,32 @@ def test_management_service_overview_preserves_fractional_premium_usage(db_manag
 
     now = time.time()
     db_manager.get_connection().execute(
-        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO provider_usage (workspace_id, task_name, task_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, input_tokens, output_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            "req-fractional-premium",
-            1,
             "workspace-a",
             "memory-curator",
-            "task-fractional-premium",
+            "task-token-usage",
             "copilot-cli",
             "Copilot CLI",
-            "claude-haiku-4.5",
-            4444,
-            "prompt",
-            '{"type":"result","usage":{"premiumRequests":0.33}}',
-            None,
+            "gpt-5.4-mini",
             "success",
-            None,
-            now - 30.0,
+            1.0,
             now - 10.0,
-            20.0,
+            None,
+            120,
+            35,
+            155,
+            "test",
         ),
     )
     db_manager.get_connection().commit()
 
     overview = service.get_overview()
 
-    assert overview.premium_usage.copilot_premium_requests_today == pytest.approx(0.33)
-    assert overview.premium_usage.copilot_premium_requests_last_day == pytest.approx(0.33)
+    assert overview.token_usage.total_tokens_last_day == 155
+    assert overview.token_usage.input_tokens_last_day == 120
+    assert overview.token_usage.output_tokens_last_day == 35
+    assert overview.token_usage.token_usage_source == "test"
 
 
 def test_management_service_task_sampling_summary_aggregates_recent_run_utility(db_manager) -> None:
@@ -985,46 +971,10 @@ def test_management_service_overview_is_global_even_from_workspace_context(db_ma
     )
     now = time.time()
     db_manager.get_connection().executemany(
-        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO provider_usage (workspace_id, task_name, task_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, input_tokens, output_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            (
-                "req-a",
-                1,
-                "workspace-a",
-                "memory-curator",
-                "task-a",
-                "copilot-cli",
-                "Copilot CLI",
-                "gpt-5",
-                111,
-                "prompt",
-                '{"type":"result","usage":{"premiumRequests":3}}',
-                None,
-                "success",
-                None,
-                now - 120.0,
-                now - 60.0,
-                60.0,
-            ),
-            (
-                "req-b",
-                1,
-                "workspace-b",
-                "memory-curator",
-                "task-b",
-                "copilot-cli",
-                "Copilot CLI",
-                "gpt-5",
-                222,
-                "prompt",
-                '{"type":"result","usage":{"premiumRequests":5}}',
-                None,
-                "success",
-                None,
-                now - 180.0,
-                now - 90.0,
-                90.0,
-            ),
+            ("workspace-a", "memory-curator", "task-a", "copilot-mini", "Copilot CLI", "gpt-5", "success", 1.0, now - 60.0, None, 1, 2, 3, "test"),
+            ("workspace-b", "memory-curator", "task-b", "copilot-mini", "Copilot CLI", "gpt-5", "success", 1.0, now - 90.0, None, 2, 3, 5, "test"),
         ],
     )
     task_a = task_queue.enqueue(
@@ -1065,8 +1015,7 @@ def test_management_service_overview_is_global_even_from_workspace_context(db_ma
 
     assert scoped_overview.memories.total == 2
     assert scoped_overview.memory_metrics.total_memories == 2
-    assert scoped_overview.premium_usage.copilot_premium_requests_today == 8
-    assert scoped_overview.premium_usage.copilot_premium_requests_last_day == 8
+    assert scoped_overview.token_usage.total_tokens_last_day == 8
     assert {record.title for record in scoped_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
     assert {item.provider_key for item in scoped_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
     assert [(item.key, item.count) for item in scoped_nerd.composition.by_workspace] == [("workspace-a", 1)]
@@ -1076,8 +1025,7 @@ def test_management_service_overview_is_global_even_from_workspace_context(db_ma
 
     assert global_overview.memories.total == 2
     assert global_overview.memory_metrics.total_memories == 2
-    assert global_overview.premium_usage.copilot_premium_requests_today == 8
-    assert global_overview.premium_usage.copilot_premium_requests_last_day == 8
+    assert global_overview.token_usage.total_tokens_last_day == 8
     assert {record.title for record in global_overview.recent_memories} == {"Workspace A fact", "Workspace B fact"}
     assert {item.provider_key for item in global_overview.provider_usage} == {"gemini-cli", "copilot-mini"}
     assert [(item.key, item.count) for item in global_nerd.composition.by_workspace] == [
@@ -2190,25 +2138,22 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
         ("workspace-a", "memory-curator", "gemini-cli", "Gemini CLI", "gemini-3-flash-preview", "success", 0.25, time.time(), None),
     )
     db_manager.get_connection().execute(
-        "INSERT INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO provider_usage (workspace_id, task_name, task_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, input_tokens, output_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            "req-premium",
-            1,
             "workspace-a",
             "memory-curator",
-            "task-premium",
+            "task-token-usage",
             "copilot-cli",
             "Copilot CLI",
             "gpt-5",
-            3333,
-            "prompt text",
-            '{"type":"message"}\n{"type":"result","usage":{"premiumRequests":13}}',
-            None,
             "success",
-            None,
-            time.time() - 30.0,
+            1.0,
             time.time() - 10.0,
-            20.0,
+            None,
+            8,
+            5,
+            13,
+            "test",
         ),
     )
     db_manager.get_connection().execute(
@@ -2279,8 +2224,9 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.memories.by_status == {"active": 1, "stale": 1}
     assert overview.memory_metrics.total_memories == 2
     assert overview.memory_metrics.thought_buffer_entries == 0
-    assert overview.premium_usage.copilot_premium_requests_today == 13
-    assert overview.premium_usage.copilot_premium_requests_last_day == 13
+    assert overview.token_usage.total_tokens_last_day == 13
+    assert overview.token_usage.input_tokens_last_day == 8
+    assert overview.token_usage.output_tokens_last_day == 5
     assert overview.agent_runs[0].task_name == "ingest-system1"
     assert overview.provider_usage[0].provider_key == "gemini-cli"
     assert overview.provider_usage[0].task_name == "memory-curator"
@@ -2288,7 +2234,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert overview.provider_usage[0].skips_last_day == 1
     assert overview.provider_usage[0].top_skip_reason_last_day == "provider_quota_exhausted"
     assert overview.provider_usage[0].active_admission_reason == "provider_quota_exhausted"
-    assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli", "copilot-mini"}
+    assert {item.provider_key for item in overview.provider_usage} == {"gemini-cli", "copilot-cli", "copilot-mini"}
     assert overview.tasks.failed_count == 1
     deduplicator = next(agent for agent in overview.agent_runs if agent.task_name == "deduplicator")
     assert deduplicator.last_result_metadata.strategy_used == "semantic"
@@ -2330,7 +2276,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     curator_route = next(item for item in nerd_metrics.route_audit if item.task_name == "memory-curator")
     summarize_route = next(item for item in nerd_metrics.route_audit if item.task_name == "summarize-memory")
     assert curator_route.task_class == "premium_agentic"
-    assert curator_route.recent_provider_key == "copilot-cli"
+    assert curator_route.recent_provider_key == "gemini-cli"
     assert summarize_route.task_class == "deterministic"
     assert summarize_route.resolved_provider_key is None
     assert nerd_metrics.provider_policy.stats[0].key == "provider_policy_route_exhaustion_count"
@@ -2351,8 +2297,7 @@ def test_management_service_overview_and_memory_detail(db_manager) -> None:
     assert provider_policy_provider.top_reason_code == "provider_quota_exhausted"
     assert provider_policy_provider.active_admission_reason == "provider_quota_exhausted"
     assert any(stat.key == "orphan_rate" for stat in nerd_metrics.stats)
-    assert any(stat.key == "copilot_premium_requests_today" and stat.value == 13.0 for stat in nerd_metrics.stats)
-    assert any(stat.key == "copilot_premium_requests_last_day" and stat.value == 13.0 for stat in nerd_metrics.stats)
+    assert any(stat.key == "total_tokens_last_day" and stat.value == 13.0 for stat in nerd_metrics.stats)
     assert all(alert.key != "curator_route_fallback" for alert in nerd_metrics.alerts)
 
 

@@ -42,6 +42,19 @@ export interface ProviderUsage {
   active_admission_reason: string | null;
   active_admission_category: string | null;
   active_retry_delay_seconds: number | null;
+  input_tokens_last_hour: number;
+  input_tokens_last_day: number;
+  output_tokens_last_hour: number;
+  output_tokens_last_day: number;
+  cached_input_tokens_last_hour: number;
+  cached_input_tokens_last_day: number;
+  cache_write_tokens_last_hour: number;
+  cache_write_tokens_last_day: number;
+  reasoning_tokens_last_hour: number;
+  reasoning_tokens_last_day: number;
+  total_tokens_last_hour: number;
+  total_tokens_last_day: number;
+  token_usage_source: string | null;
 }
 
 export interface RecentMemory {
@@ -98,9 +111,22 @@ export interface OverviewResponse {
     total_lines_compressed: number;
     thought_buffer_entries: number;
   };
-  premium_usage: {
-    copilot_premium_requests_today: number;
-    copilot_premium_requests_last_day: number;
+  token_usage: {
+    provider_calls_last_hour: number;
+    provider_calls_last_day: number;
+    input_tokens_last_hour: number;
+    input_tokens_last_day: number;
+    output_tokens_last_hour: number;
+    output_tokens_last_day: number;
+    cached_input_tokens_last_hour: number;
+    cached_input_tokens_last_day: number;
+    cache_write_tokens_last_hour: number;
+    cache_write_tokens_last_day: number;
+    reasoning_tokens_last_hour: number;
+    reasoning_tokens_last_day: number;
+    total_tokens_last_hour: number;
+    total_tokens_last_day: number;
+    token_usage_source: string | null;
   };
   tasks: { failed_count: number };
   embeddings: { backend: string | null; model_name: string | null; model_cached: boolean };

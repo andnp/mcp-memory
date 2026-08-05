@@ -283,6 +283,13 @@ class MemoryService:
                     started_at=record.started_at,
                     completed_at=record.completed_at,
                     duration_seconds=record.duration_seconds,
+                    input_tokens=record.input_tokens,
+                    output_tokens=record.output_tokens,
+                    cached_input_tokens=record.cached_input_tokens,
+                    cache_write_tokens=record.cache_write_tokens,
+                    reasoning_tokens=record.reasoning_tokens,
+                    total_tokens=record.total_tokens,
+                    token_usage_source=record.token_usage_source,
                 )
                 for record in dependencies.provider_usage_repo.list_conversations(
                     workspace_id=effective_workspace_id,

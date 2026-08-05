@@ -147,7 +147,7 @@ def budget_usage(
         proposed_actions=0 if validation is None or validation.plan is None else len(validation.plan.actions),
         accepted_mutations=0 if validation is None else len(validation.accepted_actions),
         planner_attempts=len(envelopes),
-        premium_requests=sum(1 for envelope in envelopes if envelope.premium_request),
+        provider_calls=sum(1 for envelope in envelopes if envelope.provider_call),
         token_usage=sum(token_usage) if token_usage else None,
         token_usage_source=token_source,
     )

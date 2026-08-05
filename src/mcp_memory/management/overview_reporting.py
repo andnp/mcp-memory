@@ -10,11 +10,11 @@ from mcp_memory.management.models import (
     MemoryMetricsPayload,
     OverviewCounts,
     OverviewPayload,
-    PremiumUsageSummaryPayload,
     ProviderUsagePayload,
     RuntimeLogPayload,
     StorageSummary,
     TaskStatusSummary,
+    TokenUsageSummaryPayload,
 )
 from mcp_memory.management.reporting_rows import (
     build_queue_diagnostics,
@@ -22,7 +22,7 @@ from mcp_memory.management.reporting_rows import (
     fetch_memory_metrics_row,
     fetch_pending_journal_metrics_row,
     fetch_task_count_rows,
-    summarize_copilot_premium_requests,
+    summarize_token_usage,
 )
 from mcp_memory.management.reporting_rows import MemoryMetricsRow, PendingJournalMetricsRow
 from mcp_memory.serialization import compact_memory_record_payload, task_payload
@@ -97,6 +97,19 @@ def build_provider_usage(provider_usage_repo, workspace_id: str | None) -> list[
             active_admission_reason=summary.active_admission_reason,
             active_admission_category=summary.active_admission_category,
             active_retry_delay_seconds=summary.active_retry_delay_seconds,
+            input_tokens_last_hour=summary.input_tokens_last_hour,
+            input_tokens_last_day=summary.input_tokens_last_day,
+            output_tokens_last_hour=summary.output_tokens_last_hour,
+            output_tokens_last_day=summary.output_tokens_last_day,
+            cached_input_tokens_last_hour=summary.cached_input_tokens_last_hour,
+            cached_input_tokens_last_day=summary.cached_input_tokens_last_day,
+            cache_write_tokens_last_hour=summary.cache_write_tokens_last_hour,
+            cache_write_tokens_last_day=summary.cache_write_tokens_last_day,
+            reasoning_tokens_last_hour=summary.reasoning_tokens_last_hour,
+            reasoning_tokens_last_day=summary.reasoning_tokens_last_day,
+            total_tokens_last_hour=summary.total_tokens_last_hour,
+            total_tokens_last_day=summary.total_tokens_last_day,
+            token_usage_source=summary.token_usage_source,
         )
         for summary in provider_usage_repo.summarize_usage(workspace_id=workspace_id)
     ]
@@ -147,10 +160,23 @@ def build_overview(
         sqlite_bytes = sqlite_path.stat().st_size
 
     memory_metrics = build_memory_metrics(db_manager, None, task_queue)
-    premium_usage_summary = summarize_copilot_premium_requests(db_manager, workspace_id=None)
-    premium_usage = PremiumUsageSummaryPayload(
-        copilot_premium_requests_today=premium_usage_summary.copilot_premium_requests_today,
-        copilot_premium_requests_last_day=premium_usage_summary.copilot_premium_requests_last_day,
+    token_usage_summary = summarize_token_usage(provider_usage_repo, workspace_id=None)
+    token_usage = TokenUsageSummaryPayload(
+        provider_calls_last_hour=token_usage_summary.provider_calls_last_hour,
+        provider_calls_last_day=token_usage_summary.provider_calls_last_day,
+        input_tokens_last_hour=token_usage_summary.input_tokens_last_hour,
+        input_tokens_last_day=token_usage_summary.input_tokens_last_day,
+        output_tokens_last_hour=token_usage_summary.output_tokens_last_hour,
+        output_tokens_last_day=token_usage_summary.output_tokens_last_day,
+        cached_input_tokens_last_hour=token_usage_summary.cached_input_tokens_last_hour,
+        cached_input_tokens_last_day=token_usage_summary.cached_input_tokens_last_day,
+        cache_write_tokens_last_hour=token_usage_summary.cache_write_tokens_last_hour,
+        cache_write_tokens_last_day=token_usage_summary.cache_write_tokens_last_day,
+        reasoning_tokens_last_hour=token_usage_summary.reasoning_tokens_last_hour,
+        reasoning_tokens_last_day=token_usage_summary.reasoning_tokens_last_day,
+        total_tokens_last_hour=token_usage_summary.total_tokens_last_hour,
+        total_tokens_last_day=token_usage_summary.total_tokens_last_day,
+        token_usage_source=token_usage_summary.token_usage_source,
     )
     agent_runs = build_agent_runs(task_queue, None)
     provider_usage = build_provider_usage(provider_usage_repo, None)
@@ -180,7 +206,7 @@ def build_overview(
         cache=cache,
         execution_attempts=build_execution_attempt_health(db_manager),
         memory_metrics=memory_metrics,
-        premium_usage=premium_usage,
+        token_usage=token_usage,
         queue_diagnostics=build_queue_diagnostics(task_queue, None),
         agent_runs=agent_runs,
         provider_usage=provider_usage,

@@ -371,11 +371,11 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert any(stat["key"] == "provider_p95_latency" for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "running_attempt_count" for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "stale_attempt_count" for stat in nerd_metrics["stats"])
-        assert any(stat["key"] == "premium_execution_count" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "provider_call_count" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
         assert any(stat["key"] == "compatible_batch_calls" and stat["value"] == 1.0 for stat in nerd_metrics["stats"])
-        assert any(stat["key"] == "work_items_per_premium_execution" and stat["value"] == 3.0 for stat in nerd_metrics["stats"])
-        assert any(stat["key"] == "mutations_per_premium_execution" and stat["value"] == 4.0 for stat in nerd_metrics["stats"])
-        assert any(stat["key"] == "tool_calls_per_premium_execution" and stat["value"] == 6.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "work_items_per_provider_call" and stat["value"] == 3.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "mutations_per_provider_call" and stat["value"] == 4.0 for stat in nerd_metrics["stats"])
+        assert any(stat["key"] == "tool_calls_per_provider_call" and stat["value"] == 6.0 for stat in nerd_metrics["stats"])
         assert nerd_metrics["graph_topology"]["total_memories"] == 3
         assert nerd_metrics["graph_topology"]["total_links"] == 1
         assert nerd_metrics["graph_topology"]["link_type_counts"] == {"SUPERSEDES": 1}
@@ -454,11 +454,11 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert deduplicator["last_result_metadata"]["candidate_count"] == 6
         assert deduplicator["last_result_metadata"]["campaign_key"] is None
         assert taxonomist["last_result_metadata"]["campaign_key"] == "lightweight_review"
-        assert taxonomist["last_result_metadata"]["premium_execution_count"] == 1
+        assert taxonomist["last_result_metadata"]["provider_call_count"] == 1
         assert taxonomist["last_result_metadata"]["compatible_batch_calls"] == 1
-        assert taxonomist["last_result_metadata"]["work_items_per_premium_execution"] == 3.0
-        assert taxonomist["last_result_metadata"]["mutations_per_premium_execution"] == 4.0
-        assert taxonomist["last_result_metadata"]["tool_calls_per_premium_execution"] == 6.0
+        assert taxonomist["last_result_metadata"]["work_items_per_provider_call"] == 3.0
+        assert taxonomist["last_result_metadata"]["mutations_per_provider_call"] == 4.0
+        assert taxonomist["last_result_metadata"]["tool_calls_per_provider_call"] == 6.0
         assert overview["recent_agent_runs"]
         assert any(run["result_metadata"]["strategy_used"] == "semantic" for run in overview["recent_agent_runs"])
         assert any(run["result_metadata"]["campaign_key"] == "lightweight_review" for run in overview["recent_agent_runs"])
@@ -961,7 +961,7 @@ def test_daemon_http_dashboard_and_api_routes(monkeypatch, tmp_path: Path) -> No
     assert deep_link_asset.status_code == 200
     assert overview.status_code == 200
     assert overview.json()["memories"]["total"] >= 1
-    assert overview.json()["premium_usage"]["copilot_premium_requests_today"] == 0
+    assert overview.json()["token_usage"]["total_tokens_last_day"] == 0
     assert search.status_code == 200
     assert any(result["title"] == "HTTP dashboard fact" for result in search.json()["results"])
     assert record_thought.status_code == 200

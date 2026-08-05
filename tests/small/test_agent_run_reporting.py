@@ -292,7 +292,7 @@ def test_extract_run_result_metadata_preserves_flat_mutations_without_structured
     assert metadata.mutation_outcome == MutationOutcomePayload()
 
 
-def test_extract_run_result_metadata_preserves_premium_execution_ratios_with_derived_mutations() -> None:
+def test_extract_run_result_metadata_preserves_provider_call_ratios_with_derived_mutations() -> None:
     metadata = extract_run_result_metadata(
         {
             "created": 2,
@@ -304,9 +304,9 @@ def test_extract_run_result_metadata_preserves_premium_execution_ratios_with_der
     )
 
     assert metadata.mutations == 6
-    assert metadata.mutations_per_premium_execution == 2.0
-    assert metadata.work_items_per_premium_execution == 3.0
-    assert metadata.tool_calls_per_premium_execution == 4.0
+    assert metadata.mutations_per_provider_call == 2.0
+    assert metadata.work_items_per_provider_call == 3.0
+    assert metadata.tool_calls_per_provider_call == 4.0
 
 
 def test_task_result_view_helpers_and_payloads_do_not_share_cached_models() -> None:

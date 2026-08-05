@@ -43,8 +43,8 @@ def test_budget_and_receipt_projection_counts() -> None:
         )
     )
     envelopes = [
-        SimpleNamespace(token_usage=7, token_usage_source="provider", premium_request=True),
-        SimpleNamespace(token_usage=8, token_usage_source=None, premium_request=False),
+        SimpleNamespace(token_usage=7, token_usage_source="provider", provider_call=True),
+        SimpleNamespace(token_usage=8, token_usage_source=None, provider_call=False),
     ]
     usage = budget_usage(
         cast(Any, context),
@@ -52,7 +52,7 @@ def test_budget_and_receipt_projection_counts() -> None:
         cast(Any, SimpleNamespace(plan=SimpleNamespace(actions=[1, 2]), accepted_actions=[1])),
     )
     assert usage.token_usage == 15
-    assert usage.premium_requests == 1
+    assert usage.provider_calls == 1
 
     receipts = (
         CurationActionReceipt(

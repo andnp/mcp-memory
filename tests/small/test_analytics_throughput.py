@@ -93,8 +93,8 @@ def test_build_nerd_metrics_throughput_rollups_aggregates_buckets_and_premium_co
     assert rollups.provider_p95_latency == 0.75
     assert rollups.provider_failure_rate == 0.5
     assert rollups.provider_skip_rate == pytest.approx(1 / 3)
-    assert rollups.premium_execution_count == 3
-    assert rollups.premium_claimed_work_item_count == 8
-    assert rollups.premium_mutations == 5
-    assert rollups.premium_tool_calls == 8
+    assert rollups.provider_call_count == 3
+    assert rollups.provider_claimed_work_item_count == 8
+    assert rollups.provider_mutations == 5
+    assert rollups.provider_tool_calls == 8
     assert rollups.compatible_batch_calls == 3

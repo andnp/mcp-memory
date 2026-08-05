@@ -670,7 +670,7 @@ async def test_instrumented_adapter_translates_recorded_json_without_action_coun
         raw_text=json.dumps(response),
         parsed=response,
         admission_status="admitted",
-        premium_request=True,
+        provider_call=True,
         token_usage=41,
         token_usage_source="recorded",
     )
@@ -693,7 +693,7 @@ async def test_instrumented_adapter_translates_recorded_json_without_action_coun
     assert raised.value.envelope.status == PlannerExecutionStatus.SCHEMA_FAILED
     assert raised.value.envelope.request_id == "request-55"
     assert raised.value.envelope.transcript_ref == "request-55"
-    assert raised.value.envelope.premium_request is True
+    assert raised.value.envelope.provider_call is True
     assert raised.value.envelope.token_usage == 41
     assert json.loads(provider.prompt.split("\n", 1)[1])["available_tools"] == []
 
@@ -720,7 +720,7 @@ async def test_instrumented_adapter_parses_recorded_valid_json_into_common_envel
                 raw_text=json.dumps(response),
                 parsed=response,
                 admission_status="admitted",
-                premium_request=True,
+                provider_call=True,
             )
 
     envelope = await InstrumentedCurationPlanner(_RecordedProvider()).create_plan(request, object())
@@ -728,7 +728,7 @@ async def test_instrumented_adapter_parses_recorded_valid_json_into_common_envel
     assert envelope.plan == _plan(request, seed_id)
     assert envelope.request_id == "request-56"
     assert envelope.attempt == 1
-    assert envelope.premium_request is True
+    assert envelope.provider_call is True
     assert envelope.started_at == datetime.fromtimestamp(20.0, tz=UTC)
 
 
@@ -750,7 +750,7 @@ async def test_instrumented_adapter_classifies_recorded_invalid_json_as_schema_f
                 error_text="Assistant message did not contain a JSON object",
                 raw_text="not json",
                 admission_status="admitted",
-                premium_request=True,
+                provider_call=True,
             )
 
     with pytest.raises(CurationPlannerSchemaError) as raised:

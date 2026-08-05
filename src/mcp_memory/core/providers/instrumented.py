@@ -453,7 +453,7 @@ class InstrumentedAIProvider:
                     reason_category=classification.reason_category,
                     retry_delay_seconds=classification.retry_delay_seconds,
                     admission_status="skipped",
-                    premium_request=False,
+                    provider_call=False,
                 ),
             )
             raise
@@ -528,7 +528,7 @@ class InstrumentedAIProvider:
                     parsed=None,
                     admission_status="admitted",
                     cancellation_requested=True,
-                    premium_request=True,
+                    provider_call=True,
                     token_usage_details=_extract_token_usage(observer_state.last_event),
                 ),
             )
@@ -604,7 +604,7 @@ class InstrumentedAIProvider:
                     raw_text=_extract_raw_text(observer_state.last_event),
                     parsed=None,
                     admission_status="admitted",
-                    premium_request=True,
+                    provider_call=True,
                     token_usage_details=_extract_token_usage(observer_state.last_event),
                 ),
             )
@@ -659,7 +659,7 @@ class InstrumentedAIProvider:
                 raw_text=_extract_raw_text(observer_state.last_event) or json.dumps(response, sort_keys=True),
                 parsed=response,
                 admission_status="admitted",
-                premium_request=True,
+                provider_call=True,
                 token_usage_details=_extract_token_usage(observer_state.last_event),
             ),
         )

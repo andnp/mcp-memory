@@ -33,10 +33,10 @@ class NerdMetricsThroughputRollups:
     provider_p95_latency: float = 0.0
     provider_failure_rate: float = 0.0
     provider_skip_rate: float = 0.0
-    premium_execution_count: int = 0
-    premium_claimed_work_item_count: int = 0
-    premium_mutations: int = 0
-    premium_tool_calls: int = 0
+    provider_call_count: int = 0
+    provider_claimed_work_item_count: int = 0
+    provider_mutations: int = 0
+    provider_tool_calls: int = 0
     compatible_batch_calls: int = 0
 
 
@@ -76,20 +76,20 @@ def build_nerd_metrics_throughput_rollups(
     all_provider_durations: list[float] = []
     provider_failures = 0
     provider_skips = 0
-    premium_execution_count = 0
-    premium_claimed_work_item_count = 0
-    premium_mutations = 0
-    premium_tool_calls = 0
+    provider_call_count = 0
+    provider_claimed_work_item_count = 0
+    provider_mutations = 0
+    provider_tool_calls = 0
     compatible_batch_calls = 0
 
     for row in task_rows:
         result_metadata = row.result.metadata
         provider_calls_used = result_metadata.provider_calls_used or 0
-        premium_execution_count += provider_calls_used
+        provider_call_count += provider_calls_used
         if provider_calls_used > 0:
-            premium_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
-            premium_mutations += result_metadata.mutations or 0
-            premium_tool_calls += result_metadata.tool_calls_executed or 0
+            provider_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
+            provider_mutations += result_metadata.mutations or 0
+            provider_tool_calls += result_metadata.tool_calls_executed or 0
         compatible_batch_calls += result_metadata.compatible_batch_calls or 0
 
     for row in provider_rows:
@@ -140,9 +140,9 @@ def build_nerd_metrics_throughput_rollups(
         provider_p95_latency=_percentile(all_provider_durations, 0.95),
         provider_failure_rate=provider_failure_rate,
         provider_skip_rate=provider_skip_rate,
-        premium_execution_count=premium_execution_count,
-        premium_claimed_work_item_count=premium_claimed_work_item_count,
-        premium_mutations=premium_mutations,
-        premium_tool_calls=premium_tool_calls,
+        provider_call_count=provider_call_count,
+        provider_claimed_work_item_count=provider_claimed_work_item_count,
+        provider_mutations=provider_mutations,
+        provider_tool_calls=provider_tool_calls,
         compatible_batch_calls=compatible_batch_calls,
     )

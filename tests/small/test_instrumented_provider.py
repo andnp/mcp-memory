@@ -183,4 +183,4 @@ async def test_instrumented_provider_exposes_authoritative_json_call_telemetry(d
     assert result.attempt == 1
     assert result.started_at == pytest.approx(10.0)
     assert result.completed_at == pytest.approx(11.0)
-    assert result.premium_request is True
+    assert result.provider_call is True

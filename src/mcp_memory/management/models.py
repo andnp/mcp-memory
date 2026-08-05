@@ -272,9 +272,22 @@ class JournalSummary(BaseModel):
     pending_count: int
 
 
-class PremiumUsageSummaryPayload(BaseModel):
-    copilot_premium_requests_today: float = 0.0
-    copilot_premium_requests_last_day: float = 0.0
+class TokenUsageSummaryPayload(BaseModel):
+    provider_calls_last_hour: int = 0
+    provider_calls_last_day: int = 0
+    input_tokens_last_hour: int = 0
+    input_tokens_last_day: int = 0
+    output_tokens_last_hour: int = 0
+    output_tokens_last_day: int = 0
+    cached_input_tokens_last_hour: int = 0
+    cached_input_tokens_last_day: int = 0
+    cache_write_tokens_last_hour: int = 0
+    cache_write_tokens_last_day: int = 0
+    reasoning_tokens_last_hour: int = 0
+    reasoning_tokens_last_day: int = 0
+    total_tokens_last_hour: int = 0
+    total_tokens_last_day: int = 0
+    token_usage_source: str | None = None
 
 
 class MemoryMetricsPayload(BaseModel):
@@ -371,10 +384,10 @@ class RunResultMetadataPayload(BaseModel):
     campaign_family_keys: list[str] = Field(default_factory=list)
     campaign_continuation_supported: bool | None = None
     compatible_batch_calls: int | None = None
-    premium_execution_count: int | None = None
-    work_items_per_premium_execution: float | None = None
-    mutations_per_premium_execution: float | None = None
-    tool_calls_per_premium_execution: float | None = None
+    provider_call_count: int | None = None
+    work_items_per_provider_call: float | None = None
+    mutations_per_provider_call: float | None = None
+    tool_calls_per_provider_call: float | None = None
     quality_evidence_runs: int = 0
     useful_work_count: int = 0
     retrieval_regression_count: int = 0
@@ -1285,6 +1298,19 @@ class ProviderUsagePayload(BaseModel):
     active_admission_reason: str | None = None
     active_admission_category: str | None = None
     active_retry_delay_seconds: float | None = None
+    input_tokens_last_hour: int = 0
+    input_tokens_last_day: int = 0
+    output_tokens_last_hour: int = 0
+    output_tokens_last_day: int = 0
+    cached_input_tokens_last_hour: int = 0
+    cached_input_tokens_last_day: int = 0
+    cache_write_tokens_last_hour: int = 0
+    cache_write_tokens_last_day: int = 0
+    reasoning_tokens_last_hour: int = 0
+    reasoning_tokens_last_day: int = 0
+    total_tokens_last_hour: int = 0
+    total_tokens_last_day: int = 0
+    token_usage_source: str | None = None
 
 
 class AIConversationPayload(BaseModel):
@@ -1309,6 +1335,13 @@ class AIConversationPayload(BaseModel):
     started_at: float
     completed_at: float
     duration_seconds: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    token_usage_source: str | None = None
 
 
 class AIConversationListPayload(BaseModel):
@@ -1322,7 +1355,7 @@ class OverviewPayload(BaseModel):
     cache: CacheHealthPayload = Field(default_factory=CacheHealthPayload)
     execution_attempts: ExecutionAttemptHealthPayload = Field(default_factory=ExecutionAttemptHealthPayload)
     memory_metrics: MemoryMetricsPayload
-    premium_usage: PremiumUsageSummaryPayload = Field(default_factory=PremiumUsageSummaryPayload)
+    token_usage: TokenUsageSummaryPayload = Field(default_factory=TokenUsageSummaryPayload)
     queue_diagnostics: list[QueueDiagnosticPayload] = Field(default_factory=list)
     agent_runs: list[AgentRunPayload] = Field(default_factory=list)
     provider_usage: list[ProviderUsagePayload] = Field(default_factory=list)

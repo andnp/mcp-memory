@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
 import time
-from typing import Any, TypeAlias, cast
+from typing import TypeAlias, cast
 
 from pydantic import BaseModel, Field, JsonValue
 
@@ -280,10 +280,10 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
         campaign_family_keys=_coerce_str_list(result.get("campaign_family_keys")),
         campaign_continuation_supported=_coerce_bool(result.get("campaign_continuation_supported")),
         compatible_batch_calls=_coerce_int(result.get("compatible_batch_calls")),
-        premium_execution_count=provider_calls_used,
-        work_items_per_premium_execution=_ratio_or_none(claimed_work_item_count, provider_calls_used),
-        mutations_per_premium_execution=_ratio_or_none(mutations, provider_calls_used),
-        tool_calls_per_premium_execution=_ratio_or_none(tool_calls_executed, provider_calls_used),
+        provider_call_count=provider_calls_used,
+        work_items_per_provider_call=_ratio_or_none(claimed_work_item_count, provider_calls_used),
+        mutations_per_provider_call=_ratio_or_none(mutations, provider_calls_used),
+        tool_calls_per_provider_call=_ratio_or_none(tool_calls_executed, provider_calls_used),
         quality_evidence_runs=len(quality_records),
         useful_work_count=useful_work_count,
         retrieval_regression_count=retrieval_regression_count,
@@ -682,9 +682,22 @@ class LinkRow:
 
 
 @dataclass(frozen=True)
-class CopilotPremiumUsageSummary:
-    copilot_premium_requests_today: float = 0.0
-    copilot_premium_requests_last_day: float = 0.0
+class TokenUsageSummary:
+    provider_calls_last_hour: int = 0
+    provider_calls_last_day: int = 0
+    input_tokens_last_hour: int = 0
+    input_tokens_last_day: int = 0
+    output_tokens_last_hour: int = 0
+    output_tokens_last_day: int = 0
+    cached_input_tokens_last_hour: int = 0
+    cached_input_tokens_last_day: int = 0
+    cache_write_tokens_last_hour: int = 0
+    cache_write_tokens_last_day: int = 0
+    reasoning_tokens_last_hour: int = 0
+    reasoning_tokens_last_day: int = 0
+    total_tokens_last_hour: int = 0
+    total_tokens_last_day: int = 0
+    token_usage_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1248,103 +1261,42 @@ def list_ai_conversation_rows_since(
     return [adapt_ai_conversation_row(row) for row in _fetchall_rows(db_manager, query, params, query_adapter=query_adapter)]
 
 
-def summarize_copilot_premium_requests(
-    db_manager,
+def summarize_token_usage(
+    provider_usage_repo,
     *,
     workspace_id: str | None,
     now: float | None = None,
-    query_adapter: ManagementQueryAdapter | None = None,
-) -> CopilotPremiumUsageSummary:
-    if db_manager is None:
-        return CopilotPremiumUsageSummary()
+) -> TokenUsageSummary:
+    if provider_usage_repo is None:
+        return TokenUsageSummary()
 
-    current_time = time.time() if now is None else now
-    last_day_cutoff = current_time - 86_400
-    today_start = datetime.fromtimestamp(current_time, UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    query_cutoff = min(last_day_cutoff, today_start)
-
-    premium_requests_today = 0.0
-    premium_requests_last_day = 0.0
-    for row in list_ai_conversation_rows_since(
-        db_manager,
-        cutoff=query_cutoff,
-        upper_bound=current_time,
-        workspace_id=workspace_id,
-        query_adapter=query_adapter,
-    ):
-        provider_key = row.provider_key
-        if not provider_key.startswith("copilot"):
-            continue
-
-        premium_requests = extract_copilot_premium_requests(
-            response_text=row.response_text,
-            parsed_json=row.parsed_json,
-        )
-        if premium_requests <= 0:
-            continue
-
-        completed_at = row.completed_at
-        if completed_at >= last_day_cutoff:
-            premium_requests_last_day += premium_requests
-        if completed_at >= today_start:
-            premium_requests_today += premium_requests
-
-    return CopilotPremiumUsageSummary(
-        copilot_premium_requests_today=premium_requests_today,
-        copilot_premium_requests_last_day=premium_requests_last_day,
-    )
-
-
-def extract_copilot_premium_requests(*, response_text: str | None, parsed_json: str | None) -> float:
-    premium_requests: list[float] = []
-    premium_requests.extend(_premium_requests_from_maybe_json(parsed_json))
-    premium_requests.extend(_premium_requests_from_maybe_json(response_text))
-    return max(premium_requests, default=0)
-
-
-def _premium_requests_from_maybe_json(value: str | None) -> list[float]:
-    if not isinstance(value, str):
-        return []
-    text = value.strip()
-    if not text:
-        return []
-
-    premium_requests: list[float] = []
-    parsed_text = _try_json_loads(text)
-    if parsed_text is not None:
-        premium_requests.extend(_collect_premium_requests(parsed_text))
-        return premium_requests
-
-    for line in text.splitlines():
-        parsed_line = _try_json_loads(line.strip())
-        if parsed_line is not None:
-            premium_requests.extend(_collect_premium_requests(parsed_line))
-    return premium_requests
-
-
-def _try_json_loads(text: str) -> Any | None:
-    if not text:
-        return None
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
-
-def _collect_premium_requests(payload: Any) -> list[float]:
-    results: list[float] = []
-    if isinstance(payload, dict):
-        premium_value = payload.get("premiumRequests")
-        if isinstance(premium_value, bool):
-            premium_value = None
-        if isinstance(premium_value, (int, float)):
-            results.append(float(premium_value))
-        for value in payload.values():
-            results.extend(_collect_premium_requests(value))
-    elif isinstance(payload, list):
-        for item in payload:
-            results.extend(_collect_premium_requests(item))
-    return results
+        summaries = provider_usage_repo.summarize_usage(
+            workspace_id=workspace_id,
+            now=time.time() if now is None else now,
+        )
+    except TypeError as exc:
+        if "now" not in str(exc):
+            raise
+        summaries = provider_usage_repo.summarize_usage(workspace_id=workspace_id)
+    source_values = {summary.token_usage_source for summary in summaries if summary.token_usage_source}
+    return TokenUsageSummary(
+        provider_calls_last_hour=sum(summary.calls_last_hour for summary in summaries),
+        provider_calls_last_day=sum(summary.calls_last_day for summary in summaries),
+        input_tokens_last_hour=sum(summary.input_tokens_last_hour for summary in summaries),
+        input_tokens_last_day=sum(summary.input_tokens_last_day for summary in summaries),
+        output_tokens_last_hour=sum(summary.output_tokens_last_hour for summary in summaries),
+        output_tokens_last_day=sum(summary.output_tokens_last_day for summary in summaries),
+        cached_input_tokens_last_hour=sum(summary.cached_input_tokens_last_hour for summary in summaries),
+        cached_input_tokens_last_day=sum(summary.cached_input_tokens_last_day for summary in summaries),
+        cache_write_tokens_last_hour=sum(summary.cache_write_tokens_last_hour for summary in summaries),
+        cache_write_tokens_last_day=sum(summary.cache_write_tokens_last_day for summary in summaries),
+        reasoning_tokens_last_hour=sum(summary.reasoning_tokens_last_hour for summary in summaries),
+        reasoning_tokens_last_day=sum(summary.reasoning_tokens_last_day for summary in summaries),
+        total_tokens_last_hour=sum(summary.total_tokens_last_hour for summary in summaries),
+        total_tokens_last_day=sum(summary.total_tokens_last_day for summary in summaries),
+        token_usage_source=next(iter(source_values)) if len(source_values) == 1 else ("mixed" if source_values else None),
+    )
 
 
 def list_runtime_log_rows_since(

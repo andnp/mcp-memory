@@ -5,18 +5,11 @@ interface PulseOverviewProps {
 }
 
 export function PulseOverview({ overview }: PulseOverviewProps) {
-  const formatPremiumUsage = (value: number) => {
-    if (Number.isInteger(value)) {
-      return value.toString();
-    }
-    return value.toFixed(2).replace(/\.00$/, '');
-  };
-
   const cards = [
     ['Memories', overview.memories.total],
     ['Memory Lines', overview.memory_metrics.total_memory_lines],
     ['Compressed Lines', overview.memory_metrics.total_lines_compressed],
-    ['Copilot Premium Today', overview.premium_usage.copilot_premium_requests_today],
+    ['Provider Tokens (24h)', overview.token_usage.total_tokens_last_day],
     ['Thought Buffer', overview.memory_metrics.thought_buffer_entries],
     ['Failed Tasks', overview.tasks.failed_count],
     ['Embedding Backend', overview.embeddings.backend ?? 'none'],
@@ -29,11 +22,11 @@ export function PulseOverview({ overview }: PulseOverviewProps) {
         <article key={label} className="metric-card">
           <p className="panel-title">{label}</p>
           <p className="mt-1 text-xl font-semibold text-text">
-            {label === 'Copilot Premium Today' ? formatPremiumUsage(value as number) : value}
+            {value}
           </p>
-          {label === 'Copilot Premium Today' ? (
+          {label === 'Provider Tokens (24h)' ? (
             <p className="mt-1 text-xs text-muted">
-              {formatPremiumUsage(overview.premium_usage.copilot_premium_requests_last_day)} in the last 24h
+              {overview.token_usage.provider_calls_last_day} provider calls · {overview.token_usage.output_tokens_last_day} output tokens
             </p>
           ) : null}
         </article>

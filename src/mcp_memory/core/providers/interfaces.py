@@ -47,8 +47,8 @@ class ProviderJSONCall:
     parsed: dict[str, Any] | None = None
     admission_status: str | None = None
     cancellation_requested: bool = False
-    # Kept for compatibility while callers migrate to token telemetry.
-    premium_request: bool | None = None
+    # True when this result represents an admitted provider call.
+    provider_call: bool | None = None
     token_usage_details: ProviderTokenUsage | None = None
     token_usage: int | None = None
     token_usage_source: str | None = None
