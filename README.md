@@ -22,20 +22,21 @@ The runtime is now **relational-first**.
 - Broader offline mutation and generalized writeback remain deferred.
 - Daemon-backed MCP requests now use a 60s client timeout budget, and the transport returns structured timeout errors instead of hanging indefinitely.
 
-### Premium provider economics
+### Provider token economics
 
-For premium providers such as Copilot strong models, the working assumption is:
+Provider billing is token-based. Authoritative input, output, cache, reasoning,
+and total token telemetry is the cost measure; provider-call counts remain a
+throughput measure.
 
-- **one provider execution call is one unit of premium cost**
-- wall-clock runtime does **not** change that cost unit
-- therefore the optimization target is **useful completed work per premium call**, not merely lower latency
+The maintenance optimization target is therefore **useful completed work per
+provider call and per token**, not merely lower latency.
 
 That product goal shapes the maintenance architecture:
 
-- keep one premium execution alive across additional compatible work when safe
-- let the agent discover, reprioritize, and continue through internal tools during the same paid run
-- use deterministic prep only when it increases the amount of useful work a premium call can finish, not just to make the call faster
-- prefer richer work packets and compatibility-group continuation over starting another premium execution for nearby work
+- keep one provider execution alive across additional compatible work when safe
+- let the agent discover, reprioritize, and continue through internal tools during the same run
+- use deterministic prep only when it increases the amount of useful work a provider call can finish, not just to make the call faster
+- prefer richer work packets and compatibility-group continuation when it reduces repeated context and token use
 
 ### Key Features
 

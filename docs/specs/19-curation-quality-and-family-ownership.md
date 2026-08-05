@@ -49,7 +49,7 @@ Objectives are ordered. A lower objective never justifies violating a higher one
 4. **Improve retrieval usefulness.** Prefer changes that make relevant memories easier to find, recognize, and read while reducing misleading results.
 5. **Improve structural coherence.** Reduce duplication, fragmentation, malformed lineage, weak taxonomy, and incorrect links.
 6. **Reduce avoidable storage and context cost.** Compact filler and redundancy only after meaning and retrieval value are preserved.
-7. **Optimize provider economics.** Increase useful work per premium request without lowering safety or quality thresholds.
+7. **Optimize provider economics.** Increase useful work per provider call and per token without lowering safety or quality thresholds.
 
 Mutation count, transcript length, elapsed time, and model-reported action count are not quality objectives.
 
@@ -192,7 +192,7 @@ Revision tokens prevent stale concurrent updates, but sequential agents can stil
 - do not reverse another family's recent action without changed evidence and an explicit reversal reason
 - deduplicate specialist work by family, target revision, and reason
 - report repeated A-to-B-to-A transformations as oscillation incidents
-- escalate repeated cross-family disagreement to operator review rather than spending additional premium calls
+- escalate repeated cross-family disagreement to operator review rather than spending additional provider calls or tokens
 
 Family-specific cooldown is allowed, but the shared mutation ledger is the source for cross-family stabilization.
 
@@ -316,7 +316,7 @@ Required measurements by operation class:
 - repeated unchanged no-op rate
 - cross-family oscillation rate
 - retrieval-regression rate
-- verified useful work per planner execution and premium request
+- verified useful work per planner execution and token usage
 
 Initial rollout rules:
 

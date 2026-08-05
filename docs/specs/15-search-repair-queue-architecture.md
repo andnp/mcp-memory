@@ -133,7 +133,7 @@ It should not compete directly with agentic maintenance sessions for execution s
 
 Important consequences:
 
-- repair backlog should not wait behind unrelated premium-provider work if the request is depending on quick deterministic progress
+- repair backlog should not wait behind unrelated agentic-provider work if the request is depending on quick deterministic progress
 - queue selection should avoid coupling one search request to unrelated agentic backlog
 - repair workers should use batch-oriented deterministic execution, not provider loops
 

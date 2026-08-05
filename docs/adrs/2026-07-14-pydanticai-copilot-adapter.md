@@ -20,7 +20,7 @@ and `run_stream_events()` expose execution events, `all_messages()` exposes a
 transcript, `RunUsage` exposes request/token usage, and `UsageLimits` can cap
 requests and tool calls. These APIs do not automatically understand this
 repository's admission ledger, attempt rows, cancellation finalization,
-Copilot session lifecycle, or premium-request accounting. A custom PydanticAI
+Copilot session lifecycle, or provider token accounting. A custom PydanticAI
 model would therefore be a second provider integration, not a transparent
 replacement for the existing wrapper.
 
@@ -59,10 +59,10 @@ The implementation will:
 6. propagate `asyncio.CancelledError` unchanged after finalizing the running
    conversation and attempt as `cancelled/provider_cancelled`, matching the
    current wrapper; and
-7. treat each admitted Copilot model call as one premium request using the
-   existing provider accounting. PydanticAI `RunUsage.requests` and token
-   counts may be recorded as supplemental telemetry, but must not replace the
-   Copilot accounting until Copilot supplies a documented premium-unit field.
+7. persist the admitted Copilot model call's token usage through the existing
+   provider accounting. PydanticAI `RunUsage.requests` may be recorded as
+   supplemental telemetry, but token counts from the provider SDK are the
+   billing evidence; request counts are not billing units.
 
 PydanticAI `UsageLimits` may be used as an additional local guard when the
 adapter owns tool orchestration, but it is not the admission boundary and its
@@ -76,7 +76,7 @@ request count must not be counted a second time.
 | Cancellation | **Preserved with a required test** | The adapter propagates task cancellation and uses the existing finalization path; the SDK session/task must be verified not to outlive the request. |
 | Attempt telemetry | **Preserved** | Existing observer events remain the source for attempt start, heartbeat, and finish rows. |
 | Transcript capture | **Preserved** | Existing `ai_conversations` capture remains authoritative; PydanticAI messages are optional supplemental data. |
-| Premium-request accounting | **Preserved** | Existing call rows define premium usage; PydanticAI usage is not substituted for them. |
+| Token accounting | **Preserved** | Existing provider usage rows define token usage; PydanticAI request counts are not substituted for it. |
 | Bounded tool use | **Preserved** | Copilot's explicit MCP tool allowlist remains in force and the adapter exposes no mutation tools. |
 | Typed results | **Supported** | Validate the JSON payload with the curation Pydantic model; PydanticAI's `output_type` can be used later without changing the envelope. |
 
@@ -86,20 +86,19 @@ Do not implement a custom Copilot `Model` until a spike proves all of the
 following against the pinned SDK: cancellation closes the Copilot session and
 does not leave a shielded `send_and_wait` task running; every model/tool turn
 can be mapped to the existing attempt and conversation records; and the SDK
-exposes a stable premium-request identifier or an explicitly documented rule
-for deriving one. PydanticAI's `RunUsage` is not evidence of Copilot premium
-units, and its event/transcript APIs do not replace the repository's observer
-callbacks.
+exposes stable token usage fields and the observer captures them for every
+admitted call. PydanticAI's `RunUsage.requests` is not billing evidence, and its
+event/transcript APIs do not replace the repository's observer callbacks.
 
 ## Consequences
 
 - CUR-057 can proceed later behind the provider-neutral planner protocol
   without changing production routing now.
 - The first implementation has one authoritative admission, cancellation,
-  telemetry, transcript, and billing path instead of two competing paths.
+  telemetry, transcript, and token-accounting path instead of two competing paths.
 - PydanticAI remains useful for typed validation and future bounded tool
   orchestration, but a native model adapter is explicitly deferred until the
-  Copilot lifecycle and premium accounting contract are proven.
+  Copilot lifecycle and token-accounting contract are proven.
 - No dependency or production code change is part of CUR-004.
 
 ## Verification evidence

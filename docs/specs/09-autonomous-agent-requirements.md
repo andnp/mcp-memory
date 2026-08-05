@@ -45,20 +45,20 @@ All maintenance agents (Linker, Conflict Detector, Defragmenter, Taxonomist) mus
 - **Providers**: Tiny local models.
 - **Use Cases**: Summarization, Tag Normalization.
 
-### 4.4 Premium Call Objective
+### 4.4 Provider Token Objective
 
-For premium providers such as `copilot-cli` strong models, the system should assume:
+For token-billed providers such as `copilot-cli`, the system should assume:
 
-- **1 execution call = 1 premium cost unit**
-- runtime duration does not materially change that cost unit
+- authoritative input, output, cache, reasoning, and total token usage defines cost
+- one execution call is a throughput unit, not a billing unit
 
 Therefore agent design should optimize for:
 
-- **useful work completed per premium call**
-- keeping one premium execution alive across additional compatible work when safe
+- **useful work completed per provider call and per token**
+- keeping one provider execution alive across additional compatible work when safe
 - letting the agent search, inspect, and adapt inside the same paid run instead of reflexively ending and starting another one
 
-Deterministic prep is justified only when it increases what that same premium execution can finish or avoids a later premium re-entry.
+Deterministic prep is justified only when it increases what that same provider execution can finish or reduces repeated context and token use.
 
 ## 5. Agent-Specific Logic
 
@@ -69,7 +69,7 @@ Deterministic prep is justified only when it increases what that same premium ex
 - Treat transient progress notes, debugging chatter, and one-off execution state as temporal context. Promote them only when they clearly encode reusable long-term knowledge.
 - Mutations are value-driven, not quota-driven. A no-op is correct when a change would reduce coherence or search quality.
 - When uncertain, prefer reading more context, splitting, or linking over forcing a canonical merged record.
-- When a premium execution is already live, prefer pulling more compatible work into the same session over ending early for architectural neatness alone.
+- When a provider execution is already live, prefer pulling more compatible work into the same session over ending early for architectural neatness alone.
 
 ### 5.1 The Taxonomist (Empowered)
 Unlike other agents, the Taxonomist is explicitly empowered to **delete** and **modify** the global `tags` table to collapse synonyms (e.g., `testing` + `tests` → `pytest`).

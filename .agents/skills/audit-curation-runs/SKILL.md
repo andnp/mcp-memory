@@ -38,7 +38,7 @@ repository-wide exploration.
 
    ```bash
    curl -sS http://127.0.0.1:4242/api/overview \
-     | jq '{memories, memory_metrics, premium_usage,
+     | jq '{memories, memory_metrics, token_usage,
             provider_usage:[.provider_usage[]
               | select(.task_name=="memory-curator")],
             agent_runs:[.agent_runs[]
@@ -51,7 +51,7 @@ repository-wide exploration.
               | select(.key=="memory-curator")][0]),
             quality:.curation.retrieval_quality,
             provider_stats:[.stats[]
-              | select(.key|test("runs|provider|premium|mutation|tool_calls"))]}'
+              | select(.key|test("runs|provider|token|mutation|tool_calls"))]}'
    ```
 
    The overview gives current memory counts, provider-call summaries, and the
@@ -117,17 +117,18 @@ explicitly scopes it to `memory-curator`; do not mix those populations silently.
 ## Token accounting rules
 
 Provider-call counts are not token counts. Before claiming a token total, check
-whether the live response exposes input, output, total, or cached token fields.
-In the current mcp-memory runtime, `provider_usage` and `ai_conversations` record
-durations and text but not authoritative token counts, while premium-request
-counters may remain zero even when provider calls occurred. Report exact token
-usage as **unknown** in that case.
+the live response's input, output, total, cached, and reasoning token fields.
+In the current mcp-memory runtime, `provider_usage` is the authoritative
+aggregate when its token source is populated, and `ai_conversations` exposes
+per-call token fields. Report the token source and distinguish recorded totals
+from **unknown** or incomplete telemetry.
 
 If a rough estimate is useful, sum prompt and response character counts from at
 most the API's 200-conversation limit and clearly label the result as a rough
 token-equivalent estimate. Do not present it as billing data, and do not derive
 tokens from provider-call count alone. A daily budget-exceeded or admission-skip
-signal is stronger evidence of cost pressure than a zero premium counter.
+signal is useful evidence of cost pressure, but it is not a substitute for
+token totals.
 
 ## Interpretation guardrails
 
