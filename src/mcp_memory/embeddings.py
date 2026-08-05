@@ -166,6 +166,7 @@ class OllamaEmbedder:
         from searchkernel.adapters.embedding import OllamaEmbeddingProvider
 
         self._configured_model_name = config.model
+        self._request_semaphore = threading.BoundedSemaphore(config.ollama_max_concurrency)
         self._provider = OllamaEmbeddingProvider(
             config.model, base_url=config.ollama_base_url
         )
@@ -195,16 +196,18 @@ class OllamaEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        return self._provider.embed(texts)
+        with self._request_semaphore:
+            return self._provider.embed(texts)
 
     def embed_query(self, text: str) -> list[float]:
-        query_embedder = getattr(self._provider, "embed_query", None)
-        if callable(query_embedder):
-            return list(map(float, cast(Sequence[float], query_embedder(text))))
-        vectors = self._provider.embed([text])
-        if len(vectors) != 1:
-            raise ValueError("Ollama embedder must return one query vector")
-        return list(map(float, vectors[0]))
+        with self._request_semaphore:
+            query_embedder = getattr(self._provider, "embed_query", None)
+            if callable(query_embedder):
+                return list(map(float, cast(Sequence[float], query_embedder(text))))
+            vectors = self._provider.embed([text])
+            if len(vectors) != 1:
+                raise ValueError("Ollama embedder must return one query vector")
+            return list(map(float, vectors[0]))
 
     def status(self) -> EmbedderStatus:
         return EmbedderStatus(

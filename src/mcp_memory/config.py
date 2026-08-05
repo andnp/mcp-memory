@@ -300,10 +300,13 @@ class EmbeddingsConfig:
     model: str = "sentence-transformers/all-MiniLM-L6-v2"
     batch_size: int = 32
     ollama_base_url: str = "http://localhost:11434"
+    ollama_max_concurrency: int = 2
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("embeddings.batch_size must be >= 1")
+        if self.ollama_max_concurrency < 1:
+            raise ValueError("embeddings.ollama_max_concurrency must be >= 1")
         if self.provider not in ("sentence-transformers", "ollama"):
             raise ValueError(
                 "embeddings.provider must be 'sentence-transformers' or 'ollama'"
@@ -695,6 +698,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "model": "sentence-transformers/all-MiniLM-L6-v2",
         "batch_size": 32,
         "ollama_base_url": "http://localhost:11434",
+        "ollama_max_concurrency": 2,
     }
     document["logging"] = {
         "max_runtime_logs": 5000,
