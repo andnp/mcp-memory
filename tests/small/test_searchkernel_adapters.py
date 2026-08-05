@@ -217,6 +217,23 @@ def test_vector_store_upsert_preserves_version_guard():
     assert backend.upserts
 
 
+def test_vector_store_uses_bounded_memory_query_vocabulary():
+    store = MemoryVectorStore(_VectorBackend())
+
+    expanded = store.expand_query("memory search", top_k=2)
+
+    assert expanded.startswith("memory search")
+    assert len(expanded.split()) <= 4
+    assert "memories" in expanded or "records" in expanded
+
+
+def test_record_loading_fails_when_legacy_repository_has_no_read_adapter():
+    with pytest.raises(RuntimeError, match="must provide"):
+        from mcp_memory.integrations.searchkernel_adapters import _load_memory_records
+
+        _load_memory_records(object(), ["memory-1"])
+
+
 def test_memory_stores_expose_repository_epochs():
     repository = _EpochRepository()
 

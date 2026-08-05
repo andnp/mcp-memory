@@ -41,3 +41,14 @@ def test_compatibility_factory_keeps_memory_registry_entry() -> None:
     kernel = build_memory_search_kernel(cast(Any, RetrievalDouble()))
 
     assert isinstance(kernel.registry["memory"], MemorySearchableSource)
+
+
+def test_compatibility_factory_preserves_federation_controls() -> None:
+    kernel = build_memory_search_kernel(
+        cast(Any, RetrievalDouble()),
+        per_source_timeout_s=1.25,
+        side_effect_free=True,
+    )
+
+    assert kernel.executor.config.per_source_timeout_s == 1.25
+    assert kernel.registry["memory"]._side_effect_free is True

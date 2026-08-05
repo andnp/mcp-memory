@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from searchkernel.domain import RecordStatus
 from searchkernel.ports.federation import (
@@ -41,12 +41,14 @@ class MemoryFederationSource(SearchSource):
         source_identity: SourceIdentity | None = None,
         authorize: Callable[[SearchRequest, Any], bool] | None = None,
         health_provider: Any | None = None,
+        side_effect_free: bool = False,
     ) -> None:
         self._retrieval = retrieval
         self._repository = repository
         self._identity = source_identity or SourceIdentity(_SOURCE_KIND, _SOURCE_ID)
         self._authorize = authorize
         self._health_provider = health_provider
+        self._side_effect_free = side_effect_free
         self._capabilities = SourceCapabilities(
             supports_filters=True,
             supports_source_selection=True,
@@ -90,17 +92,28 @@ class MemoryFederationSource(SearchSource):
             if key in _SAFE_FILTERS
         }
         workspace_id = _string_filter(filters, "workspace_id")
+        ranking_workspace_id = None
         if workspace_id is None and request.caller is not None:
             claim_workspace = request.caller.claims.get("workspace_id")
             if isinstance(claim_workspace, str) and claim_workspace:
-                workspace_id = claim_workspace
-        outcome = await self._retrieval.search(
+                ranking_workspace_id = claim_workspace
+        retrieval_filters: dict[str, object] = {}
+        if ranking_workspace_id is not None:
+            retrieval_filters["_ranking_workspace_id"] = ranking_workspace_id
+        retrieval_kwargs: dict[str, object] = {
+            "limit": request.top_k,
+            "workspace_id": workspace_id,
+            "memory_type": _string_filter(filters, "memory_type"),
+            "status": _string_filter(filters, "status"),
+            "include_superseded": bool(filters.get("include_superseded", False)),
+        }
+        if retrieval_filters:
+            retrieval_kwargs["filters"] = retrieval_filters
+        if self._side_effect_free:
+            retrieval_kwargs["side_effect_free"] = True
+        outcome = await cast(Any, self._retrieval).search(
             request.query,
-            limit=request.top_k,
-            workspace_id=workspace_id,
-            memory_type=_string_filter(filters, "memory_type"),
-            status=_string_filter(filters, "status"),
-            include_superseded=bool(filters.get("include_superseded", False)),
+            **retrieval_kwargs,
         )
 
         hits: list[SearchHit] = []

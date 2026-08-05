@@ -35,6 +35,19 @@ _GRAPH_EDGE_DISCOUNTS = {
     "AMENDS": 0.6,
     "CONTRADICTS": 0.35,
 }
+_MEMORY_QUERY_SYNONYMS = {
+    "memory": ("memories", "record"),
+    "memories": ("memory", "records"),
+    "decision": ("decisions", "choice"),
+    "architecture": ("design",),
+    "implementation": ("code", "implementation"),
+    "task": ("tasks", "work"),
+    "bug": ("defect", "issue"),
+    "fix": ("repair", "correction"),
+    "search": ("retrieval", "lookup"),
+    "curation": ("maintenance", "cleanup"),
+}
+_MAX_QUERY_SYNONYMS = 8
 
 
 MemoryBackendHit = RecordHit | tuple[str, float]
@@ -253,6 +266,32 @@ class MemoryVectorStore(AsyncVectorStore):
 
     def vector_epoch(self) -> int:
         return _repository_search_epochs(self._repository)["vector"]
+
+    def expand_query(
+        self,
+        query: str,
+        *,
+        top_k: int = _MAX_QUERY_SYNONYMS,
+        similarity_threshold: float = 0.0,
+    ) -> str:
+        """Provide bounded memory vocabulary to searchkernel's expansion hook."""
+        del similarity_threshold
+        tokens = query.split()
+        lowered = [
+            token.casefold().strip(".,!?;:")
+            for token in tokens
+            if token.casefold().strip(".,!?;:")
+        ]
+        additions: list[str] = []
+        for token in lowered:
+            for synonym in _MEMORY_QUERY_SYNONYMS.get(token, ()):
+                if synonym not in lowered and synonym not in additions:
+                    additions.append(synonym)
+                if len(additions) >= min(max(top_k, 0), _MAX_QUERY_SYNONYMS):
+                    break
+            if len(additions) >= min(max(top_k, 0), _MAX_QUERY_SYNONYMS):
+                break
+        return " ".join([query, *additions]) if additions else query
 
     async def search(
         self,
@@ -712,7 +751,9 @@ def _load_memory_records(
         return records_by_id
     peek_memory = getattr(repository, "peek_memory", None)
     if not callable(peek_memory):
-        return records_by_id
+        raise RuntimeError(
+            "memory repository must provide get_searchable_memories, get_memory, or peek_memory"
+        )
     typed_peek_memory = cast(
         Callable[[str], MemoryReadContext | None],
         peek_memory,

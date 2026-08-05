@@ -58,7 +58,7 @@ class SearchMemoryRecordsOperation:
         debug: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
         started_at = perf_counter()
-        results = self.execute(
+        request = MemorySearchRequest(
             query=query,
             workspace_id=workspace_id,
             limit=limit,
@@ -67,10 +67,18 @@ class SearchMemoryRecordsOperation:
             status=status,
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
-            debug=debug,
         )
+        outcome = self._retrieval.search_sync(request)
+        results = [_to_relational_search_result(result) for result in outcome.results]
+        trace = outcome.trace.to_dict() if debug and outcome.trace is not None else None
         return results, SearchExecutionDiagnostics(
-            timing_ms={"total": round((perf_counter() - started_at) * 1000.0, 3)}
+            timing_ms={"total": round((perf_counter() - started_at) * 1000.0, 3)},
+            kernel_diagnostics=list(outcome.diagnostics),
+            cache_diagnostics=list(outcome.cache_diagnostics),
+            failure_count=len(outcome.failures),
+            missing_record_count=len(outcome.missing_record_ids),
+            degraded=bool(outcome.failures or outcome.degraded),
+            trace=trace,
         )
 
 
