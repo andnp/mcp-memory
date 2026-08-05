@@ -10,6 +10,12 @@ workflow. Do not call `record_thought`, mutation tools, enqueue maintenance, or
 approve curation actions. Search and read only the records needed to support a
 conclusion.
 
+The agent may restart the local daemon when it is stale, unhealthy, or
+explicitly requested: run `uv run mcp-memory daemon restart`, then verify
+`uv run mcp-memory daemon status` reports a running daemon, expected project
+binary, and ready runtime before collecting search evidence. Report restart
+failures as deployment/outage findings rather than negative search results.
+
 ## Protocol
 
 1. State the question, time window, intended scope, runtime version, and
