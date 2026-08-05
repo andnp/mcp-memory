@@ -16,10 +16,11 @@ conclusion.
    searchkernel dependency version. Test global behavior without a workspace
    filter; test isolation with an explicit filter. Treat the caller workspace
    as ranking context, not isolation.
-2. Run a bounded query matrix covering exact refs/paths/symbols/commits,
-   conceptual terms, synonyms, vague terms, multi-term queries, unrelated
+2. Run a bounded query matrix covering conceptual terms, synonyms, vague terms,
+   multi-term queries, ordinary filename/symbol/commit text, unrelated
    controls, and duplicate candidates. Keep each category small and record the
-   exact query strings.
+   exact query strings. Exact memory identifiers are read semantics, not a
+   searchkernel search-quality contract.
 3. Run a baseline without debug, then repeat selected queries with
    `debug: true`. Repeat cold and warm queries when cache behavior or latency
    matters. Keep limits bounded and prefer adaptive search unless exact
@@ -42,9 +43,11 @@ conclusion.
    query; an explicitly authorized follow-up may inspect the sibling
    searchkernel checkout and prepare a release handoff, but dogfooding itself
    must remain read-only.
-8. After an upstream fix is released, verify the source commit, PyPI version,
-   lockfile resolution, and live runtime version before attributing behavior
-   changes to the release.
+8. Treat any searchkernel search-quality code change as upstream release work:
+   it requires a new PyPI release, an mcp-memory dependency and lockfile
+   update, source/PyPI/runtime verification, and only then attribution of
+   behavior changes to the release. Verify the source commit, published PyPI
+   version, resolved lockfile version, and live runtime version.
 
 ## Evidence rules
 
