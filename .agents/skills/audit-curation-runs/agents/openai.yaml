@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Curation Runs"
+  short_description: "Audit curator health, yield, quality, and cost"
+  default_prompt: "Use $audit-curation-runs to audit the last 24 hours of autonomous curation activity."
