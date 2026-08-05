@@ -9,6 +9,7 @@ from mcp_memory.integrations.memory_retrieval import (
 from mcp_memory.relational.search import (
     RelationalSearchResult,
     SearchExecutionDiagnostics,
+    build_search_scope_diagnostics,
     _to_relational_search_result,
 )
 
@@ -85,6 +86,10 @@ class SearchMemoryRecordsOperation:
             failure_count=len(outcome.failures),
             missing_record_count=len(outcome.missing_record_ids),
             degraded=bool(outcome.failures or outcome.degraded),
+            scope=build_search_scope_diagnostics(
+                workspace_id=workspace_id,
+                ranking_workspace_id=ranking_workspace_id,
+            ),
             trace=trace,
         )
 

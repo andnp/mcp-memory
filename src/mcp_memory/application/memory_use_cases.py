@@ -43,7 +43,10 @@ from mcp_memory.relational.operations import (
     ReadMemoryRecordOperation,
     SearchMemoryRecordsOperation,
 )
-from mcp_memory.relational.search import _to_relational_search_result
+from mcp_memory.relational.search import (
+    _to_relational_search_result,
+    build_search_scope_diagnostics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +409,10 @@ async def _search_memory_records_async(
             "degraded": outcome.degraded,
             "pipeline_diagnostics": list(pipeline.diagnostics.reasons),
             "timing_ms": timing_ms,
+            "scope": build_search_scope_diagnostics(
+                workspace_id=arguments.get("workspace_id"),
+                ranking_workspace_id=ctx.workspace_id,
+            ),
         }
         payload["timing_ms"] = timing_ms
         payload["adaptive_limit_enabled"] = arguments.get(

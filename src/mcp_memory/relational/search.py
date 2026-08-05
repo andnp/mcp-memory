@@ -89,6 +89,7 @@ class SearchExecutionDiagnostics:
     missing_record_count: int = 0
     degraded: bool = False
     trace: dict[str, object] | None = None
+    scope: dict[str, object] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -105,7 +106,20 @@ class SearchExecutionDiagnostics:
             "missing_record_count": self.missing_record_count,
             "degraded": self.degraded,
             "trace": None if self.trace is None else dict(self.trace),
+            "scope": dict(self.scope),
         }
+
+
+def build_search_scope_diagnostics(
+    *,
+    workspace_id: str | None,
+    ranking_workspace_id: str | None,
+) -> dict[str, object]:
+    return {
+        "mode": "filtered" if workspace_id is not None else "global",
+        "workspace_filter": workspace_id,
+        "ranking_workspace_id": ranking_workspace_id,
+    }
 
 
 @dataclass(slots=True)
@@ -302,6 +316,10 @@ class RelationalMemorySearchService:
             failure_count=len(outcome.failures),
             missing_record_count=len(outcome.missing_record_ids),
             degraded=outcome.degraded,
+            scope=build_search_scope_diagnostics(
+                workspace_id=workspace_id,
+                ranking_workspace_id=ranking_workspace_id,
+            ),
             trace=(
                 outcome.trace.to_dict()
                 if debug and outcome.trace is not None
