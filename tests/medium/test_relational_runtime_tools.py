@@ -7,7 +7,6 @@ from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.mcp.handlers import call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 
-
 pytestmark = pytest.mark.medium
 
 
@@ -103,7 +102,7 @@ async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch, tmp_path: Path) -> None:
+async def test_relational_runtime_search_debug_reports_stage_timing(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
@@ -140,9 +139,8 @@ async def test_relational_runtime_search_debug_reports_total_timing(monkeypatch,
         assert payload["timing_ms"]["total"] >= 0.0
         assert payload["results"][0]["workspace_ids"] == [runtime.workspace_id or "workspace-local"]
         assert payload["results"][0]["score"] >= 0.0
-        assert payload["search_diagnostics"]["timing_ms"] == {
-            "total": payload["timing_ms"]["total"]
-        }
+        assert payload["search_diagnostics"]["timing_ms"] == payload["timing_ms"]
+        assert payload["timing_ms"]["search"] >= 0.0
     finally:
         runtime.close()
 
@@ -189,9 +187,8 @@ async def test_relational_runtime_search_debug_reports_kernel_diagnostics(
 
         assert "status" not in payload
         assert len(payload["results"]) == 5
-        assert payload["search_diagnostics"]["timing_ms"] == {
-            "total": payload["timing_ms"]["total"]
-        }
+        assert payload["search_diagnostics"]["timing_ms"] == payload["timing_ms"]
+        assert payload["timing_ms"]["search"] >= 0.0
     finally:
         runtime.close()
 
