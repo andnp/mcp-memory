@@ -48,11 +48,11 @@ Bad / Ugly report.
 7. Report curator-ready duplicate or quality signals with candidate refs,
    rationale, confidence, and suggested owner. Never merge, archive, split,
    collapse, or enqueue anything while dogfooding.
-8. After the report, launch a separate read-only triage subagent. It should
-   reproduce the most important findings, distinguish facts from hypotheses,
-   classify ownership, identify release implications, and propose an
-   implementation commit sequence. It must not mutate the corpus, edit code, or
-   implement the plan.
+8. After the report, launch a separate read-only triage subagent. It must return
+   confirmed findings, guesses, who should own each issue, whether an upstream
+   release is actually needed, and a numbered commit plan. Each plan item needs
+   a conventional commit subject, a one-line reason, and a rough changed-line
+   estimate. It must not mutate the corpus, edit code, or implement the plan.
 
 ## Report shape
 
@@ -62,9 +62,8 @@ Keep the report short and candid:
 - **Bad:** gaps, weak ranking, missing context, noisy results, or poor
   search-to-read usefulness.
 - **Ugly:** bugs, surprising behavior, repeated failures, or operational issues.
-- **Follow-up:** likely owner (`searchkernel`, `mcp-memory`, curator,
-  deployment/release), confidence, and the next reproduction or implementation
-  step.
+- **Follow-up:** what to do next, who should do it, how sure we are, and whether
+  it needs an upstream release.
 
 Treat a returned result as evidence of retrieval, not proof of correctness.
 Use selected reads to support judgments. If search or read is unavailable,
@@ -84,7 +83,6 @@ Verify the daemon is running, uses the expected project binary, and is ready
 before collecting search evidence. Report restart failures as deployment or
 outage findings.
 
-Searchkernel must remain domain-neutral. If a search-quality change belongs
-upstream, it requires a new PyPI release, an mcp-memory dependency and lockfile
-update, source/PyPI/runtime verification, and only then attribution of the
-behavior change to that release.
+Keep Searchkernel domain-neutral. If a search-quality fix belongs there, publish
+a new PyPI version, update mcp-memory and its lockfile, and verify the source,
+published package, lockfile, and running daemon before crediting the release.
