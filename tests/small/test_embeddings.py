@@ -184,10 +184,12 @@ def test_embeddings_config_rejects_unknown_provider() -> None:
 def test_ollama_embedder_model_name_and_status() -> None:
     config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
 
-    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider"):
+    with mock.patch("searchkernel.adapters.embedding.OllamaEmbeddingProvider") as mock_provider_cls:
+        mock_provider_cls.return_value.dim = 1024
         embedder = OllamaEmbedder(config)
 
     assert embedder.model_name == "qwen3-embedding:0.6b"
+    assert embedder.dim == 1024
     assert embedder.configured_model_name == "qwen3-embedding:0.6b"
     status = embedder.status()
     assert status.backend == "ollama"
