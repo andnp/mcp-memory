@@ -101,6 +101,32 @@ def test_resolve_daemon_request_timeout_seconds_preserves_default_and_explicit_o
     assert daemon_transport.resolve_daemon_request_timeout_seconds("/api/memories/search", timeout_seconds=7.5) == 7.5
 
 
+def test_attach_transport_diagnostics_correlates_debug_search_response() -> None:
+    daemon_transport = _daemon_transport_module()
+    tracked_request = daemon_transport._TrackedDaemonTransportRequest(
+        request_id=17,
+        path="/internal/tools/search_memory_records",
+        started_at=0.0,
+        started_at_perf=0.0,
+        queue_wait_ms=12.3456,
+        execution_ms=678.9012,
+    )
+    response = {
+        "status": "ok",
+        "results": [],
+        "search_diagnostics": {"timing_ms": {"total": 678.9}},
+    }
+
+    enriched = daemon_transport._attach_transport_diagnostics(response, tracked_request)
+
+    assert enriched["search_diagnostics"]["transport"] == {
+        "request_id": 17,
+        "queue_wait_ms": 12.346,
+        "execution_ms": 678.901,
+    }
+    assert "transport" not in response["search_diagnostics"]
+
+
 def test_request_zmq_json_uses_fresh_client_context_per_request(monkeypatch) -> None:
     daemon_transport = _daemon_transport_module()
 
