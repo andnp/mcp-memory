@@ -28,6 +28,8 @@ _DEFAULT_TORCH_NUM_THREADS = 4
 _DEFAULT_TORCH_INTEROP_THREADS = 1
 _TORCH_THREAD_CAP_INITIALIZED = False
 _TORCH_THREAD_CAP_LOCK = threading.Lock()
+_OLLAMA_REQUEST_SEMAPHORES: dict[tuple[str, str, int], threading.BoundedSemaphore] = {}
+_OLLAMA_REQUEST_SEMAPHORES_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -166,7 +168,16 @@ class OllamaEmbedder:
         from searchkernel.adapters.embedding import OllamaEmbeddingProvider
 
         self._configured_model_name = config.model
-        self._request_semaphore = threading.BoundedSemaphore(config.ollama_max_concurrency)
+        semaphore_key = (
+            config.ollama_base_url,
+            config.model,
+            config.ollama_max_concurrency,
+        )
+        with _OLLAMA_REQUEST_SEMAPHORES_LOCK:
+            self._request_semaphore = _OLLAMA_REQUEST_SEMAPHORES.setdefault(
+                semaphore_key,
+                threading.BoundedSemaphore(config.ollama_max_concurrency),
+            )
         self._provider = OllamaEmbeddingProvider(
             config.model, base_url=config.ollama_base_url
         )
