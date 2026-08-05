@@ -175,6 +175,13 @@ class OllamaEmbedder:
         return self._configured_model_name
 
     @property
+    def dim(self) -> int:
+        dimension = getattr(self._provider, "dim", None)
+        if not isinstance(dimension, int) or dimension < 1:
+            raise AttributeError("Ollama embedding dimension is unavailable")
+        return dimension
+
+    @property
     def configured_model_name(self) -> str:
         return self._configured_model_name
 
