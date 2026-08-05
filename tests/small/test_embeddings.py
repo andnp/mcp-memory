@@ -251,6 +251,58 @@ def test_ollama_embedder_bounds_request_concurrency() -> None:
             assert [future.result(timeout=2) for future in futures] == [[[0.1, 0.2]]] * 4
 
 
+def test_ollama_embedder_instances_currently_admit_semantic_requests_independently() -> None:
+    config = EmbeddingsConfig(
+        provider="ollama",
+        model="qwen3-embedding:0.6b",
+        ollama_max_concurrency=1,
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    both_entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProvider:
+        def embed_query(self, text: str) -> list[float]:
+            nonlocal active, max_active
+            assert text in {"first query", "second query"}
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+                if active == 2:
+                    both_entered.set()
+            try:
+                assert release.wait(2)
+                return [0.1, 0.2]
+            finally:
+                with lock:
+                    active -= 1
+
+    with mock.patch(
+        "searchkernel.adapters.embedding.OllamaEmbeddingProvider",
+        side_effect=[BlockingProvider(), BlockingProvider()],
+    ):
+        first = OllamaEmbedder(config)
+        second = OllamaEmbedder(config)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(first.embed_query, "first query"),
+                executor.submit(second.embed_query, "second query"),
+            ]
+            assert both_entered.wait(2)
+            with lock:
+                assert active == 2
+            release.set()
+            assert [future.result(timeout=2) for future in futures] == [
+                [0.1, 0.2],
+                [0.1, 0.2],
+            ]
+
+    assert max_active == 2
+
+
 def test_ollama_embedder_embed_returns_empty_list_for_no_texts() -> None:
     config = EmbeddingsConfig(provider="ollama", model="qwen3-embedding:0.6b")
 
