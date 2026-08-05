@@ -71,8 +71,15 @@ class SearchMemoryRecordsOperation:
         outcome = self._retrieval.search_sync(request)
         results = [_to_relational_search_result(result) for result in outcome.results]
         trace = outcome.trace.to_dict() if debug and outcome.trace is not None else None
+        timing_ms = {"total": round((perf_counter() - started_at) * 1000.0, 3)}
+        timing_ms.update(
+            {
+                stage: round(duration, 3)
+                for stage, duration in outcome.stage_timings_ms.items()
+            }
+        )
         return results, SearchExecutionDiagnostics(
-            timing_ms={"total": round((perf_counter() - started_at) * 1000.0, 3)},
+            timing_ms=timing_ms,
             kernel_diagnostics=list(outcome.diagnostics),
             cache_diagnostics=list(outcome.cache_diagnostics),
             failure_count=len(outcome.failures),

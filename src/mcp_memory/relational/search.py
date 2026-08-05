@@ -286,10 +286,17 @@ class RelationalMemorySearchService:
                 _utc_now(),
                 best_effort=True,
             )
+        timing_ms = {
+            "total": round((time.perf_counter() - started_at) * 1000.0, 3)
+        }
+        timing_ms.update(
+            {
+                stage: round(duration, 3)
+                for stage, duration in outcome.stage_timings_ms.items()
+            }
+        )
         diagnostics = SearchExecutionDiagnostics(
-            timing_ms={
-                "total": round((time.perf_counter() - started_at) * 1000.0, 3)
-            },
+            timing_ms=timing_ms,
             kernel_diagnostics=list(outcome.diagnostics),
             cache_diagnostics=list(outcome.cache_diagnostics),
             failure_count=len(outcome.failures),

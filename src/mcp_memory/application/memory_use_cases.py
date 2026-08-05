@@ -386,6 +386,13 @@ async def _search_memory_records_async(
         ),
     }
     if arguments["debug"]:
+        timing_ms = {"total": round(duration_ms, 3)}
+        timing_ms.update(
+            {
+                stage: round(duration, 3)
+                for stage, duration in outcome.stage_timings_ms.items()
+            }
+        )
         payload["search_diagnostics"] = {
             "kernel_failures": [
                 {
@@ -398,9 +405,9 @@ async def _search_memory_records_async(
             "missing_record_ids": list(outcome.missing_record_ids),
             "degraded": outcome.degraded,
             "pipeline_diagnostics": list(pipeline.diagnostics.reasons),
-            "timing_ms": {"total": round(duration_ms, 3)},
+            "timing_ms": timing_ms,
         }
-        payload["timing_ms"] = {"total": round(duration_ms, 3)}
+        payload["timing_ms"] = timing_ms
         payload["adaptive_limit_enabled"] = arguments.get(
             "adaptive_limit",
             "limit" not in arguments,

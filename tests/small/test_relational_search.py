@@ -286,7 +286,7 @@ def test_service_search_filters_archived_records_by_default(db_manager) -> None:
     ] == [archived.id]
 
 
-def test_service_search_diagnostics_are_kernel_compatible_total_only(db_manager) -> None:
+def test_service_search_diagnostics_expose_kernel_stage_timing(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     service = RelationalMemorySearchService(repository, Config())
     record = repository.create_memory(
@@ -307,7 +307,7 @@ def test_service_search_diagnostics_are_kernel_compatible_total_only(db_manager)
     assert results
     assert diagnostics.timing_ms["total"] >= 0.0
     assert diagnostics.to_payload()["semantic_candidate_strategy"] == "kernel"
-    assert set(diagnostics.timing_ms) == {"total"}
+    assert diagnostics.timing_ms["search"] >= 0.0
 
 
 def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) -> None:
