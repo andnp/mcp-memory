@@ -310,6 +310,41 @@ def test_service_search_diagnostics_expose_kernel_stage_timing(db_manager) -> No
     assert diagnostics.timing_ms["search"] >= 0.0
 
 
+def test_service_search_diagnostics_describe_scope(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    service = RelationalMemorySearchService(repository, Config())
+    record = repository.create_memory(
+        title="Scope diagnostics note",
+        content="Global and filtered searches expose their scope.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+
+    _, global_diagnostics = service.search_memories_with_diagnostics(
+        "scope diagnostics",
+        ranking_workspace_id="workspace-alpha",
+        debug=True,
+    )
+    _, filtered_diagnostics = service.search_memories_with_diagnostics(
+        "scope diagnostics",
+        workspace_id="workspace-alpha",
+        ranking_workspace_id="workspace-beta",
+        debug=True,
+    )
+
+    assert global_diagnostics.to_payload()["scope"] == {
+        "mode": "global",
+        "workspace_filter": None,
+        "ranking_workspace_id": "workspace-alpha",
+    }
+    assert filtered_diagnostics.to_payload()["scope"] == {
+        "mode": "filtered",
+        "workspace_filter": "workspace-alpha",
+        "ranking_workspace_id": "workspace-beta",
+    }
+
+
 def test_service_search_diagnostics_preserve_kernel_outcome_details(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     repository.create_memory(
