@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
+
 
 class ProviderConversationLike(Protocol):
     @property
@@ -76,6 +78,7 @@ class ProviderUsagePort(Protocol):
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
     ) -> None: ...
 
     def record_conversation(
@@ -97,6 +100,7 @@ class ProviderUsagePort(Protocol):
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
         started_at: float,
         completed_at: float,
     ) -> None: ...

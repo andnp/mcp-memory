@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 25
+POSTGRES_SCHEMA_VERSION = 26
 
 
 @dataclass(frozen=True)
@@ -840,6 +840,26 @@ POSTGRES_MIGRATIONS = (
         statements=(
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS engagement_utility_delta DOUBLE PRECISION",
             "ALTER TABLE curation_quality_evidence ADD COLUMN IF NOT EXISTS engagement_evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ),
+    ),
+    PostgresMigration(
+        version=26,
+        name="add_provider_token_usage",
+        statements=(
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS input_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS output_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS cached_input_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS total_tokens BIGINT",
+            "ALTER TABLE provider_usage ADD COLUMN IF NOT EXISTS token_usage_source TEXT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS input_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS output_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS cached_input_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS total_tokens BIGINT",
+            "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS token_usage_source TEXT",
         ),
     ),
 )

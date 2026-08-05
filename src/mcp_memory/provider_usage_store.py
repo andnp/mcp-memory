@@ -11,6 +11,7 @@ from mcp_memory.operational_store_rows import (
     build_provider_usage_summaries,
     encode_optional_json_object,
 )
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 from mcp_memory.utils.db import DatabaseManager
 
 
@@ -40,11 +41,12 @@ class ProviderUsageRepository:
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
     ):
         if self._db_manager is None:
             return
         self._db_manager.get_connection().execute(
-            "INSERT INTO provider_usage (workspace_id, task_name, task_id, request_id, subprocess_pid, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO provider_usage (workspace_id, task_name, task_id, request_id, subprocess_pid, provider_key, provider_name, model_name, status, duration_seconds, created_at, error_text, reason_category, reason_code, retry_delay_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._workspace_id,
                 task_name,
@@ -61,6 +63,13 @@ class ProviderUsageRepository:
                 reason_category,
                 reason_code,
                 retry_delay_seconds,
+                None if token_usage is None else token_usage.input_tokens,
+                None if token_usage is None else token_usage.output_tokens,
+                None if token_usage is None else token_usage.cached_input_tokens,
+                None if token_usage is None else token_usage.cache_write_tokens,
+                None if token_usage is None else token_usage.reasoning_tokens,
+                None if token_usage is None else token_usage.total_tokens,
+                None if token_usage is None else token_usage.source,
             ),
         )
         self._db_manager.get_connection().commit()
@@ -84,13 +93,14 @@ class ProviderUsageRepository:
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
         started_at: float,
         completed_at: float,
     ) -> None:
         if self._db_manager is None:
             return
         self._db_manager.get_connection().execute(
-            "INSERT OR REPLACE INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO ai_conversations (request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, retry_delay_seconds, started_at, completed_at, duration_seconds, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 request_id,
                 attempt,
@@ -112,6 +122,13 @@ class ProviderUsageRepository:
                 started_at,
                 completed_at,
                 max(completed_at - started_at, 0.0),
+                None if token_usage is None else token_usage.input_tokens,
+                None if token_usage is None else token_usage.output_tokens,
+                None if token_usage is None else token_usage.cached_input_tokens,
+                None if token_usage is None else token_usage.cache_write_tokens,
+                None if token_usage is None else token_usage.reasoning_tokens,
+                None if token_usage is None else token_usage.total_tokens,
+                None if token_usage is None else token_usage.source,
             ),
         )
         self._db_manager.get_connection().commit()
@@ -320,7 +337,7 @@ class ProviderUsageRepository:
         current_time = time.time() if now is None else now
         params: list[object] = []
         query = (
-            "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code "
+            "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source "
             "FROM provider_usage"
         )
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id

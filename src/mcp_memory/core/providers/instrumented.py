@@ -18,6 +18,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 from mcp_memory.core.providers.interfaces import ProviderJSONCall
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 from mcp_memory.core.ports.providers import ProviderUsagePort, TaskExecutionAttemptPort
 
 
@@ -327,6 +328,7 @@ class InstrumentedAIProvider:
             reason_category=event.reason_category,
             reason_code=event.reason_code,
             retry_delay_seconds=event.retry_delay_seconds,
+            token_usage=event.token_usage,
             started_at=event.started_at,
             completed_at=event.completed_at,
         )
@@ -489,6 +491,7 @@ class InstrumentedAIProvider:
                 reason_category="cancellation",
                 reason_code="provider_cancelled",
                 retry_delay_seconds=None,
+                token_usage=_extract_token_usage(observer_state.last_event),
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
@@ -526,6 +529,7 @@ class InstrumentedAIProvider:
                     admission_status="admitted",
                     cancellation_requested=True,
                     premium_request=True,
+                    token_usage_details=_extract_token_usage(observer_state.last_event),
                 ),
             )
             raise
@@ -551,6 +555,7 @@ class InstrumentedAIProvider:
                 reason_category=classification.reason_category,
                 reason_code=classification.reason_code,
                 retry_delay_seconds=classification.retry_delay_seconds,
+                token_usage=_extract_token_usage(observer_state.last_event),
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
@@ -600,6 +605,7 @@ class InstrumentedAIProvider:
                     parsed=None,
                     admission_status="admitted",
                     premium_request=True,
+                    token_usage_details=_extract_token_usage(observer_state.last_event),
                 ),
             )
             raise
@@ -628,6 +634,7 @@ class InstrumentedAIProvider:
             reason_category=None,
             reason_code=None,
             retry_delay_seconds=None,
+            token_usage=_extract_token_usage(observer_state.last_event),
         )
         self._finish_attempt(
             request_id=request_id,
@@ -653,6 +660,7 @@ class InstrumentedAIProvider:
                 parsed=response,
                 admission_status="admitted",
                 premium_request=True,
+                token_usage_details=_extract_token_usage(observer_state.last_event),
             ),
         )
         return response
@@ -743,6 +751,7 @@ class InstrumentedAIProvider:
                 reason_category="cancellation",
                 reason_code="provider_cancelled",
                 retry_delay_seconds=None,
+                token_usage=_extract_token_usage(observer_state.last_event),
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
@@ -784,6 +793,7 @@ class InstrumentedAIProvider:
                 reason_category=classification.reason_category,
                 reason_code=classification.reason_code,
                 retry_delay_seconds=classification.retry_delay_seconds,
+                token_usage=_extract_token_usage(observer_state.last_event),
             )
             self._usage_repository.finalize_running_conversation(
                 request_id=request_id,
@@ -839,6 +849,7 @@ class InstrumentedAIProvider:
             reason_category=None if result.status == "success" else "execution",
             reason_code=None if result.status == "success" else "agent_run_unsuccessful",
             retry_delay_seconds=None,
+            token_usage=result.token_usage,
         )
         self._finish_attempt(
             request_id=request_id,
@@ -918,6 +929,7 @@ class _InstrumentedAgenticSession:
             reason_category=None if result.status == "success" else "execution",
             reason_code=None if result.status == "success" else "agent_run_unsuccessful",
             retry_delay_seconds=None,
+            token_usage=result.token_usage,
         )
         return result
 
@@ -974,6 +986,12 @@ def _extract_raw_text(event: ProviderObserverEvent | None) -> str | None:
     if not isinstance(event, ProviderAttemptFinishedEvent):
         return None
     return event.raw_text
+
+
+def _extract_token_usage(event: ProviderObserverEvent | None) -> ProviderTokenUsage | None:
+    if not isinstance(event, ProviderAttemptFinishedEvent):
+        return None
+    return event.token_usage
 
 
 def _notify_json_call(

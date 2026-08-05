@@ -142,6 +142,19 @@ class ProviderUsageSummary:
     active_admission_reason: str | None = None
     active_admission_category: str | None = None
     active_retry_delay_seconds: float | None = None
+    input_tokens_last_hour: int = 0
+    input_tokens_last_day: int = 0
+    output_tokens_last_hour: int = 0
+    output_tokens_last_day: int = 0
+    cached_input_tokens_last_hour: int = 0
+    cached_input_tokens_last_day: int = 0
+    cache_write_tokens_last_hour: int = 0
+    cache_write_tokens_last_day: int = 0
+    reasoning_tokens_last_hour: int = 0
+    reasoning_tokens_last_day: int = 0
+    total_tokens_last_hour: int = 0
+    total_tokens_last_day: int = 0
+    token_usage_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -205,6 +218,13 @@ class AIConversationRecord:
     started_at: float
     completed_at: float
     duration_seconds: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    token_usage_source: str | None = None
 
     @classmethod
     def from_sqlite_row(cls, row: Mapping[str, object]) -> Self:
@@ -230,6 +250,13 @@ class AIConversationRecord:
             started_at=_require_float(row["started_at"], "started_at"),
             completed_at=_require_float(row["completed_at"], "completed_at"),
             duration_seconds=_optional_float(row["duration_seconds"]) or 0.0,
+            input_tokens=_optional_int(row["input_tokens"]) if "input_tokens" in row.keys() else None,
+            output_tokens=_optional_int(row["output_tokens"]) if "output_tokens" in row.keys() else None,
+            cached_input_tokens=_optional_int(row["cached_input_tokens"]) if "cached_input_tokens" in row.keys() else None,
+            cache_write_tokens=_optional_int(row["cache_write_tokens"]) if "cache_write_tokens" in row.keys() else None,
+            reasoning_tokens=_optional_int(row["reasoning_tokens"]) if "reasoning_tokens" in row.keys() else None,
+            total_tokens=_optional_int(row["total_tokens"]) if "total_tokens" in row.keys() else None,
+            token_usage_source=_optional_str(row["token_usage_source"]) if "token_usage_source" in row.keys() else None,
         )
 
     @classmethod
@@ -256,6 +283,13 @@ class AIConversationRecord:
             started_at=_require_float(row[18], "started_at"),
             completed_at=_require_float(row[19], "completed_at"),
             duration_seconds=_optional_float(row[20]) or 0.0,
+            input_tokens=_optional_int(row[21]) if len(row) > 21 else None,
+            output_tokens=_optional_int(row[22]) if len(row) > 22 else None,
+            cached_input_tokens=_optional_int(row[23]) if len(row) > 23 else None,
+            cache_write_tokens=_optional_int(row[24]) if len(row) > 24 else None,
+            reasoning_tokens=_optional_int(row[25]) if len(row) > 25 else None,
+            total_tokens=_optional_int(row[26]) if len(row) > 26 else None,
+            token_usage_source=_optional_str(row[27]) if len(row) > 27 else None,
         )
 
 
@@ -366,6 +400,13 @@ class ProviderUsageSample:
     duration_seconds: float
     created_at: float
     reason_code: str | None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    token_usage_source: str | None = None
 
     @classmethod
     def from_sqlite_row(cls, row: Mapping[str, object]) -> Self:
@@ -378,6 +419,13 @@ class ProviderUsageSample:
             duration_seconds=_optional_float(row["duration_seconds"]) or 0.0,
             created_at=_optional_float(row["created_at"]) or 0.0,
             reason_code=_optional_str(row["reason_code"]),
+            input_tokens=_optional_int(row["input_tokens"]) if "input_tokens" in row.keys() else None,
+            output_tokens=_optional_int(row["output_tokens"]) if "output_tokens" in row.keys() else None,
+            cached_input_tokens=_optional_int(row["cached_input_tokens"]) if "cached_input_tokens" in row.keys() else None,
+            cache_write_tokens=_optional_int(row["cache_write_tokens"]) if "cache_write_tokens" in row.keys() else None,
+            reasoning_tokens=_optional_int(row["reasoning_tokens"]) if "reasoning_tokens" in row.keys() else None,
+            total_tokens=_optional_int(row["total_tokens"]) if "total_tokens" in row.keys() else None,
+            token_usage_source=_optional_str(row["token_usage_source"]) if "token_usage_source" in row.keys() else None,
         )
 
     @classmethod
@@ -391,6 +439,13 @@ class ProviderUsageSample:
             duration_seconds=_optional_float(row[5]) or 0.0,
             created_at=_optional_float(row[6]) or 0.0,
             reason_code=_optional_str(row[7]),
+            input_tokens=_optional_int(row[8]) if len(row) > 8 else None,
+            output_tokens=_optional_int(row[9]) if len(row) > 9 else None,
+            cached_input_tokens=_optional_int(row[10]) if len(row) > 10 else None,
+            cache_write_tokens=_optional_int(row[11]) if len(row) > 11 else None,
+            reasoning_tokens=_optional_int(row[12]) if len(row) > 12 else None,
+            total_tokens=_optional_int(row[13]) if len(row) > 13 else None,
+            token_usage_source=_optional_str(row[14]) if len(row) > 14 else None,
         )
 
     @property
@@ -423,10 +478,25 @@ class _ProviderUsageAccumulator:
     duration_last_day: list[float] = field(default_factory=list)
     failure_reasons: dict[str, int] = field(default_factory=dict)
     skip_reasons: dict[str, int] = field(default_factory=dict)
+    input_tokens_last_hour: int = 0
+    input_tokens_last_day: int = 0
+    output_tokens_last_hour: int = 0
+    output_tokens_last_day: int = 0
+    cached_input_tokens_last_hour: int = 0
+    cached_input_tokens_last_day: int = 0
+    cache_write_tokens_last_hour: int = 0
+    cache_write_tokens_last_day: int = 0
+    reasoning_tokens_last_hour: int = 0
+    reasoning_tokens_last_day: int = 0
+    total_tokens_last_hour: int = 0
+    total_tokens_last_day: int = 0
+    token_usage_sources: dict[str, int] = field(default_factory=dict)
 
     def observe(self, sample: ProviderUsageSample, *, last_hour: float, last_day: float) -> None:
         in_last_hour = sample.created_at >= last_hour
         in_last_day = sample.created_at >= last_day
+        if in_last_day:
+            self._observe_tokens(sample, in_last_hour=in_last_hour)
         if sample.status == "skipped":
             if in_last_day:
                 self.skips_last_day += 1
@@ -480,7 +550,41 @@ class _ProviderUsageAccumulator:
                 if active_state is None
                 else max(active_state.active_until - current_time, 0.0)
             ),
+            input_tokens_last_hour=self.input_tokens_last_hour,
+            input_tokens_last_day=self.input_tokens_last_day,
+            output_tokens_last_hour=self.output_tokens_last_hour,
+            output_tokens_last_day=self.output_tokens_last_day,
+            cached_input_tokens_last_hour=self.cached_input_tokens_last_hour,
+            cached_input_tokens_last_day=self.cached_input_tokens_last_day,
+            cache_write_tokens_last_hour=self.cache_write_tokens_last_hour,
+            cache_write_tokens_last_day=self.cache_write_tokens_last_day,
+            reasoning_tokens_last_hour=self.reasoning_tokens_last_hour,
+            reasoning_tokens_last_day=self.reasoning_tokens_last_day,
+            total_tokens_last_hour=self.total_tokens_last_hour,
+            total_tokens_last_day=self.total_tokens_last_day,
+            token_usage_source=_top_reason(self.token_usage_sources),
         )
+
+    def _observe_tokens(self, sample: ProviderUsageSample, *, in_last_hour: bool) -> None:
+        fields = (
+            ("input_tokens", "input_tokens_last_day", "input_tokens_last_hour"),
+            ("output_tokens", "output_tokens_last_day", "output_tokens_last_hour"),
+            ("cached_input_tokens", "cached_input_tokens_last_day", "cached_input_tokens_last_hour"),
+            ("cache_write_tokens", "cache_write_tokens_last_day", "cache_write_tokens_last_hour"),
+            ("reasoning_tokens", "reasoning_tokens_last_day", "reasoning_tokens_last_hour"),
+            ("total_tokens", "total_tokens_last_day", "total_tokens_last_hour"),
+        )
+        for source_field, day_field, hour_field in fields:
+            value = getattr(sample, source_field)
+            if value is None:
+                continue
+            setattr(self, day_field, getattr(self, day_field) + value)
+            if in_last_hour:
+                setattr(self, hour_field, getattr(self, hour_field) + value)
+        if sample.token_usage_source:
+            self.token_usage_sources[sample.token_usage_source] = (
+                self.token_usage_sources.get(sample.token_usage_source, 0) + 1
+            )
 
 
 def build_provider_usage_summaries(

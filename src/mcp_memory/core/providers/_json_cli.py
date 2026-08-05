@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp_memory.core.providers.interfaces import ProviderObserver
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class AIResponse:
     error: str | None = None
     subprocess_pid: int | None = None
     returncode: int | None = None
+    token_usage: ProviderTokenUsage | None = None
 
     @property
     def success(self) -> bool:

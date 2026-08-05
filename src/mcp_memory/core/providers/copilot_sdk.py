@@ -5,8 +5,9 @@ import copy
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mcp_memory.core.providers._json_cli import AIResponse
 from mcp_memory.core.providers._json_cli import PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS
@@ -18,6 +19,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserver
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,13 @@ _imported_modules = None
 CopilotClient = None
 PermissionHandler = None
 AssistantMessageData = None
+AssistantUsageData = None
 SessionErrorData = None
 
 
 def _import_copilot_modules():
     """Lazily import copilot modules to allow daemon startup without the package."""
-    global _imported_modules, CopilotClient, PermissionHandler, AssistantMessageData, SessionErrorData
+    global _imported_modules, CopilotClient, PermissionHandler, AssistantMessageData, AssistantUsageData, SessionErrorData
 
     # Return cached versions if already imported
     if _imported_modules is not None:
@@ -41,13 +44,21 @@ def _import_copilot_modules():
         from copilot import CopilotClient as _CopilotClient
         from copilot.session import PermissionHandler as _PermissionHandler
         from copilot.session_events import AssistantMessageData as _AssistantMessageData
+        from copilot.session_events import AssistantUsageData as _AssistantUsageData
         from copilot.session_events import SessionErrorData as _SessionErrorData
 
         # Cache and set module-level attributes for test patching
-        _imported_modules = (_CopilotClient, _PermissionHandler, _AssistantMessageData, _SessionErrorData)
+        _imported_modules = (
+            _CopilotClient,
+            _PermissionHandler,
+            _AssistantMessageData,
+            _AssistantUsageData,
+            _SessionErrorData,
+        )
         CopilotClient = _CopilotClient
         PermissionHandler = _PermissionHandler
         AssistantMessageData = _AssistantMessageData
+        AssistantUsageData = _AssistantUsageData
         SessionErrorData = _SessionErrorData
 
         return _imported_modules
@@ -64,6 +75,108 @@ try:
 except ImportError:
     # It's okay if copilot is not installed - it will be lazily imported on first use
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _CopilotSessionResult:
+    event: Any
+    token_usage: ProviderTokenUsage | None
+
+
+@dataclass(slots=True)
+class _CopilotTokenUsageAccumulator:
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    observed_usage_event: bool = False
+
+    def observe(self, event: Any) -> None:
+        usage_type = globals()["AssistantUsageData"]
+        if usage_type is None or not isinstance(getattr(event, "data", None), usage_type):
+            return
+        data = event.data
+        self.observed_usage_event = True
+        self.input_tokens = _sum_optional(self.input_tokens, _optional_token_value(data.input_tokens))
+        self.output_tokens = _sum_optional(self.output_tokens, _optional_token_value(data.output_tokens))
+        self.cached_input_tokens = _sum_optional(
+            self.cached_input_tokens,
+            _optional_token_value(data.cache_read_tokens),
+        )
+        self.cache_write_tokens = _sum_optional(
+            self.cache_write_tokens,
+            _optional_token_value(data.cache_write_tokens),
+        )
+        self.reasoning_tokens = _sum_optional(
+            self.reasoning_tokens,
+            _optional_token_value(data.reasoning_tokens),
+        )
+
+    def finish(self, event: Any) -> ProviderTokenUsage | None:
+        if not self.observed_usage_event:
+            message_data = getattr(event, "data", None)
+            message_type = globals()["AssistantMessageData"]
+            if message_type is not None and isinstance(message_data, message_type):
+                self.output_tokens = _optional_token_value(getattr(message_data, "output_tokens", None))
+        if not any(
+            value is not None
+            for value in (
+                self.input_tokens,
+                self.output_tokens,
+                self.cached_input_tokens,
+                self.cache_write_tokens,
+                self.reasoning_tokens,
+                self.total_tokens,
+            )
+        ):
+            return None
+        total_tokens = self.total_tokens
+        if total_tokens is None and self.input_tokens is not None and self.output_tokens is not None:
+            total_tokens = self.input_tokens + self.output_tokens
+        return ProviderTokenUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            total_tokens=total_tokens,
+            source=(
+                "copilot_sdk_assistant_usage"
+                if self.observed_usage_event
+                else "copilot_sdk_assistant_message"
+            ),
+        )
+
+
+def _optional_token_value(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return max(int(cast(Any, value)), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sum_optional(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def _subscribe_to_token_usage(session: Any, accumulator: _CopilotTokenUsageAccumulator):
+    on = getattr(session, "on", None)
+    if not callable(on):
+        return lambda: None
+    try:
+        unsubscribe = on(accumulator.observe)
+    except Exception:  # noqa: BLE001 - telemetry must not break provider calls
+        logger.debug("Copilot session does not support usage subscriptions", exc_info=True)
+        return lambda: None
+    return unsubscribe if callable(unsubscribe) else (lambda: None)
 
 
 class CopilotSDKProvider:
@@ -120,17 +233,22 @@ class CopilotSDKProvider:
         started_at = time.time()
         self._notify(ProviderAttemptStartedEvent(attempt=attempt, prompt=prompt, subprocess_pid=None, started_at=started_at))
         try:
-            event = await self._send_with_heartbeat(prompt, started_at=started_at, attempt=attempt)
+            session_result = await self._send_with_heartbeat(prompt, started_at=started_at, attempt=attempt)
         except TimeoutError:
             response = AIResponse(raw_text="", parsed=None, error="Command timed out")
             self._finish(attempt=attempt, prompt=prompt, started_at=started_at, status="timeout", response=response)
             return response
         except Exception as exc:  # noqa: BLE001 - SDK raises plain Exception for connection/session failures
-            response = AIResponse(raw_text="", parsed=None, error=str(exc))
+            response = AIResponse(
+                raw_text="",
+                parsed=None,
+                error=str(exc),
+                token_usage=getattr(exc, "copilot_token_usage", None),
+            )
             self._finish(attempt=attempt, prompt=prompt, started_at=started_at, status="error", response=response)
             return response
 
-        response = _to_ai_response(event)
+        response = _to_ai_response(session_result.event, token_usage=session_result.token_usage)
         self._finish(
             attempt=attempt,
             prompt=prompt,
@@ -140,7 +258,13 @@ class CopilotSDKProvider:
         )
         return response
 
-    async def _send_with_heartbeat(self, prompt: str, *, started_at: float, attempt: int):
+    async def _send_with_heartbeat(
+        self,
+        prompt: str,
+        *,
+        started_at: float,
+        attempt: int,
+    ) -> _CopilotSessionResult:
         # Use global CopilotClient (may be patched in tests)
         if globals()['CopilotClient'] is None:
             _import_copilot_modules()
@@ -187,9 +311,18 @@ class CopilotSDKProvider:
                 on_permission_request=_PermissionHandler.approve_all,
                 mcp_servers=self._mcp_servers(),
             )
+            usage = _CopilotTokenUsageAccumulator()
+            unsubscribe = _subscribe_to_token_usage(session, usage)
             try:
-                return await session.send_and_wait(prompt, timeout=self._timeout_seconds)
+                event = await session.send_and_wait(prompt, timeout=self._timeout_seconds)
+                return _CopilotSessionResult(event=event, token_usage=usage.finish(event))
+            except BaseException as exc:
+                token_usage = usage.finish(None)
+                if token_usage is not None:
+                    setattr(exc, "copilot_token_usage", token_usage)
+                raise
             finally:
+                unsubscribe()
                 await session.disconnect()
 
     def _finish(self, *, attempt: int, prompt: str, started_at: float, status: str, response: AIResponse) -> None:
@@ -207,6 +340,7 @@ class CopilotSDKProvider:
                 raw_text=response.raw_text,
                 parsed=response.parsed,
                 error_text=response.error,
+                token_usage=response.token_usage,
             )
         )
 
@@ -298,6 +432,8 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                 started_at=started_at,
             )
         )
+        usage = _CopilotTokenUsageAccumulator()
+        unsubscribe = _subscribe_to_token_usage(session, usage)
         operation_task = asyncio.ensure_future(
             session.send_and_wait(prompt, timeout=self._timeout_seconds)
         )
@@ -312,7 +448,11 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                         asyncio.shield(operation_task),
                         timeout=min(PROVIDER_SUBPROCESS_HEARTBEAT_SECONDS, remaining_seconds),
                     )
-                    response = _to_ai_response(event, allow_non_json=allow_non_json)
+                    response = _to_ai_response(
+                        event,
+                        allow_non_json=allow_non_json,
+                        token_usage=usage.finish(event),
+                    )
                     self._finish(
                         attempt=1,
                         prompt=prompt,
@@ -326,6 +466,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                         response = _to_ai_response(
                             operation_task.result(),
                             allow_non_json=allow_non_json,
+                            token_usage=usage.finish(operation_task.result()),
                         )
                         self._finish(
                             attempt=1,
@@ -347,6 +488,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                         )
                     )
         finally:
+            unsubscribe()
             if not operation_task.done():
                 operation_task.cancel()
                 try:
@@ -366,6 +508,7 @@ class CopilotSDKAgenticProvider(CopilotSDKProvider):
                     raw_text=response.raw_text,
                     parsed=response.parsed,
                     subprocess_pid=None,
+                    token_usage=response.token_usage,
                 )
         assert last_response is not None
         raise build_cli_failure_exception(self.provider_name, self._max_retries + 1, last_response.error)
@@ -430,6 +573,7 @@ class _CopilotSDKAgenticSession:
             raw_text=response.raw_text,
             parsed=response.parsed,
             subprocess_pid=None,
+            token_usage=response.token_usage,
         )
 
     async def close(self) -> None:
@@ -442,7 +586,12 @@ class _CopilotSDKAgenticSession:
             await self._client.__aexit__(None, None, None)
 
 
-def _to_ai_response(event: Any, *, allow_non_json: bool = False) -> AIResponse:
+def _to_ai_response(
+    event: Any,
+    *,
+    allow_non_json: bool = False,
+    token_usage: ProviderTokenUsage | None = None,
+) -> AIResponse:
     # Use global modules (may be patched in tests)
     if globals()['AssistantMessageData'] is None:
         _import_copilot_modules()
@@ -450,18 +599,33 @@ def _to_ai_response(event: Any, *, allow_non_json: bool = False) -> AIResponse:
     _SessionErrorData = globals()['SessionErrorData']
 
     if event is None:
-        return AIResponse(raw_text="", parsed=None, error="No assistant message received")
+        return AIResponse(raw_text="", parsed=None, error="No assistant message received", token_usage=token_usage)
     if isinstance(event.data, _SessionErrorData):
-        return AIResponse(raw_text="", parsed=None, error=f"{event.data.error_type}: {event.data.message}")
+        return AIResponse(
+            raw_text="",
+            parsed=None,
+            error=f"{event.data.error_type}: {event.data.message}",
+            token_usage=token_usage,
+        )
     if not isinstance(event.data, _AssistantMessageData):
-        return AIResponse(raw_text="", parsed=None, error="No assistant message content found")
+        return AIResponse(
+            raw_text="",
+            parsed=None,
+            error="No assistant message content found",
+            token_usage=token_usage,
+        )
     content = event.data.content
     parsed = _extract_json_object(content)
     if parsed is None:
         if allow_non_json:
-            return AIResponse(raw_text=content, parsed={})
-        return AIResponse(raw_text=content, parsed=None, error="Assistant message did not contain a JSON object")
-    return AIResponse(raw_text=content, parsed=parsed)
+            return AIResponse(raw_text=content, parsed={}, token_usage=token_usage)
+        return AIResponse(
+            raw_text=content,
+            parsed=None,
+            error="Assistant message did not contain a JSON object",
+            token_usage=token_usage,
+        )
+    return AIResponse(raw_text=content, parsed=parsed, token_usage=token_usage)
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:

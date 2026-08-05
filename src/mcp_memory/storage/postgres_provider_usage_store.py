@@ -12,6 +12,7 @@ from mcp_memory.operational_store_rows import (
     build_provider_usage_summaries,
     encode_optional_json_object,
 )
+from mcp_memory.core.providers.interfaces import ProviderTokenUsage
 from mcp_memory.provider_usage_store import (
     _ALL_WORKSPACES,
     _UNCHANGED,
@@ -42,6 +43,7 @@ class PostgresProviderUsageRepository:
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
     ) -> None:
         with optional_connection(self._sessions) as connection:
             if connection is None:
@@ -52,8 +54,10 @@ class PostgresProviderUsageRepository:
                     INSERT INTO provider_usage (
                         workspace_id, task_name, task_id, request_id, subprocess_pid,
                         provider_key, provider_name, model_name, status, duration_seconds,
-                        created_at, error_text, reason_category, reason_code, retry_delay_seconds
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        created_at, error_text, reason_category, reason_code, retry_delay_seconds,
+                        input_tokens, output_tokens, cached_input_tokens, cache_write_tokens,
+                        reasoning_tokens, total_tokens, token_usage_source
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         self._workspace_id,
@@ -71,6 +75,13 @@ class PostgresProviderUsageRepository:
                         reason_category,
                         reason_code,
                         retry_delay_seconds,
+                        None if token_usage is None else token_usage.input_tokens,
+                        None if token_usage is None else token_usage.output_tokens,
+                        None if token_usage is None else token_usage.cached_input_tokens,
+                        None if token_usage is None else token_usage.cache_write_tokens,
+                        None if token_usage is None else token_usage.reasoning_tokens,
+                        None if token_usage is None else token_usage.total_tokens,
+                        None if token_usage is None else token_usage.source,
                     ),
                 )
             connection.commit()
@@ -94,6 +105,7 @@ class PostgresProviderUsageRepository:
         reason_category: str | None = None,
         reason_code: str | None = None,
         retry_delay_seconds: float | None = None,
+        token_usage: ProviderTokenUsage | None = None,
         started_at: float,
         completed_at: float,
     ) -> None:
@@ -107,12 +119,14 @@ class PostgresProviderUsageRepository:
                         request_id, attempt, workspace_id, task_name, task_id, provider_key,
                         provider_name, model_name, subprocess_pid, prompt_text, response_text,
                         parsed_json, status, error_text, reason_category, reason_code,
-                        retry_delay_seconds, started_at, completed_at, duration_seconds
+                        retry_delay_seconds, started_at, completed_at, duration_seconds,
+                        input_tokens, output_tokens, cached_input_tokens, cache_write_tokens,
+                        reasoning_tokens, total_tokens, token_usage_source
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s,
                         %s::jsonb, %s, %s, %s, %s,
-                        %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (request_id, attempt)
                     DO UPDATE SET
@@ -134,6 +148,13 @@ class PostgresProviderUsageRepository:
                         started_at = EXCLUDED.started_at,
                         completed_at = EXCLUDED.completed_at,
                         duration_seconds = EXCLUDED.duration_seconds
+                        , input_tokens = EXCLUDED.input_tokens
+                        , output_tokens = EXCLUDED.output_tokens
+                        , cached_input_tokens = EXCLUDED.cached_input_tokens
+                        , cache_write_tokens = EXCLUDED.cache_write_tokens
+                        , reasoning_tokens = EXCLUDED.reasoning_tokens
+                        , total_tokens = EXCLUDED.total_tokens
+                        , token_usage_source = EXCLUDED.token_usage_source
                     """,
                     (
                         request_id,
@@ -156,6 +177,13 @@ class PostgresProviderUsageRepository:
                         started_at,
                         completed_at,
                         max(completed_at - started_at, 0.0),
+                        None if token_usage is None else token_usage.input_tokens,
+                        None if token_usage is None else token_usage.output_tokens,
+                        None if token_usage is None else token_usage.cached_input_tokens,
+                        None if token_usage is None else token_usage.cache_write_tokens,
+                        None if token_usage is None else token_usage.reasoning_tokens,
+                        None if token_usage is None else token_usage.total_tokens,
+                        None if token_usage is None else token_usage.source,
                     ),
                 )
             connection.commit()
@@ -187,7 +215,8 @@ class PostgresProviderUsageRepository:
         query = (
             "SELECT id, request_id, attempt, workspace_id, task_name, task_id, provider_key, provider_name, model_name, "
             "subprocess_pid, prompt_text, response_text, parsed_json, status, error_text, reason_category, reason_code, "
-            "retry_delay_seconds, started_at, completed_at, duration_seconds FROM ai_conversations"
+            "retry_delay_seconds, started_at, completed_at, duration_seconds, input_tokens, output_tokens, "
+            "cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source FROM ai_conversations"
         )
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
@@ -375,7 +404,8 @@ class PostgresProviderUsageRepository:
         current_time = time.time() if now is None else now
         active_workspace_id = None if workspace_id is _ALL_WORKSPACES else workspace_id
         query = (
-            "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code "
+            "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_code, "
+            "input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source "
             "FROM provider_usage"
         )
         params: list[object] = []

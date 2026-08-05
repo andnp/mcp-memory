@@ -2,12 +2,13 @@ import asyncio
 import json
 import time
 from collections import deque
-from typing import Self
+from typing import Any, Self
 
 import pytest
 
 from copilot.session_events import AssistantMessageData
 from copilot.session_events import SessionErrorData
+from copilot.session_events import AssistantUsageData
 
 from mcp_memory.core.providers import AgenticRunResult
 from mcp_memory.core.providers import copilot_sdk as copilot_sdk_module
@@ -41,6 +42,28 @@ def _patch_copilot_client(monkeypatch, client: FakeCopilotClient) -> FakeCopilot
     return factory
 
 
+class _UsageAwareFakeCopilotSession(FakeCopilotSession):
+    def __init__(self, *, events: deque[Any], usage_events: list[Any]) -> None:
+        super().__init__(events=events)
+        self._usage_events = usage_events
+        self._handlers: list[Any] = []
+
+    def on(self, handler):
+        self._handlers.append(handler)
+
+        def unsubscribe() -> None:
+            if handler in self._handlers:
+                self._handlers.remove(handler)
+
+        return unsubscribe
+
+    async def send_and_wait(self, prompt: str, *, timeout: float = 60.0) -> Any:
+        for event in self._usage_events:
+            for handler in list(self._handlers):
+                handler(event)
+        return await super().send_and_wait(prompt, timeout=timeout)
+
+
 @pytest.mark.asyncio
 async def test_copilot_sdk_provider_returns_parsed_json(monkeypatch) -> None:
     session = FakeCopilotSession(
@@ -55,6 +78,44 @@ async def test_copilot_sdk_provider_returns_parsed_json(monkeypatch) -> None:
     assert factory.client.create_session_calls[0]["model"] == "gpt-5.4-mini"
     assert session.sent_prompts == ["summarize these memories"]
     assert session.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_copilot_sdk_provider_captures_usage_events_and_persists_them(monkeypatch, db_manager) -> None:
+    usage_event = FakeCopilotSessionEvent(
+        data=AssistantUsageData(
+            model="gpt-5.4-mini",
+            input_tokens=120,
+            output_tokens=35,
+            cache_read_tokens=20,
+            cache_write_tokens=4,
+            reasoning_tokens=7,
+        )
+    )
+    session = _UsageAwareFakeCopilotSession(
+        events=deque([FakeCopilotSessionEvent(data=AssistantMessageData(content='{"actions": []}', message_id="m-usage"))]),
+        usage_events=[usage_event],
+    )
+    _patch_copilot_client(monkeypatch, FakeCopilotClient(session=session))
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        CopilotSDKProvider(model="gpt-5.4-mini", max_retries=0),
+        usage_repository=repository,
+        provider_key="copilot-sdk",
+        provider_name="Copilot SDK",
+        model_name="gpt-5.4-mini",
+    )
+
+    assert await provider.ask("measure this call") == {"actions": []}
+
+    usage_row = db_manager.get_connection().execute(
+        "SELECT input_tokens, output_tokens, cached_input_tokens, cache_write_tokens, reasoning_tokens, total_tokens, token_usage_source FROM provider_usage ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conversation = repository.list_conversations(limit=1)[0]
+    assert tuple(usage_row) == (120, 35, 20, 4, 7, 155, "copilot_sdk_assistant_usage")
+    assert conversation.input_tokens == 120
+    assert conversation.output_tokens == 35
+    assert conversation.total_tokens == 155
 
 
 @pytest.mark.asyncio

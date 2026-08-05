@@ -166,7 +166,14 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             error_text TEXT,
             reason_category TEXT,
             reason_code TEXT,
-            retry_delay_seconds REAL
+            retry_delay_seconds REAL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cached_input_tokens INTEGER,
+            cache_write_tokens INTEGER,
+            reasoning_tokens INTEGER,
+            total_tokens INTEGER,
+            token_usage_source TEXT
         );
 
         CREATE TABLE IF NOT EXISTS task_execution_attempts (
@@ -211,6 +218,13 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             started_at REAL NOT NULL,
             completed_at REAL NOT NULL,
             duration_seconds REAL NOT NULL DEFAULT 0,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cached_input_tokens INTEGER,
+            cache_write_tokens INTEGER,
+            reasoning_tokens INTEGER,
+            total_tokens INTEGER,
+            token_usage_source TEXT,
             UNIQUE(request_id, attempt)
         );
 
@@ -406,6 +420,13 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "provider_usage", "reason_category", "TEXT")
     ensure_column(conn, "provider_usage", "reason_code", "TEXT")
     ensure_column(conn, "provider_usage", "retry_delay_seconds", "REAL")
+    ensure_column(conn, "provider_usage", "input_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "output_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "cached_input_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "cache_write_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "reasoning_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "total_tokens", "INTEGER")
+    ensure_column(conn, "provider_usage", "token_usage_source", "TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS task_execution_attempts (
@@ -432,6 +453,13 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "ai_conversations", "reason_category", "TEXT")
     ensure_column(conn, "ai_conversations", "reason_code", "TEXT")
     ensure_column(conn, "ai_conversations", "retry_delay_seconds", "REAL")
+    ensure_column(conn, "ai_conversations", "input_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "output_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "cached_input_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "cache_write_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "reasoning_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "total_tokens", "INTEGER")
+    ensure_column(conn, "ai_conversations", "token_usage_source", "TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS provider_admission_state (
