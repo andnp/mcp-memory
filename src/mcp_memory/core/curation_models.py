@@ -465,6 +465,7 @@ class CurationBudgetUsage(CurationModel):
     proposed_actions: int = 0
     accepted_mutations: int = 0
     planner_attempts: int = 0
+    premium_requests: int = 0
     provider_calls: int = 0
     wall_clock_seconds: float = 0.0
     token_usage: int | None = None

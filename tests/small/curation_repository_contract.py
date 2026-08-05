@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from mcp_memory.core.curation_models import CurationRunOutcome
+from mcp_memory.core.curation_models import CurationBudgetUsage, CurationRunOutcome
 from mcp_memory.curation_store import (
     MAX_CURATION_READ_LIMIT,
     CandidateDisposition,
@@ -77,6 +77,7 @@ def _run() -> CurationRun:
         run_id=uuid4(),
         frontier_key="frontier",
         context_fingerprint="context",
+        budget_usage=CurationBudgetUsage(premium_requests=1),
         disclosure_audit={
             "version": 1,
             "provider_trust_class": "external",
@@ -129,6 +130,7 @@ def assert_curation_repository_contract(make_repository: RepositoryFactory) -> N
     assert terminal.outcome is CurationRunOutcome.APPLIED
     assert terminal.terminalized_at is not None
     assert repository.get_run(run.run_id) == terminal
+    assert terminal.budget_usage.premium_requests == 1
     assert repository.terminalize_run(
         run.run_id,
         CurationRunState.VERIFYING,
