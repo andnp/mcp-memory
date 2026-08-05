@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
+from searchkernel.search.adaptive_limit import resolve_adaptive_result_limit
 
 from mcp_memory.config import Config
 from mcp_memory.core.ports.memory import MemoryRecord, RankedMemoryCandidate
@@ -51,6 +52,26 @@ def test_fuse_reciprocal_rank_preserves_kernel_formula_and_configured_k() -> Non
         "doc1": 1 / 11 + 1 / 12,
         "doc2": 1 / 12 + 1 / 11,
     }
+
+
+def test_adaptive_result_bands_use_calibrated_scores() -> None:
+    engine = RankingEngine(Config())
+    scores = [
+        engine.calibrate_score(rrf_score)
+        for rrf_score in (0.05, 0.049, 0.048, 0.02)
+    ]
+
+    result_limit = resolve_adaptive_result_limit(
+        scores,
+        requested_limit=1,
+        adaptive_enabled=True,
+        maximum_limit=4,
+        score_ratio_floor=0.7,
+        minimum_score=0.0,
+        maximum_score_gap=0.08,
+    )
+
+    assert result_limit == 3
 
 
 def test_pure_ranking_uses_explicit_candidate_authority_without_storage() -> None:

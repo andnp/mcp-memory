@@ -17,6 +17,7 @@ from mcp_memory.core.ports.memory import (
     RankedMemoryCandidate,
     MemoryRecord,
 )
+from searchkernel.search.calibration import calibrate_score
 from searchkernel.search.fusion import fuse_reciprocal_rank
 
 ACCESS_HALF_LIFE_DAYS = 7
@@ -163,8 +164,11 @@ class RankingEngine:
         )
 
     def calibrate_score(self, rrf_score: float) -> float:
-        exponent = -self._weights.calibration_steepness * (rrf_score - self._weights.calibration_threshold)
-        return 1.0 / (1.0 + math.exp(exponent))
+        return calibrate_score(
+            rrf_score,
+            threshold=self._weights.calibration_threshold,
+            steepness=self._weights.calibration_steepness,
+        )
 
     def type_aware_recency_bonus(self, record: RelationalMemoryRecord) -> float:
         try:
