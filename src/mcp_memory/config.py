@@ -300,7 +300,7 @@ class EmbeddingsConfig:
     model: str = "sentence-transformers/all-MiniLM-L6-v2"
     batch_size: int = 32
     ollama_base_url: str = "http://localhost:11434"
-    ollama_max_concurrency: int = 2
+    ollama_max_concurrency: int = 1
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
@@ -698,7 +698,7 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "model": "sentence-transformers/all-MiniLM-L6-v2",
         "batch_size": 32,
         "ollama_base_url": "http://localhost:11434",
-        "ollama_max_concurrency": 2,
+        "ollama_max_concurrency": 1,
     }
     document["logging"] = {
         "max_runtime_logs": 5000,

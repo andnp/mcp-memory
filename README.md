@@ -325,7 +325,7 @@ embedding model instead, set the provider, model, and Ollama endpoint:
 provider = "ollama"
 model = "qwen3-embedding:0.6b"
 ollama_base_url = "http://localhost:11434"
-ollama_max_concurrency = 2
+ollama_max_concurrency = 1
 ```
 
 For the full operator path, backup notes, and smoke checklist, see `docs/postgres-shared-mode-runbook.md`.

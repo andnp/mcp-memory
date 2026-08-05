@@ -81,6 +81,7 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.embeddings.provider == "sentence-transformers"
     assert loaded.embeddings.model == "sentence-transformers/all-MiniLM-L6-v2"
     assert loaded.embeddings.ollama_base_url == "http://localhost:11434"
+    assert loaded.embeddings.ollama_max_concurrency == 1
     assert loaded.search_ranking.rrf_k == 60.0
     assert loaded.search_ranking.adaptive_result_max == 15
     assert loaded.search_ranking.adaptive_result_score_ratio_floor == 0.7
