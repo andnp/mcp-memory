@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
+
 from searchkernel.domain import RecordHit, Vector
 from searchkernel.ports import AsyncEmbeddingProvider, EmbeddingBatchProvider
 from searchkernel.runtime import get_or_compute_query_embedding
@@ -343,7 +344,11 @@ def build_memory_record_pipeline(
             repository,
             candidate,
         ),
-        result_filter=lambda result: _result_allowed(repository, result),
+        result_filter=lambda result: _result_allowed(
+            repository,
+            result,
+            resolved_config,
+        ),
         post_process=_sort_results,
     )
     hydrator = MemoryHydrator(cast(MemoryReadPort, policy_repository))
@@ -549,6 +554,7 @@ def _order_vector_ranking(
 def _result_allowed(
     repository: MemoryRepositoryPort,
     result: RecordSearchResult,
+    config: Config,
 ) -> bool:
     record = _cached_memory(repository, result.record_id)
     if record is None or not _memory_allowed(repository, record):
@@ -559,6 +565,13 @@ def _result_allowed(
     if "keyword" in result.provenance.strategies:
         signal_context.keyword_candidates_present = True
         return True
+    semantic = result.provenance.strategy_details.get("vector")
+    if (
+        semantic is not None
+        and semantic.raw_score
+        < config.search_ranking.semantic_only_abstain_threshold
+    ):
+        return False
     return (
         signal_context.keyword_candidates_present
         or signal_context.top_semantic_score

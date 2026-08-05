@@ -19,7 +19,6 @@ from mcp_memory.integrations.searchkernel_record_pipeline import (
     build_memory_record_pipeline,
 )
 
-
 pytestmark = pytest.mark.small
 
 
@@ -560,6 +559,56 @@ async def test_semantic_only_abstention_uses_vector_raw_score(
 
     assert [result.record_id for result in outcome.results] == expected_ids
     assert vector_store.write_count == 0
+
+
+@pytest.mark.asyncio
+async def test_semantic_only_filter_drops_low_confidence_tail() -> None:
+    repository = FakeRepository(
+        records={
+            "strong": _memory("strong"),
+            "weak": _memory("weak"),
+        },
+        keyword_ids=[],
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast(
+            "MemoryVectorBackend",
+            FakeVectorStore([("strong", 0.96), ("weak", 0.72)]),
+        ),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search("unmatched query", limit=5)
+
+    assert [result.record_id for result in outcome.results] == ["strong"]
+
+
+@pytest.mark.asyncio
+async def test_keyword_match_survives_low_confidence_semantic_control() -> None:
+    relevant = _memory(
+        "relevant",
+        title="auth policy",
+        summary="auth policy",
+        content="Auth policy details.",
+    )
+    distractor = _memory("distractor")
+    repository = FakeRepository(
+        records={"relevant": relevant, "distractor": distractor},
+        keyword_ids=["relevant"],
+    )
+    pipeline = build_memory_record_pipeline(
+        cast("MemoryRepositoryPort", repository),
+        vector_store=cast(
+            "MemoryVectorBackend",
+            FakeVectorStore([("distractor", 0.72), ("relevant", 0.55)]),
+        ),
+        embedder=FakeEmbedder(),
+    )
+
+    outcome = await pipeline.search("auth policy rollout", limit=5)
+
+    assert [result.record_id for result in outcome.results] == ["relevant"]
 
 
 @pytest.mark.asyncio
