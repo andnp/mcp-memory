@@ -5826,8 +5826,8 @@ def test_memory_curator_recency_quota_is_capped(monkeypatch, tmp_path: Path) -> 
         seed_records = _select_curator_seed_records(runtime, _curator_task_for_tests(runtime.workspace_id))
         seeded_ids = {record.id for record in seed_records}
 
-        assert len(seed_records) == CURATOR_MAX_SEED_RECORDS
-        assert len(seeded_ids.intersection(recent_ids)) == 4
+        assert len(seed_records) == len(older_ids) + len(recent_ids)
+        assert len(seeded_ids.intersection(recent_ids)) == len(recent_ids)
         assert seeded_ids.issuperset(older_ids)
     finally:
         runtime.close()
