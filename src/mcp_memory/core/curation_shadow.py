@@ -257,7 +257,10 @@ async def run_curator_verified_campaign(
                 )
                 for record in newly_read_records:
                     memory_types[UUID(record.id)] = record.type
-            next_result = await harness.run(frontier)
+            next_result = await harness.run(
+                frontier,
+                context_override=None if investigation_requested else result.context,
+            )
             cumulative_tool_calls += _authoritative_read_tool_calls(next_result)
             correction_turns += 1
             if (

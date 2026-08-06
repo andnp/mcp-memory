@@ -448,6 +448,30 @@ async def test_repeated_noop_advances_cooldown_metadata(db_manager: DatabaseMana
 
 
 @pytest.mark.asyncio
+async def test_context_override_skips_context_reassembly(
+    db_manager: DatabaseManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed = uuid4()
+    frontier = _frontier(seed)
+    planner = _RequestBoundFakePlanner([
+        FakePlannerScenario(plan=_plan(frontier, seed)),
+        FakePlannerScenario(plan=_plan(frontier, seed)),
+    ])
+    harness = _harness(db_manager, planner)
+    first = await harness.run(frontier)
+
+    monkeypatch.setattr(
+        "mcp_memory.core.curation_harness._assemble_context",
+        lambda **_: pytest.fail("context should be reused"),
+    )
+
+    second = await harness.run(frontier, context_override=first.context)
+
+    assert second.context is first.context
+
+
+@pytest.mark.asyncio
 async def test_valid_action_is_deferred_and_never_executes_mutation(db_manager: DatabaseManager) -> None:
     seed = uuid4()
     work_items = SQLiteWorkItemRepository(db_manager)

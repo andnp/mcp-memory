@@ -341,41 +341,49 @@ class CurationDryRunHarness:
             no_op_cooldown_seconds=self._config.no_op_cooldown_seconds,
         )
 
-    async def run(self, frontier: CurationFrontier) -> CurationDryRunResult:
+    async def run(
+        self,
+        frontier: CurationFrontier,
+        *,
+        context_override: ImmutableCurationContextPacket | None = None,
+    ) -> CurationDryRunResult:
         seed_reads = tuple(_materialize_read(value) for value in frontier.seed_reads)
         support_reads = tuple(_materialize_read(value) for value in frontier.support_reads)
         exploratory_reads = tuple(
             _materialize_read(value) for value in frontier.exploratory_reads
         )
         context_failure: CurationBudgetExhausted | None = None
-        try:
-            context = _assemble_context(
-                family=frontier.family,
-                strategy=frontier.strategy,
-                seed_reads=seed_reads,
-                support_reads=support_reads,
-                exploratory_reads=exploratory_reads,
-                provider=self._config.provider,
-                budget=self._config.read_budget,
-                protections_by_memory=cast(Any, self._protections_by_memory),
-                sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
-                require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
-                campaign_hypothesis=frontier.campaign_hypothesis,
-            )
-        except CurationBudgetExhausted as error:
-            context_failure = error
-            context = build_context_packet(
-                family=frontier.family,
-                strategy=frontier.strategy,
-                seed_reads=(),
-                support_reads=(),
-                provider=self._config.provider,
-                budget=self._config.read_budget,
-                protections_by_memory=cast(Any, self._protections_by_memory),
-                sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
-                require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
-                campaign_hypothesis=frontier.campaign_hypothesis,
-            )
+        if context_override is not None:
+            context = context_override
+        else:
+            try:
+                context = _assemble_context(
+                    family=frontier.family,
+                    strategy=frontier.strategy,
+                    seed_reads=seed_reads,
+                    support_reads=support_reads,
+                    exploratory_reads=exploratory_reads,
+                    provider=self._config.provider,
+                    budget=self._config.read_budget,
+                    protections_by_memory=cast(Any, self._protections_by_memory),
+                    sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
+                    require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+                    campaign_hypothesis=frontier.campaign_hypothesis,
+                )
+            except CurationBudgetExhausted as error:
+                context_failure = error
+                context = build_context_packet(
+                    family=frontier.family,
+                    strategy=frontier.strategy,
+                    seed_reads=(),
+                    support_reads=(),
+                    provider=self._config.provider,
+                    budget=self._config.read_budget,
+                    protections_by_memory=cast(Any, self._protections_by_memory),
+                    sensitive_fields_by_memory=cast(Any, self._sensitive_fields_by_memory),
+                    require_authoritative_disclosure_context=self._config.require_authoritative_disclosure_context,
+                    campaign_hypothesis=frontier.campaign_hypothesis,
+                )
         context_record_counts = _context_record_counts(
             context,
             source_seed_count=len(seed_reads),
