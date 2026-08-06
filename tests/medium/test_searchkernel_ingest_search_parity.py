@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from searchkernel.domain import Record
+from searchkernel.ports.federation import (
+    SearchHit,
+    SearchRequest,
+    SearchResponse,
+    SourceCapabilities,
+    SourceIdentity,
+)
 from searchkernel.runtime.query_embedding_cache import clear_query_embedding_cache
+from searchkernel.runtime.federation import FederationExecutor
 
 from benchmarks.searchkernel_ingest_search import (
     IngestSearchHarness,
@@ -16,6 +25,7 @@ from benchmarks.searchkernel_ingest_search import (
 )
 from mcp_memory.integrations.searchkernel_adapters import MemoryRecordAdapter
 from mcp_memory.integrations.searchkernel_ingestion import MemoryRecordIngestor
+from mcp_memory.integrations.federation_source import MemoryFederationSource
 
 
 pytestmark = pytest.mark.medium
@@ -91,6 +101,54 @@ async def test_workspace_filters_isolate_search_and_keep_shared_membership(
     shared_a = await harness.search("deployment", workspace_id="workspace-a")
     shared_b = await harness.search("deployment", workspace_id="workspace-b")
     assert shared_a.result_ids == shared_b.result_ids == ("shared-workspace",)
+
+
+@pytest.mark.asyncio
+async def test_federation_combines_workspace_scoped_memory_and_note_hits(
+    harness: IngestSearchHarness,
+) -> None:
+    await harness.ingest()
+
+    async def memory_search(query: str, **kwargs: object):
+        return await harness.pipeline.search(
+            query,
+            limit=int(cast(Any, kwargs["limit"])),
+            filters={key: value for key, value in kwargs.items() if key != "limit"},
+        )
+
+    note_capabilities = SourceCapabilities()
+
+    async def note_search(request: SearchRequest) -> SearchResponse:
+        hits = (
+            SearchHit(
+                source_kind="note",
+                source_id="deployment-note",
+                workspace_id="workspace-a",
+                title="Deployment note",
+                snippet="Workspace A deployment note.",
+                source_rank=1,
+            ),
+        ) if request.filters.get("workspace_id") == "workspace-a" else ()
+        return SearchResponse(
+            source=SourceIdentity("note", "fixture"),
+            hits=hits,
+            capabilities=note_capabilities,
+        )
+
+    sources = [
+        MemoryFederationSource(cast(Any, SimpleNamespace(search=memory_search))),
+        SimpleNamespace(
+            source_identity=SourceIdentity("note", "fixture"),
+            search=note_search,
+            capabilities=lambda: note_capabilities,
+        ),
+    ]
+    response = await FederationExecutor(cast(Any, sources)).search(
+        SearchRequest(query="deployment", top_k=5, filters={"workspace_id": "workspace-a"})
+    )
+
+    assert {hit.source_kind for hit in response.hits} == {"memory", "note"}
+    assert all(hit.workspace_id == "workspace-a" for hit in response.hits)
 
 
 @pytest.mark.asyncio
