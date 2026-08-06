@@ -94,6 +94,7 @@ def test_sqlite_descriptor_is_part_of_receipt_identity(db_manager: DatabaseManag
 def _run() -> CurationRun:
     return CurationRun(
         run_id=uuid4(),
+        task_id=uuid4(),
         frontier_key="test-frontier",
         context_fingerprint="test-context",
         state=CurationRunState.EXECUTING,
@@ -154,6 +155,10 @@ def test_sqlite_action_transaction_commits_all_authoritative_artifacts(db_manage
     connection = db_manager.get_connection()
     assert connection.execute("SELECT COUNT(*) FROM embedding_repair_queue").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_mutation_events").fetchone()[0] == 1
+    event = connection.execute(
+        "SELECT task_id, curation_run_id FROM memory_mutation_events"
+    ).fetchone()
+    assert tuple(event) == (str(run.task_id), str(run.run_id))
     assert connection.execute("SELECT COUNT(*) FROM memory_record_revisions").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM memory_link_revisions").fetchone()[0] == 1
     assert SQLiteCurationStore(db_manager).get_receipt(run.run_id, action_id) == receipt

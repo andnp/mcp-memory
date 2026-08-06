@@ -42,6 +42,7 @@ def _seed(postgres_storage_config):
     assert first is not None and second is not None
     run = CurationRun(
         run_id=uuid4(),
+        task_id=uuid4(),
         frontier_key="test-frontier",
         context_fingerprint="test-context",
         state=CurationRunState.EXECUTING,
@@ -120,6 +121,9 @@ def test_postgres_action_replay_is_idempotent(postgres_storage_config) -> None:
     assert calls == 1
     with manager.open_connection() as connection:
         with connection.cursor() as cursor:
+            cursor.execute("SELECT task_id, curation_run_id FROM memory_mutation_events")
+            row = cursor.fetchone()
+            assert row == (str(run.task_id), str(run.run_id))
             for table in ("curation_action_receipts", "memory_mutation_events", "embedding_repair_queue"):
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 row = cursor.fetchone()

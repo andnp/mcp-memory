@@ -246,7 +246,7 @@ class SQLiteCurationActionStore:
                 return existing
 
             run = connection.execute(
-                "SELECT state, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
+                "SELECT state, task_id, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
                 (str(run_id),),
             ).fetchone()
             if run is None and restores_event_id is not None:
@@ -266,7 +266,7 @@ class SQLiteCurationActionStore:
                     ),
                 )
                 run = connection.execute(
-                    "SELECT state, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
+                    "SELECT state, task_id, plan_id, policy_version FROM curation_runs WHERE run_id = ?",
                     (str(run_id),),
                 ).fetchone()
             if run is None and restores_event_id is None:
@@ -308,8 +308,9 @@ class SQLiteCurationActionStore:
                 event_id=event_id,
                 run_id=run_id,
                 action_id=action_id,
-                plan_id=None if run is None or run[1] is None else UUID(str(run[1])),
-                policy_version=None if run is None or run[2] is None else str(run[2]),
+                task_id=None if run is None or run[1] is None else UUID(str(run[1])),
+                plan_id=None if run is None or run[2] is None else UUID(str(run[2])),
+                policy_version=None if run is None or run[3] is None else str(run[3]),
                 operation=result.operation.strip(),
                 actor_kind=actor_kind,
                 restores_event_id=restores_event_id,
@@ -499,6 +500,7 @@ class SQLiteCurationActionStore:
         event_id: UUID,
         run_id: UUID,
         action_id: UUID,
+        task_id: UUID | None,
         plan_id: UUID | None,
         policy_version: str | None,
         operation: str,
@@ -514,16 +516,17 @@ class SQLiteCurationActionStore:
         connection.execute(
             """
             INSERT INTO memory_mutation_events (
-                id, operation, actor_kind, family, curation_run_id, plan_id,
+                id, operation, actor_kind, family, task_id, curation_run_id, plan_id,
                 action_id, policy_version, schema_version, status, restores_event_id,
                 idempotency_key, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
             """,
             (
                 str(event_id),
                 operation,
                 str(actor_kind),
                 "curation",
+                None if task_id is None else str(task_id),
                 str(run_id),
                 None if plan_id is None else str(plan_id),
                 str(action_id),
