@@ -243,6 +243,20 @@ comparison and its shadow controls are retired; searchkernel is authoritative.
   combination, and test that behavior directly.
 - Add live multi-source and ingest-to-search smoke tests.
 
+### SearchKernel cutover verification
+
+Run these checks from the same environment that will launch the daemon:
+
+```bash
+uv lock --check
+uv run python -c "from importlib.metadata import version; assert version('andnp-searchkernel') == '0.18.0'"
+uv run python -c "import mcp_memory.daemon_runtime; import searchkernel"
+uv run pytest -q tests/medium/test_searchkernel_ingest_search_parity.py
+```
+
+The version assertion verifies the locally resolved package used by the live
+runtime; it does not claim or require an upstream release announcement.
+
 ## Candidate extraction matrix
 
 | Primitive | Destination | Keep domain policy in mcp-memory? |
