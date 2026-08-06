@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import signal
+import sys
 from types import SimpleNamespace
 import threading
 
@@ -177,6 +178,7 @@ def test_spawn_daemon_process_uses_global_bootstrap(monkeypatch, tmp_path: Path)
     assert captured['stdin'] is not None
     assert captured['start_new_session'] is True
     assert details.pid == 4321
+    assert details.command[0] == sys.executable
     assert details.command[1:4] == ('-m', 'mcp_memory.cli', 'daemon')
     assert details.startup_log_path.name == 'daemon.log'
 
