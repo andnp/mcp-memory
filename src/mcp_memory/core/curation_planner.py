@@ -24,6 +24,7 @@ from mcp_memory.core.curation_models import (
 )
 from mcp_memory.core.provider_admission import classify_provider_failure
 from mcp_memory.core.providers.interfaces import AgenticSession, ProviderJSONCall
+from mcp_memory.core.curation_validation import CurationRetryFeedback
 
 
 class CurationReadTools(Protocol):
@@ -552,26 +553,41 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
     async def create_plan(
         self, request: CurationPlanningRequest, tools: CurationReadTools
     ) -> PlannerExecutionEnvelope[CurationPlan]:
+        retry_feedback = getattr(tools, "retry_feedback", None)
         if self._plan_state is not None:
             context = getattr(tools, "context", None)
             seed_memory_ids = tuple(getattr(context, "seed_memory_ids", ()))
             self._plan_state.begin(request, seed_memory_ids=seed_memory_ids)
-            prompt = _build_planner_prompt(
-                request,
-                tools,
-                incremental_tool_names=(
-                    "propose_curation_action",
-                    "replace_curation_action",
-                    "remove_curation_action",
-                    "retain_curation_memory",
-                    "request_curation_investigation",
-                ),
+            prompt = (
+                _build_planner_repair_prompt(
+                    retry_feedback,
+                    incremental=True,
+                )
+                if retry_feedback is not None
+                else _build_planner_prompt(
+                    request,
+                    tools,
+                    incremental_tool_names=(
+                        "propose_curation_action",
+                        "replace_curation_action",
+                        "remove_curation_action",
+                        "retain_curation_memory",
+                        "request_curation_investigation",
+                    ),
+                )
             )
         else:
-            prompt = _build_planner_prompt(
-                request,
-                tools,
-                submission_tool_name="submit_curation_plan",
+            prompt = (
+                _build_planner_repair_prompt(
+                    retry_feedback,
+                    incremental=False,
+                )
+                if retry_feedback is not None
+                else _build_planner_prompt(
+                    request,
+                    tools,
+                    submission_tool_name="submit_curation_plan",
+                )
             )
         if self._quality_feedback is not None:
             prompt += "\nMeasured quality feedback:\n" + json.dumps(
@@ -928,6 +944,32 @@ def _build_planner_prompt(
             "return a complete JSON plan; the tool calls are authoritative."
         )
     return instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _build_planner_repair_prompt(
+    retry_feedback: CurationRetryFeedback,
+    *,
+    incremental: bool,
+) -> str:
+    payload = {
+        "reason_code": str(retry_feedback.reason_code),
+        "message": str(retry_feedback.message)[:1000],
+        "fields": list(retry_feedback.fields),
+        "issue_codes": list(retry_feedback.issue_codes),
+        "expected_fields": list(retry_feedback.expected_fields),
+        "received_fields": list(retry_feedback.received_fields),
+    }
+    instruction = (
+        "Repair the previous curation plan in this same session using only the "
+        "bounded diagnostics below. Do not restate or reread the full context. "
+        "Preserve valid work, correct the reported issue, and submit the complete "
+        "typed plan again. "
+    )
+    if incremental:
+        instruction += "Use the typed curation tools; do not add speculative work."
+    else:
+        instruction += "Call submit_curation_plan exactly once."
+    return instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def _envelope_base(

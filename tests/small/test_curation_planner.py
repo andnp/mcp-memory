@@ -37,6 +37,7 @@ from mcp_memory.core.curation_planner import (
     InstrumentedCurationPlanner,
     PlannerExecutionStatus,
     SessionCurationPlanner,
+    _build_planner_repair_prompt,
     _build_planner_prompt,
     _request_for_packet,
 )
@@ -463,7 +464,7 @@ def test_planner_prompt_preserves_contract_retry_diagnostics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_planning_retries_provider_failure_with_bounded_error_feedback() -> None:
+async def test_planning_does_not_retry_provider_failure() -> None:
     seed_id = uuid4()
     context = build_context_packet(
         family="curator",
@@ -515,12 +516,25 @@ async def test_planning_retries_provider_failure_with_bounded_error_feedback() -
         ),
     )
 
-    assert result.plan is not None
-    assert planner.inner.calls == 2
-    assert result.retry_reason == "provider_failed"
+    assert result.plan is None
+    assert planner.inner.calls == 1
+    assert result.retry_reason is None
     assert planner.feedback[0] is None
-    assert planner.feedback[1].reason_code == "provider_failed"
-    assert "assistant completion was not usable" in planner.feedback[1].message
+
+
+def test_planner_repair_prompt_omits_full_context() -> None:
+    prompt = _build_planner_repair_prompt(
+        CurationRetryFeedback(
+            reason_code="schema_invalid",
+            message="missing required field",
+            fields=("actions",),
+        ),
+        incremental=True,
+    )
+
+    assert "missing required field" in prompt
+    assert "full context" in prompt
+    assert '"context"' not in prompt
 
 
 @pytest.mark.asyncio

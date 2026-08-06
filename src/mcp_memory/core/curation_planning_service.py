@@ -106,13 +106,6 @@ async def plan_and_validate(
             failure = error
             if error.envelope is not None:
                 envelopes.append(cast(PlannerExecutionEnvelope[Any], error.envelope))
-            if isinstance(error, CurationPlannerProviderError) and attempt == 0:
-                retry_reason = error.reason_code
-                feedback = CurationRetryFeedback(
-                    reason_code="provider_failed",
-                    message=_provider_retry_message(error),
-                )
-                continue
             return CurationPlanningOutput(None, None, envelopes, retry_reason, failure)
 
         validation = validate_curation_plan(
