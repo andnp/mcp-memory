@@ -105,7 +105,7 @@ def test_coerce_task_result_view_exposes_curator_yield_telemetry() -> None:
         {
             "curation_outcome": "applied",
             "curation_campaign_result": {
-                "budget_usage": {"accepted_mutations": 2, "planner_attempts": 2},
+                "budget_usage": {"accepted_mutations": 2, "planner_attempts": 2, "provider_calls": 3},
                 "verification_failure_count": 1,
                 "receipts": [
                     {"operation": "normalize_memory"},
@@ -120,6 +120,7 @@ def test_coerce_task_result_view_exposes_curator_yield_telemetry() -> None:
     assert result.curation_verification_failure_count == 1
     assert result.curation_provider_failure_count == 0
     assert result.curation_retry_count == 1
+    assert result.metadata.provider_calls_used == 3
     assert result.curation_mutation_categories == {
         "content_tag": 1,
         "structural_link": 1,

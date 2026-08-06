@@ -222,6 +222,8 @@ def _build_run_result_metadata(result: JsonObject) -> RunResultMetadataPayload:
     sampled_memory_ids = result.get("sampled_memory_ids")
     claimed_work_item_count = _coerce_int(result.get("claimed_work_item_count"))
     provider_calls_used = _coerce_int(result.get("provider_calls_used"))
+    if provider_calls_used is None:
+        provider_calls_used = _curation_campaign_int(result, "budget_usage", "provider_calls")
     tool_calls_executed = _coerce_int(result.get("tool_calls_executed"))
     mutation_outcome = _extract_mutation_outcome(result)
     mutations = _coerce_int(result.get("mutations"))
@@ -572,6 +574,7 @@ class TaskRunRow:
     status: str
     completed_at: float
     duration_seconds: float
+    task_id: str | None = None
     result: TaskResultView = field(default_factory=TaskResultView)
 
     def __post_init__(self) -> None:
@@ -601,6 +604,7 @@ class ProviderUsageRow:
     duration_seconds: float
     created_at: float
     task_name: str | None = None
+    task_id: str | None = None
     reason_category: str | None = None
     reason_code: str | None = None
     retry_delay_seconds: float | None = None
@@ -765,6 +769,7 @@ def adapt_task_run_row(row: Mapping[str, object]) -> TaskRunRow:
         status=_require_str(row, "status"),
         completed_at=_require_float(row, "completed_at"),
         duration_seconds=_require_float(row, "duration_seconds"),
+        task_id=_optional_str(row, "task_id"),
         result=coerce_task_result_view(row.get("result_json")),
     )
 
@@ -784,6 +789,7 @@ def adapt_maintenance_task_run_row(row: Mapping[str, object]) -> MaintenanceTask
 def adapt_provider_usage_row(row: Mapping[str, object]) -> ProviderUsageRow:
     return ProviderUsageRow(
         task_name=_optional_str(row, "task_name"),
+        task_id=_optional_str(row, "task_id"),
         provider_key=_require_str(row, "provider_key"),
         provider_name=_require_str(row, "provider_name"),
         model_name=_require_str(row, "model_name"),
@@ -1153,7 +1159,7 @@ def list_task_run_rows_since(
 ) -> list[TaskRunRow]:
     if db_manager is None:
         return []
-    query = "SELECT status, completed_at, duration_seconds, result_json FROM task_runs WHERE completed_at >= ?"
+    query = "SELECT task_id, status, completed_at, duration_seconds, result_json FROM task_runs WHERE completed_at >= ?"
     params: list[object] = [cutoff]
     if workspace_id is not None:
         query += " AND workspace_id = ?"
@@ -1193,7 +1199,7 @@ def list_provider_usage_rows_since(
     if db_manager is None:
         return []
     query = (
-        "SELECT task_name, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_category, reason_code, retry_delay_seconds "
+        "SELECT task_name, task_id, provider_key, provider_name, model_name, status, duration_seconds, created_at, reason_category, reason_code, retry_delay_seconds "
         "FROM provider_usage WHERE created_at >= ?"
     )
     params: list[object] = [cutoff]

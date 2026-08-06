@@ -82,10 +82,13 @@ def build_nerd_metrics_throughput_rollups(
     provider_tool_calls = 0
     compatible_batch_calls = 0
 
+    task_ids = {row.task_id for row in task_rows if row.task_id is not None}
+    provider_rows_have_task_ids = any(row.task_id is not None for row in provider_rows)
     for row in task_rows:
         result_metadata = row.result.metadata
         provider_calls_used = result_metadata.provider_calls_used or 0
-        provider_call_count += provider_calls_used
+        if not provider_rows_have_task_ids:
+            provider_call_count += provider_calls_used
         if provider_calls_used > 0:
             provider_claimed_work_item_count += result_metadata.claimed_work_item_count or 0
             provider_mutations += result_metadata.mutations or 0
@@ -97,6 +100,8 @@ def build_nerd_metrics_throughput_rollups(
         if status == "skipped":
             provider_skips += 1
             continue
+        if provider_rows_have_task_ids and row.task_id in task_ids:
+            provider_call_count += 1
 
         bucket_start = float(int(row.created_at // bucket_seconds) * bucket_seconds)
         key = (

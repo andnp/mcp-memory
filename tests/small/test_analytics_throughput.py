@@ -98,3 +98,40 @@ def test_build_nerd_metrics_throughput_rollups_aggregates_buckets_and_premium_co
     assert rollups.provider_mutations == 5
     assert rollups.provider_tool_calls == 8
     assert rollups.compatible_batch_calls == 3
+
+
+def test_build_nerd_metrics_attributes_provider_rows_by_task_id() -> None:
+    rollups = build_nerd_metrics_throughput_rollups(
+        task_rows=[
+            TaskRunRow(
+                task_id="curator-task",
+                completed_at=120.0,
+                status="completed",
+                duration_seconds=1.0,
+                result=coerce_task_result_view({"mutations": 2}),
+            )
+        ],
+        provider_rows=[
+            ProviderUsageRow(
+                task_id="curator-task",
+                provider_key="copilot",
+                provider_name="Copilot",
+                model_name="model",
+                status="success",
+                duration_seconds=1.0,
+                created_at=120.0,
+            ),
+            ProviderUsageRow(
+                task_id="other-task",
+                provider_key="copilot",
+                provider_name="Copilot",
+                model_name="model",
+                status="success",
+                duration_seconds=1.0,
+                created_at=120.0,
+            ),
+        ],
+        bucket_seconds=60,
+    )
+
+    assert rollups.provider_call_count == 1
