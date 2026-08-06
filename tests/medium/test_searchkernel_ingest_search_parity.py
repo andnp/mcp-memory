@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from searchkernel.domain import Record
@@ -14,6 +15,7 @@ from benchmarks.searchkernel_ingest_search import (
     sample_memories,
 )
 from mcp_memory.integrations.searchkernel_adapters import MemoryRecordAdapter
+from mcp_memory.integrations.searchkernel_ingestion import MemoryRecordIngestor
 
 
 pytestmark = pytest.mark.medium
@@ -44,6 +46,24 @@ async def test_ingest_receipt_and_search_are_connected(harness: IngestSearchHarn
     assert observation.result_ids == ("auth-current",)
     assert observation.elapsed_ms >= 0.0
     assert observation.candidate_observations
+
+
+@pytest.mark.asyncio
+async def test_memory_ingestor_round_trips_into_kernel_search(
+    harness: IngestSearchHarness,
+) -> None:
+    ingestor = MemoryRecordIngestor(
+        object(),
+        cast(Any, harness.vector_store),
+        harness.embedder,
+    )
+
+    receipt = await ingestor.index_records(sample_memories())
+
+    assert receipt.committed == len(sample_memories())
+    observation = await harness.search("authentication policy", workspace_id="workspace-a")
+
+    assert observation.result_ids == ("auth-current",)
 
 
 @pytest.mark.asyncio
