@@ -48,28 +48,32 @@ def test_ensure_daemon_started_reuses_healthy_metadata(monkeypatch, tmp_path: Pa
         started_at=1.0,
         status="ready",
     )
-    observed_timeout_seconds: list[float] = []
     metadata_path = resolve_daemon_metadata_path()
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(__import__("json").dumps(metadata.__dict__), encoding="utf-8")
-
     monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
+    assessments = iter(
+        [
+            DaemonHealthAssessment(False, "probe_timeout", True, 0.1),
+            DaemonHealthAssessment(True, "healthy", False, 0.1),
+        ]
+    )
+    observed_probes: list[tuple[int, float]] = []
     monkeypatch.setattr(
         "mcp_memory.daemon._assess_daemon_health",
-        lambda current, timeout_seconds=3.0: observed_timeout_seconds.append(timeout_seconds) or DaemonHealthAssessment(
-            healthy=True,
-            reason="healthy",
-            retryable=False,
-            timeout_seconds=timeout_seconds,
-        ),
+        lambda current, timeout_seconds=3.0: observed_probes.append((current.pid, timeout_seconds)) or next(assessments),
     )
+    monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")))
 
     current = ensure_daemon_started()
 
     assert current.port == 8123
     assert current.daemon_scope == "global"
-    assert observed_timeout_seconds == [pytest.approx(spec.config.daemon.auto_start_timeout_seconds / 3.0)]
+    assert observed_probes == [
+        (metadata.pid, pytest.approx(spec.config.daemon.auto_start_timeout_seconds / 3.0)),
+        (metadata.pid, pytest.approx(spec.config.daemon.auto_start_timeout_seconds / 3.0)),
+    ]
 
 
 def test_ensure_daemon_started_uses_configured_auto_start_timeout(monkeypatch, tmp_path: Path) -> None:
@@ -1347,6 +1351,7 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
 
     spawned: list[tuple[str, int]] = []
     removed_sockets: list[Path] = []
+    probe_timeouts: list[float] = []
     monotonic_values = iter([0.0, 0.2, 0.4, 0.6, 0.8])
 
     monkeypatch.setattr("mcp_memory.daemon.resolve_global_daemon_bootstrap_spec", lambda workspace_root_override=None, cwd=None: spec)
@@ -1357,7 +1362,10 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
     monkeypatch.setattr("mcp_memory.daemon._is_daemon_healthy", lambda current: current.pid == fresh_metadata.pid)
     monkeypatch.setattr("mcp_memory.daemon._is_process_running", lambda pid: False)
     monkeypatch.setattr("mcp_memory.daemon._terminate_orphaned_daemon_processes", lambda **kwargs: None)
-    monkeypatch.setattr("mcp_memory.daemon._probe_daemon_socket", lambda socket_path, timeout_seconds: False)
+    monkeypatch.setattr(
+        "mcp_memory.daemon._probe_daemon_socket",
+        lambda socket_path, timeout_seconds: probe_timeouts.append(timeout_seconds) or False,
+    )
     monkeypatch.setattr("mcp_memory.daemon._remove_daemon_socket", lambda socket_path: removed_sockets.append(Path(socket_path)))
     monkeypatch.setattr("mcp_memory.daemon._spawn_daemon_process", lambda host, port: spawned.append((host, port)))
     monkeypatch.setattr("mcp_memory.daemon.time.sleep", lambda _: None)
@@ -1367,4 +1375,6 @@ def test_ensure_daemon_started_cleans_stale_socket_before_spawn(monkeypatch, tmp
 
     assert current.port == 8131
     assert removed_sockets == [stale_socket]
+    assert len(probe_timeouts) == 1
+    assert 0.05 <= probe_timeouts[0] <= 0.1
     assert spawned == [(spec.config.daemon.host, 4242)]
