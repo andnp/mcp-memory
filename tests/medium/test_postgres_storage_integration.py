@@ -20,7 +20,11 @@ from mcp_memory.core.agent_runtime import (
     handle_project_manager_task,
     handle_sweeper_task,
 )
-from mcp_memory.core.task_handlers import CURATOR_TASK_NAME, RECURRING_TASK_INTERVAL_SECONDS
+from mcp_memory.core.task_handlers import (
+    CURATOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
+    RECURRING_TASK_INTERVAL_SECONDS,
+)
 from mcp_memory.core.task_worker import RuntimeTaskWorker
 from mcp_memory.core.tasks import TaskRecord
 from mcp_memory.daemon import create_daemon_app
@@ -678,6 +682,43 @@ def test_postgres_integration_task_queue_lifecycle_and_task_runs(postgres_storag
         assert summaries[0].completed_runs == 1
         assert summaries[0].retry_runs == 1
         assert summaries[0].total_lines_compressed == 3
+
+
+def test_postgres_integration_task_queue_allows_only_one_background_cleanup_to_run(postgres_storage_config) -> None:
+    ensure_postgres_schema(postgres_storage_config)
+
+    with PostgresConnectionManager(postgres_storage_config) as manager:
+        queue = PostgresTaskQueue(manager)
+        first_cleanup = queue.enqueue(
+            CURATOR_TASK_NAME,
+            priority=1,
+            available_at=0.0,
+            task_id="postgres-cleanup-one",
+        )
+        second_cleanup = queue.enqueue(
+            DEDUPLICATOR_TASK_NAME,
+            priority=90,
+            available_at=0.0,
+            task_id="postgres-cleanup-two",
+        )
+        normal_task = queue.enqueue(
+            "normal-background-task",
+            priority=100,
+            available_at=0.0,
+            task_id="postgres-normal-task",
+        )
+
+        claimed_first = queue.claim_next(now=1.0)
+        claimed_while_cleanup_runs = queue.claim_next(now=2.0)
+
+        assert claimed_first is not None and claimed_first.id == first_cleanup.id
+        assert claimed_while_cleanup_runs is not None and claimed_while_cleanup_runs.id == normal_task.id
+        assert queue.get_task(second_cleanup.id).status == "pending"
+
+        queue.complete(first_cleanup.id, completed_at=3.0, execution_epoch=claimed_first.execution_epoch)
+        claimed_second = queue.claim_next(now=4.0)
+
+        assert claimed_second is not None and claimed_second.id == second_cleanup.id
 
 
 def test_postgres_integration_task_retry_clears_stale_cancellation_state(postgres_storage_config) -> None:

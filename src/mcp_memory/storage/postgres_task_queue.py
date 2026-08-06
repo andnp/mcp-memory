@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
+from mcp_memory.core.maintenance_schedule import BACKGROUND_CLEANUP_TASK_NAMES
 from mcp_memory.core.ports.tasks import TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.core.task_results import TaskRunResultSource, coerce_task_run_result
 from mcp_memory.storage.session import DbConnectionLike, SessionManager
@@ -114,8 +115,25 @@ class PostgresTaskQueue:
             clauses.append("workspace_id = %s")
             params.append(workspace_id)
 
+        cleanup_names = tuple(sorted(BACKGROUND_CLEANUP_TASK_NAMES))
+        cleanup_placeholders = ", ".join("%s" for _ in cleanup_names)
+        clauses.append(
+            "(task_name NOT IN (" + cleanup_placeholders + ") "
+            "OR NOT EXISTS ("
+            "SELECT 1 FROM tasks AS running_cleanup "
+            "WHERE running_cleanup.status = 'running' "
+            "AND running_cleanup.task_name IN (" + cleanup_placeholders + ")"
+            "))"
+        )
+        params.extend(cleanup_names)
+        params.extend(cleanup_names)
+
         with self._sessions.open_connection() as connection:
             with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("mcp-memory:background-cleanup-claim",),
+                )
                 cursor.execute(
                     f"SELECT id FROM tasks WHERE {' AND '.join(clauses)} ORDER BY priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
                     tuple(params),

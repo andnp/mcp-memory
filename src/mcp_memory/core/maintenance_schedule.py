@@ -59,6 +59,10 @@ MAINTENANCE_TASK_NAMES = (
     CURATOR_TASK_NAME,
 )
 
+# All maintenance work shares one execution lane.  System1 ingestion is kept
+# separate because it is user-facing capture rather than cleanup.
+BACKGROUND_CLEANUP_TASK_NAMES = frozenset(MAINTENANCE_TASK_NAMES)
+
 AUTONOMOUS_RECURRING_MAINTENANCE_TASK_NAMES = (
     SWEEPER_TASK_NAME,
     CURATOR_TASK_NAME,

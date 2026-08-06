@@ -26,6 +26,7 @@ from mcp_memory.core.task_results import TaskRunResult
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
+    DEDUPLICATOR_TASK_NAME,
     FACT_CHECKER_TASK_NAME,
     SYSTEM1_AUTO_INGEST_RATE_LIMIT_SECONDS,
     SYSTEM1_INGEST_PRIORITY,
@@ -217,6 +218,25 @@ def test_sqlite_task_queue_claim_next_can_filter_by_workspace(db_manager) -> Non
     assert claimed is not None
     assert claimed.id == task_a.id
     assert queue.get_task(task_b.id).status == "pending"
+
+
+def test_sqlite_task_queue_allows_only_one_background_cleanup_to_run(db_manager) -> None:
+    queue = SQLiteTaskQueue(db_manager)
+    first_cleanup = queue.enqueue(CURATOR_TASK_NAME, priority=1, available_at=0.0, task_id="cleanup-one")
+    second_cleanup = queue.enqueue(DEDUPLICATOR_TASK_NAME, priority=90, available_at=0.0, task_id="cleanup-two")
+    normal_task = queue.enqueue("normal-background-task", priority=100, available_at=0.0, task_id="normal-task")
+
+    claimed_first = queue.claim_next(now=1.0)
+    claimed_while_cleanup_runs = queue.claim_next(now=2.0)
+
+    assert claimed_first is not None and claimed_first.id == first_cleanup.id
+    assert claimed_while_cleanup_runs is not None and claimed_while_cleanup_runs.id == normal_task.id
+    assert queue.get_task(second_cleanup.id).status == "pending"
+
+    queue.complete(first_cleanup.id, completed_at=3.0, execution_epoch=claimed_first.execution_epoch)
+    claimed_second = queue.claim_next(now=4.0)
+
+    assert claimed_second is not None and claimed_second.id == second_cleanup.id
 
 
 def test_sqlite_task_queue_complete_marks_terminal_state(db_manager) -> None:
@@ -1557,9 +1577,12 @@ def test_drain_legacy_cleanup_tasks_merges_multiple_rows_across_workspaces(db_ma
             available_at=0.0,
             task_id=task_id,
         )
-        assert queue.claim_next(now=10.0, workspace_id=workspace_id) is not None
-        if status == "pending":
-            queue.request_cancel(task.id, cancelled_by="system", reason="preexisting", requested_at=11.0)
+        if status == "running":
+            db_manager.get_connection().execute(
+                "UPDATE tasks SET status = 'running', started_at = 10.0, claimed_at = 10.0 WHERE id = ?",
+                (task.id,),
+            )
+            db_manager.get_connection().commit()
 
     drained = drain_legacy_cleanup_tasks(queue, now=200.0)
     canonical = queue.find_open_task(CURATOR_TASK_NAME, None)

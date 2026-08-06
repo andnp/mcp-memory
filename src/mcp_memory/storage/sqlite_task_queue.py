@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
+from mcp_memory.core.maintenance_schedule import BACKGROUND_CLEANUP_TASK_NAMES
 from mcp_memory.core.ports.tasks import TaskRecord, TaskRunRecord, TaskRunSummary
 from mcp_memory.core.task_results import TaskRunResultSource, coerce_task_run_result
 from mcp_memory.utils.db import DatabaseManager
@@ -122,6 +123,19 @@ class SQLiteTaskQueue:
             elif workspace_id is not _ANY_WORKSPACE:
                 clauses.append("workspace_id = ?")
                 params.append(workspace_id)
+
+            cleanup_placeholders = ", ".join("?" for _ in BACKGROUND_CLEANUP_TASK_NAMES)
+            cleanup_names = tuple(sorted(BACKGROUND_CLEANUP_TASK_NAMES))
+            clauses.append(
+                "(task_name NOT IN (" + cleanup_placeholders + ") "
+                "OR NOT EXISTS ("
+                "SELECT 1 FROM tasks AS running_cleanup "
+                "WHERE running_cleanup.status = 'running' "
+                "AND running_cleanup.task_name IN (" + cleanup_placeholders + ")"
+                "))"
+            )
+            params.extend(cleanup_names)
+            params.extend(cleanup_names)
 
             row = conn.execute(
                 "SELECT * FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY priority ASC, created_at ASC LIMIT 1",
