@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from mcp_memory.core.maintenance_schedule import BACKGROUND_CLEANUP_TASK_NAMES
 from mcp_memory.core.task_handlers import (
     CONFLICT_DETECTOR_TASK_NAME,
     CURATOR_TASK_NAME,
@@ -54,7 +55,7 @@ class TaskAdministrationService:
             raise ValueError(f"unknown_background_task:{task_name}")
 
         payload = {"workspace_id": None}
-        if force:
+        if force and canonical_task_name not in BACKGROUND_CLEANUP_TASK_NAMES:
             task = dependencies.task_queue.enqueue(
                 task_name=canonical_task_name,
                 workspace_id=None,

@@ -1868,6 +1868,26 @@ def test_management_service_redirects_manual_cleanup_aliases_to_memory_curator(d
     assert payload["redirected_from_task_name"] == task_name
 
 
+def test_management_service_force_does_not_duplicate_open_cleanup_task(db_manager) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    task_queue = SQLiteTaskQueue(db_manager)
+    service = _build_management_service(
+        db_manager,
+        workspace_id="workspace-a",
+        repository=repository,
+        task_queue=task_queue,
+    )
+
+    first = service.enqueue_background_task("memory-curator", force=False)
+    forced = service.enqueue_background_task("memory-curator", force=True)
+
+    assert first["status"] == "enqueued"
+    assert forced["status"] == "already_pending"
+    assert forced["created"] is False
+    assert forced["task"]["id"] == first["task"]["id"]
+    assert len(task_queue.list_open_tasks_any_workspace("memory-curator")) == 1
+
+
 def test_management_service_groups_manual_cleanup_aliases_in_run_all(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
