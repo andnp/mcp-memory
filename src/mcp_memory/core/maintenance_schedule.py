@@ -75,7 +75,7 @@ RECURRING_TASK_INTERVAL_SECONDS = {
     DEDUPLICATOR_TASK_NAME: MAINTENANCE_FAMILY_REGISTRY[DEDUPLICATOR_TASK_NAME].recurring_interval_seconds,
     TAXONOMIST_TASK_NAME: MAINTENANCE_FAMILY_REGISTRY[TAXONOMIST_TASK_NAME].recurring_interval_seconds,
     SWEEPER_TASK_NAME: 21600.0,
-    CURATOR_TASK_NAME: 300.0,
+    CURATOR_TASK_NAME: 1800.0,
 }
 
 # Active autonomous recurring entries only; legacy cleanup names are drained by

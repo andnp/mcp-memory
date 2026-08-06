@@ -53,7 +53,7 @@ RECURRING_TASK_INTERVAL_SECONDS = {
 	DEDUPLICATOR_TASK_NAME: 21600.0,
 	TAXONOMIST_TASK_NAME: 7200.0,
 	SWEEPER_TASK_NAME: 21600.0,
-	CURATOR_TASK_NAME: 300.0,
+	CURATOR_TASK_NAME: 1800.0,
 }
 # Active autonomous recurring entries only; legacy cleanup rows are drained by
 # startup migration and do not auto-resume.
