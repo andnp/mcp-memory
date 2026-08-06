@@ -212,6 +212,8 @@ class IncrementalCurationPlanState:
 
     max_proposed_actions: int | None = None
     builder: IncrementalCurationPlanBuilder | None = None
+    investigation_requested: bool = False
+    investigation_reason: str | None = None
 
     def begin(
         self,
@@ -220,6 +222,8 @@ class IncrementalCurationPlanState:
         seed_memory_ids: tuple[UUID, ...],
     ) -> None:
         self.builder = IncrementalCurationPlanBuilder(request, seed_memory_ids)
+        self.investigation_requested = False
+        self.investigation_reason = None
 
     def require_builder(self) -> IncrementalCurationPlanBuilder:
         if self.builder is None:
@@ -243,6 +247,10 @@ class IncrementalCurationPlanState:
 
     def add_retention(self, decision: RetentionDecision) -> None:
         self.require_builder().add_retention(decision)
+
+    def request_investigation(self, reason: str | None = None) -> None:
+        self.investigation_requested = True
+        self.investigation_reason = None if reason is None else reason.strip()[:500] or None
 
     def build(self, *, rationale: str) -> CurationPlan:
         return self.require_builder().build(rationale=rationale)
@@ -556,6 +564,7 @@ class SessionCurationPlanner(InstrumentedCurationPlanner):
                     "replace_curation_action",
                     "remove_curation_action",
                     "retain_curation_memory",
+                    "request_curation_investigation",
                 ),
             )
         else:
@@ -913,7 +922,9 @@ def _build_planner_prompt(
             " Build the plan incrementally using the typed MCP tools. Call "
             "propose_curation_action once per mutation, retain_curation_memory once "
             "per retained seed, and use replace_curation_action or "
-            "remove_curation_action when correcting an earlier proposal. Do not "
+            "remove_curation_action when correcting an earlier proposal. Call "
+            "request_curation_investigation when the visible context is insufficient "
+            "for an evidence-backed plan, then wait for refreshed context. Do not "
             "return a complete JSON plan; the tool calls are authoritative."
         )
     return instruction + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)

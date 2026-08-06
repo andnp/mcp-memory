@@ -116,18 +116,9 @@ async def run_curator_verified_campaign(
         allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
         tools=_incremental_curation_tools(plan_state),
     )
-    investigation = (
-        await run_curator_investigation(
-            agentic_provider,
-            seed_records=seed_records,
-            task_id=task.id,
-            limits=investigation_limits,
-            session=session,
-        )
-    )
-    exploratory_records, exploratory_reads = _investigated_reads(
-        ctx, investigation, seed_records
-    )
+    investigation = CurationInvestigationResult("skipped", reason="lazy_preflight")
+    exploratory_records: list[Any] = []
+    exploratory_reads: tuple[AcceptedMaintenanceRead, ...] = ()
     context_records = [*seed_records, *exploratory_records]
 
     planner = SessionCurationPlanner(
@@ -217,8 +208,9 @@ async def run_curator_verified_campaign(
             cumulative_accepted += int(
                 getattr(result.result, "verified_action_count", len(result.result.receipts))
             )
+            investigation_requested = plan_state.investigation_requested
             termination_reason = _feedback_termination_reason(result)
-            if termination_reason is not None:
+            if not investigation_requested and termination_reason is not None:
                 break
             remaining_budget = _remaining_mutation_budget(
                 configured_budget,
@@ -228,50 +220,43 @@ async def run_curator_verified_campaign(
             if remaining_budget.max_accepted_mutations == 0 or remaining_budget.max_proposed_actions == 0:
                 termination_reason = "cumulative_budget_exhausted"
                 break
-            feedback = _quality_feedback_payload(result)
-            cast(Any, planner).set_quality_feedback(feedback)
+            if not investigation_requested:
+                feedback = _quality_feedback_payload(result)
+                cast(Any, planner).set_quality_feedback(feedback)
             harness._config.mutation_budget = remaining_budget
-            investigation = await run_curator_investigation(
-                agentic_provider,
-                seed_records=seed_records,
-                task_id=task.id,
-                limits=investigation_limits,
-                session=session,
-            )
-            newly_read_records, newly_read_context = _investigated_reads(
-                ctx, investigation, seed_records
-            )
-            exploratory_records = list(
-                {
-                    record.id: record
-                    for record in [*exploratory_records, *newly_read_records]
-                }.values()
-            )
-            exploratory_reads = tuple(
-                {
-                    str(read.record["id"]): read
-                    for read in [*exploratory_reads, *newly_read_context]
-                }.values()
-            )
-            refreshed = _refresh_records(ctx, [*seed_records, *exploratory_records])
-            if refreshed:
+            if investigation_requested:
+                investigation = await run_curator_investigation(
+                    agentic_provider,
+                    seed_records=seed_records,
+                    task_id=task.id,
+                    limits=investigation_limits,
+                    session=session,
+                )
+                newly_read_records, newly_read_context = _investigated_reads(
+                    ctx, investigation, seed_records
+                )
+                exploratory_records = list(
+                    {
+                        record.id: record
+                        for record in [*exploratory_records, *newly_read_records]
+                    }.values()
+                )
+                exploratory_reads = tuple(
+                    {
+                        str(read.record["id"]): read
+                        for read in [*exploratory_reads, *newly_read_context]
+                    }.values()
+                )
+                refreshed = _refresh_records(ctx, [*seed_records, *exploratory_records])
                 frontier = _frontier_with_refreshed_records(
                     frontier,
-                    refreshed,
+                    refreshed or [*seed_records, *exploratory_records],
                     sampled_count=len(sampled_records),
                     exploratory_reads=exploratory_reads,
                     retain_work_item=False,
                 )
-            else:
-                frontier = _frontier_with_refreshed_records(
-                    frontier,
-                    [*seed_records, *exploratory_records],
-                    sampled_count=len(sampled_records),
-                    exploratory_reads=exploratory_reads,
-                    retain_work_item=False,
-                )
-            for record in newly_read_records:
-                memory_types[UUID(record.id)] = record.type
+                for record in newly_read_records:
+                    memory_types[UUID(record.id)] = record.type
             next_result = await harness.run(frontier)
             cumulative_tool_calls += _authoritative_read_tool_calls(next_result)
             correction_turns += 1
@@ -410,7 +395,7 @@ def _curation_no_op_reason(
 ) -> str | None:
     if outcome is CurationRunOutcome.NO_OP:
         if investigation.status != "completed":
-            return "investigation_unavailable"
+            return investigation.reason or "investigation_unavailable"
         return "planner_retained" if plan is not None and not plan.actions else "execution_no_op"
     if outcome in {
         CurationRunOutcome.INVALID_PLAN,
@@ -530,6 +515,12 @@ def _incremental_curation_tools(state: IncrementalCurationPlanState) -> list[Any
             return ToolResult(text_result_for_llm=f"Retention decision not added: {error}")
         return ToolResult(text_result_for_llm="Retention decision added to the pending plan.")
 
+    def request_investigation(invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.arguments
+        reason = arguments.get("reason") if isinstance(arguments, dict) else None
+        state.request_investigation(reason if isinstance(reason, str) else None)
+        return ToolResult(text_result_for_llm="Investigation requested; wait for refreshed context before planning.")
+
     action_schema = TypeAdapter(CurationAction).json_schema()
     return [
         Tool(
@@ -577,6 +568,18 @@ def _incremental_curation_tools(state: IncrementalCurationPlanState) -> list[Any
                 "required": ["decision"],
             },
             handler=retain,
+            skip_permission=True,
+            defer="never",
+        ),
+        Tool(
+            name="request_curation_investigation",
+            description="Request read-only investigation when the visible context is insufficient.",
+            parameters={
+                "type": "object",
+                "properties": {"reason": {"type": "string", "maxLength": 500}},
+                "required": [],
+            },
+            handler=request_investigation,
             skip_permission=True,
             defer="never",
         ),

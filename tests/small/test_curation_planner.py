@@ -195,6 +195,15 @@ def test_incremental_plan_state_supports_action_revisions() -> None:
     assert [item.memory_id for item in plan.retained] == [seed_id, other_seed_id]
 
 
+def test_incremental_plan_state_records_lazy_investigation_requests() -> None:
+    state = IncrementalCurationPlanState()
+
+    state.request_investigation("need adjacent canonical evidence")
+
+    assert state.investigation_requested is True
+    assert state.investigation_reason == "need adjacent canonical evidence"
+
+
 @pytest.mark.asyncio
 async def test_session_planner_assembles_incremental_tool_plan() -> None:
     seed_id = uuid4()
