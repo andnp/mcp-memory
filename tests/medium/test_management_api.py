@@ -1283,7 +1283,7 @@ async def test_daemon_zmq_dispatch_processes_tool_requests_concurrently(monkeypa
     assert total_elapsed < 0.7
     for index, payload_text, elapsed in results:
         payload = json.loads(payload_text)
-        assert payload == {"status": "ok", "query": f"query-{index}"}
+        assert payload == {"query": f"query-{index}"}
         assert elapsed < 0.7
 
 
