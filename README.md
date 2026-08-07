@@ -201,6 +201,14 @@ max_snapshots = 24
 create_startup_snapshot = true
 warn_on_shared_storage = true
 
+[maintenance]
+# Archived memories older than this are eligible for bounded GC.
+archived_memory_retention_days = 90
+memory_gc_batch_size = 100
+dangling_link_gc_batch_size = 100
+# Start safely; switch to "delete" after reviewing sweeper reports.
+memory_gc_mode = "report-only"
+
 [embeddings]
 provider = "sentence-transformers"
 model = "sentence-transformers/all-MiniLM-L6-v2"

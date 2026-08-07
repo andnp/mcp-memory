@@ -910,17 +910,13 @@ def test_postgres_integration_maintenance_housekeeping_handlers_update_state(
 
         assert project_result == {"updated": 1}
         assert fact_result == {"degraded": 1, "restored": 0}
-        assert sweep_result == {
-            "deleted_tasks": 1,
-            "deleted_journal_entries": 1,
-            "gc_metadata_records": 0,
-            "lineage_hotspots": {
-                "active_split_original_records": 0,
-                "oversized_lineage_metadata_records": 0,
-                "high_relationship_density_records": 0,
-                "examples": [],
-            },
-        }
+        assert sweep_result["deleted_tasks"] == 1
+        assert sweep_result["deleted_journal_entries"] == 1
+        assert sweep_result["gc_metadata_records"] == 0
+        assert sweep_result["lineage_hotspots"]["examples"] == []
+        assert sweep_result["dangling_links"]["deleted"] == 0
+        assert sweep_result["memory_gc"]["mode"] == "report-only"
+        assert sweep_result["memory_gc"]["deleted"] == 0
         assert stale_plan_record is not None
         assert healthy_memory_record is not None
         assert broken_memory_record is not None
@@ -1024,18 +1020,20 @@ def test_postgres_integration_sweeper_preserves_unexpired_recoverable_entries_an
             "high_relationship_density_records": 0,
             "examples": [],
         }
-        assert first == {
-            "deleted_tasks": 1,
-            "deleted_journal_entries": 2,
-            "gc_metadata_records": 0,
-            "lineage_hotspots": empty_lineage_hotspots,
-        }
-        assert second == {
-            "deleted_tasks": 0,
-            "deleted_journal_entries": 0,
-            "gc_metadata_records": 0,
-            "lineage_hotspots": empty_lineage_hotspots,
-        }
+        assert first["deleted_tasks"] == 1
+        assert first["deleted_journal_entries"] == 2
+        assert first["gc_metadata_records"] == 0
+        assert first["lineage_hotspots"] == empty_lineage_hotspots
+        assert first["dangling_links"]["deleted"] == 0
+        assert first["memory_gc"]["mode"] == "report-only"
+        assert first["memory_gc"]["deleted"] == 0
+        assert second["deleted_tasks"] == 0
+        assert second["deleted_journal_entries"] == 0
+        assert second["gc_metadata_records"] == 0
+        assert second["lineage_hotspots"] == empty_lineage_hotspots
+        assert second["dangling_links"]["deleted"] == 0
+        assert second["memory_gc"]["mode"] == "report-only"
+        assert second["memory_gc"]["deleted"] == 0
         assert remaining_recoverable == [(preserved_row[0],)]
         assert runtime.vector_store.deleted == [("thought", str(expired_row[0]), None)]
     finally:

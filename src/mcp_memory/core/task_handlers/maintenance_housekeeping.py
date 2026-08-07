@@ -23,12 +23,152 @@ _LINEAGE_METADATA_LIST_WARNING_COUNT = 10
 _RELATIONSHIP_DENSITY_WARNING_COUNT = 20
 _LINEAGE_HOTSPOT_EXAMPLE_LIMIT = 10
 _DANGLING_LINK_EXAMPLE_LIMIT = 10
+_ARCHIVED_MEMORY_GC_EXAMPLE_LIMIT = 10
+_DEFAULT_ARCHIVED_MEMORY_RETENTION_DAYS = 90
+_DEFAULT_MEMORY_GC_BATCH_SIZE = 100
+_DEFAULT_DANGLING_LINK_BATCH_SIZE = 100
+_MEMORY_GC_MODES = frozenset({"report-only", "delete"})
 
 
 class DanglingLinkReconciliationResult(TypedDict):
     scanned: int
     deleted: int
     deleted_link_examples: list[dict[str, str]]
+
+
+class ArchivedMemoryGcResult(TypedDict):
+    mode: str
+    cutoff: str
+    scanned: int
+    eligible: int
+    skipped_protected: int
+    skipped_linked: int
+    deleted: int
+    eligible_memory_examples: list[str]
+    deleted_memory_examples: list[str]
+
+
+def gc_archived_memories(
+    connection: BackendConnection,
+    sqlite_mode: bool,
+    *,
+    cutoff: datetime,
+    batch_size: int = _DEFAULT_MEMORY_GC_BATCH_SIZE,
+    mode: str = "report-only",
+) -> ArchivedMemoryGcResult:
+    """Report or delete one bounded batch of safe-to-remove archived memories."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if mode not in _MEMORY_GC_MODES:
+        raise ValueError(f"unsupported memory GC mode: {mode!r}")
+
+    cutoff_text = cutoff.astimezone(UTC).isoformat()
+    now_text = datetime.now(UTC).isoformat()
+    rows = _fetchall_rows(
+        connection,
+        sqlite_mode,
+        """
+        SELECT memories.id,
+               EXISTS (
+                   SELECT 1
+                   FROM memory_protections
+                   WHERE memory_protections.memory_id = memories.id
+                     AND (memory_protections.expires_at IS NULL OR memory_protections.expires_at > {})
+               ) AS is_protected,
+               EXISTS (
+                   SELECT 1
+                   FROM links
+                   WHERE (links.source_id = memories.id OR links.target_id = memories.id)
+                     AND links.type <> 'SUPERSEDES'
+               ) AS has_non_supersedes_link
+        FROM memories
+        WHERE memories.status = 'archived'
+          AND memories.archived_at IS NOT NULL
+          AND memories.archived_at < {}
+        ORDER BY memories.archived_at ASC, memories.id ASC
+        LIMIT {}
+        """,
+        (now_text, cutoff_text, batch_size),
+    )
+
+    eligible_ids: list[str] = []
+    skipped_protected = 0
+    skipped_linked = 0
+    for memory_id, is_protected, has_non_supersedes_link in rows:
+        if bool(is_protected):
+            skipped_protected += 1
+        elif bool(has_non_supersedes_link):
+            skipped_linked += 1
+        else:
+            eligible_ids.append(str(memory_id))
+
+    deleted_ids: list[str] = []
+    if mode == "delete":
+        for memory_id in eligible_ids:
+            deleted = _execute_write(
+                connection,
+                sqlite_mode,
+                """
+                DELETE FROM memories
+                WHERE id = {}
+                  AND status = 'archived'
+                  AND archived_at IS NOT NULL
+                  AND archived_at < {}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM memory_protections
+                      WHERE memory_protections.memory_id = memories.id
+                        AND (memory_protections.expires_at IS NULL OR memory_protections.expires_at > {})
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM links
+                      WHERE (links.source_id = memories.id OR links.target_id = memories.id)
+                        AND links.type <> 'SUPERSEDES'
+                  )
+                """,
+                (memory_id, cutoff_text, now_text),
+            )
+            if deleted != 1:
+                continue
+            _execute_write(
+                connection,
+                sqlite_mode,
+                "DELETE FROM links WHERE source_id = {} OR target_id = {}",
+                (memory_id, memory_id),
+            )
+            projection_table = "memories_fts" if sqlite_mode else "memory_search_documents"
+            _execute_write(
+                connection,
+                sqlite_mode,
+                f"DELETE FROM {projection_table} WHERE memory_id = {{}}",
+                (memory_id,),
+            )
+            _execute_write(
+                connection,
+                sqlite_mode,
+                "DELETE FROM embeddings WHERE source_kind = 'memory' AND source_id = {}",
+                (memory_id,),
+            )
+            _execute_write(
+                connection,
+                sqlite_mode,
+                "DELETE FROM memory_protections WHERE memory_id = {}",
+                (memory_id,),
+            )
+            deleted_ids.append(memory_id)
+
+    return {
+        "mode": mode,
+        "cutoff": cutoff_text,
+        "scanned": len(rows),
+        "eligible": len(eligible_ids),
+        "skipped_protected": skipped_protected,
+        "skipped_linked": skipped_linked,
+        "deleted": len(deleted_ids),
+        "eligible_memory_examples": eligible_ids[:_ARCHIVED_MEMORY_GC_EXAMPLE_LIMIT],
+        "deleted_memory_examples": deleted_ids[:_ARCHIVED_MEMORY_GC_EXAMPLE_LIMIT],
+    }
 
 
 def reconcile_dangling_links(
@@ -52,7 +192,10 @@ def reconcile_dangling_links(
             SELECT links.source_id, links.target_id, links.type
             FROM links
             WHERE NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.source_id)
-               OR NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.target_id)
+               OR (
+                   links.target_id NOT LIKE 'ext:%'
+                   AND NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.target_id)
+               )
             ORDER BY links.source_id ASC, links.target_id ASC, links.type ASC
             LIMIT {}
             """,
@@ -199,13 +342,65 @@ def handle_sweeper_task(
     task: TaskRecord,
 ) -> dict[str, Any]:
     if ctx.db_manager is None:
-        return {"deleted_tasks": 0, "deleted_journal_entries": 0, "gc_metadata_records": 0}
+        return {
+            "deleted_tasks": 0,
+            "deleted_journal_entries": 0,
+            "gc_metadata_records": 0,
+            "dangling_links": _empty_dangling_link_result(),
+            "memory_gc": _empty_archived_memory_gc_result(),
+            "dangling_links_deleted": 0,
+            "memory_gc_scanned": 0,
+            "memory_gc_eligible": 0,
+            "memory_gc_deleted": 0,
+        }
 
     cutoff = datetime.now(UTC) - timedelta(days=DEFAULT_SWEEP_RETENTION_DAYS)
     cutoff_timestamp = cutoff.timestamp()
+    maintenance_config = getattr(ctx.config, "maintenance", None)
+    link_batch_size = int(
+        task.data.get(
+            "dangling_link_gc_batch_size",
+            getattr(maintenance_config, "dangling_link_gc_batch_size", _DEFAULT_DANGLING_LINK_BATCH_SIZE),
+        )
+    )
+    memory_gc_batch_size = int(
+        task.data.get(
+            "memory_gc_batch_size",
+            getattr(maintenance_config, "memory_gc_batch_size", _DEFAULT_MEMORY_GC_BATCH_SIZE),
+        )
+    )
+    memory_gc_mode = str(
+        task.data.get(
+            "memory_gc_mode",
+            getattr(maintenance_config, "memory_gc_mode", "report-only"),
+        )
+    )
+    memory_retention_days = int(
+        task.data.get(
+            "archived_memory_retention_days",
+            getattr(
+                maintenance_config,
+                "archived_memory_retention_days",
+                _DEFAULT_ARCHIVED_MEMORY_RETENTION_DAYS,
+            ),
+        )
+    )
+    archived_memory_cutoff = datetime.now(UTC) - timedelta(days=memory_retention_days)
     with _open_backend_connection(ctx) as connection:
         sqlite_mode = _uses_sqlite_backend(ctx)
         lineage_hotspots = _scan_lineage_hotspots(connection, sqlite_mode)
+        dangling_links = reconcile_dangling_links(
+            connection,
+            sqlite_mode,
+            batch_size=link_batch_size,
+        )
+        memory_gc = gc_archived_memories(
+            connection,
+            sqlite_mode,
+            cutoff=archived_memory_cutoff,
+            batch_size=memory_gc_batch_size,
+            mode=memory_gc_mode,
+        )
         deleted_tasks = _execute_write(
             connection,
             sqlite_mode,
@@ -233,6 +428,30 @@ def handle_sweeper_task(
         "deleted_journal_entries": deleted_journal_entries,
         "gc_metadata_records": gc_metadata_records,
         "lineage_hotspots": lineage_hotspots,
+        "dangling_links": dangling_links,
+        "memory_gc": memory_gc,
+        "dangling_links_deleted": dangling_links["deleted"],
+        "memory_gc_scanned": memory_gc["scanned"],
+        "memory_gc_eligible": memory_gc["eligible"],
+        "memory_gc_deleted": memory_gc["deleted"],
+    }
+
+
+def _empty_dangling_link_result() -> DanglingLinkReconciliationResult:
+    return {"scanned": 0, "deleted": 0, "deleted_link_examples": []}
+
+
+def _empty_archived_memory_gc_result() -> ArchivedMemoryGcResult:
+    return {
+        "mode": "report-only",
+        "cutoff": "",
+        "scanned": 0,
+        "eligible": 0,
+        "skipped_protected": 0,
+        "skipped_linked": 0,
+        "deleted": 0,
+        "eligible_memory_examples": [],
+        "deleted_memory_examples": [],
     }
 
 

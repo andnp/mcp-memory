@@ -57,7 +57,7 @@ Manual/public mutations should adopt the same history path incrementally so audi
 7. **Lineage survives.** Merge, split, archive, and restore preserve enough relationship and metadata state to reconstruct provenance.
 8. **No history in generic metadata.** Core mutation history and protection rules use first-class relational tables.
 9. **Global store semantics.** Workspace associations are restored as provenance metadata, not as tenancy boundaries.
-10. **Delete stays exceptional.** Automatic hard deletion remains disabled until retention, tombstone, relationship, and restore requirements are proven.
+10. **Delete stays exceptional.** Automatic hard deletion is limited to the bounded archived-memory GC contract below; it is report-only by default and never deletes protected or relationship-bearing memories.
 
 ## 5. Logical Data Model
 
@@ -188,6 +188,12 @@ A user-authored content, status, tag, workspace, or relationship change:
 
 Protection rows for missing memories remain inspectable for a retention window so accidental deletion does not erase evidence of user intent. A later tombstone policy may make this permanent for protected records.
 
+### 7.4 Archived-memory garbage collection
+
+The sweeper may process one deterministic bounded batch of archived memories whose explicit `archived_at` timestamp is older than the configured retention window (90 days by default). The default mode is `report-only`; deletion requires setting `[maintenance].memory_gc_mode = "delete"` or supplying an equivalent task override.
+
+GC skips any memory with an active protection and any memory participating in a link other than `SUPERSEDES`. `SUPERSEDES` is lineage metadata, not a status. A deleted memory's live links, search projection, embeddings, and protection rows are removed in the same authoritative database transaction; mutation events and revisions remain as audit history. External references such as `ext:...` are not treated as dangling memory links.
+
 ## 8. Restore Contract
 
 ### 8.1 Restore request
@@ -224,7 +230,7 @@ If current state diverged, return a conflict with an operator-readable diff. Do 
 | archive | restore prior status and associated semantic state |
 | merge | restore canonical and source snapshots plus affected links only when neither side has dependent later changes |
 | split | restore original and reverse child/lineage changes only when children have no dependent later changes |
-| delete | unavailable until tombstone and retention design is accepted |
+| delete | bounded archived-memory GC only; mutation history remains available, while restore of deleted state is not currently supported |
 
 Merge and split restore are high risk and initially require operator confirmation even when preconditions pass.
 
@@ -433,7 +439,7 @@ Run the same behavior against SQLite and Postgres:
 - Search projections, embedding repair, and derivative caches follow restored state.
 - Operators can inspect a bounded before/after diff without reading provider prose.
 - First terminal mutation/run outcomes remain authoritative under late callbacks and recovery.
-- Automatic hard delete remains disabled until a separate accepted tombstone/retention design exists.
+- Archived-memory GC is bounded, protected, report-first, and preserves mutation history; tombstones remain a future option for restoring deleted live state.
 
 ## 18. Non-Goals
 
