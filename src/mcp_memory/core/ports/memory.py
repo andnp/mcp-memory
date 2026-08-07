@@ -48,6 +48,7 @@ class MemoryRecord:
     workspace_ids: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     memory_ref: int | None = None
+    archived_at: str | None = None
 
 
 def format_memory_ref(memory_ref: int | None) -> str | None:

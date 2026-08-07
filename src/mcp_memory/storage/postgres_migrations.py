@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 26
+POSTGRES_SCHEMA_VERSION = 27
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ POSTGRES_MIGRATIONS = (
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                archived_at TEXT,
                 read_count INTEGER NOT NULL DEFAULT 0,
                 access_score DOUBLE PRECISION NOT NULL DEFAULT 0,
                 last_accessed_at TEXT,
@@ -860,6 +861,14 @@ POSTGRES_MIGRATIONS = (
             "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT",
             "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS total_tokens BIGINT",
             "ALTER TABLE ai_conversations ADD COLUMN IF NOT EXISTS token_usage_source TEXT",
+        ),
+    ),
+    PostgresMigration(
+        version=27,
+        name="add_memory_archived_at",
+        statements=(
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS archived_at TEXT",
+            "UPDATE memories SET archived_at = updated_at WHERE status = 'archived' AND archived_at IS NULL",
         ),
     ),
 )

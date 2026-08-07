@@ -167,6 +167,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_surfaced_at,
                         memories.metadata,
                         memories.memory_ref,
+                        memories.archived_at,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
                     FROM memories
@@ -206,8 +207,9 @@ class PostgresRelationalMemoryRepository:
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
                 memory_ref=self._coerce_int(row[13]),
-                workspace_ids=self._load_text_values(row[14]),
-                tags=self._load_text_values(row[15]),
+                archived_at=None if row[14] is None else str(row[14]),
+                workspace_ids=self._load_text_values(row[15]),
+                tags=self._load_text_values(row[16]),
             )
         return [records_by_id[memory_id] for memory_id in resolved_ids if memory_id in records_by_id]
 
@@ -253,8 +255,8 @@ class PostgresRelationalMemoryRepository:
                     """
                     INSERT INTO memories (
                         id, title, content, summary, type, status, created_at, updated_at,
-                        read_count, access_score, last_accessed_at, last_surfaced_at, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        read_count, access_score, last_accessed_at, last_surfaced_at, metadata, archived_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                     """,
                     (
                         record_id,
@@ -270,6 +272,7 @@ class PostgresRelationalMemoryRepository:
                         None,
                         None,
                         metadata_payload,
+                        self._utc_now() if normalized_status == "archived" else None,
                     ),
                 )
                 self._replace_workspace_mappings(cursor, record_id, normalized_workspace_ids)
@@ -425,6 +428,10 @@ class PostgresRelationalMemoryRepository:
             columns.append("metadata = %s::jsonb")
             values.append(json.dumps(metadata, sort_keys=True))
 
+        if normalized_status is not None and normalized_status != existing.status:
+            columns.append("archived_at = %s")
+            values.append(self._utc_now() if normalized_status == "archived" else None)
+
         columns.append("updated_at = %s")
         values.append(self._utc_now())
         values.append(resolved_memory_id)
@@ -482,7 +489,7 @@ class PostgresRelationalMemoryRepository:
             params.append(status)
         query = (
             "SELECT id, title, content, summary, type, status, created_at, updated_at, "
-            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref "
+            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at "
             "FROM memories "
         )
         if joins:
@@ -519,6 +526,7 @@ class PostgresRelationalMemoryRepository:
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
                 memory_ref=self._coerce_int(row[13]),
+                archived_at=None if row[14] is None else str(row[14]),
                 workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
                 tags=tags_by_memory_id.get(memory_id, []),
             )
@@ -741,6 +749,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_surfaced_at,
                         memories.metadata,
                         memories.memory_ref,
+                        memories.archived_at,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags,
                         COALESCE(link_counts.incoming_links_count, 0) AS incoming_links_count,
@@ -769,7 +778,7 @@ class PostgresRelationalMemoryRepository:
         candidate_build_started = time.perf_counter()
         candidates: list[RankedMemoryCandidate] = []
         for row in rows:
-            has_incoming_supersedes = self._coerce_int(row[17]) > 0
+            has_incoming_supersedes = self._coerce_int(row[18]) > 0
             candidates.append(
                 RankedMemoryCandidate(
                     record=RelationalMemoryRecord(
@@ -787,16 +796,17 @@ class PostgresRelationalMemoryRepository:
                         last_surfaced_at=None if row[11] is None else str(row[11]),
                         metadata=self._load_metadata(row[12]),
                         memory_ref=self._coerce_int(row[13]),
-                        workspace_ids=self._load_text_values(row[14]),
-                        tags=self._load_text_values(row[15]),
+                        archived_at=None if row[14] is None else str(row[14]),
+                        workspace_ids=self._load_text_values(row[15]),
+                        tags=self._load_text_values(row[16]),
                     ),
-                    incoming_links_count=self._coerce_int(row[16]),
+                    incoming_links_count=self._coerce_int(row[17]),
                     has_incoming_supersedes=has_incoming_supersedes,
                     incoming_link_type_counts={
-                        "DEPENDS_ON": self._coerce_int(row[18]),
-                        "AMENDS": self._coerce_int(row[19]),
-                        "CONTRADICTS": self._coerce_int(row[20]),
-                        "SUPERSEDES": self._coerce_int(row[21]),
+                        "DEPENDS_ON": self._coerce_int(row[19]),
+                        "AMENDS": self._coerce_int(row[20]),
+                        "CONTRADICTS": self._coerce_int(row[21]),
+                        "SUPERSEDES": self._coerce_int(row[22]),
                     },
                 )
             )
@@ -932,6 +942,7 @@ class PostgresRelationalMemoryRepository:
                         memories.last_surfaced_at,
                         memories.metadata,
                         memories.memory_ref,
+                        memories.archived_at,
                         COALESCE(workspace_agg.workspace_ids, ARRAY[]::text[]) AS workspace_ids,
                         COALESCE(tag_agg.tags, ARRAY[]::text[]) AS tags
                     FROM memories
@@ -985,8 +996,9 @@ class PostgresRelationalMemoryRepository:
                 last_surfaced_at=None if row[11] is None else str(row[11]),
                 metadata=self._load_metadata(row[12]),
                 memory_ref=self._coerce_int(row[13]),
-                workspace_ids=self._load_text_values(row[14]),
-                tags=self._load_text_values(row[15]),
+                archived_at=None if row[14] is None else str(row[14]),
+                workspace_ids=self._load_text_values(row[15]),
+                tags=self._load_text_values(row[16]),
             )
             for row in rows
         ]
@@ -1350,7 +1362,7 @@ class PostgresRelationalMemoryRepository:
 
         query = (
             "SELECT DISTINCT id, title, content, summary, type, status, created_at, updated_at, "
-            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories "
+            "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at FROM memories "
         )
         if joins:
             query += " ".join(joins) + " "
@@ -1368,7 +1380,8 @@ class PostgresRelationalMemoryRepository:
         cursor.execute(
             """
             SELECT id, title, content, summary, type, status, created_at, updated_at,
-                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref
+                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref,
+                   archived_at
             FROM memories
             WHERE id = %s
             """,
@@ -1386,7 +1399,8 @@ class PostgresRelationalMemoryRepository:
         cursor.execute(
             """
             SELECT id, title, content, summary, type, status, created_at, updated_at,
-                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref
+                   read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref,
+                   archived_at
             FROM memories
             WHERE id = ANY(%s::text[])
             """,
@@ -1532,6 +1546,7 @@ class PostgresRelationalMemoryRepository:
             last_surfaced_at=None if row[11] is None else str(row[11]),
             metadata=self._load_metadata(row[12]),
             memory_ref=self._coerce_int(row[13]),
+            archived_at=None if row[14] is None else str(row[14]),
             workspace_ids=[str(workspace_row[0]) for workspace_row in workspace_rows],
             tags=[str(tag_row[0]) for tag_row in tag_rows],
         )
@@ -1552,6 +1567,7 @@ class PostgresRelationalMemoryRepository:
             last_surfaced_at=None if row[11] is None else str(row[11]),
             metadata=self._load_metadata(row[12]),
             memory_ref=self._coerce_int(row[13]),
+            archived_at=None if row[14] is None else str(row[14]),
             workspace_ids=[],
             tags=[],
         )

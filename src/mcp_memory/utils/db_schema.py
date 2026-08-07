@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -80,6 +80,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            archived_at TEXT,
             read_count INTEGER NOT NULL DEFAULT 0,
             access_score REAL NOT NULL DEFAULT 0,
             last_accessed_at TEXT,
@@ -380,6 +381,10 @@ def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "memories", "status", "TEXT NOT NULL DEFAULT 'active'")
     ensure_column(conn, "memories", "created_at", "TEXT")
     ensure_column(conn, "memories", "updated_at", "TEXT")
+    ensure_column(conn, "memories", "archived_at", "TEXT")
+    conn.execute(
+        "UPDATE memories SET archived_at = updated_at WHERE status = 'archived' AND archived_at IS NULL"
+    )
     ensure_column(conn, "memories", "read_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "memories", "access_score", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "memories", "last_accessed_at", "TEXT")

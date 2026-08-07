@@ -151,6 +151,7 @@ class RelationalMemoryRepository:
                 status=row["status"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                archived_at=row["archived_at"],
                 read_count=int(row["read_count"] or 0),
                 access_score=row["access_score"],
                 last_accessed_at=row["last_accessed_at"],
@@ -184,6 +185,7 @@ class RelationalMemoryRepository:
         normalized_tags = self._normalize_values(tags or [])
         normalized_type = self._validate_memory_type(memory_type)
         normalized_status = self._validate_memory_status(status)
+        archived_timestamp = self._utc_now() if normalized_status == "archived" else None
         self._validate_required_text("title", normalized_title)
         self._validate_required_text("content", normalized_content)
         if not normalized_workspace_ids:
@@ -207,8 +209,8 @@ class RelationalMemoryRepository:
                 """
                 INSERT INTO memories (
                     id, memory_ref, title, content, summary, type, status, created_at, updated_at,
-                    read_count, access_score, last_accessed_at, last_surfaced_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    archived_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
@@ -220,6 +222,7 @@ class RelationalMemoryRepository:
                     normalized_status,
                     created_timestamp,
                     updated_timestamp,
+                    archived_timestamp,
                     0,
                     0.0,
                     None,
@@ -1051,6 +1054,12 @@ class RelationalMemoryRepository:
         if metadata is not None:
             columns.append("metadata = ?")
             values.append(json.dumps(metadata, sort_keys=True))
+
+        if normalized_status is not None and normalized_status != existing.status:
+            columns.append("archived_at = ?")
+            values.append(
+                self._utc_now() if normalized_status == "archived" else None
+            )
 
         columns.append("updated_at = ?")
         values.append(self._utc_now())

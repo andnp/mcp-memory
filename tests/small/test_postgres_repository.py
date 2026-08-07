@@ -76,7 +76,7 @@ class FakeCursor:
         ):
             self._select_searchable_memories(normalized, arguments)
         elif normalized.startswith(
-            "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY("
+            "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at FROM memories WHERE id = ANY("
         ):
             self._select_memories_by_ids(arguments)
         elif normalized.startswith("SELECT id, title, content, summary, type, status, created_at, updated_at,") and "FROM memories WHERE id = %s" in normalized:
@@ -220,6 +220,7 @@ class FakeCursor:
             "last_accessed_at": arguments[10],
             "last_surfaced_at": arguments[11],
             "metadata": str(arguments[12]),
+            "archived_at": arguments[13],
             "memory_ref": self._state.next_memory_ref,
         }
         self._state.next_memory_ref += 1
@@ -628,6 +629,7 @@ class FakeCursor:
             memory["last_surfaced_at"],
             memory["metadata"],
             memory["memory_ref"],
+            memory["archived_at"],
         )
 
     def _sorted_memories(self) -> Iterable[dict[str, object]]:
@@ -1330,7 +1332,7 @@ def test_postgres_repository_list_memories_batches_workspace_and_tag_hydration(
     queries = state.query_log[query_start:]
     assert len(queries) == 3
     assert queries[0].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at FROM memories"
     )
     assert queries[1] == "SELECT memory_id, workspace_id FROM memory_workspaces WHERE memory_id = ANY(%s::text[]) ORDER BY memory_id ASC, workspace_id ASC"
     assert queries[2] == "SELECT memory_tags.memory_id, tags.name FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id WHERE memory_tags.memory_id = ANY(%s::text[]) ORDER BY memory_tags.memory_id ASC, tags.name ASC"
@@ -1634,12 +1636,12 @@ def test_postgres_repository_read_cache_validation_tokens_are_stable_for_unchang
     assert second == first
     assert len(first_queries) == 4
     assert first_queries[0].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY(%s::text[])"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at FROM memories WHERE id = ANY(%s::text[])"
     )
     assert first_queries[1] == "SELECT source_id, target_id, type, context FROM links WHERE source_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
     assert first_queries[2] == "SELECT source_id, target_id, type, context FROM links WHERE target_id = ANY(%s::text[]) ORDER BY source_id ASC, target_id ASC"
     assert first_queries[3].startswith(
-        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref FROM memories WHERE id = ANY(%s::text[])"
+        "SELECT id, title, content, summary, type, status, created_at, updated_at, read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref, archived_at FROM memories WHERE id = ANY(%s::text[])"
     )
     assert not any(query == "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" for query in first_queries)
     assert not any(
