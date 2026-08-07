@@ -183,15 +183,20 @@ class MemoryKeywordStore(AsyncKeywordStore):
         filters: Mapping[str, Any] | None = None,
     ) -> list[RecordHit]:
         filters = filters or {}
+        search_kwargs: dict[str, Any] = {
+            "workspace_id": _string_filter(filters, "workspace_id"),
+            "memory_type": _string_filter(filters, "memory_type"),
+            "status": _memory_status_filter(filters.get("status")),
+            "include_superseded": bool(filters.get("include_superseded", False)),
+            "limit": k,
+        }
+        tags = _tags_filter(filters.get("tags"))
+        if tags:
+            search_kwargs["tags"] = tags
         memory_ids = await asyncio.to_thread(
             self._repository.search_keyword_memory_ids,
             query,
-            workspace_id=_string_filter(filters, "workspace_id"),
-            memory_type=_string_filter(filters, "memory_type"),
-            status=_memory_status_filter(filters.get("status")),
-            tags=_tags_filter(filters.get("tags")),
-            include_superseded=bool(filters.get("include_superseded", False)),
-            limit=k,
+            **search_kwargs,
         )
         workspace_id = _string_filter(filters, "workspace_id")
         records_by_id = await asyncio.to_thread(
