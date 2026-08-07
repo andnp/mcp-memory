@@ -14,11 +14,12 @@ class NoopProviderUsageRepository:
         *,
         workspace_id: str | None | object = None,
         request_id: str | None = None,
+        task_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
     ):
-        del workspace_id, request_id, task_name, status, limit
+        del workspace_id, request_id, task_id, task_name, status, limit
         return []
 
     def list_active_admission_states(

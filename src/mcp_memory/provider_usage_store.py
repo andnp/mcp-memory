@@ -138,6 +138,7 @@ class ProviderUsageRepository:
         *,
         workspace_id: str | None | object = _ALL_WORKSPACES,
         request_id: str | None = None,
+        task_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
@@ -154,6 +155,9 @@ class ProviderUsageRepository:
         if request_id is not None:
             clauses.append("request_id = ?")
             params.append(request_id)
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            params.append(task_id)
         if task_name is not None:
             clauses.append("task_name = ?")
             params.append(task_name)

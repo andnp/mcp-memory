@@ -147,6 +147,7 @@ class ProviderUsagePort(Protocol):
         *,
         workspace_id: str | None | object = ...,
         request_id: str | None = None,
+        task_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
@@ -297,11 +298,12 @@ class NullProviderUsagePort:
         *,
         workspace_id: str | None | object = ...,
         request_id: str | None = None,
+        task_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
     ) -> Sequence[ProviderConversationLike]:
-        del workspace_id, request_id, task_name, status, limit
+        del workspace_id, request_id, task_id, task_name, status, limit
         return []
 
     def reconcile_running_task_conversations(self, **kwargs: object) -> int:

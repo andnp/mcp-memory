@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext
@@ -91,6 +91,8 @@ async def run_curator_direct_mcp(
 
     tool_calls = int(getattr(tool_snapshot, "total_calls", 0))
     mutations = int(getattr(tool_snapshot, "mutating_calls", 0))
+    tool_call_ledger = list(getattr(tool_snapshot, "tool_call_ledger", []))
+    provider_metadata = _direct_provider_usage_metadata(ctx, task)
     outcome = "applied" if mutations else "no_op"
     if claimed_work_item is not None:
         complete_work_item(ctx, claimed_work_item.id)
@@ -104,6 +106,8 @@ async def run_curator_direct_mcp(
         claimed_work_item_count=1 if claimed_work_item is not None else 0,
         tool_calls_executed=tool_calls,
         mutations=mutations,
+        tool_call_ledger=tool_call_ledger,
+        **provider_metadata,
         curation_outcome=outcome,
         curation_no_op_reason=None if mutations else "agent_no_mutations",
         curation_campaign_result={
@@ -112,6 +116,8 @@ async def run_curator_direct_mcp(
             "productive_mutation_count": mutations,
             "tool_calls_executed": tool_calls,
             "tool_names_used": list(getattr(tool_snapshot, "tool_names_used", [])),
+            "tool_call_ledger": tool_call_ledger,
+            **provider_metadata,
         },
     )
 
@@ -190,3 +196,63 @@ def _curator_agentic_provider(ctx: ApplicationContext, task: TaskRecord, provide
             workspace_id=task.workspace_id,
         )
     return candidate
+
+
+def _direct_provider_usage_metadata(ctx: ApplicationContext, task: TaskRecord) -> dict[str, Any]:
+    provider_usage = getattr(ctx, "provider_usage", None)
+    list_conversations = getattr(provider_usage, "list_conversations", None)
+    if not callable(list_conversations):
+        return {"provider_call_count": 0, "provider_calls_used": 0}
+    try:
+        conversations = cast(Iterable[Any], list_conversations(
+            workspace_id=task.workspace_id,
+            task_id=task.id,
+            limit=200,
+        ))
+    except TypeError:
+        conversations = cast(Iterable[Any], list_conversations(
+            workspace_id=task.workspace_id,
+            task_name=task.task_name,
+            limit=200,
+        ))
+    selected: dict[str, Any] = {}
+    for conversation in conversations:
+        if getattr(conversation, "task_id", task.id) != task.id:
+            continue
+        request_id = getattr(conversation, "request_id", None)
+        if not isinstance(request_id, str) or not request_id:
+            continue
+        previous = selected.get(request_id)
+        if previous is None or _conversation_order(conversation) > _conversation_order(previous):
+            selected[request_id] = conversation
+
+    metadata: dict[str, Any] = {
+        "provider_call_count": len(selected),
+        "provider_calls_used": len(selected),
+    }
+    token_fields = (
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+    )
+    for field_name in token_fields:
+        values = [getattr(item, field_name, None) for item in selected.values()]
+        present_values = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
+        if present_values:
+            metadata[field_name] = sum(present_values)
+    sources = [getattr(item, "token_usage_source", None) for item in selected.values()]
+    source = next((value for value in reversed(sources) if isinstance(value, str) and value), None)
+    if source is not None:
+        metadata["token_usage_source"] = source
+    return metadata
+
+
+def _conversation_order(conversation: Any) -> tuple[int, float, int]:
+    return (
+        int(getattr(conversation, "attempt", 0) or 0),
+        float(getattr(conversation, "completed_at", 0.0) or 0.0),
+        int(getattr(conversation, "id", 0) or 0),
+    )

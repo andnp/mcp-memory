@@ -193,6 +193,7 @@ class PostgresProviderUsageRepository:
         *,
         workspace_id: str | None | object = _ALL_WORKSPACES,
         request_id: str | None = None,
+        task_id: str | None = None,
         task_name: str | None = None,
         status: str | None = None,
         limit: int = 50,
@@ -206,6 +207,9 @@ class PostgresProviderUsageRepository:
         if request_id is not None:
             clauses.append("request_id = %s")
             params.append(request_id)
+        if task_id is not None:
+            clauses.append("task_id = %s")
+            params.append(task_id)
         if task_name is not None:
             clauses.append("task_name = %s")
             params.append(task_name)

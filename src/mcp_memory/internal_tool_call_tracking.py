@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from threading import Lock
+from typing import Any
 
 
 _READ_ONLY_INTERNAL_TOOL_NAMES = frozenset(
@@ -34,6 +35,7 @@ class InternalToolCallSnapshot:
     total_calls: int = 0
     mutating_calls: int = 0
     by_name: dict[str, int] = field(default_factory=dict)
+    tool_call_ledger: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def tool_names_used(self) -> list[str]:
@@ -45,6 +47,7 @@ class _MutableTaskToolCallState:
     total_calls: int = 0
     mutating_calls: int = 0
     by_name: dict[str, int] = field(default_factory=dict)
+    tool_call_ledger: list[dict[str, Any]] = field(default_factory=list)
 
 
 class InternalToolCallTracker:
@@ -77,6 +80,8 @@ class InternalToolCallTracker:
         *,
         task_id: str | None = None,
         session_id: str | None = None,
+        success: bool = True,
+        arguments: dict[str, object] | None = None,
     ) -> str | None:
         normalized_tool_name = _normalized_string(tool_name)
         if normalized_tool_name is None:
@@ -94,8 +99,19 @@ class InternalToolCallTracker:
             state = self._task_state.setdefault(resolved_task_id, _MutableTaskToolCallState())
             state.total_calls += 1
             state.by_name[normalized_tool_name] = state.by_name.get(normalized_tool_name, 0) + 1
-            if internal_tool_is_mutating(normalized_tool_name):
+            is_mutating = internal_tool_is_mutating(normalized_tool_name)
+            if success and is_mutating:
                 state.mutating_calls += 1
+            state.tool_call_ledger.append(
+                {
+                    "sequence": state.total_calls,
+                    "tool_name": normalized_tool_name,
+                    "kind": "mutation" if is_mutating else "read",
+                    "status": "success" if success else "error",
+                    "argument_keys": sorted(arguments or {}),
+                    "memory_ids": _extract_memory_ids(arguments),
+                }
+            )
             return resolved_task_id
 
     def snapshot_task(self, task_id: str) -> InternalToolCallSnapshot | None:
@@ -143,6 +159,7 @@ class InternalToolCallTracker:
             total_calls=state.total_calls,
             mutating_calls=state.mutating_calls,
             by_name=dict(state.by_name),
+            tool_call_ledger=[dict(call) for call in state.tool_call_ledger],
         )
 
 
@@ -151,3 +168,33 @@ def _normalized_string(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+_MEMORY_ID_ARGUMENT_KEYS = frozenset(
+    {
+        "memory_id",
+        "memory_ids",
+        "record_id",
+        "record_ids",
+        "source_id",
+        "target_id",
+        "canonical_id",
+        "source_memory_id",
+        "target_memory_id",
+        "affected_memory_ids",
+    }
+)
+
+
+def _extract_memory_ids(arguments: dict[str, object] | None) -> list[str]:
+    if not arguments:
+        return []
+    memory_ids: list[str] = []
+    for key, value in arguments.items():
+        if key not in _MEMORY_ID_ARGUMENT_KEYS:
+            continue
+        values = value if isinstance(value, (list, tuple, set, frozenset)) else (value,)
+        for item in values:
+            if isinstance(item, (str, int)) and str(item).strip():
+                memory_ids.append(str(item))
+    return list(dict.fromkeys(memory_ids))

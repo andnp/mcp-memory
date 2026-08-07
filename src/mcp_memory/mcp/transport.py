@@ -14,7 +14,7 @@ from mcp_memory.internal_tool_call_tracking import InternalToolCallTracker
 
 ToolService = Callable[..., Any]
 ToolServiceResolver = Callable[[], dict[str, ToolService]]
-ToolSuccessRecorder = Callable[[ApplicationContext, str, dict], None]
+ToolSuccessRecorder = Callable[[ApplicationContext, str, dict, list[TextContent]], None]
 
 
 def text_response(payload: dict) -> list[TextContent]:
@@ -124,7 +124,7 @@ async def _dispatch_tool(
         compact_success=compact_success,
     )
     if on_success is not None:
-        on_success(ctx, name, arguments)
+        on_success(ctx, name, arguments, response)
     return response
 
 
@@ -251,7 +251,12 @@ async def dispatch_internal_memory_tool(
     )
 
 
-def _record_internal_tool_call(ctx: ApplicationContext, name: str, arguments: dict[str, object]) -> None:
+def _record_internal_tool_call(
+    ctx: ApplicationContext,
+    name: str,
+    arguments: dict[str, object],
+    response: list[TextContent],
+) -> None:
     tracker = getattr(ctx, "internal_tool_call_tracker", None)
     if not isinstance(tracker, InternalToolCallTracker):
         return
@@ -261,4 +266,18 @@ def _record_internal_tool_call(ctx: ApplicationContext, name: str, arguments: di
         name,
         task_id=task_id,
         session_id=getattr(ctx, "session_id", None),
+        success=_internal_tool_response_succeeded(response),
+        arguments=arguments,
     )
+
+
+def _internal_tool_response_succeeded(response: list[TextContent]) -> bool:
+    for content in response:
+        if content.type != "text":
+            continue
+        try:
+            payload = json.loads(content.text)
+        except (TypeError, ValueError):
+            return True
+        return not (isinstance(payload, dict) and payload.get("status") == "error")
+    return True

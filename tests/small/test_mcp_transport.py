@@ -141,3 +141,33 @@ async def test_internal_dispatch_unknown_tool_does_not_record_tracker_counts() -
     assert snapshot.total_calls == 0
     assert snapshot.mutating_calls == 0
     assert snapshot.by_name == {}
+
+
+@pytest.mark.asyncio
+async def test_internal_dispatch_records_service_error_without_counting_mutation() -> None:
+    tracker = InternalToolCallTracker()
+    tracker.reset_task("task-1", session_id="session-123")
+    ctx = ApplicationContext(
+        session_id="session-123",
+        internal_tool_call_tracker=tracker,
+    )
+
+    def _error_service(_ctx: ApplicationContext, _arguments: dict) -> dict:
+        return {"status": "error", "error": "stale_memory"}
+
+    payload = _payload(
+        await transport._dispatch_tool(
+            ctx,
+            "internal_update_memory_record",
+            {"memory_id": "memory-1", "task_id": "task-1"},
+            service_resolver=lambda: {"internal_update_memory_record": _error_service},
+            on_success=transport._record_internal_tool_call,
+        )
+    )
+    snapshot = tracker.finalize_task("task-1")
+
+    assert payload == {"status": "error", "error": "stale_memory"}
+    assert snapshot is not None
+    assert snapshot.total_calls == 1
+    assert snapshot.mutating_calls == 0
+    assert snapshot.tool_call_ledger[0]["status"] == "error"

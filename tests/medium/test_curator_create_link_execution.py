@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,7 @@ from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
-from mcp_memory.mcp.internal_mutation_services import internal_create_memory_link_service
+from mcp_memory.mcp.transport import dispatch_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
 
@@ -27,11 +26,9 @@ class _DirectLinkSession:
 
     async def run_agent(self, prompt: str) -> AgenticRunResult:
         assert "no planning or submission stage" in prompt
-        tracker = self._ctx.internal_tool_call_tracker
-        assert tracker is not None
-        tracker.record_call("internal_create_memory_link", task_id=self._task_id)
-        result = internal_create_memory_link_service(
+        result = await dispatch_internal_memory_tool(
             self._ctx,
+            "internal_create_memory_link",
             {
                 "source_id": self._source_id,
                 "target_id": self._target_id,
@@ -40,7 +37,7 @@ class _DirectLinkSession:
                 "task_id": self._task_id,
             },
         )
-        return AgenticRunResult(status="success", parsed={"summary": json.dumps(result)}, raw_text=json.dumps(result))
+        return AgenticRunResult(status="success", parsed={"summary": result[0].text}, raw_text=result[0].text)
 
     async def close(self) -> None:
         return None
