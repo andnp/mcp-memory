@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-POSTGRES_SCHEMA_VERSION = 27
+POSTGRES_SCHEMA_VERSION = 28
 
 
 @dataclass(frozen=True)
@@ -869,6 +869,13 @@ POSTGRES_MIGRATIONS = (
         statements=(
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS archived_at TEXT",
             "UPDATE memories SET archived_at = updated_at WHERE status = 'archived' AND archived_at IS NULL",
+        ),
+    ),
+    PostgresMigration(
+        version=28,
+        name="reconcile_legacy_memory_links",
+        statements=(
+            "DELETE FROM links WHERE NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.source_id) OR (links.target_id NOT LIKE 'ext:%' AND NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.target_id))",
         ),
     ),
 )

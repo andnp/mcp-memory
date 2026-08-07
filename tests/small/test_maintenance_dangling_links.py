@@ -25,6 +25,7 @@ def test_reconcile_dangling_links_is_bounded_deterministic_and_idempotent(db_man
             ("source", "missing-a", "SUPPORTS"),
             ("missing-source", "source", "DEPENDS_ON"),
             ("source", "archived", "AMENDS"),
+            ("source", "ext:missing.txt", "REFERENCES"),
         ],
     )
     connection.execute("UPDATE memories SET status = 'archived' WHERE id = 'archived'")
@@ -44,7 +45,10 @@ def test_reconcile_dangling_links_is_bounded_deterministic_and_idempotent(db_man
         ],
     }
     assert second == {"scanned": 0, "deleted": 0, "deleted_link_examples": []}
-    assert connection.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 2
+    assert connection.execute(
+        "SELECT 1 FROM links WHERE target_id = 'ext:missing.txt'"
+    ).fetchone() is not None
 
 
 def test_reconcile_dangling_links_rejects_unbounded_batch_size(db_manager) -> None:
