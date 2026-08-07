@@ -231,6 +231,24 @@ def test_mcp_server_initializes_with_workspace_root() -> None:
     assert server.workspace_root == "demo-workspace"
 
 
+def test_mcp_server_defaults_to_current_workspace_root(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_memory.server.resolve_workspace_root", lambda: tmp_path)
+    captured: dict[str, object] = {}
+
+    server = MCPServer()
+    server._daemon = object()
+
+    def capture_request(_metadata, _path, payload, *, timeout_seconds=None):
+        del timeout_seconds
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr("mcp_memory.server.request_daemon_json", capture_request)
+
+    assert server._request_json("/internal/tools", None) == {"status": "ok"}
+    assert captured["payload"] == {"__workspace_root": str(tmp_path)}
+
+
 def test_mcp_server_tool_requests_retry_once_after_transport_timeout(monkeypatch) -> None:
     server = MCPServer(workspace_root="demo-workspace")
     initial_daemon = object()
