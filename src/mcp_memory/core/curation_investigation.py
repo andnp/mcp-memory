@@ -1,4 +1,4 @@
-"""Bounded, read-only investigation before typed curator planning."""
+"""Curator investigation and direct mutation tool scopes."""
 
 from __future__ import annotations
 
@@ -14,6 +14,17 @@ READ_ONLY_CURATOR_INVESTIGATION_TOOLS = (
     "internal_list_relationships",
     "internal_bounded_adjacency",
 )
+
+CURATOR_MUTATION_TOOLS = (
+    "internal_update_memory_record",
+    "internal_archive_memory_record",
+    "internal_merge_memory_into_canonical",
+    "internal_split_memory_record",
+    "internal_create_memory_link",
+    "internal_delete_memory_link",
+)
+
+CURATOR_AGENT_TOOLS = READ_ONLY_CURATOR_INVESTIGATION_TOOLS + CURATOR_MUTATION_TOOLS
 
 
 @dataclass(frozen=True, slots=True)

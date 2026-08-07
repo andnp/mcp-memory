@@ -21,7 +21,7 @@ from mcp_memory.core.curation_harness import CurationDryRunHarness, CurationFron
 from mcp_memory.core.curation_investigation import (
     CurationInvestigationLimits,
     CurationInvestigationResult,
-    READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
+    CURATOR_AGENT_TOOLS,
     run_curator_investigation,
 )
 from mcp_memory.core.curation_planner import (
@@ -113,7 +113,7 @@ async def run_curator_verified_campaign(
     session = None
     plan_state = IncrementalCurationPlanState()
     session = await cast(Callable[..., Awaitable[Any]], opener)(
-        allowed_tool_names=READ_ONLY_CURATOR_INVESTIGATION_TOOLS,
+        allowed_tool_names=CURATOR_AGENT_TOOLS,
         tools=_incremental_curation_tools(plan_state),
     )
     investigation = CurationInvestigationResult("skipped", reason="lazy_preflight")
