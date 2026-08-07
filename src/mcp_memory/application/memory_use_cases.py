@@ -204,6 +204,7 @@ def _search_memory_records(
         "adaptive_limit": arguments.get("adaptive_limit", "limit" not in arguments),
         "memory_type": arguments["memory_type"],
         "status": arguments["status"],
+        "tags": arguments["tags"],
         "include_superseded": arguments["include_superseded"],
         "debug": debug_enabled,
     }

@@ -691,6 +691,10 @@ def _memory_allowed(repository: MemoryRepositoryPort, memory: MemoryRecord) -> b
     if isinstance(memory_type, str) and memory.type != memory_type:
         return False
 
+    tags = filters.get("tags")
+    if isinstance(tags, (list, tuple, set)) and not set(tags).issubset(memory.tags):
+        return False
+
     if not bool(filters.get("include_superseded", False)):
         incoming = _cached_links(
             repository,

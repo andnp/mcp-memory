@@ -28,6 +28,7 @@ class SearchMemoryRecordsOperation:
         memory_type: str | None,
         status: str | None,
         include_superseded: bool,
+        tags: tuple[str, ...] = (),
         ranking_workspace_id: str | None = None,
         debug: bool = False,
     ) -> list[RelationalSearchResult]:
@@ -39,6 +40,7 @@ class SearchMemoryRecordsOperation:
             adaptive_limit=adaptive_limit,
             memory_type=memory_type,
             status=status,
+            tags=tags,
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
         )
@@ -55,6 +57,7 @@ class SearchMemoryRecordsOperation:
         memory_type: str | None,
         status: str | None,
         include_superseded: bool,
+        tags: tuple[str, ...] = (),
         ranking_workspace_id: str | None = None,
         debug: bool = False,
     ) -> tuple[list[RelationalSearchResult], SearchExecutionDiagnostics]:
@@ -66,6 +69,7 @@ class SearchMemoryRecordsOperation:
             adaptive_limit=adaptive_limit,
             memory_type=memory_type,
             status=status,
+            tags=tags,
             include_superseded=include_superseded,
             ranking_workspace_id=ranking_workspace_id,
         )

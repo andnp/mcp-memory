@@ -26,6 +26,7 @@ class MemorySearchRequest:
     workspace_id: str | None = None
     memory_type: str | None = None
     status: str | None = None
+    tags: tuple[str, ...] = ()
     include_superseded: bool = False
     ranking_workspace_id: str | None = None
 
@@ -40,6 +41,7 @@ class MemoryRetrievalPort(Protocol):
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: tuple[str, ...] | None = None,
         include_superseded: bool = False,
         ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
@@ -55,6 +57,7 @@ class MemoryRetrievalPort(Protocol):
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: tuple[str, ...] | None = None,
         include_superseded: bool = False,
         ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
@@ -110,6 +113,7 @@ class MemoryRetrievalFacade:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: tuple[str, ...] | None = None,
         include_superseded: bool = False,
         ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
@@ -123,6 +127,7 @@ class MemoryRetrievalFacade:
                 workspace_id=workspace_id,
                 memory_type=memory_type,
                 status=status,
+                tags=tuple(tags or ()),
                 include_superseded=include_superseded,
                 ranking_workspace_id=ranking_workspace_id,
             )
@@ -134,6 +139,8 @@ class MemoryRetrievalFacade:
             active_filters["memory_type"] = request.memory_type
         if request.status is not None:
             active_filters["status"] = request.status
+        if request.tags:
+            active_filters["tags"] = request.tags
         if request.ranking_workspace_id is not None:
             active_filters["_ranking_workspace_id"] = request.ranking_workspace_id
         if request.include_superseded or "include_superseded" not in active_filters:
@@ -155,6 +162,7 @@ class MemoryRetrievalFacade:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: tuple[str, ...] | None = None,
         include_superseded: bool = False,
         ranking_workspace_id: str | None = None,
         filters: dict[str, object] | None = None,
@@ -168,6 +176,7 @@ class MemoryRetrievalFacade:
                 workspace_id=workspace_id,
                 memory_type=memory_type,
                 status=status,
+                tags=tags,
                 include_superseded=include_superseded,
                 ranking_workspace_id=ranking_workspace_id,
                 filters=filters,

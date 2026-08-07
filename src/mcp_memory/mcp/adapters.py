@@ -45,6 +45,7 @@ def parse_search_arguments(arguments: dict) -> dict:
         "workspace_id": optional_string(arguments, "workspace_id"),
         "memory_type": optional_string(arguments, "memory_type"),
         "status": optional_string(arguments, "status"),
+        "tags": tuple(string_list(arguments, "tags")),
         "include_superseded": optional_bool(arguments, "include_superseded", False),
         "debug": optional_bool(arguments, "debug", False),
     }

@@ -27,6 +27,86 @@ class _RuntimeFusionFakeEmbedder:
 
 
 @pytest.mark.asyncio
+async def test_skill_observation_lifecycle_and_tag_filter(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    runtime = create_runtime(cwd=tmp_path / "workspace")
+    try:
+        recorded = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "record_skill_observation",
+                    {
+                        "title": "Observer should search open findings",
+                        "summary": "Use the observation tag when reviewing skill improvements.",
+                        "content": "The daily reviewer needs a deterministic tag filter for open findings.",
+                        "skill": "task-observer",
+                        "observation_kind": "improvement",
+                        "privacy_classification": "internal",
+                    },
+                )
+            )[0].text
+        )
+        memory_id = recorded["record"]["memory_id"]
+        assert recorded["record"]["status"] == "active"
+        assert "skill:task-observer" in recorded["record"]["tags"]
+
+        search_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {
+                        "query": "deterministic tag filter",
+                        "tags": ["skill-observation", "skill:task-observer"],
+                        "limit": 5,
+                    },
+                )
+            )[0].text
+        )
+        assert [result["memory_ref"] for result in search_payload["results"]] == [
+            f"mem-{recorded['record']['memory_ref']}"
+        ]
+
+        resolved = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "resolve_skill_observation",
+                    {
+                        "memory_id": memory_id,
+                        "resolution": "actioned",
+                        "note": "Implemented the tag-constrained review query.",
+                    },
+                )
+            )[0].text
+        )
+        assert resolved["record"]["status"] == "archived"
+
+        archived_payload = json.loads(
+            (
+                await call_memory_tool(
+                    runtime,
+                    "search_memory_records",
+                    {
+                        "query": "deterministic tag filter",
+                        "tags": ["skill-observation"],
+                        "status": "archived",
+                        "limit": 5,
+                    },
+                )
+            )[0].text
+        )
+        assert [result["memory_ref"] for result in archived_payload["results"]] == [
+            f"mem-{recorded['record']['memory_ref']}"
+        ]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_relational_runtime_search_and_read_tools(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

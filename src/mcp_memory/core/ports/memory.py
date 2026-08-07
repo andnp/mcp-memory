@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -106,6 +107,7 @@ class MemoryReadPort(Protocol):
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]: ...

@@ -189,6 +189,7 @@ class MemoryKeywordStore(AsyncKeywordStore):
             workspace_id=_string_filter(filters, "workspace_id"),
             memory_type=_string_filter(filters, "memory_type"),
             status=_memory_status_filter(filters.get("status")),
+            tags=_tags_filter(filters.get("tags")),
             include_superseded=bool(filters.get("include_superseded", False)),
             limit=k,
         )
@@ -808,6 +809,10 @@ def _epoch_value(values: Mapping[str, object], key: str) -> int:
 def _string_filter(filters: Mapping[str, Any], key: str) -> str | None:
     value = filters.get(key)
     return value if isinstance(value, str) else None
+
+
+def _tags_filter(value: object) -> list[str]:
+    return list(dict.fromkeys(_string_sequence_filter(value)))
 
 
 def _string_sequence_filter(value: object) -> list[str]:

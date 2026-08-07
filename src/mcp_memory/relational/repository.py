@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -303,6 +304,7 @@ class RelationalMemoryRepository:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
@@ -313,6 +315,7 @@ class RelationalMemoryRepository:
             workspace_id=workspace_id,
             memory_type=None,
             status=status,
+            tags=tags,
             include_superseded=include_superseded,
             limit=limit,
         )
@@ -324,6 +327,7 @@ class RelationalMemoryRepository:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
@@ -346,6 +350,12 @@ class RelationalMemoryRepository:
         if status is not None:
             clauses.append("memories.status = ?")
             params.append(status)
+        for tag in tags or ():
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id "
+                "WHERE memory_tags.memory_id = memories.id AND tags.name = ?)"
+            )
+            params.append(tag)
         if not include_superseded:
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
@@ -339,6 +339,7 @@ class PostgresRelationalMemoryRepository:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[RelationalMemoryReadContext]:
@@ -348,6 +349,7 @@ class PostgresRelationalMemoryRepository:
             workspace_id=workspace_id,
             memory_type=memory_type,
             status=status,
+            tags=tags,
             include_superseded=include_superseded,
             limit=limit,
         )
@@ -478,7 +480,6 @@ class PostgresRelationalMemoryRepository:
         if status is not None:
             clauses.append("memories.status = %s")
             params.append(status)
-
         query = (
             "SELECT id, title, content, summary, type, status, created_at, updated_at, "
             "read_count, access_score, last_accessed_at, last_surfaced_at, metadata, memory_ref "
@@ -593,6 +594,7 @@ class PostgresRelationalMemoryRepository:
         workspace_id: str | None = None,
         memory_type: str | None = None,
         status: str | None = None,
+        tags: Sequence[str] | None = None,
         include_superseded: bool = False,
         limit: int = 50,
     ) -> list[str]:
@@ -621,6 +623,12 @@ class PostgresRelationalMemoryRepository:
         if status is not None:
             clauses.append("memories.status = %s")
             params.append(status)
+        for tag in tags or ():
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memory_tags JOIN tags ON tags.id = memory_tags.tag_id "
+                "WHERE memory_tags.memory_id = memories.id AND tags.name = %s)"
+            )
+            params.append(tag)
         if not include_superseded:
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM links supersedes WHERE supersedes.target_id = memories.id AND supersedes.type = 'SUPERSEDES')"

@@ -82,6 +82,11 @@ def get_memory_tools() -> list[Tool]:
                     },
                     "memory_type": {"type": "string"},
                     "status": {"type": "string"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Return records that have every listed tag.",
+                    },
                     "include_superseded": {"type": "boolean"},
                     "debug": {"type": "boolean"},
                 },
