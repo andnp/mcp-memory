@@ -18,6 +18,7 @@ from mcp_memory.client_clock import (
     suspend_aware_deadline,
     suspend_aware_now,
 )
+from mcp_memory.config import resolve_workspace_root
 
 
 def request_daemon_json(*args, **kwargs):
@@ -71,7 +72,7 @@ class MCPServer:
         server_name: str = "mcp-memory",
         tool_path_prefix: str = "/internal/tools",
     ):
-        self.workspace_root = workspace_root
+        self.workspace_root = workspace_root or str(resolve_workspace_root())
         self.server = Server(
             server_name,
             on_list_tools=self._list_tools,
