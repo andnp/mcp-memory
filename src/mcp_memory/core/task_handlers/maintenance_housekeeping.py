@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, ContextManager, cast
+from typing import Any, ContextManager, TypedDict, cast
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.task_handlers.constants import (
@@ -22,6 +22,68 @@ _LINEAGE_METADATA_WARNING_BYTES = 2_000
 _LINEAGE_METADATA_LIST_WARNING_COUNT = 10
 _RELATIONSHIP_DENSITY_WARNING_COUNT = 20
 _LINEAGE_HOTSPOT_EXAMPLE_LIMIT = 10
+_DANGLING_LINK_EXAMPLE_LIMIT = 10
+
+
+class DanglingLinkReconciliationResult(TypedDict):
+    scanned: int
+    deleted: int
+    deleted_link_examples: list[dict[str, str]]
+
+
+def reconcile_dangling_links(
+    connection: BackendConnection,
+    sqlite_mode: bool,
+    *,
+    batch_size: int = 100,
+) -> DanglingLinkReconciliationResult:
+    """Delete links whose source or target memory no longer exists."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    scanned = 0
+    deleted = 0
+    examples: list[dict[str, str]] = []
+    while True:
+        rows = _fetchall_rows(
+            connection,
+            sqlite_mode,
+            """
+            SELECT links.source_id, links.target_id, links.type
+            FROM links
+            WHERE NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.source_id)
+               OR NOT EXISTS (SELECT 1 FROM memories WHERE memories.id = links.target_id)
+            ORDER BY links.source_id ASC, links.target_id ASC, links.type ASC
+            LIMIT {}
+            """,
+            (batch_size,),
+        )
+        if not rows:
+            break
+
+        scanned += len(rows)
+        link_params: list[object] = []
+        predicates: list[str] = []
+        for source_id, target_id, link_type in rows:
+            predicates.append("(source_id = {} AND target_id = {} AND type = {})")
+            link_params.extend((source_id, target_id, link_type))
+            if len(examples) < _DANGLING_LINK_EXAMPLE_LIMIT:
+                examples.append(
+                    {
+                        "source_id": str(source_id),
+                        "target_id": str(target_id),
+                        "type": str(link_type),
+                    }
+                )
+
+        deleted += _execute_write(
+            connection,
+            sqlite_mode,
+            f"DELETE FROM links WHERE {' OR '.join(predicates)}",
+            tuple(link_params),
+        )
+
+    return {"scanned": scanned, "deleted": deleted, "deleted_link_examples": examples}
 
 
 def handle_project_manager_task(
