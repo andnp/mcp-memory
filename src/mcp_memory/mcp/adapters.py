@@ -14,6 +14,29 @@ def parse_record_thought_arguments(arguments: dict) -> str:
     return require_string(arguments, "content")
 
 
+def parse_skill_observation_arguments(arguments: dict) -> dict[str, object]:
+    return {
+        "title": require_string(arguments, "title"),
+        "summary": require_string(arguments, "summary"),
+        "content": require_string(arguments, "content"),
+        "skill": require_string(arguments, "skill"),
+        "observation_kind": require_string(arguments, "observation_kind"),
+        "privacy_classification": require_string(arguments, "privacy_classification"),
+        "workspace_id": optional_string(arguments, "workspace_id"),
+    }
+
+
+def parse_resolve_skill_observation_arguments(arguments: dict) -> dict[str, object]:
+    resolution = require_string(arguments, "resolution")
+    if resolution not in {"actioned", "deferred"}:
+        raise ValueError("resolution must be actioned or deferred")
+    return {
+        "memory_id": require_string(arguments, "memory_id"),
+        "resolution": resolution,
+        "note": require_string(arguments, "note"),
+    }
+
+
 def parse_search_arguments(arguments: dict) -> dict:
     return {
         "query": require_string(arguments, "query"),

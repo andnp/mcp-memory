@@ -12,7 +12,9 @@ from collections.abc import Mapping
 
 from mcp_memory.application.memory_use_cases import (
     ReadMemoryRecordUseCase,
+    RecordSkillObservationUseCase,
     RecordThoughtUseCase,
+    ResolveSkillObservationUseCase,
     SearchMemoryRecordsUseCase,
 )
 from mcp_memory.application.ports import MemoryReadContext, MemoryReadDependencies
@@ -21,7 +23,9 @@ from mcp_memory.mcp.adapters import (
     parse_batch_read_arguments,
     parse_read_arguments,
     parse_record_thought_arguments,
+    parse_resolve_skill_observation_arguments,
     parse_search_arguments,
+    parse_skill_observation_arguments,
 )
 from mcp_memory.mcp.cache_policy import (
     _load_validated_cached_projection_entries,
@@ -101,6 +105,14 @@ def record_thought_service(ctx: ApplicationContext, arguments: dict) -> dict:
         writeback_cache=cache_state.writeback_cache,
         max_outbox_entries=cache_state.max_outbox_entries,
     ).execute(content)
+
+
+def record_skill_observation_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    return RecordSkillObservationUseCase(ctx).execute(parse_skill_observation_arguments(arguments))
+
+
+def resolve_skill_observation_service(ctx: ApplicationContext, arguments: dict) -> dict:
+    return ResolveSkillObservationUseCase(ctx).execute(parse_resolve_skill_observation_arguments(arguments))
 
 
 def search_memory_records_service(
@@ -187,6 +199,8 @@ def read_memory_records_service(
 
 __all__ = [
     "record_thought_service",
+    "record_skill_observation_service",
+    "resolve_skill_observation_service",
     "search_memory_records_service",
     "search_memory_records_async_service",
     "read_memory_record_service",

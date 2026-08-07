@@ -20,6 +20,45 @@ def get_memory_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="record_skill_observation",
+            description=(
+                "Record a reusable skill-improvement observation with explicit evidence, scope, and privacy classification."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "content": {"type": "string"},
+                    "skill": {"type": "string"},
+                    "observation_kind": {"type": "string"},
+                    "privacy_classification": {"type": "string"},
+                    "workspace_id": {"type": "string"},
+                },
+                "required": [
+                    "title",
+                    "summary",
+                    "content",
+                    "skill",
+                    "observation_kind",
+                    "privacy_classification",
+                ],
+            },
+        ),
+        Tool(
+            name="resolve_skill_observation",
+            description="Mark one skill observation as actioned or deferred with a concise resolution note.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "resolution": {"type": "string", "enum": ["actioned", "deferred"]},
+                    "note": {"type": "string"},
+                },
+                "required": ["memory_id", "resolution", "note"],
+            },
+        ),
+        Tool(
             name="search_memory_records",
             description=(
                 "Search relational memory records with summary-first results. "

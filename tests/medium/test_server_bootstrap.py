@@ -39,9 +39,25 @@ def test_get_memory_tools_returns_expected_names() -> None:
 
     assert names == [
         "record_thought",
+        "record_skill_observation",
+        "resolve_skill_observation",
         "search_memory_records",
         "read_memory_records",
         "read_memory_record",
+    ]
+    observation_tool = next(tool for tool in tools if tool.name == "record_skill_observation")
+    assert observation_tool.input_schema["required"] == [
+        "title",
+        "summary",
+        "content",
+        "skill",
+        "observation_kind",
+        "privacy_classification",
+    ]
+    resolution_tool = next(tool for tool in tools if tool.name == "resolve_skill_observation")
+    assert resolution_tool.input_schema["properties"]["resolution"]["enum"] == [
+        "actioned",
+        "deferred",
     ]
     search_tool = next(tool for tool in tools if tool.name == "search_memory_records")
     assert search_tool.description is not None
@@ -60,11 +76,25 @@ def test_get_memory_tools_returns_expected_names() -> None:
                 "type": "boolean",
                 "description": "Include superseded record breadcrumbs. Defaults to false to save tokens.",
             },
-            "include_metadata": {
-                "type": "boolean",
-                "description": "Include maintenance metadata and workspace IDs. Defaults to false to save tokens.",
+                "include_metadata": {
+                    "type": "boolean",
+                    "description": "Include maintenance metadata and workspace IDs. Defaults to false to save tokens.",
+                },
+                "summary_only": {
+                    "type": "boolean",
+                    "description": "Return a bounded summary projection without content.",
+                },
+                "content_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional character offset for a bounded content chunk.",
+                },
+                "content_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional maximum characters in the returned content chunk.",
+                },
             },
-        },
         "required": ["memory_id"],
     }
 

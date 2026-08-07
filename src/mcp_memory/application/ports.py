@@ -46,6 +46,7 @@ class MemoryReadContext(Protocol):
 class MemoryMutationDependencies(Protocol):
     config: Any
     journal: Any
+    repository: Any
     task_queue: Any
     workspace_id: str | None
 

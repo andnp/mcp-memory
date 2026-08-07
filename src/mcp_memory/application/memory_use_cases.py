@@ -105,6 +105,71 @@ def _record_thought(
     return {"status": "recorded"}
 
 
+def _observation_payload(record) -> dict[str, object]:
+    return {
+        "memory_id": record.id,
+        "memory_ref": record.memory_ref,
+        "title": record.title,
+        "summary": record.summary,
+        "status": record.status,
+        "memory_type": record.type,
+        "tags": list(record.tags),
+    }
+
+
+def _record_skill_observation(ctx: MemoryMutationDependencies, arguments: dict) -> dict:
+    repository = getattr(ctx, "repository", None)
+    if repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+    workspace_id = arguments.get("workspace_id") or ctx.workspace_id
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        return {"status": "error", "error": "workspace_not_initialized"}
+    skill = arguments["skill"]
+    kind = arguments["observation_kind"]
+    privacy = arguments["privacy_classification"]
+    record = repository.create_memory(
+        title=arguments["title"],
+        content=arguments["content"],
+        summary=arguments["summary"],
+        workspace_ids=[workspace_id.strip()],
+        tags=["skill-observation", f"skill:{skill}", f"kind:{kind}", f"privacy:{privacy}"],
+        memory_type="observation",
+        status="active",
+        metadata={
+            "skill": skill,
+            "observation_kind": kind,
+            "privacy_classification": privacy,
+            "review_status": "open",
+        },
+    )
+    if record is None:
+        return {"status": "error", "error": "observation_not_recorded"}
+    return {"status": "ok", "record": _observation_payload(record)}
+
+
+def _resolve_skill_observation(ctx: MemoryMutationDependencies, arguments: dict) -> dict:
+    repository = getattr(ctx, "repository", None)
+    if repository is None:
+        return {"status": "error", "error": "repository_not_initialized"}
+    record = repository.get_memory(arguments["memory_id"])
+    if record is None:
+        return {"status": "error", "error": "memory_not_found"}
+    if record.type != "observation" or "skill-observation" not in record.tags:
+        return {"status": "error", "error": "not_skill_observation"}
+    resolution = arguments["resolution"]
+    status = "archived" if resolution == "actioned" else "stale"
+    metadata = dict(record.metadata)
+    metadata.update({"review_status": resolution, "resolution_note": arguments["note"]})
+    updated = repository.update_memory(
+        record.id,
+        status=status,
+        metadata=metadata,
+    )
+    if updated is None:
+        return {"status": "error", "error": "memory_not_found"}
+    return {"status": "ok", "record": _observation_payload(updated)}
+
+
 def _search_memory_records(
     ctx: MemoryReadDependencies,
     arguments: dict,
@@ -563,6 +628,22 @@ class RecordThoughtUseCase:
             writeback_cache=self._writeback_cache,
             max_outbox_entries=self._max_outbox_entries,
         )
+
+
+class RecordSkillObservationUseCase:
+    def __init__(self, ctx: MemoryMutationDependencies) -> None:
+        self._ctx = ctx
+
+    def execute(self, arguments: dict) -> dict:
+        return _record_skill_observation(self._ctx, arguments)
+
+
+class ResolveSkillObservationUseCase:
+    def __init__(self, ctx: MemoryMutationDependencies) -> None:
+        self._ctx = ctx
+
+    def execute(self, arguments: dict) -> dict:
+        return _resolve_skill_observation(self._ctx, arguments)
 
 
 class SearchMemoryRecordsUseCase:
