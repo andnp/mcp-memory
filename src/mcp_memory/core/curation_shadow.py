@@ -15,7 +15,7 @@ from mcp_memory.core.task_handlers.agentic_tool_tracking import (
     reset_agentic_tool_tracking,
 )
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.task_handlers.maintenance_work_items import release_work_item
+from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_item, release_work_item
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -92,6 +92,8 @@ async def run_curator_verified_campaign(
     tool_calls = int(getattr(tool_snapshot, "total_calls", 0))
     mutations = int(getattr(tool_snapshot, "mutating_calls", 0))
     outcome = "applied" if mutations else "no_op"
+    if claimed_work_item is not None:
+        complete_work_item(ctx, claimed_work_item.id)
     return sampling_payload(
         seed_batch,
         sampled_records=sampled_records,

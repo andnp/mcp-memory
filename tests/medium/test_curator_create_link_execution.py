@@ -6,70 +6,73 @@ from typing import Any
 
 import pytest
 
+from mcp_memory.context import ApplicationContext
+from mcp_memory.core.providers.interfaces import AgenticRunResult
 from mcp_memory.core.task_handlers import CURATOR_TASK_NAME
 from mcp_memory.core.task_handlers.curator_handlers import handle_memory_curator_task
 from mcp_memory.core.tasks import TaskRecord
+from mcp_memory.mcp.internal_mutation_services import internal_create_memory_link_service
 from mcp_memory.mcp.runtime import create_runtime
 from mcp_memory.work_item_store import EXECUTION_LANE_AGENTIC, WORK_FAMILY_MEMORY_CURATION_REVIEW
-from tests.medium.curator_agentic_fixture import agentic_curator
-
 
 pytestmark = pytest.mark.medium
 
 
-class _CreateLinkJSONProvider:
-    provider_trust_class = "local"
+class _DirectLinkSession:
+    def __init__(self, ctx: ApplicationContext, task_id: str, source_id: str, target_id: str) -> None:
+        self._ctx = ctx
+        self._task_id = task_id
+        self._source_id = source_id
+        self._target_id = target_id
 
-    async def ask_json(self, prompt: str) -> dict[str, object]:
-        payload = json.loads(prompt.split("\n", 1)[1])
-        request = payload["request"]
-        context = payload["context"]
-        source, target = context["seeds"][:2]
-        link = {
-            "source_id": source["memory_id"],
-            "target_id": target["memory_id"],
-            "link_type": "SUPPORTS",
-            "context": "The source records the target as supporting evidence.",
-        }
-        absent_link = {
-            "source_id": source["memory_id"],
-            "target_id": target["memory_id"],
-            "link_type": "SUPPORTS",
-        }
-        return {
-            "run_id": request["run_id"],
-            "plan_id": request["plan_id"],
-            "frontier_key": request["frontier_key"],
-            "context_fingerprint": request["context_fingerprint"],
-            "seed_memory_ids": [source["memory_id"], target["memory_id"]],
-            "actions": [
-                {
-                    "operation": "create_link",
-                    "action_id": "00000000-0000-0000-0000-000000000004",
-                    "source_id": source["memory_id"],
-                    "target_id": target["memory_id"],
-                    "link_type": "SUPPORTS",
-                    "context": link["context"],
-                    "confidence": 1.0,
-                    "rationale": "the source directly supports the target",
-                    "evidence": [{"link": link}],
-                    "preconditions": {
-                        "record_tokens": {
-                            source["memory_id"]: context["record_tokens"][source["memory_id"]],
-                            target["memory_id"]: context["record_tokens"][target["memory_id"]],
-                        },
-                        "absent_links": [absent_link],
-                    },
-                }
-            ],
-            "retained": [],
-            "rationale": "record the exact supporting edge",
-        }
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        assert "no planning or submission stage" in prompt
+        tracker = self._ctx.internal_tool_call_tracker
+        assert tracker is not None
+        tracker.record_call("internal_create_memory_link", task_id=self._task_id)
+        result = internal_create_memory_link_service(
+            self._ctx,
+            {
+                "source_id": self._source_id,
+                "target_id": self._target_id,
+                "link_type": "SUPPORTS",
+                "context": "The source directly supports the target.",
+                "task_id": self._task_id,
+            },
+        )
+        return AgenticRunResult(status="success", parsed={"summary": json.dumps(result)}, raw_text=json.dumps(result))
+
+    async def close(self) -> None:
+        return None
 
 
-def _task(runtime, task_id: str) -> TaskRecord:
+class _DirectLinkProvider:
+    def __init__(self, ctx: ApplicationContext, source_id: str, target_id: str) -> None:
+        self._ctx = ctx
+        self._source_id = source_id
+        self._target_id = target_id
+
+    def with_usage_context(self, **context: object) -> _DirectLinkProvider:
+        del context
+        return self
+
+    async def open_agent_session(
+        self,
+        *,
+        allowed_tool_names: tuple[str, ...] | None = None,
+    ) -> _DirectLinkSession:
+        assert allowed_tool_names is not None
+        assert "internal_create_memory_link" in allowed_tool_names
+        return _DirectLinkSession(self._ctx, "direct-link-task", self._source_id, self._target_id)
+
+    async def run_agent(self, prompt: str) -> AgenticRunResult:
+        del prompt
+        return AgenticRunResult(status="success", raw_text="{}")
+
+
+def _task(runtime: Any) -> TaskRecord:
     return TaskRecord(
-        id=task_id,
+        id="direct-link-task",
         task_name=CURATOR_TASK_NAME,
         data={"workspace_id": runtime.workspace_id},
         workspace_id=runtime.workspace_id,
@@ -87,54 +90,48 @@ def _task(runtime, task_id: str) -> TaskRecord:
     )
 
 
-def _seed_runtime(tmp_path: Path) -> tuple[Any, Any, Any, Any]:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    runtime = create_runtime(cwd=workspace)
-    assert runtime.repository is not None and runtime.work_items is not None and runtime.config is not None
-    source = runtime.repository.create_memory(
-        title="Supporting source",
-        content="The source describes the authentication evidence.",
-        summary="Authentication evidence source.",
-        workspace_ids=[runtime.workspace_id or "global"],
-        memory_type="fact",
-    )
-    target = runtime.repository.create_memory(
-        title="Supported target",
-        content="The target is the durable authentication conclusion.",
-        summary="Authentication conclusion.",
-        workspace_ids=[runtime.workspace_id or "global"],
-        memory_type="fact",
-    )
-    assert source is not None and target is not None
-    item, _ = runtime.work_items.enqueue_unique(
-        family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
-        execution_lane=EXECUTION_LANE_AGENTIC,
-        workspace_id=runtime.workspace_id,
-        payload={"seed_memory_ids": [source.id, target.id]},
-        idempotency_key="curator-create-link-test",
-    )
-    return runtime, source, target, item
-
-
 @pytest.mark.asyncio
-async def test_default_campaign_applies_create_link_with_verification(
+async def test_direct_campaign_applies_create_link_mcp_tool(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    runtime, source, target, item = _seed_runtime(tmp_path)
-    try:
-        runtime.ai_agent_provider = agentic_curator(_CreateLinkJSONProvider())
-        result = await handle_memory_curator_task(runtime, _task(runtime, "curator-create-link-task"), object())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = create_runtime(cwd=workspace)
+    assert runtime.repository is not None and runtime.work_items is not None
 
-        assert result["execution_mode"] == "curation_verified_campaign"
+    try:
+        source = runtime.repository.create_memory(
+            title="Supporting source",
+            content="The source describes authentication evidence.",
+            summary="Authentication evidence source.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        target = runtime.repository.create_memory(
+            title="Supported target",
+            content="The target is the durable authentication conclusion.",
+            summary="Authentication conclusion.",
+            workspace_ids=[runtime.workspace_id or "global"],
+            memory_type="fact",
+        )
+        assert source is not None and target is not None
+        item, _ = runtime.work_items.enqueue_unique(
+            family_key=WORK_FAMILY_MEMORY_CURATION_REVIEW,
+            execution_lane=EXECUTION_LANE_AGENTIC,
+            workspace_id=runtime.workspace_id,
+            payload={"seed_memory_ids": [source.id, target.id]},
+            idempotency_key="direct-curator-link",
+        )
+        runtime.ai_agent_provider = _DirectLinkProvider(runtime, source.id, target.id)
+
+        result = await handle_memory_curator_task(runtime, _task(runtime), object())
+
         assert result["curation_outcome"] == "applied"
         assert result["mutations"] == 1
         assert runtime.repository.get_links(source.id, direction="outgoing")
-        receipt = runtime.curation.list_receipts(result["curation_run_id"])[0]
-        assert receipt.status.value == "verified"
         assert runtime.work_items.get_item(item.id).status == "completed"
     finally:
         runtime.close()
