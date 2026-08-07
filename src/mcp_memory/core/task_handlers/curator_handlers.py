@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from mcp_memory.context import ApplicationContext, TaskRuntimeContext
 from mcp_memory.core.curation_shadow import (
-    run_curator_verified_campaign,
+    run_curator_direct_mcp,
 )
 from mcp_memory.core.task_handlers.campaigns import campaign_metadata
 import mcp_memory.core.task_handlers.curator_support as _curator_support
@@ -110,7 +110,7 @@ async def handle_memory_curator_task(
             reason="no_seed_records",
         )
 
-    return await run_curator_verified_campaign(
+    return await run_curator_direct_mcp(
         ctx,
         task,
         provider=provider,

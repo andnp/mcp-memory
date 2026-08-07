@@ -19,7 +19,7 @@ from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_i
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
-async def run_curator_verified_campaign(
+async def run_curator_direct_mcp(
     ctx: ApplicationContext,
     task: TaskRecord,
     *,
