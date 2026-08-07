@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -6,6 +7,7 @@ from mcp_memory.config import (
     AIConfig,
     BackupsConfig,
     DaemonConfig,
+    MaintenanceConfig,
     MemoryConfig,
     SearchRankingConfig,
     SearchKernelConfig,
@@ -33,6 +35,48 @@ def test_ai_config_defaults_to_available_model() -> None:
 def test_memory_config_rejects_invalid_checkpoint_interval() -> None:
     with pytest.raises(ValueError, match="checkpoint_interval_ops"):
         MemoryConfig(checkpoint_interval_ops=0)
+
+
+def test_maintenance_config_has_safe_gc_defaults() -> None:
+    config = MaintenanceConfig()
+
+    assert config.archived_memory_retention_days == 90
+    assert config.memory_gc_batch_size == 100
+    assert config.dangling_link_gc_batch_size == 100
+    assert config.memory_gc_mode == "report-only"
+
+
+def test_load_config_reads_maintenance_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "maintenance-config.toml"
+    config_path.write_text(
+        """
+[maintenance]
+archived_memory_retention_days = 30
+memory_gc_batch_size = 25
+dangling_link_gc_batch_size = 10
+memory_gc_mode = "delete"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.maintenance == MaintenanceConfig(30, 25, 10, "delete")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("archived_memory_retention_days", 0, "archived_memory_retention_days"),
+        ("memory_gc_batch_size", 0, "memory_gc_batch_size"),
+        ("dangling_link_gc_batch_size", 0, "dangling_link_gc_batch_size"),
+        ("memory_gc_mode", "delete-now", "memory_gc_mode"),
+    ],
+)
+def test_maintenance_config_rejects_invalid_values(field: str, value: object, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        invalid_config: dict[str, Any] = {field: value}
+        MaintenanceConfig(**invalid_config)
 
 
 def test_searchkernel_defaults_to_lenient_failure_mode() -> None:
@@ -75,6 +119,10 @@ def test_default_config_is_created_once(tmp_path: Path) -> None:
     assert loaded.storage.cache.enabled is False
     assert loaded.storage.cache.mode == "readonly"
     assert loaded.daemon.port == 4242
+    assert loaded.maintenance.archived_memory_retention_days == 90
+    assert loaded.maintenance.memory_gc_batch_size == 100
+    assert loaded.maintenance.dangling_link_gc_batch_size == 100
+    assert loaded.maintenance.memory_gc_mode == "report-only"
     assert loaded.backups.enabled is True
     assert loaded.backups.interval_seconds == 3600.0
     assert loaded.backups.max_snapshots == 24

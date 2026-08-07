@@ -20,6 +20,7 @@ DEFAULT_APP_NAME = "mcp-memory"
 GLOBAL_DAEMON_IDENTITY = "global"
 StorageBackendKind = Literal["sqlite", "postgres"]
 StorageCacheMode = Literal["readonly", "writeback"]
+MemoryGCMode = Literal["report-only", "delete"]
 
 
 @dataclass
@@ -195,6 +196,24 @@ class IngestEscalationConfig:
 @dataclass
 class CurationConfig:
     """Curator runtime configuration."""
+
+
+@dataclass
+class MaintenanceConfig:
+    archived_memory_retention_days: int = 90
+    memory_gc_batch_size: int = 100
+    dangling_link_gc_batch_size: int = 100
+    memory_gc_mode: MemoryGCMode = "report-only"
+
+    def __post_init__(self) -> None:
+        if self.archived_memory_retention_days < 1:
+            raise ValueError("maintenance.archived_memory_retention_days must be >= 1")
+        if self.memory_gc_batch_size < 1:
+            raise ValueError("maintenance.memory_gc_batch_size must be >= 1")
+        if self.dangling_link_gc_batch_size < 1:
+            raise ValueError("maintenance.dangling_link_gc_batch_size must be >= 1")
+        if self.memory_gc_mode not in {"report-only", "delete"}:
+            raise ValueError("maintenance.memory_gc_mode must be 'report-only' or 'delete'")
 
 
 
@@ -411,6 +430,7 @@ class Config:
     ingest_suppression: IngestSuppressionConfig = field(default_factory=IngestSuppressionConfig)
     ingest_escalation: IngestEscalationConfig = field(default_factory=IngestEscalationConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
 
 
 def _load_dataclass_from_dict(cls: type[Any], data: dict[str, Any]):
@@ -693,6 +713,12 @@ def ensure_default_config_exists(config_path: Path | None = None) -> Path:
         "create_startup_snapshot": True,
         "warn_on_shared_storage": True,
     }
+    document["maintenance"] = {
+        "archived_memory_retention_days": 90,
+        "memory_gc_batch_size": 100,
+        "dangling_link_gc_batch_size": 100,
+        "memory_gc_mode": "report-only",
+    }
     document["embeddings"] = {
         "provider": "sentence-transformers",
         "model": "sentence-transformers/all-MiniLM-L6-v2",
@@ -788,6 +814,7 @@ def load_config(config_path: Path | None = None) -> Config:
         ingest_suppression=_load_ingest_suppression_config(raw.get("ingest_suppression", {})),
         ingest_escalation=_load_ingest_escalation_config(raw.get("ingest_escalation", {})),
         curation=_load_dataclass_from_dict(CurationConfig, raw.get("curation", {})),
+        maintenance=_load_dataclass_from_dict(MaintenanceConfig, raw.get("maintenance", {})),
     )
 
 
