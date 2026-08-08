@@ -472,6 +472,16 @@ class CurationQualitySampler:
             )
             else historical_query_text
         )
+        consistency_payload = mutation.payload.get("quality_consistency", {})
+        consistency_data = (
+            consistency_payload if isinstance(consistency_payload, Mapping) else {}
+        )
+        captured_after_context = consistency_data.get("after_query_context")
+        after_query_context = (
+            dict(captured_after_context)
+            if isinstance(captured_after_context, Mapping)
+            else dict(query.query_context)
+        )
         neutral_reason = _neutral_query_reason(
             query_text,
             None if explicit_hypothesis is None else explicit_hypothesis.query,
@@ -490,6 +500,7 @@ class CurationQualitySampler:
                 engagement_evidence={
                     "query_provenance": query.provenance.value,
                     "query_trusted": query.trusted,
+                    **_replay_provenance(query, after_query_context, {}),
                 },
                 **common,
             )
@@ -532,13 +543,9 @@ class CurationQualitySampler:
             for memory_id in before_ids
         )
         after_epochs = _search_epochs(self._search)
-        consistency_payload = mutation.payload.get("quality_consistency", {})
-        consistency_data = (
-            consistency_payload if isinstance(consistency_payload, Mapping) else {}
-        )
         consistency = assess_replay_consistency(
             before_context=query.query_context,
-            after_context=query.query_context,
+            after_context=after_query_context,
             before_epochs=query.before_search_epochs,
             after_epochs=after_epochs,
             replay_complete=replay_complete,
@@ -565,7 +572,7 @@ class CurationQualitySampler:
                     trusted_query=query.trusted,
                     replay_complete=replay_complete,
                     before_query_context=query.query_context,
-                    after_query_context=query.query_context,
+                    after_query_context=after_query_context,
                     before_search_epochs=query.before_search_epochs,
                     after_search_epochs=after_epochs,
                     consistency_flags=consistency.flags,
@@ -594,9 +601,8 @@ class CurationQualitySampler:
                 engagement_evidence={
                     "query_provenance": query.provenance.value,
                     "query_trusted": query.trusted,
+                    **_replay_provenance(query, after_query_context, after_epochs),
                     "consistency_flags": list(consistency.flags),
-                    "before_search_epochs": dict(query.before_search_epochs),
-                    "after_search_epochs": dict(after_epochs),
                 },
                 **common,
             )
@@ -659,6 +665,7 @@ class CurationQualitySampler:
                 ),
                 "query_provenance": query.provenance.value,
                 "query_trusted": query.trusted,
+                **_replay_provenance(query, after_query_context, after_epochs),
                 "cluster_utility_delta": case.cluster_utility_delta,
                 "duplicate_density_change": case.duplicate_density_change,
             },
@@ -1141,6 +1148,19 @@ def _search_epochs(search: Any) -> dict[str, int]:
         str(key): int(value)
         for key, value in values.items()
         if isinstance(value, int) and not isinstance(value, bool)
+    }
+
+
+def _replay_provenance(
+    query: QualityQuery,
+    after_context: Mapping[str, object],
+    after_epochs: Mapping[str, int],
+) -> dict[str, object]:
+    return {
+        "before_query_context": dict(query.query_context),
+        "after_query_context": dict(after_context),
+        "before_search_epochs": dict(query.before_search_epochs),
+        "after_search_epochs": dict(after_epochs),
     }
 
 
