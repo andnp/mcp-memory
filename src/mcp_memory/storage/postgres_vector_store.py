@@ -170,16 +170,18 @@ class PostgresVectorStore:
         self,
         cursor,
         *,
+        source_kind: str,
         model_name: str,
     ) -> set[int]:
         cursor.execute(
             """
             SELECT DISTINCT jsonb_array_length(embedding_json)
             FROM embeddings
-            WHERE model_name = %s
+            WHERE source_kind = %s
+              AND model_name = %s
               AND jsonb_typeof(embedding_json) = 'array'
             """,
-            (model_name,),
+            (source_kind, model_name),
         )
         return {
             int(row[0])
@@ -368,7 +370,11 @@ class PostgresVectorStore:
                     if current is None or str(current[0]) != source_updated_at:
                         connection.rollback()
                         return False
-                stored_dimensions = self._read_model_dimensions(cursor, model_name=model_name)
+                stored_dimensions = self._read_model_dimensions(
+                    cursor,
+                    source_kind=source_kind,
+                    model_name=model_name,
+                )
                 current_dimension = len(normalized_embedding)
                 if len(stored_dimensions) > 1:
                     raise ValueError(

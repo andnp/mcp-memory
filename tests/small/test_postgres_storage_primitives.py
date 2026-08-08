@@ -520,12 +520,13 @@ class FakePrimitiveCursor:
                 )
             ]
             return
-        if normalized.startswith("SELECT DISTINCT jsonb_array_length(embedding_json) FROM embeddings WHERE model_name = %s AND jsonb_typeof(embedding_json) = 'array'"):
+        if normalized.startswith("SELECT DISTINCT jsonb_array_length(embedding_json) FROM embeddings WHERE source_kind = %s AND model_name = %s AND jsonb_typeof(embedding_json) = 'array'"):
             dimensions = sorted(
                 {
                     len(json.loads(str(row["embedding_json"])))
                     for row in self._state.embeddings
-                    if str(row["model_name"]) == str(arguments[0])
+                    if str(row["source_kind"]) == str(arguments[0])
+                    and str(row["model_name"]) == str(arguments[1])
                 }
             )
             self._result = [(dimension,) for dimension in dimensions]
@@ -1400,6 +1401,31 @@ def test_postgres_vector_store_rejects_mismatched_dimension_for_existing_model_i
         )
 
     assert [str(row["source_id"]) for row in session_manager.state.embeddings] == ["memory-a"]
+
+
+def test_postgres_vector_store_scopes_dimension_consistency_to_source_kind() -> None:
+    session_manager = FakePrimitiveSessionManager()
+    store = PostgresVectorStore(session_manager)
+
+    store.upsert(
+        source_kind="memory",
+        source_id="memory-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0],
+    )
+    store.upsert(
+        source_kind="document",
+        source_id="document-a",
+        workspace_id=None,
+        model_name="mini-embed",
+        embedding=[1.0, 0.0, 0.0],
+    )
+
+    assert [(str(row["source_kind"]), len(json.loads(str(row["embedding_json"])))) for row in session_manager.state.embeddings] == [
+        ("memory", 2),
+        ("document", 3),
+    ]
 
 
 def test_postgres_vector_store_rejects_upsert_when_existing_model_identity_is_already_mixed() -> None:
