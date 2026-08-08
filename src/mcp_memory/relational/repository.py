@@ -977,12 +977,144 @@ class RelationalMemoryRepository:
             include_superseded=include_superseded,
             limit=limit,
         )
+        return self._hydrate_maintenance_contexts(memory_ids)
+
+    def _hydrate_maintenance_contexts(
+        self,
+        memory_ids: list[str],
+    ) -> list[RelationalMemoryReadContext]:
+        if not memory_ids:
+            return []
+
+        conn = self._db.get_connection()
+        memory_rows_by_id = self._memory_rows_by_ids(conn, memory_ids)
+        existing_memory_ids = [memory_id for memory_id in memory_ids if memory_id in memory_rows_by_id]
+        if not existing_memory_ids:
+            return []
+
+        workspace_ids_by_memory_id = self._workspace_ids_by_memory_ids(conn, existing_memory_ids)
+        tags_by_memory_id = self._tags_by_memory_ids(conn, existing_memory_ids)
+        outgoing_links_by_memory_id, incoming_links_by_memory_id = self._links_by_memory_ids(
+            conn,
+            existing_memory_ids,
+        )
+        superseded_target_ids = self._normalize_values(
+            [
+                link.target_id
+                for memory_id in existing_memory_ids
+                for link in outgoing_links_by_memory_id.get(memory_id, [])
+                if link.link_type == "SUPERSEDES"
+            ]
+        )
+        superseded_rows_by_id = self._memory_rows_by_ids(conn, superseded_target_ids)
+        superseded_existing_ids = [
+            memory_id for memory_id in superseded_target_ids if memory_id in superseded_rows_by_id
+        ]
+        superseded_workspace_ids_by_memory_id = self._workspace_ids_by_memory_ids(
+            conn,
+            superseded_existing_ids,
+        )
+        superseded_tags_by_memory_id = self._tags_by_memory_ids(conn, superseded_existing_ids)
+
         contexts: list[RelationalMemoryReadContext] = []
-        for memory_id in memory_ids:
-            context = self.peek_memory(memory_id)
-            if context is not None:
-                contexts.append(context)
+        for memory_id in existing_memory_ids:
+            record = self._candidate_record_from_row(
+                memory_rows_by_id[memory_id],
+                workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
+                tags=tags_by_memory_id.get(memory_id, []),
+            )
+            outgoing = outgoing_links_by_memory_id.get(memory_id, [])
+            superseded = []
+            for link in outgoing:
+                if link.link_type != "SUPERSEDES" or link.target_id not in superseded_rows_by_id:
+                    continue
+                superseded_record = self._candidate_record_from_row(
+                    superseded_rows_by_id[link.target_id],
+                    workspace_ids=superseded_workspace_ids_by_memory_id.get(link.target_id, []),
+                    tags=superseded_tags_by_memory_id.get(link.target_id, []),
+                )
+                superseded.append(superseded_record)
+            contexts.append(
+                RelationalMemoryReadContext(
+                    record=record,
+                    relationships={
+                        "outgoing": outgoing,
+                        "incoming": incoming_links_by_memory_id.get(memory_id, []),
+                    },
+                    superseded=superseded,
+                )
+            )
         return contexts
+
+    def _memory_rows_by_ids(self, conn, memory_ids: list[str]):
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows = conn.execute(
+            f"SELECT * FROM memories WHERE id IN ({placeholders})",
+            memory_ids,
+        ).fetchall()
+        return {str(row["id"]): row for row in rows}
+
+    def _workspace_ids_by_memory_ids(self, conn, memory_ids: list[str]):
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows = conn.execute(
+            f"SELECT memory_id, workspace_id FROM memory_workspaces "
+            f"WHERE memory_id IN ({placeholders}) ORDER BY memory_id ASC, workspace_id ASC",
+            memory_ids,
+        ).fetchall()
+        workspace_ids_by_memory_id: dict[str, list[str]] = {}
+        for row in rows:
+            workspace_ids_by_memory_id.setdefault(str(row["memory_id"]), []).append(
+                str(row["workspace_id"])
+            )
+        return workspace_ids_by_memory_id
+
+    def _tags_by_memory_ids(self, conn, memory_ids: list[str]):
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows = conn.execute(
+            f"SELECT memory_tags.memory_id, tags.name FROM memory_tags "
+            f"JOIN tags ON tags.id = memory_tags.tag_id "
+            f"WHERE memory_tags.memory_id IN ({placeholders}) "
+            "ORDER BY memory_tags.memory_id ASC, tags.name ASC",
+            memory_ids,
+        ).fetchall()
+        tags_by_memory_id: dict[str, list[str]] = {}
+        for row in rows:
+            tags_by_memory_id.setdefault(str(row["memory_id"]), []).append(str(row["name"]))
+        return tags_by_memory_id
+
+    def _links_by_memory_ids(self, conn, memory_ids: list[str]):
+        if not memory_ids:
+            return {}, {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows = conn.execute(
+            f"SELECT source_id, target_id, type, context FROM links "
+            f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders}) "
+            "ORDER BY source_id ASC, target_id ASC",
+            [*memory_ids, *memory_ids],
+        ).fetchall()
+        memory_id_set = set(memory_ids)
+        outgoing_links_by_memory_id: dict[str, list[MemoryLink]] = {}
+        incoming_links_by_memory_id: dict[str, list[MemoryLink]] = {}
+        for row in rows:
+            source_id = str(row["source_id"])
+            target_id = str(row["target_id"])
+            link = MemoryLink(
+                source_id=source_id,
+                target_id=target_id,
+                link_type=row["type"],
+                context=row["context"],
+            )
+            if source_id in memory_id_set:
+                outgoing_links_by_memory_id.setdefault(source_id, []).append(link)
+            if target_id in memory_id_set:
+                incoming_links_by_memory_id.setdefault(target_id, []).append(link)
+        return outgoing_links_by_memory_id, incoming_links_by_memory_id
 
     def update_memory(
         self,
@@ -1227,7 +1359,13 @@ class RelationalMemoryRepository:
             tags=[tag_row[0] for tag_row in tag_rows],
         )
 
-    def _candidate_record_from_row(self, row) -> RelationalMemoryRecord:
+    def _candidate_record_from_row(
+        self,
+        row,
+        *,
+        workspace_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> RelationalMemoryRecord:
         return RelationalMemoryRecord(
             id=row["id"],
             memory_ref=row["memory_ref"],
@@ -1243,8 +1381,12 @@ class RelationalMemoryRepository:
             last_accessed_at=row["last_accessed_at"],
             last_surfaced_at=row["last_surfaced_at"],
             metadata=json.loads(row["metadata"] or "{}"),
-            workspace_ids=_split_csv_values(row["workspace_ids_csv"]),
-            tags=_split_csv_values(row["tags_csv"]),
+            workspace_ids=(
+                _split_csv_values(row["workspace_ids_csv"])
+                if workspace_ids is None
+                else workspace_ids
+            ),
+            tags=_split_csv_values(row["tags_csv"]) if tags is None else tags,
         )
 
     def resolve_memory_id(self, memory_id: str) -> str | None:

@@ -576,6 +576,142 @@ def test_maintenance_search_returns_full_context_without_telemetry_changes(
     }
 
 
+def test_maintenance_search_batches_context_hydration_and_preserves_filters(
+    db_manager,
+) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    old = repository.create_memory(
+        title="Legacy batch maintenance fact",
+        content="Legacy batch maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["legacy"],
+        created_at="2026-07-14T12:01:00+00:00",
+        updated_at="2026-07-14T12:01:00+00:00",
+    )
+    current = repository.create_memory(
+        title="Current batch maintenance fact",
+        content="Current batch maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["current", "maintenance"],
+        created_at="2026-07-14T12:03:00+00:00",
+        updated_at="2026-07-14T12:03:00+00:00",
+    )
+    peer = repository.create_memory(
+        title="Peer batch maintenance fact",
+        content="Peer batch maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha", "workspace-beta"],
+        tags=["maintenance", "peer"],
+        created_at="2026-07-14T12:02:00+00:00",
+        updated_at="2026-07-14T12:02:00+00:00",
+    )
+    cross_workspace = repository.create_memory(
+        title="Cross workspace batch maintenance fact",
+        content="This should be filtered out.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+    )
+    other_type = repository.create_memory(
+        title="Batch maintenance plan",
+        content="This plan should be filtered out.",
+        memory_type="plan",
+        workspace_ids=["workspace-alpha"],
+    )
+    stale = repository.create_memory(
+        title="Stale batch maintenance fact",
+        content="This stale fact should be filtered out.",
+        memory_type="fact",
+        status="stale",
+        workspace_ids=["workspace-alpha"],
+    )
+    supporter = repository.create_memory(
+        title="Batch maintenance supporter",
+        content="Supports the current fact.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert (
+        old is not None
+        and current is not None
+        and peer is not None
+        and cross_workspace is not None
+        and other_type is not None
+        and stale is not None
+        and supporter is not None
+    )
+    repository.add_link(current.id, old.id, "SUPERSEDES", "Current replaces legacy")
+    repository.add_link(supporter.id, current.id, "DEPENDS_ON", "Support for current")
+
+    expected_ids = repository._search_keyword_memory_ids(
+        "batch maintenance",
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        status="active",
+        include_superseded=True,
+        limit=10,
+    )
+    queries: list[str] = []
+    connection = db_manager.get_connection()
+    connection.set_trace_callback(queries.append)
+    try:
+        contexts = repository.search_memories_for_maintenance(
+            "batch maintenance",
+            workspace_id="workspace-alpha",
+            memory_type="fact",
+            status="active",
+            include_superseded=True,
+            limit=10,
+        )
+    finally:
+        connection.set_trace_callback(None)
+
+    assert [context.record.id for context in contexts] == expected_ids
+    assert cross_workspace.id not in expected_ids
+    assert other_type.id not in expected_ids
+    assert stale.id not in expected_ids
+    assert contexts == [repository.peek_memory(memory_id) for memory_id in expected_ids]
+    assert contexts[0].record.workspace_ids == ["workspace-alpha"]
+    assert contexts[0].record.tags == ["current", "maintenance"]
+    assert [record.id for record in contexts[0].superseded] == [old.id]
+    assert contexts[0].superseded[0].workspace_ids == ["workspace-alpha"]
+    assert contexts[0].superseded[0].tags == ["legacy"]
+    assert contexts[0].relationships["incoming"] == repository.get_links(
+        current.id,
+        "incoming",
+    )
+    application_queries = [query for query in queries if not query.startswith("--")]
+    assert len(application_queries) <= 8
+    assert not any("WHERE memory_id = ?" in query for query in application_queries)
+
+
+def test_maintenance_search_skips_missing_and_empty_hydration_ids(
+    db_manager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    record = repository.create_memory(
+        title="Hydration presence check",
+        content="A record used to check missing hydration rows.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert record is not None
+
+    monkeypatch.setattr(
+        repository,
+        "_search_keyword_memory_ids",
+        lambda *args, **kwargs: ["missing-memory", record.id],
+    )
+    assert [context.record.id for context in repository.search_memories_for_maintenance("ignored")] == [
+        record.id
+    ]
+
+    monkeypatch.setattr(repository, "_search_keyword_memory_ids", lambda *args, **kwargs: [])
+    assert repository.search_memories_for_maintenance("ignored") == []
+
+
 def test_embedding_health_and_rebuild_remain_service_owned(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     vector_store = SQLiteVectorStore(db_manager)
