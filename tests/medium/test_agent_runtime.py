@@ -3,6 +3,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import time
+from typing import cast
 
 import pytest
 
@@ -61,6 +62,7 @@ from mcp_memory.core.journal import System1Journal
 from mcp_memory.core.tasks import SQLiteTaskQueue, TaskRecord
 from mcp_memory.mcp.handlers import call_internal_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.relational.search import RelationalMemorySearchService
 from mcp_memory.provider_usage_store import ProviderUsageRepository
 from mcp_memory.work_item_store import (
     EXECUTION_LANE_AGENTIC,
@@ -6246,8 +6248,9 @@ async def test_ingest_handler_clusters_semantically_related_thoughts(monkeypatch
     runtime.embedder = _SemanticFakeEmbedder()
     runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
     if runtime.relational_search is not None:
-        runtime.relational_search._embedder = runtime.embedder  # noqa: SLF001
-        runtime.relational_search._vector_store = runtime.vector_store  # noqa: SLF001
+        search = cast(RelationalMemorySearchService, runtime.relational_search)
+        search._embedder = runtime.embedder  # noqa: SLF001
+        search._vector_store = runtime.vector_store  # noqa: SLF001
 
     try:
         first = runtime.journal.record("jwt refresh rollout")

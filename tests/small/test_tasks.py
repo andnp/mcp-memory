@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
@@ -59,7 +60,7 @@ class _TaskRuntimeContextStub:
     db_manager: object = None
     journal: object = None
     repository: object = None
-    relational_search: object = None
+    relational_search: MemorySearchPort | None = None
     task_queue: object = None
     curation: object = None
     curation_action_store: object = None

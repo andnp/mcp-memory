@@ -181,12 +181,13 @@ def _evaluate_direct_quality(
     *,
     campaign_hypothesis: CampaignHypothesis | None,
 ) -> tuple[CurationQualityEvidence, ...]:
-    if not evidence or ctx.db_manager is None or ctx.relational_search is None:
+    search = ctx.relational_search
+    if not evidence or ctx.db_manager is None or search is None:
         return ()
     repository = _DirectQualityEvidenceRepository()
     sampler = CurationQualitySampler(
         db_manager=ctx.db_manager,
-        search=_DirectQualitySearch(ctx),
+        search=_DirectQualitySearch(search, ctx.repository),
         repository=repository,
         candidate_repository=getattr(ctx, "curation", None),
         sample_rate=1.0,
@@ -214,9 +215,9 @@ def _direct_quality_run(task: TaskRecord) -> Any:
 
 
 class _DirectQualitySearch:
-    def __init__(self, ctx: ApplicationContext) -> None:
-        self._search = ctx.relational_search
-        self._repository = ctx.repository
+    def __init__(self, search: Any, repository: Any) -> None:
+        self._search = search
+        self._repository = repository
 
     def search_memories_for_maintenance(self, query: str, *, limit: int = 50) -> Any:
         return self._search.search_memories_for_maintenance(query, limit=limit)

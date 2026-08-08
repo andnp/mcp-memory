@@ -202,6 +202,7 @@ def create_runtime_composition(
         embedder=embedder,
         enable_background_repair_queue=enable_background_repair_queue,
     )
+    assert storage.relational_search is not None
     provider_registry = _build_provider_registry(
         config=spec.config,
         workspace_root=workspace_root,

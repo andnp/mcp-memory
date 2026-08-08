@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 import psycopg
 import pytest
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import AIConfig, Config, PostgresStorageConfig, ProviderRoutingConfig, StorageConfig
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.mcp.runtime import GlobalDaemonBootstrapSpec, WorkspaceRuntimeSpec, _build_provider_registry, create_runtime_from_spec
@@ -636,7 +638,7 @@ def test_build_provider_registry_uses_backend_capabilities_for_postgres(tmp_path
         db_manager=object(),
         journal=object(),
         repository=object(),
-        relational_search=object(),
+        relational_search=cast(MemorySearchPort, object()),
         read_cache=None,
         task_queue=_UnsupportedTaskQueue(),
         provider_usage=object(),

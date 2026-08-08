@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.core.ports.providers import (
     ProviderPolicyEventPort,
@@ -30,7 +31,7 @@ class MemoryPipelineContext(Protocol):
     db_manager: Any
     journal: Any
     repository: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     task_queue: Any
 
 
@@ -83,7 +84,7 @@ class MemoryReadCapabilities:
     memory_path: Path | None = None
     db_manager: object | None = None
     repository: object | None = None
-    relational_search: object | None = None
+    relational_search: MemorySearchPort | None = None
     read_cache: object | None = None
     embedder: object | None = None
     vector_store: object | None = None
@@ -111,7 +112,7 @@ class MutationCapabilities:
     workspace_id: str | None = None
     journal: object | None = None
     repository: object | None = None
-    relational_search: object | None = None
+    relational_search: MemorySearchPort | None = None
     task_queue: object | None = None
     curation: object | None = None
     mutation_history: object | None = None
@@ -260,7 +261,7 @@ class _TaskRuntimeContextAdapter:
     db_manager: object | None
     journal: object | None
     repository: object | None
-    relational_search: object | None
+    relational_search: MemorySearchPort | None
     embedding_maintenance: object | None
     task_queue: object | None
     curation: object | None
@@ -383,7 +384,7 @@ class ApplicationContext:
     db_manager: Any = None
     journal: Any = None
     repository: Any = None
-    relational_search: Any = None
+    relational_search: MemorySearchPort | None = None
     embedding_maintenance: Any = None
     read_cache: Any = None
     task_queue: Any = None

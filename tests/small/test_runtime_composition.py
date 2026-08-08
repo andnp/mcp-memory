@@ -26,6 +26,32 @@ from mcp_memory.mcp.runtime import (
 from mcp_memory.storage.types import StorageBackendResources
 
 
+class _MemorySearchPort:
+    def get_health(self) -> object:
+        return object()
+
+    def read_memory(self, memory_id: str) -> object:
+        raise NotImplementedError
+
+    def peek_memory(self, memory_id: str) -> object:
+        raise NotImplementedError
+
+    def search_memories_for_maintenance(
+        self,
+        query: str,
+        workspace_id: str | None = None,
+        limit: int = 50,
+        *,
+        memory_type: str | None = None,
+        status: str | None = None,
+        include_superseded: bool = False,
+    ) -> object:
+        raise NotImplementedError
+
+    def resolve_memory_id(self, memory_id: str) -> str | None:
+        raise NotImplementedError
+
+
 class _Closeable:
     def __init__(self, name: str, calls: list[str]) -> None:
         self.name = name
@@ -57,12 +83,13 @@ def _empty_capabilities() -> RuntimeCapabilityBundles:
 def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_path) -> None:
     embedder = object()
     provider_registry = {"test": {"json": object()}}
+    search_port = _MemorySearchPort()
     storage = StorageBackendResources(
         backend="sqlite",
         db_manager=object(),
         journal=object(),
         repository=object(),
-        relational_search=SimpleNamespace(get_health=lambda: object()),
+        relational_search=search_port,
         read_cache=object(),
         task_queue=object(),
         provider_usage=object(),
@@ -98,6 +125,7 @@ def test_create_runtime_composition_exposes_grouped_resources(monkeypatch, tmp_p
     resources = composition.resources
     assert resources is not None
     assert resources.storage is storage
+    assert composition.context.relational_search is search_port
     assert resources.embedder is embedder
     assert resources.provider_registry is provider_registry
     assert resources.internal_tool_call_tracker is composition.context.internal_tool_call_tracker
@@ -110,7 +138,7 @@ def test_runtime_resources_close_order_is_idempotent_and_skips_missing_close_met
         db_manager=_Closeable("db", calls),
         journal=object(),
         repository=_Closeable("repository", calls),
-        relational_search=object(),
+        relational_search=_MemorySearchPort(),
         read_cache=_Closeable("cache", calls),
         task_queue=object(),
         provider_usage=object(),
@@ -143,7 +171,7 @@ def test_runtime_resources_do_not_close_aliased_storage_resources_twice() -> Non
         db_manager=_Closeable("db", calls),
         journal=object(),
         repository=_Closeable("repository", calls),
-        relational_search=object(),
+        relational_search=_MemorySearchPort(),
         read_cache=_Closeable("cache", calls),
         task_queue=object(),
         provider_usage=object(),

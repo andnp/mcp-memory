@@ -5,10 +5,12 @@ from pathlib import Path
 import sqlite3
 from threading import Event, Thread
 from types import SimpleNamespace
+from typing import cast
 import warnings
 
 import pytest
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import JournalEntry
@@ -436,7 +438,7 @@ def _build_context(*, read_cache: SharedReadCache, relational_search: object) ->
     context = ApplicationContext(
         workspace_id="workspace-123",
         storage_backend="postgres",
-        relational_search=relational_search,
+        relational_search=cast(MemorySearchPort, relational_search),
         read_cache=read_cache,
         retrieval_telemetry=FakeTelemetryRepository(),
         runtime_logs=FakeRuntimeLogs(),
@@ -1756,12 +1758,12 @@ def test_search_memory_records_service_records_cache_metrics_for_external_non_de
     )
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 100.0)
     cache.store_search_response(request, warm_response)
-    ctx.relational_search = CountingSearchService()
+    ctx.relational_search = cast(MemorySearchPort, CountingSearchService())
 
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 104.0)
     fresh_hit_response = search_memory_records_service(ctx, {"query": "warm cache"})
 
-    ctx.relational_search = FailingSearchService()
+    ctx.relational_search = cast(MemorySearchPort, FailingSearchService())
     monkeypatch.setattr("mcp_memory.storage.shared_read_cache.time", lambda: 106.0)
     stale_response = search_memory_records_service(ctx, {"query": "warm cache"})
 

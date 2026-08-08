@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config, CurationConfig, StorageCacheMode
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.journal import System1Journal
@@ -42,7 +43,7 @@ class _ManagementContextStub:
     db_manager: object = None
     journal: object = None
     repository: object = None
-    relational_search: object = None
+    relational_search: MemorySearchPort | None = None
     read_cache: object = None
     task_queue: object = None
     ai_json_provider: object = None

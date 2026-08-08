@@ -47,6 +47,11 @@ def _make_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return create_runtime(cwd=workspace)
 
 
+def _relational_search(runtime):
+    assert runtime.relational_search is not None
+    return runtime.relational_search
+
+
 def _applied_unverified_run(runtime):
     assert runtime.repository is not None
     record = runtime.repository.create_memory(
@@ -86,7 +91,7 @@ def test_recovery_verifies_once_and_finalizes_run(monkeypatch: pytest.MonkeyPatc
     try:
         run, _action, receipt = _applied_unverified_run(runtime)
         calls = 0
-        real_reads = runtime.relational_search
+        real_reads = _relational_search(runtime)
 
         class _CountingReads:
             def peek_memory(self, memory_id: str):
@@ -125,7 +130,7 @@ def test_failed_reconciliation_blocks_and_late_terminal_writes_are_ignored(
         run, _action, receipt = _applied_unverified_run(runtime)
         assert runtime.repository.update_memory(str(receipt.affected_ids[0]), title="Edited after the action") is not None
 
-        outcome = CurationReconciler(runtime.curation, runtime.relational_search, sleep=lambda _delay: None).reconcile()[0]
+        outcome = CurationReconciler(runtime.curation, _relational_search(runtime), sleep=lambda _delay: None).reconcile()[0]
         assert outcome.disposition is CurationReconciliationDisposition.BLOCK
         assert outcome.reason_code == "verification_failed"
         stored_run = runtime.curation.get_run(run.run_id)
@@ -167,7 +172,7 @@ def test_recovery_prefers_persisted_descriptor_over_action_resolution(
 
         reconciler = CurationReconciler(
             runtime.curation,
-            runtime.relational_search,
+            _relational_search(runtime),
             action_resolver=lambda _run, _receipt: None,
             sleep=lambda _delay: None,
         )
@@ -199,7 +204,7 @@ def test_recovery_rejects_descriptor_target_status_before_verifying(
             updated,
         ) is not None
 
-        outcome = CurationReconciler(runtime.curation, runtime.relational_search, sleep=lambda _delay: None).reconcile()[0]
+        outcome = CurationReconciler(runtime.curation, _relational_search(runtime), sleep=lambda _delay: None).reconcile()[0]
         assert outcome.disposition is CurationReconciliationDisposition.BLOCK
         assert outcome.reason_code == "verification_failed"
         stored = runtime.curation.get_receipt(run.run_id, receipt.action_id)
@@ -233,7 +238,7 @@ def test_recovery_terminalizes_run_when_descriptor_hydration_fails(
                 (descriptor_json, str(run.run_id), str(receipt.action_id)),
             )
 
-        outcome = CurationReconciler(runtime.curation, runtime.relational_search, sleep=lambda _delay: None).reconcile()[0]
+        outcome = CurationReconciler(runtime.curation, _relational_search(runtime), sleep=lambda _delay: None).reconcile()[0]
         assert outcome.disposition is CurationReconciliationDisposition.BLOCK
         assert outcome.reason_code == "descriptor_hydration_failed"
         stored_run = runtime.curation.get_run(run.run_id)
@@ -290,7 +295,7 @@ def test_legacy_non_normalize_receipt_is_action_unavailable(
 
         outcome = CurationReconciler(
             runtime.curation,
-            runtime.relational_search,
+            _relational_search(runtime),
             sleep=lambda _delay: None,
         ).reconcile()[0]
         assert outcome.disposition is CurationReconciliationDisposition.BLOCK
@@ -314,7 +319,7 @@ def _empty_run(runtime, *, task_id: UUID | None, created_at: datetime) -> Curati
 def _empty_run_reconciler(runtime, now: float) -> CurationReconciler:
     return CurationReconciler(
         runtime.curation,
-        runtime.relational_search,
+        _relational_search(runtime),
         task_queue=runtime.task_queue,
         clock=lambda: now,
         stale_after_seconds=60.0,
@@ -467,7 +472,7 @@ def test_sqlite_lock_retries_are_bounded(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
         reconciler = CurationReconciler(
             cast(CurationRepository, _LockedStore()),
-            runtime.relational_search,
+            _relational_search(runtime),
             sleep=sleeps.append,
         )
         assert reconciler.reconcile() == []

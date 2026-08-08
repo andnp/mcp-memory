@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mcp_memory.application.ports import MemorySearchPort
 from mcp_memory.config import Config
 
 
@@ -17,7 +18,7 @@ class StorageBackendResources:
     db_manager: Any
     journal: Any
     repository: Any
-    relational_search: Any
+    relational_search: MemorySearchPort | None
     read_cache: Any
     task_queue: Any
     provider_usage: Any

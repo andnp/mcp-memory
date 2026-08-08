@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from mcp_memory.embeddings import SQLiteVectorStore
 from mcp_memory.mcp.handlers import call_memory_tool
 from mcp_memory.mcp.runtime import create_runtime
+from mcp_memory.relational.search import RelationalMemorySearchService
 
 pytestmark = pytest.mark.medium
 
@@ -193,8 +195,9 @@ async def test_relational_runtime_search_debug_reports_stage_timing(monkeypatch,
         runtime.embedder = _RuntimeFusionFakeEmbedder()
         runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
         assert runtime.relational_search is not None
-        runtime.relational_search._embedder = runtime.embedder
-        runtime.relational_search._vector_store = runtime.vector_store
+        search = cast(RelationalMemorySearchService, runtime.relational_search)
+        search._embedder = runtime.embedder
+        search._vector_store = runtime.vector_store
         record = runtime.repository.create_memory(
             title="Timing debug note",
             content="Credential security search timing should be visible in debug mode.",
@@ -241,8 +244,9 @@ async def test_relational_runtime_search_debug_reports_kernel_diagnostics(
         runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
         monkeypatch.setattr(runtime.vector_store, "supports_candidate_filtering", True, raising=False)
         assert runtime.relational_search is not None
-        runtime.relational_search._embedder = runtime.embedder
-        runtime.relational_search._vector_store = runtime.vector_store
+        search = cast(RelationalMemorySearchService, runtime.relational_search)
+        search._embedder = runtime.embedder
+        search._vector_store = runtime.vector_store
 
         for index in range(5):
             record = runtime.repository.create_memory(
@@ -377,8 +381,9 @@ async def test_relational_runtime_search_combines_keyword_and_semantic_candidate
         runtime.embedder = _RuntimeFusionFakeEmbedder()
         runtime.vector_store = SQLiteVectorStore(runtime.db_manager)
         assert runtime.relational_search is not None
-        runtime.relational_search._embedder = runtime.embedder
-        runtime.relational_search._vector_store = runtime.vector_store
+        search = cast(RelationalMemorySearchService, runtime.relational_search)
+        search._embedder = runtime.embedder
+        search._vector_store = runtime.vector_store
 
         lexical = runtime.repository.create_memory(
             title="Permission checklist",
