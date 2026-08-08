@@ -7,6 +7,7 @@ from mcp_memory.core.providers.interfaces import ProviderAttemptHeartbeatEvent
 from mcp_memory.core.providers.interfaces import ProviderAttemptStartedEvent
 from mcp_memory.core.providers.interfaces import ProviderObserverEvent
 from mcp_memory.core.providers.interfaces import AgenticRunResult
+from mcp_memory.core.providers.interfaces import ProviderBudgetExceeded
 from mcp_memory.core.provider_admission import ProviderAdmissionDecision
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.provider_usage_store import ProviderUsageRepository
@@ -143,6 +144,110 @@ async def test_instrumented_provider_records_attempts_from_typed_observer_events
     assert attempt.started_at == pytest.approx(10.0)
     assert attempt.last_heartbeat_at == pytest.approx(12.0)
     assert attempt.completed_at == pytest.approx(12.0)
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_propagates_retry_attempt_identities(db_manager, monkeypatch) -> None:
+    """Each observed provider retry keeps the run epoch and deterministic identity."""
+    class _Provider:
+        def __init__(self, observer=None) -> None:
+            self._observer = observer
+
+        def with_observer(self, observer):
+            return _Provider(observer)
+
+        async def ask(self, prompt: str) -> dict[str, object]:
+            assert self._observer is not None
+            for attempt in (1, 2):
+                self._observer(
+                    ProviderAttemptStartedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=8000 + attempt,
+                        started_at=float(attempt),
+                    )
+                )
+                self._observer(
+                    ProviderAttemptFinishedEvent(
+                        attempt=attempt,
+                        prompt=prompt,
+                        subprocess_pid=8000 + attempt,
+                        started_at=float(attempt),
+                        completed_at=float(attempt) + 0.5,
+                        duration_seconds=0.5,
+                        status="error" if attempt == 1 else "success",
+                        raw_text="retry" if attempt == 1 else '{"ok": true}',
+                        parsed=None if attempt == 1 else {"ok": True},
+                    )
+                )
+            return {"ok": True}
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    conversations: list[dict[str, object]] = []
+
+    def record_conversation(**kwargs: object) -> None:
+        conversations.append(kwargs)
+
+    monkeypatch.setattr(repository, "record_conversation", record_conversation)
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id="retry-attempt-task",
+        execution_epoch=11,
+        workspace_id="workspace-a",
+    )
+
+    await provider.ask("retry this")
+
+    request_ids = {str(event["request_id"]) for event in conversations}
+    assert len(request_ids) == 1
+    request_id = request_ids.pop()
+    assert [event["attempt"] for event in conversations] == [1, 1, 2, 2]
+    assert {
+        event["attempt_identity"]
+        for event in conversations
+    } == {
+        f"retry-attempt-task:11:{request_id}:1",
+        f"retry-attempt-task:11:{request_id}:2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_instrumented_provider_admission_skip_has_no_call_identity(db_manager) -> None:
+    """Admission skips retain the run epoch without claiming a provider call."""
+    class _Provider:
+        async def ask(self, prompt: str) -> dict[str, object]:
+            raise AssertionError("admission should prevent provider execution")
+
+    repository = ProviderUsageRepository(db_manager, workspace_id="workspace-a")
+    provider = InstrumentedAIProvider(
+        _Provider(),
+        usage_repository=repository,
+        provider_key="gemini-cli",
+        provider_name="Gemini CLI",
+        model_name="gemini-3-flash-preview",
+        daily_call_limit=0,
+    ).with_usage_context(
+        task_name="memory-curator",
+        task_id="admission-skip-task",
+        execution_epoch=13,
+        workspace_id="workspace-a",
+    )
+
+    with pytest.raises(ProviderBudgetExceeded):
+        await provider.ask("do not call")
+
+    row = db_manager.get_connection().execute(
+        "SELECT execution_epoch, request_id, attempt, attempt_identity, status "
+        "FROM provider_usage WHERE task_id = ?",
+        ("admission-skip-task",),
+    ).fetchone()
+    assert tuple(row) == (13, None, None, None, "skipped")
 
 
 @pytest.mark.asyncio

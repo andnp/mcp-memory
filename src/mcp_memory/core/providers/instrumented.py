@@ -268,6 +268,7 @@ class InstrumentedAIProvider:
             self._usage_repository.record_conversation(
                 request_id=request_id,
                 attempt=event.attempt,
+                attempt_identity=self._attempt_identity(request_id=request_id, attempt=event.attempt),
                 task_name=self._task_name,
                 task_id=self._task_id,
                 execution_epoch=self._execution_epoch,
@@ -321,6 +322,7 @@ class InstrumentedAIProvider:
         self._usage_repository.record_conversation(
             request_id=request_id,
             attempt=event.attempt,
+            attempt_identity=self._attempt_identity(request_id=request_id, attempt=event.attempt),
             task_name=self._task_name,
             task_id=self._task_id,
             execution_epoch=self._execution_epoch,
@@ -384,7 +386,7 @@ class InstrumentedAIProvider:
             created_at=created_at,
             error_text=decision.error_text,
             reason_category=decision.reason_category,
-            reason_code=decision.reason,
+            reason_code=getattr(decision, "reason", None) or decision.reason_code,
             retry_delay_seconds=decision.retry_delay_seconds,
         )
 
@@ -432,25 +434,7 @@ class InstrumentedAIProvider:
             self._enforce_rate_limits()
         except Exception as exc:
             classification = classify_provider_failure(exc)
-            self._usage_repository.record_call(
-                task_name=self._task_name,
-                task_id=self._task_id,
-                execution_epoch=self._execution_epoch,
-                request_id=request_id,
-                attempt=0,
-                attempt_identity=self._attempt_identity(request_id=request_id, attempt=0),
-                subprocess_pid=None,
-                provider_key=self._provider_key,
-                provider_name=self._provider_name,
-                model_name=self._model_name,
-                status="skipped",
-                duration_seconds=0.0,
-                created_at=started_at,
-                error_text=classification.error_text,
-                reason_category=classification.reason_category,
-                reason_code=classification.reason_code,
-                retry_delay_seconds=classification.retry_delay_seconds,
-            )
+            self.record_admission_skip(classification, now=started_at)
             _notify_json_call(
                 _on_call_complete,
                 ProviderJSONCall(
@@ -731,25 +715,7 @@ class InstrumentedAIProvider:
             self._enforce_rate_limits()
         except Exception as exc:
             classification = classify_provider_failure(exc)
-            self._usage_repository.record_call(
-                task_name=self._task_name,
-                task_id=self._task_id,
-                execution_epoch=self._execution_epoch,
-                request_id=request_id,
-                attempt=0,
-                attempt_identity=self._attempt_identity(request_id=request_id, attempt=0),
-                subprocess_pid=None,
-                provider_key=self._provider_key,
-                provider_name=self._provider_name,
-                model_name=self._model_name,
-                status="skipped",
-                duration_seconds=0.0,
-                created_at=started_at,
-                error_text=classification.error_text,
-                reason_category=classification.reason_category,
-                reason_code=classification.reason_code,
-                retry_delay_seconds=classification.retry_delay_seconds,
-            )
+            self.record_admission_skip(classification, now=started_at)
             raise
 
         provider = self._provider
@@ -921,7 +887,12 @@ class _InstrumentedAgenticSession:
         request_id = str(uuid4())
         self._observer_state.request_id = request_id
         self._provider._guard_test_execution()
-        self._provider._enforce_rate_limits()
+        try:
+            self._provider._enforce_rate_limits()
+        except Exception as exc:
+            classification = classify_provider_failure(exc)
+            self._provider.record_admission_skip(classification, now=started_at)
+            raise
         try:
             result = await self._session.run_agent(prompt)
         except asyncio.CancelledError:
