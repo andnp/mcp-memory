@@ -5,8 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Iterable
 from collections.abc import Mapping
+from typing import Literal
 
 from mcp_memory.operational_store_rows import ProviderUsageSample
+
+QualityClassification = Literal["improved", "neutral", "regression"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,9 @@ class CuratorTelemetry:
     verified_mutations: int = 0
     productive_mutations: int = 0
     quality_evidence: int = 0
+    quality_improvements: int = 0
+    quality_neutral: int = 0
+    quality_regressions: int = 0
     failures: int = 0
     retries: int = 0
     token_totals: CuratorTokenTotals = CuratorTokenTotals()
@@ -141,6 +147,7 @@ def project_curator_telemetry(
     campaign_payload = campaign if isinstance(campaign, Mapping) else {}
     quality = campaign_payload.get("quality_evidence", payload.get("quality_evidence"))
     quality_count = len(quality) if isinstance(quality, list) else 0
+    quality_counts = _classify_quality_evidence(quality)
     internal_tool_calls = _non_negative_int(
         campaign_payload.get("tool_calls_executed", payload.get("tool_calls_executed"))
     )
@@ -164,6 +171,9 @@ def project_curator_telemetry(
         verified_mutations=verified_mutations,
         productive_mutations=productive_mutations,
         quality_evidence=quality_count,
+        quality_improvements=quality_counts["improved"],
+        quality_neutral=quality_counts["neutral"],
+        quality_regressions=quality_counts["regression"],
         failures=authoritative_provider.failures,
         retries=authoritative_provider.retries,
         token_totals=authoritative_provider.token_totals,
@@ -182,3 +192,36 @@ def _non_negative_int(value: object) -> int:
     if isinstance(value, int):
         return max(value, 0)
     return 0
+
+
+def classify_quality_utility(
+    composite_utility: float | None,
+    *,
+    neutral_reason: object = None,
+) -> QualityClassification:
+    """Classify quality without treating zero utility as a regression."""
+
+    if neutral_reason is not None or composite_utility is None or composite_utility == 0.0:
+        return "neutral"
+    return "regression" if composite_utility < 0.0 else "improved"
+
+
+def _classify_quality_evidence(value: object) -> dict[QualityClassification, int]:
+    counts: dict[QualityClassification, int] = {"improved": 0, "neutral": 0, "regression": 0}
+    if not isinstance(value, list):
+        return counts
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        components = [
+            item.get("retrieval_utility_delta"),
+            item.get("content_quality_delta"),
+            item.get("engagement_utility_delta"),
+        ]
+        numeric = [number for number in components if isinstance(number, int | float) and not isinstance(number, bool)]
+        classification = classify_quality_utility(
+            sum(numeric) if numeric else None,
+            neutral_reason=item.get("neutral_reason"),
+        )
+        counts[classification] += 1
+    return counts

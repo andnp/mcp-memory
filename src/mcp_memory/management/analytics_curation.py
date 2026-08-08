@@ -19,6 +19,7 @@ from mcp_memory.management.query_runner import (
     ManagementQueryAdapter,
     ManagementQueryRunner,
 )
+from mcp_memory.core.curator_telemetry import classify_quality_utility
 
 _RESTORABLE_OPERATIONS = frozenset({"normalize_memory", "create_link"})
 _VALID_PLAN_OUTCOMES = frozenset(
@@ -286,13 +287,19 @@ def build_curation_metrics(
             useful_work_rate=_ratio(useful_work_count, len(useful_work_observed)),
             content_evaluated_action_count=len(content_quality),
             content_quality_improved_count=sum(
-                1 for row in content_quality if _number(row.get("content_quality_delta")) > 0
+                1
+                for row in content_quality
+                if classify_quality_utility(_optional_number(row.get("content_quality_delta"))) == "improved"
             ),
             content_quality_neutral_count=sum(
-                1 for row in content_quality if _number(row.get("content_quality_delta")) == 0
+                1
+                for row in content_quality
+                if classify_quality_utility(_optional_number(row.get("content_quality_delta"))) == "neutral"
             ),
             content_quality_regression_count=sum(
-                1 for row in content_quality if _number(row.get("content_quality_delta")) < 0
+                1
+                for row in content_quality
+                if classify_quality_utility(_optional_number(row.get("content_quality_delta"))) == "regression"
             ),
             content_quality_delta=sum(
                 _number(row.get("content_quality_delta")) for row in content_quality
@@ -425,6 +432,15 @@ def _number(value: object) -> float:
         return 0.0
 
 
+def _optional_number(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 def _json_non_negative_int(value: object) -> int:
     result = _integer(value)
     return max(result, 0)
