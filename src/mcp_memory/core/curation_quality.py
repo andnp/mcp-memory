@@ -30,6 +30,7 @@ from mcp_memory.core.curation_quality_provenance import (
     QueryProvenance,
 )
 from mcp_memory.core.curation_quality_consistency import assess_replay_consistency
+from mcp_memory.core.curation_quality_structural import evaluate_structural_mutation
 from mcp_memory.core.curation_models import (
     CampaignHypothesis,
     CampaignRetrievalProblem,
@@ -360,8 +361,20 @@ class CurationQualitySampler:
             "created_at": self._clock(),
         }
         content = self._content_quality(mutation)
-        if mutation.operation in {"create_link", "remove_link"}:
-            return CurationQualityEvidence(status="structural_only", **common)
+        structural = evaluate_structural_mutation(
+            mutation.operation, mutation.structural_deltas
+        )
+        if structural.relevant:
+            return CurationQualityEvidence(
+                status="structural_only" if structural.verified else "unverified",
+                useful_work=True if structural.verified and mutation.structural_deltas else None,
+                neutral_reason=structural.reason,
+                engagement_evidence={
+                    "structural_verified": structural.verified,
+                    "structural_details": dict(structural.details),
+                },
+                **common,
+            )
 
         explicit_hypothesis = (
             campaign_hypothesis if _is_explicit(campaign_hypothesis) else None
