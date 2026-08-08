@@ -118,6 +118,32 @@ def test_revision_or_adjacency_change_resets_noop_eligibility(db_manager, change
     assert state.cooldown_until is None
 
 
+def test_candidate_cas_loss_uses_authoritative_winner(db_manager, monkeypatch) -> None:
+    repository = _Repository()
+    record = _record(uuid4())
+    ctx = _context(db_manager, repository)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    original = CurationCandidateState(
+        memory_id=UUID(record.id),
+        last_observed_revision_token="stale-token",
+        disposition=CandidateDisposition.COOLDOWN,
+        cooldown_until=now + timedelta(hours=1),
+    )
+    winner = original.model_copy(
+        update={"last_observed_revision_token": curator_candidate_revision_token(ctx, record)}
+    )
+    ctx.curation.put_candidate_state(original)
+
+    def lose_race(memory_id, expected_token, state):
+        del expected_token, state
+        ctx.curation.put_candidate_state(winner)
+        return None
+
+    monkeypatch.setattr(ctx.curation, "compare_and_set_candidate_state", lose_race)
+
+    assert filter_curator_candidates(ctx, [record], now=now) == []
+
+
 def test_quality_feedback_escalation_survives_revision_change(db_manager) -> None:
     repository = _Repository()
     record = _record(uuid4())
