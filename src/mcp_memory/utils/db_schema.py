@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
@@ -341,6 +341,7 @@ def create_current_schema(conn: sqlite3.Connection) -> None:
     )
     create_mutation_history_schema(conn)
     create_curation_ledger_schema(conn)
+    create_direct_mutation_evidence_schema(conn)
 
 
 def apply_legacy_additive_migrations(conn: sqlite3.Connection) -> None:
@@ -686,6 +687,48 @@ def create_curation_ledger_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (run_id, action_id),
             FOREIGN KEY (run_id) REFERENCES curation_runs(run_id) ON DELETE CASCADE
         );
+        """
+    )
+
+
+def create_direct_mutation_evidence_schema(conn: sqlite3.Connection) -> None:
+    """Create idempotent evidence rows for direct internal mutations."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS direct_mutation_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            execution_epoch INTEGER,
+            session_id TEXT,
+            call_id TEXT,
+            sequence INTEGER,
+            tool_name TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            ledger_json TEXT NOT NULL DEFAULT '{}',
+            outcome TEXT,
+            error_code TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            finalized_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS direct_mutation_entity_deltas (
+            evidence_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            entity_kind TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            before_revision TEXT,
+            after_revision TEXT,
+            before_exists INTEGER NOT NULL,
+            after_exists INTEGER NOT NULL,
+            transition TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (evidence_id, ordinal),
+            FOREIGN KEY (evidence_id) REFERENCES direct_mutation_evidence(evidence_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_direct_mutation_evidence_execution
+            ON direct_mutation_evidence(task_id, execution_epoch, sequence);
         """
     )
     ensure_column(conn, "curation_runs", "disclosure_audit_json", "TEXT NOT NULL DEFAULT '{}'")
