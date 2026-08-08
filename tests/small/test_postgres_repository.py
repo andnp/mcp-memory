@@ -1144,6 +1144,94 @@ def test_postgres_repository_maintenance_search_returns_filtered_context_without
     }
 
 
+def test_postgres_repository_maintenance_search_batches_context_hydration(
+    postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
+) -> None:
+    repository, session_manager = postgres_repository
+    current = repository.create_memory(
+        title="Current batched maintenance fact",
+        content="Current maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["current", "maintenance"],
+        created_at="2026-07-14T12:03:00+00:00",
+        updated_at="2026-07-14T12:03:00+00:00",
+    )
+    peer = repository.create_memory(
+        title="Peer batched maintenance fact",
+        content="Peer maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha", "workspace-beta"],
+        tags=["maintenance", "peer"],
+        created_at="2026-07-14T12:02:00+00:00",
+        updated_at="2026-07-14T12:02:00+00:00",
+    )
+    cross_workspace = repository.create_memory(
+        title="Cross workspace batched maintenance fact",
+        content="Should not match the workspace filter.",
+        memory_type="fact",
+        workspace_ids=["workspace-beta"],
+    )
+    old = repository.create_memory(
+        title="Legacy batched maintenance fact",
+        content="Legacy maintenance details.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+        tags=["legacy"],
+        created_at="2026-07-14T12:01:00+00:00",
+        updated_at="2026-07-14T12:01:00+00:00",
+    )
+    supporter = repository.create_memory(
+        title="Support note",
+        content="Supports the current fact.",
+        memory_type="fact",
+        workspace_ids=["workspace-alpha"],
+    )
+    assert (
+        current is not None
+        and peer is not None
+        and cross_workspace is not None
+        and old is not None
+        and supporter is not None
+    )
+
+    repository.add_link(current.id, old.id, "SUPERSEDES", "Current replaces legacy")
+    repository.add_link(supporter.id, current.id, "DEPENDS_ON", "Support for current")
+    state = session_manager.connections[0]._state
+    query_start = len(state.query_log)
+    connection_start = len(session_manager.connections)
+
+    contexts = repository.search_memories_for_maintenance(
+        "batched maintenance",
+        workspace_id="workspace-alpha",
+        memory_type="fact",
+        include_superseded=True,
+        limit=10,
+    )
+
+    queries = state.query_log[query_start:]
+    assert [context.record.id for context in contexts] == [current.id, peer.id, old.id]
+    assert cross_workspace.id not in [context.record.id for context in contexts]
+    assert contexts[0].record.workspace_ids == ["workspace-alpha"]
+    assert contexts[0].record.tags == ["current", "maintenance"]
+    assert [(link.source_id, link.target_id, link.link_type, link.context) for link in contexts[0].relationships["outgoing"]] == [
+        (current.id, old.id, "SUPERSEDES", "Current replaces legacy"),
+    ]
+    assert [(link.source_id, link.target_id, link.link_type, link.context) for link in contexts[0].relationships["incoming"]] == [
+        (supporter.id, current.id, "DEPENDS_ON", "Support for current"),
+    ]
+    assert [record.id for record in contexts[0].superseded] == [old.id]
+    assert contexts[0].superseded[0].workspace_ids == ["workspace-alpha"]
+    assert contexts[0].superseded[0].tags == ["legacy"]
+    assert contexts[1].record.workspace_ids == ["workspace-alpha", "workspace-beta"]
+    assert contexts[1].record.tags == ["maintenance", "peer"]
+    assert contexts[2].relationships == {"outgoing": [], "incoming": [contexts[0].relationships["outgoing"][0]]}
+    assert len(session_manager.connections) - connection_start == 2
+    assert len(queries) <= 9
+    assert "SELECT workspace_id FROM memory_workspaces WHERE memory_id = %s ORDER BY workspace_id ASC" not in queries
+    assert not any(query.startswith("SELECT tags.name FROM tags JOIN memory_tags") for query in queries)
+
+
 def test_postgres_repository_batches_ranking_candidate_hydration_and_preserves_filters(
     postgres_repository: tuple[PostgresRelationalMemoryRepository, FakeSessionManager],
 ) -> None:

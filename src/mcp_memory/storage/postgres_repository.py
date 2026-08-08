@@ -356,11 +356,85 @@ class PostgresRelationalMemoryRepository:
             include_superseded=include_superseded,
             limit=limit,
         )
+        return self._hydrate_maintenance_contexts(memory_ids)
+
+    def _hydrate_maintenance_contexts(
+        self,
+        memory_ids: list[str],
+    ) -> list[RelationalMemoryReadContext]:
+        if not memory_ids:
+            return []
+
+        with self._sessions.open_connection() as connection:
+            with connection.cursor() as cursor:
+                memory_rows_by_id = self._memory_rows_by_id(cursor, memory_ids)
+                existing_memory_ids = [
+                    memory_id for memory_id in memory_ids if memory_id in memory_rows_by_id
+                ]
+                if not existing_memory_ids:
+                    return []
+
+                workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(
+                    cursor,
+                    existing_memory_ids,
+                )
+                tags_by_memory_id = self._tags_by_memory_id(cursor, existing_memory_ids)
+                outgoing_links_by_memory_id = self._links_by_memory_id(
+                    cursor,
+                    existing_memory_ids,
+                    direction="outgoing",
+                )
+                incoming_links_by_memory_id = self._links_by_memory_id(
+                    cursor,
+                    existing_memory_ids,
+                    direction="incoming",
+                )
+                superseded_target_ids = self._normalize_values(
+                    [
+                        link.target_id
+                        for memory_id in existing_memory_ids
+                        for link in outgoing_links_by_memory_id.get(memory_id, [])
+                        if link.link_type == "SUPERSEDES"
+                    ]
+                )
+                superseded_rows_by_id = self._memory_rows_by_id(cursor, superseded_target_ids)
+                superseded_workspace_ids_by_memory_id = self._workspace_ids_by_memory_id(
+                    cursor,
+                    superseded_target_ids,
+                ) if superseded_target_ids else {}
+                superseded_tags_by_memory_id = (
+                    self._tags_by_memory_id(cursor, superseded_target_ids)
+                    if superseded_target_ids
+                    else {}
+                )
+
         contexts: list[RelationalMemoryReadContext] = []
-        for memory_id in memory_ids:
-            context = self.peek_memory(memory_id)
-            if context is not None:
-                contexts.append(context)
+        for memory_id in existing_memory_ids:
+            record = self._record_from_memory_row(
+                memory_rows_by_id[memory_id],
+                workspace_ids=workspace_ids_by_memory_id.get(memory_id, []),
+                tags=tags_by_memory_id.get(memory_id, []),
+            )
+            outgoing = outgoing_links_by_memory_id.get(memory_id, [])
+            superseded = [
+                self._record_from_memory_row(
+                    superseded_rows_by_id[link.target_id],
+                    workspace_ids=superseded_workspace_ids_by_memory_id.get(link.target_id, []),
+                    tags=superseded_tags_by_memory_id.get(link.target_id, []),
+                )
+                for link in outgoing
+                if link.link_type == "SUPERSEDES" and link.target_id in superseded_rows_by_id
+            ]
+            contexts.append(
+                RelationalMemoryReadContext(
+                    record=record,
+                    relationships={
+                        "outgoing": outgoing,
+                        "incoming": incoming_links_by_memory_id.get(memory_id, []),
+                    },
+                    superseded=superseded,
+                )
+            )
         return contexts
 
     def update_memory(
@@ -1551,7 +1625,13 @@ class PostgresRelationalMemoryRepository:
             tags=[str(tag_row[0]) for tag_row in tag_rows],
         )
 
-    def _record_from_memory_row(self, row: tuple[object, ...]) -> RelationalMemoryRecord:
+    def _record_from_memory_row(
+        self,
+        row: tuple[object, ...],
+        *,
+        workspace_ids: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> RelationalMemoryRecord:
         return RelationalMemoryRecord(
             id=str(row[0]),
             title=str(row[1]),
@@ -1568,8 +1648,8 @@ class PostgresRelationalMemoryRepository:
             metadata=self._load_metadata(row[12]),
             memory_ref=self._coerce_int(row[13]),
             archived_at=None if row[14] is None else str(row[14]),
-            workspace_ids=[],
-            tags=[],
+            workspace_ids=[] if workspace_ids is None else workspace_ids,
+            tags=[] if tags is None else tags,
         )
 
     def _replace_workspace_mappings(self, cursor: CursorLike, memory_id: str, workspace_ids: list[str]) -> None:
