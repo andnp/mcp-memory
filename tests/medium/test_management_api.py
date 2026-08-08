@@ -481,8 +481,10 @@ async def test_management_api_exposes_dashboard_and_json_views(monkeypatch, tmp_
         assert "next_available_at" in fact_checker
         assert "last_result_summary" in fact_checker
         assert run_agent["status"] == "enqueued"
+        assert run_agent["created"] is True
         assert run_agent["task"]["task_name"] == "memory-curator"
         assert run_agent["redirected_from_task_name"] == "graph-linker"
+        assert run_agent["task"]["id"] != running_task["task"]["id"]
         assert any(result["task"]["task_name"] == "memory-curator" for result in run_all["results"])
         assert cancel_task["status"] in {"cancellation_requested", "cancelled"}
         assert cancel_task["task"]["cancellation_reason"] == "operator_cancelled"
