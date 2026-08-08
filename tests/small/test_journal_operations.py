@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import cast
 
 import pytest
@@ -14,6 +15,31 @@ from mcp_memory.storage.shared_read_cache import SharedReadCache
 
 
 pytestmark = pytest.mark.small
+
+
+def test_database_manager_close_releases_connection_owned_by_other_thread(db_manager) -> None:
+    connection_ready = Event()
+    allow_exit = Event()
+    errors: list[Exception] = []
+
+    def _worker() -> None:
+        connection = db_manager.get_connection()
+        connection_ready.set()
+        assert allow_exit.wait(timeout=1.0)
+        try:
+            connection.execute("SELECT 1")
+        except sqlite3.ProgrammingError as exc:
+            errors.append(exc)
+
+    thread = Thread(target=_worker)
+    thread.start()
+    assert connection_ready.wait(timeout=1.0)
+    db_manager.close()
+    allow_exit.set()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
 
 
 def test_record_thought_falls_back_to_writeback_outbox_on_journal_unavailable(
@@ -166,6 +192,7 @@ def test_flush_record_thought_writeback_outbox_does_not_duplicate_late_sqlite_co
     cache = SharedReadCache(tmp_path / "shared_read_cache.sqlite3")
     unblock_record = Event()
     completed = Event()
+    cleanup_completed = Event()
 
     class SlowDelegatingJournal(System1Journal):
         def __init__(self) -> None:
@@ -183,6 +210,10 @@ def test_flush_record_thought_writeback_outbox_does_not_duplicate_late_sqlite_co
                 return super().record_with_timestamp(content, workspace_id=workspace_id, timestamp=timestamp)
             finally:
                 completed.set()
+
+        def close_thread_connection(self) -> None:
+            super().close_thread_connection()
+            cleanup_completed.set()
 
     journal = SlowDelegatingJournal()
 
@@ -207,6 +238,7 @@ def test_flush_record_thought_writeback_outbox_does_not_duplicate_late_sqlite_co
 
     unblock_record.set()
     assert completed.wait(timeout=1.0)
+    assert cleanup_completed.wait(timeout=1.0)
     assert [entry.content for entry in journal.get_pending(limit=10, workspace_id="workspace-a")] == ["slow thought"]
 
     flush_result = journal_operations_module.flush_record_thought_writeback_outbox(

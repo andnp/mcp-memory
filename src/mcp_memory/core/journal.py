@@ -45,6 +45,9 @@ class System1Journal:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
 
+    def close_thread_connection(self) -> None:
+        self._db.close_thread_connection()
+
     def record(self, content: str, workspace_id: str | None = None) -> JournalEntry:
         return self.record_with_timestamp(content, workspace_id=workspace_id)
 

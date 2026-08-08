@@ -76,8 +76,13 @@ def _run_bounded_authoritative_record(
         except Exception as exc:  # pragma: no cover - exercised through caller assertions
             result["error"] = exc
         finally:
-            _RECORD_THOUGHT_WRITE_SLOT.release()
-            completed.set()
+            try:
+                close_thread_connection = getattr(journal, "close_thread_connection", None)
+                if callable(close_thread_connection):
+                    close_thread_connection()
+            finally:
+                _RECORD_THOUGHT_WRITE_SLOT.release()
+                completed.set()
 
     Thread(target=_worker, daemon=True, name="record-thought-authoritative-write").start()
 

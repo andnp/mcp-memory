@@ -20,6 +20,8 @@ class DatabaseManager:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._local = threading.local()
+        self._connections: dict[int, sqlite3.Connection] = {}
+        self._connections_lock = threading.Lock()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # Initialize schema via a temporary connection
         conn = self._open_connection()
@@ -52,10 +54,13 @@ class DatabaseManager:
 
     def get_connection(self) -> sqlite3.Connection:
         """Return a per-thread SQLite connection."""
+        thread_id = threading.get_ident()
         conn = getattr(self._local, "connection", None)
-        if conn is None:
-            conn = self._open_connection()
-            self._local.connection = conn
+        with self._connections_lock:
+            if conn is None or self._connections.get(thread_id) is not conn:
+                conn = self._open_connection()
+                self._connections[thread_id] = conn
+                self._local.connection = conn
         return conn
 
     def open_connection(
@@ -89,10 +94,21 @@ class DatabaseManager:
         return int(row[0])
 
     def close(self) -> None:
-        conn = getattr(self._local, "connection", None)
+        with self._connections_lock:
+            connections = list(self._connections.values())
+            self._connections.clear()
+            self._local.connection = None
+        for conn in connections:
+            conn.close()
+
+    def close_thread_connection(self) -> None:
+        """Close the connection owned by the current thread, if any."""
+        thread_id = threading.get_ident()
+        with self._connections_lock:
+            conn = self._connections.pop(thread_id, None)
+            self._local.connection = None
         if conn is not None:
             conn.close()
-            self._local.connection = None
 
 
 __all__ = [
