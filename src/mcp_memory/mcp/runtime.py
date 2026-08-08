@@ -31,6 +31,7 @@ from searchkernel.ports import EmbeddingBatchProvider
 from mcp_memory.core.providers.instrumented import InstrumentedAIProvider
 from mcp_memory.core.providers import build_agentic_ai_provider
 from mcp_memory.core.providers import build_json_ai_provider
+from mcp_memory.curation_quality_store import PostgresCurationQualityStore, SQLiteCurationQualityStore
 from mcp_memory.core.storage import ensure_memory_dirs
 from mcp_memory.storage.factory import StorageBackendResources, build_storage_runtime_components
 from mcp_memory.storage.types import StorageBootstrapSpec
@@ -231,6 +232,7 @@ def create_runtime_composition(
         task_queue=storage.task_queue,
         curation=storage.curation,
         curation_action_store=storage.curation_action_store,
+        curation_quality=_build_curation_quality_store(storage),
         direct_mutation_evidence=storage.direct_mutation_evidence,
         mutation_history=storage.mutation_history,
         ai_json_provider=ai_json_provider,
@@ -304,6 +306,12 @@ def _runtime_resources_from_context(context: ApplicationContext) -> RuntimeResou
         provider_registry=cast(dict[str, dict[str, object]], context.ai_provider_registry or {}),
         internal_tool_call_tracker=cast(InternalToolCallTracker, context.internal_tool_call_tracker),
     )
+
+
+def _build_curation_quality_store(storage: StorageBackendResources) -> object:
+    if storage.backend == "postgres":
+        return PostgresCurationQualityStore(storage.db_manager)
+    return SQLiteCurationQualityStore(storage.db_manager)
 
 
 def _close_resource_once(resource: object, closed_resource_ids: set[int]) -> None:

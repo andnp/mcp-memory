@@ -53,6 +53,8 @@ class TaskRuntimeContext(MemoryPipelineContext, Protocol):
     session_id: str | None
     curation: Any
     curation_action_store: Any
+    curation_quality: Any
+    direct_mutation_evidence: Any
     ai_json_provider: Any
     ai_agent_provider: Any
     ai_provider_registry: dict[str, Any] | None
@@ -117,6 +119,8 @@ class MutationCapabilities:
     curation: object | None = None
     mutation_history: object | None = None
     curation_action_store: object | None = None
+    curation_quality: object | None = None
+    direct_mutation_evidence: object | None = None
 
     @classmethod
     def from_context(cls, ctx: MemoryPipelineContext) -> MutationCapabilities:
@@ -129,6 +133,8 @@ class MutationCapabilities:
             curation=getattr(ctx, "curation", None),
             mutation_history=getattr(ctx, "mutation_history", None),
             curation_action_store=getattr(ctx, "curation_action_store", None),
+            curation_quality=getattr(ctx, "curation_quality", None),
+            direct_mutation_evidence=getattr(ctx, "direct_mutation_evidence", None),
         )
 
 
@@ -215,6 +221,8 @@ class TaskRuntimeCapabilities:
             task_queue=self.mutation.task_queue,
             curation=self.mutation.curation,
             curation_action_store=self.mutation.curation_action_store,
+            curation_quality=self.mutation.curation_quality,
+            direct_mutation_evidence=self.mutation.direct_mutation_evidence,
             mutation_history=self.mutation.mutation_history,
             ai_json_provider=self.provider.ai_json_provider,
             ai_agent_provider=self.provider.ai_agent_provider,
@@ -266,6 +274,8 @@ class _TaskRuntimeContextAdapter:
     task_queue: object | None
     curation: object | None
     curation_action_store: object | None
+    curation_quality: object | None
+    direct_mutation_evidence: object | None
     mutation_history: object | None
     ai_json_provider: JSONTaskProvider | None
     ai_agent_provider: AgenticTaskProvider | None
@@ -353,6 +363,8 @@ _TASK_RUNTIME_FIELDS = _MEMORY_PIPELINE_FIELDS | frozenset(
         "work_items",
         "embedding_repair_queue",
         "internal_tool_call_tracker",
+        "curation_quality",
+        "direct_mutation_evidence",
     }
 )
 
@@ -404,6 +416,7 @@ class ApplicationContext:
     embedder: Any = None
     vector_store: Any = None
     curation_action_store: Any = None
+    curation_quality: Any = None
     direct_mutation_evidence: Any = None
     search_health: Any = None
     internal_tool_call_tracker: Any = None

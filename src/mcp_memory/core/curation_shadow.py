@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 from mcp_memory.context import ApplicationContext
 from mcp_memory.core.curation_investigation import CURATOR_AGENT_TOOLS
@@ -19,13 +19,6 @@ from mcp_memory.core.curation_quality import (
 from mcp_memory.core.curation_quality_inputs import mutations_from_direct_evidence
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.direct_mutation_evidence import DirectMutationOutcome, productive_mutation_count
-from mcp_memory.core.task_handlers.agentic_tool_tracking import (
-    finalize_agentic_tool_tracking,
-    reset_agentic_tool_tracking,
-    validate_agentic_tool_tracking_snapshot,
-)
-from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
-from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_item, release_work_item
 from mcp_memory.core.ports.tasks import TaskRecord
 
 
@@ -43,6 +36,14 @@ async def run_curator_direct_mcp(
     work_item_metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Run one curator session with direct access to the mutation MCP tools."""
+    from mcp_memory.core.task_handlers.agentic_tool_tracking import (
+        finalize_agentic_tool_tracking,
+        reset_agentic_tool_tracking,
+        validate_agentic_tool_tracking_snapshot,
+    )
+    from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
+    from mcp_memory.core.task_handlers.maintenance_work_items import complete_work_item, release_work_item
+
     agentic_provider = _curator_agentic_provider(ctx, task, provider)
     if agentic_provider is None:
         if claimed_work_item is not None:
@@ -108,12 +109,13 @@ async def run_curator_direct_mcp(
     )
     ledger_valid = bool(ledger_validation["valid"])
     direct_evidence = _direct_evidence_for_task(ctx, task)
-    quality_evidence = _evaluate_direct_quality(
+    quality_evaluation = _evaluate_direct_quality(
         ctx,
         task,
         direct_evidence,
         campaign_hypothesis=campaign_hypothesis,
     )
+    quality_evidence = quality_evaluation.evidence
     verified_mutations = productive_mutation_count(direct_evidence)
     quality_productive_mutations = quality_productive_mutation_count(quality_evidence)
     mutations = verified_mutations if direct_evidence and ledger_valid else actual_mutations if ledger_valid else 0
@@ -160,9 +162,13 @@ async def run_curator_direct_mcp(
                 item.model_dump(mode="json") for item in quality_evidence
             ],
             "quality_outcomes": _quality_outcome_counts(quality_evidence),
+            "quality_evidence_status": quality_evaluation.status,
+            "quality_evidence_reason": quality_evaluation.reason,
             **provider_metadata,
         },
         quality_evidence=[item.model_dump(mode="json") for item in quality_evidence],
+        quality_evidence_status=quality_evaluation.status,
+        quality_evidence_reason=quality_evaluation.reason,
     )
 
 
@@ -180,11 +186,17 @@ def _evaluate_direct_quality(
     evidence: list[Any],
     *,
     campaign_hypothesis: CampaignHypothesis | None,
-) -> tuple[CurationQualityEvidence, ...]:
+) -> "_DirectQualityEvaluation":
+    if not evidence:
+        return _DirectQualityEvaluation((), "not_applicable")
+    repository = getattr(ctx, "curation_quality", None)
+    if repository is None:
+        return _DirectQualityEvaluation((), "unavailable", "quality_repository_unavailable")
+    if ctx.db_manager is None:
+        return _DirectQualityEvaluation((), "unavailable", "database_unavailable")
     search = ctx.relational_search
-    if not evidence or ctx.db_manager is None or search is None:
-        return ()
-    repository = _DirectQualityEvidenceRepository()
+    if search is None:
+        return _DirectQualityEvaluation((), "unavailable", "search_unavailable")
     sampler = CurationQualitySampler(
         db_manager=ctx.db_manager,
         search=_DirectQualitySearch(search, ctx.repository),
@@ -193,11 +205,14 @@ def _evaluate_direct_quality(
         sample_rate=1.0,
     )
     run = _direct_quality_run(task)
-    return sampler.evaluate(
+    quality_evidence = sampler.evaluate(
         run=run,
         mutations=[mutations_from_direct_evidence(item) for item in evidence],
         campaign_hypothesis=campaign_hypothesis,
     )
+    if not quality_evidence:
+        return _DirectQualityEvaluation((), "not_observed", "no_sampled_mutations")
+    return _DirectQualityEvaluation(quality_evidence, "recorded")
 
 
 def _direct_quality_run(task: TaskRecord) -> Any:
@@ -228,17 +243,11 @@ class _DirectQualitySearch:
         return dict(values) if isinstance(values, dict) else {}
 
 
-@dataclass
-class _DirectQualityEvidenceRepository:
-    values: list[CurationQualityEvidence] = field(default_factory=list)
-
-    def put_quality_evidence(self, evidence: CurationQualityEvidence) -> CurationQualityEvidence:
-        self.values.append(evidence)
-        return evidence
-
-    def list_quality_evidence(self, *, run_id: UUID | None = None, limit: int = 100) -> list[CurationQualityEvidence]:
-        values = self.values if run_id is None else [item for item in self.values if item.run_id == run_id]
-        return values[: max(1, min(limit, 1000))]
+@dataclass(frozen=True, slots=True)
+class _DirectQualityEvaluation:
+    evidence: tuple[CurationQualityEvidence, ...]
+    status: str
+    reason: str | None = None
 
 
 def _quality_outcome_counts(evidence: Iterable[CurationQualityEvidence]) -> dict[str, int]:
