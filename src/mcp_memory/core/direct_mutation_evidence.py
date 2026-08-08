@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -67,7 +68,10 @@ class DirectMutationEvidence:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> "DirectMutationEvidence":
-        key = call_id or f"{task_id or 'missing'}:{execution_epoch or 0}:{tool_name}:{uuid4().hex}"
+        key = call_id or _missing_call_id_key(
+            task_id=task_id, execution_epoch=execution_epoch,
+            tool_name=tool_name, arguments=arguments,
+        )
         now = _now()
         return cls(
             evidence_id=uuid4().hex,
@@ -249,6 +253,21 @@ def _json_safe(value: Any) -> Any:
     except (TypeError, ValueError):
         return str(value)
     return value
+
+
+def _missing_call_id_key(
+    *, task_id: str | None, execution_epoch: int | None,
+    tool_name: str, arguments: dict[str, Any],
+) -> str:
+    identity = json.dumps(
+        {
+            "task_id": task_id,
+            "execution_epoch": execution_epoch,
+            "tool_name": tool_name,
+            "arguments": arguments,
+        }, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
+    )
+    return f"direct-mutation:{sha256(identity.encode()).hexdigest()}"
 
 
 def _now() -> str:
