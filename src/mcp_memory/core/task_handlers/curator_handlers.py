@@ -12,7 +12,13 @@ import mcp_memory.core.task_handlers.curator_support as _curator_support
 from mcp_memory.core.task_handlers.maintenance_framework import sampling_payload
 from mcp_memory.core.task_handlers.maintenance_work_items import (
     complete_work_item,
+    defer_work_item,
     work_item_result_metadata,
+)
+from mcp_memory.core.task_handlers.curator_seed_resolution import (
+    CuratorSeedResolution,
+    CuratorSeedResolutionState,
+    resolve_curator_seed_packet,
 )
 from mcp_memory.core.curation_validation import CurationMutationBudget
 from mcp_memory.core.curation_models import (
@@ -67,12 +73,38 @@ async def handle_memory_curator_task(
         if task.data.get("campaign_hypothesis") is not None or claimed_review_item is None
         else claimed_review_item.payload
     )
+    seed_resolution = (
+        resolve_curator_seed_packet(ctx, claimed_review_item.payload)
+        if claimed_review_item is not None
+        else None
+    )
+    if seed_resolution is not None and claimed_review_item is not None:
+        resolution_metadata = seed_resolution.metadata()
+        if seed_resolution.state == CuratorSeedResolutionState.TEMPORARILY_UNAVAILABLE:
+            defer_work_item(
+                ctx,
+                claimed_review_item.id,
+                error=seed_resolution.reason or "seed_resolution_temporarily_unavailable",
+                retry_delay_seconds=60.0,
+            )
+            return {
+                **resolution_metadata,
+                "summary": None,
+                "tool_calls_executed": 0,
+                "mutations": 0,
+                "claimed_work_item_count": 0,
+                "reason": "seed_resolution_temporarily_unavailable",
+            }
+        if seed_resolution.state == CuratorSeedResolutionState.MALFORMED:
+            _quarantine_curator_review_item(ctx, claimed_review_item, seed_resolution)
+            claimed_review_item = None
     seed_batch, sampled_records, seed_records, claimed_review_item = await asyncio.to_thread(
         _prepare_curator_seed_context,
         ctx,
         task,
         claimed_review_item,
         campaign_hypothesis,
+        seed_resolution,
     )
 
     claimed_family_key = (
@@ -88,6 +120,8 @@ async def handle_memory_curator_task(
         claimed_work_item=claimed_review_item,
         campaign_hypothesis=campaign_hypothesis,
     )
+    if seed_resolution is not None:
+        work_item_metadata.update(seed_resolution.metadata())
     work_item_metadata.update(
         campaign_metadata(
             compatibility_group=COMPATIBILITY_GROUP_STRUCTURAL_REVIEW,
@@ -138,9 +172,14 @@ def _prepare_curator_seed_context(
     task: TaskRecord,
     claimed_review_item: Any,
     campaign_hypothesis: Any,
+    seed_resolution: CuratorSeedResolution | None = None,
 ) -> tuple[Any, list[Any], list[Any], Any]:
     if claimed_review_item is not None:
-        seed_records = _curator_support.review_seed_records(ctx, claimed_review_item.payload)
+        seed_records = (
+            list(seed_resolution.records)
+            if seed_resolution is not None
+            else _curator_support.review_seed_records(ctx, claimed_review_item.payload)
+        )
         if seed_records:
             seed_batch = _curator_support.review_sampling_batch(claimed_review_item.payload, seed_records)
         else:
@@ -173,6 +212,25 @@ def _prepare_curator_seed_context(
         support_records = _curator_support.select_curator_support_records(ctx, task, sampled_records)
         seed_records = sampled_records + support_records
     return seed_batch, sampled_records, seed_records, claimed_review_item
+
+
+def _quarantine_curator_review_item(
+    ctx: ApplicationContext,
+    claimed_review_item: Any,
+    resolution: CuratorSeedResolution,
+) -> None:
+    work_items = getattr(ctx, "work_items", None)
+    quarantine_item = getattr(work_items, "quarantine_item", None)
+    error = resolution.reason or "malformed_seed_packet"
+    if callable(quarantine_item):
+        quarantine_item(claimed_review_item.id, error=error)
+        return
+    defer_work_item(
+        ctx,
+        claimed_review_item.id,
+        error=f"quarantined:{error}",
+        retry_delay_seconds=365 * 24 * 60 * 60,
+    )
 
 
 def _claim_curator_review_work_batch(
