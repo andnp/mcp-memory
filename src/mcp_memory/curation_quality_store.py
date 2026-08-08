@@ -13,6 +13,19 @@ from mcp_memory.storage.session import DbConnectionLike, SessionManager
 from mcp_memory.utils.db import DatabaseManager
 
 
+_POSTGRES_QUALITY_EVIDENCE_SELECT = """
+    SELECT run_id, action_id, operation, affected_memory_ids_json,
+           policy_version, query_id, status, before_ranked_ids_json,
+           after_ranked_ids_json, retrieval_regression_count,
+           zero_result_change, payload_size_change, useful_work, created_at,
+           retrieval_utility_delta, acceptance_met, neutral_reason,
+           content_quality_score_before, content_quality_score_after,
+           content_quality_delta, content_quality_improved,
+           engagement_utility_delta, engagement_evidence_json, evidence_id
+    FROM curation_quality_evidence
+"""
+
+
 class SQLiteCurationQualityStore(CurationQualityRepository):
     def __init__(self, db_manager: DatabaseManager) -> None:
         self._db = db_manager
@@ -135,7 +148,7 @@ class PostgresCurationQualityStore(CurationQualityRepository):
         limit: int = 100,
     ) -> Sequence[CurationQualityEvidence]:
         bounded = max(1, min(limit, 1000))
-        query = "SELECT * FROM curation_quality_evidence"
+        query = _POSTGRES_QUALITY_EVIDENCE_SELECT
         params: tuple[object, ...]
         if run_id is not None:
             query += " WHERE run_id = %s"

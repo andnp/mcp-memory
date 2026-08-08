@@ -55,6 +55,20 @@ def test_repository_failure_is_temporarily_unavailable() -> None:
     assert resolution.reason == "repository_lookup_failed:RuntimeError"
 
 
+def test_repository_value_error_is_not_deferred_forever() -> None:
+    """Classify a permanent lookup contract error as malformed input."""
+    def get_memory(_memory_id: str) -> None:
+        raise ValueError("invalid repository response")
+
+    ctx = SimpleNamespace(repository=SimpleNamespace(get_memory=get_memory))
+
+    resolution = resolve_curator_seed_packet(ctx, {"seed_memory_ids": ["broken"]})
+
+    assert resolution.state == CuratorSeedResolutionState.MALFORMED
+    assert resolution.fallback_allowed is True
+    assert resolution.reason == "repository_lookup_malformed:ValueError"
+
+
 @pytest.mark.parametrize(
     ("payload", "reason"),
     [

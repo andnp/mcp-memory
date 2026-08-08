@@ -805,6 +805,57 @@ def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manage
     assert curation_store.get_candidate_state(memory_id) == initial
 
 
+def test_quality_escalation_retries_candidate_cas_without_unconditional_write() -> None:
+    """Do not overwrite a concurrent candidate update after CAS contention."""
+    memory_id = uuid4()
+    initial = CurationCandidateState(memory_id=memory_id, last_observed_revision_token="rev-1")
+    cas_attempts: list[str | None] = []
+    writes: list[CurationCandidateState] = []
+
+    def get_candidate_state(_memory_id):
+        return initial
+
+    def compare_and_set(_memory_id, expected_token, _state):
+        cas_attempts.append(expected_token)
+        return None
+
+    def put_candidate_state(state):
+        writes.append(state)
+        raise AssertionError("quality escalation bypassed candidate CAS")
+
+    candidate_repository = SimpleNamespace(
+        get_candidate_state=get_candidate_state,
+        compare_and_set_candidate_state=compare_and_set,
+        put_candidate_state=put_candidate_state,
+    )
+    sampler = CurationQualitySampler(
+        db_manager=None,
+        search=_Search([]),
+        repository=cast(Any, SimpleNamespace()),
+        candidate_repository=cast(Any, candidate_repository),
+        clock=lambda: datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    evidence = CurationQualityEvidence(
+        run_id=uuid4(),
+        action_id=uuid4(),
+        operation="rewrite_memory",
+        affected_memory_ids=[memory_id],
+        policy_version="1",
+        status="evaluated",
+        retrieval_regression_count=1,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    sampler._escalate_quality_regression(
+        _run(),
+        evidence,
+        cast(Any, SimpleNamespace(affected_memory_ids=(memory_id,), evidence_id=None)),
+    )
+
+    assert cas_attempts == ["rev-1", "rev-1", "rev-1"]
+    assert writes == []
+
+
 @pytest.mark.parametrize(
     ("mode", "before", "after", "minimum", "expected"),
     [

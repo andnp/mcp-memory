@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping
@@ -97,11 +98,17 @@ def resolve_curator_seed_packet(ctx: Any, payload: Mapping[str, Any] | Any) -> C
                 missing_ids.append(memory_id)
             else:
                 records.append(record)
-    except Exception as exc:
+    except (ConnectionError, OSError, RuntimeError, TimeoutError, sqlite3.OperationalError) as exc:
         return CuratorSeedResolution(
             CuratorSeedResolutionState.TEMPORARILY_UNAVAILABLE,
             requested_memory_ids=tuple(memory_ids),
             reason=f"repository_lookup_failed:{type(exc).__name__}",
+        )
+    except (TypeError, ValueError) as exc:
+        return CuratorSeedResolution(
+            CuratorSeedResolutionState.MALFORMED,
+            requested_memory_ids=tuple(memory_ids),
+            reason=f"repository_lookup_malformed:{type(exc).__name__}",
         )
 
     state = CuratorSeedResolutionState.READY if records else CuratorSeedResolutionState.STALE

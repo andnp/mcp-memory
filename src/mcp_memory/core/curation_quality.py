@@ -373,19 +373,20 @@ class CurationQualitySampler:
         else:
             return
         for memory_id in mutation.affected_memory_ids:
-            previous = candidate_repository.get_candidate_state(memory_id)
-            coverage_evidence = (
-                {} if previous is None else dict(previous.coverage_evidence_json)
-            )
-            coverage_evidence["quality_regression"] = {
-                "reason": reason,
-                "retrieval_regression_count": evidence.retrieval_regression_count or 0,
-                "zero_result_change": evidence.zero_result_change or 0,
-                "acceptance_met": evidence.acceptance_met,
-                "neutral_reason": evidence.neutral_reason,
-            }
-            candidate_repository.put_candidate_state(
-                CurationCandidateState(
+            compare_and_set = getattr(candidate_repository, "compare_and_set_candidate_state", None)
+            for _ in range(3):
+                previous = candidate_repository.get_candidate_state(memory_id)
+                coverage_evidence = (
+                    {} if previous is None else dict(previous.coverage_evidence_json)
+                )
+                coverage_evidence["quality_regression"] = {
+                    "reason": reason,
+                    "retrieval_regression_count": evidence.retrieval_regression_count or 0,
+                    "zero_result_change": evidence.zero_result_change or 0,
+                    "acceptance_met": evidence.acceptance_met,
+                    "neutral_reason": evidence.neutral_reason,
+                }
+                updated = CurationCandidateState(
                     memory_id=memory_id,
                     last_observed_revision_token=(
                         None if previous is None else previous.last_observed_revision_token
@@ -414,7 +415,16 @@ class CurationQualitySampler:
                     ),
                     coverage_evidence_json=coverage_evidence,
                 )
-            )
+                if callable(compare_and_set):
+                    if compare_and_set(
+                        memory_id,
+                        None if previous is None else previous.last_observed_revision_token,
+                        updated,
+                    ) is not None:
+                        break
+                    continue
+                candidate_repository.put_candidate_state(updated)
+                break
 
     def _evaluate_action(
         self,
