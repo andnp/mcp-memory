@@ -33,6 +33,8 @@ SAMPLER_OUTCOME_ROLLED_BACK = "rolled_back"
 SAMPLER_OUTCOME_NEUTRAL = "neutral"
 SAMPLER_OUTCOME_NO_OP = "no_op"
 SAMPLER_OUTCOME_LEGACY_MUTATION = "legacy_mutation"
+SAMPLER_OUTCOME_UNOBSERVED = "unobserved"
+SAMPLER_UNOBSERVED_REASON_MISSING_QUALITY_EVIDENCE = "missing_quality_evidence"
 
 
 @dataclass
@@ -62,6 +64,7 @@ class _UtilityAccumulator:
     productive_mutations: int = 0
     quality_pass_runs: int = 0
     quality_failure_runs: int = 0
+    unobserved_runs: int = 0
     provider_failure_runs: int = 0
 
 
@@ -130,6 +133,7 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 SAMPLER_OUTCOME_ROLLED_BACK,
                 SAMPLER_OUTCOME_NEUTRAL,
             })
+            utility_row.unobserved_runs += int(outcome.outcome == SAMPLER_OUTCOME_UNOBSERVED)
             utility_row.provider_failure_runs += int(outcome.outcome == SAMPLER_OUTCOME_PROVIDER_FAILURE)
 
         if _has_selector_behavior_signal(metadata):
@@ -218,6 +222,7 @@ def build_task_sampling_summary(runs: Iterable[AgentRunHistoryPayload]) -> TaskS
                 productive_mutations=row.productive_mutations,
                 quality_pass_runs=row.quality_pass_runs,
                 quality_failure_runs=row.quality_failure_runs,
+                unobserved_runs=row.unobserved_runs,
                 provider_failure_runs=row.provider_failure_runs,
                 sampler_priority_score=_selection_priority_score(row),
                 sampler_priority_explanation=_selection_priority_explanation(row),
@@ -263,6 +268,7 @@ class SamplerOutcomeProjection:
     quality_passed: bool
     quality_failure: bool
     provider_failure: bool
+    reason: str | None = None
 
 
 def project_sampler_outcome(run: AgentRunHistoryPayload) -> SamplerOutcomeProjection:
@@ -323,11 +329,12 @@ def project_sampler_outcome(run: AgentRunHistoryPayload) -> SamplerOutcomeProjec
             provider_failure=False,
         )
     return SamplerOutcomeProjection(
-        outcome=SAMPLER_OUTCOME_LEGACY_MUTATION,
-        productive_mutations=mutations,
+        outcome=SAMPLER_OUTCOME_UNOBSERVED,
+        productive_mutations=0,
         quality_passed=False,
         quality_failure=False,
         provider_failure=False,
+        reason=SAMPLER_UNOBSERVED_REASON_MISSING_QUALITY_EVIDENCE,
     )
 
 

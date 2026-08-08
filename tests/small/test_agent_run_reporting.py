@@ -23,6 +23,8 @@ from mcp_memory.management.task_sampling_summary import (
     SAMPLER_OUTCOME_QUALITY_FAILURE,
     SAMPLER_OUTCOME_QUALITY_PASS,
     SAMPLER_OUTCOME_ROLLED_BACK,
+    SAMPLER_OUTCOME_UNOBSERVED,
+    SAMPLER_UNOBSERVED_REASON_MISSING_QUALITY_EVIDENCE,
     build_selection_strategy_utility_priors,
     build_task_sampling_summary,
     project_sampler_outcome,
@@ -731,20 +733,31 @@ def test_project_sampler_outcome_excludes_neutral_rollbacks_and_provider_failure
     assert provider.quality_failure is False
 
 
+def test_project_sampler_outcome_marks_mutations_without_quality_evidence_unobserved() -> None:
+    projected = project_sampler_outcome(_sampler_run(mutations=3))
+
+    assert projected.outcome == SAMPLER_OUTCOME_UNOBSERVED
+    assert projected.reason == SAMPLER_UNOBSERVED_REASON_MISSING_QUALITY_EVIDENCE
+    assert projected.productive_mutations == 0
+    assert projected.quality_failure is False
+
+
 def test_sampling_summary_reports_productive_mutations_separately() -> None:
     summary = build_task_sampling_summary(
         [
             _sampler_run(mutations=4, quality_evidence_runs=1, quality_acceptance_met=True),
             _sampler_run(mutations=8, quality_evidence_runs=1, quality_acceptance_met=False),
+            _sampler_run(mutations=2),
             _sampler_run(mutations=6, status="failed", provider_failure_classification="timeout"),
         ]
     )
 
     row = summary.selection_utility[0]
-    assert row.total_mutations == 18
+    assert row.total_mutations == 20
     assert row.productive_mutations == 4
     assert row.quality_pass_runs == 1
     assert row.quality_failure_runs == 1
+    assert row.unobserved_runs == 1
     assert row.provider_failure_runs == 1
 
 

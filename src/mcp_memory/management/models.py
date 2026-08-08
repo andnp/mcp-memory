@@ -502,6 +502,7 @@ class SelectionStrategyUtilityPayload(BaseModel):
     productive_mutations: int = 0
     quality_pass_runs: int = 0
     quality_failure_runs: int = 0
+    unobserved_runs: int = 0
     provider_failure_runs: int = 0
     sampler_priority_score: float | None = None
     sampler_priority_explanation: str | None = None
