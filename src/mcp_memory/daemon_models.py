@@ -73,11 +73,15 @@ class DaemonControllerView:
         get_snapshot = getattr(self.transport_server, "get_diagnostics_snapshot", None)
         if not callable(get_snapshot):
             return None
-        snapshot = get_snapshot()
-        if snapshot is None:
+        try:
+            snapshot = get_snapshot()
+            if snapshot is None:
+                return None
+            if isinstance(snapshot, dict):
+                return snapshot
+            if not is_dataclass(snapshot):
+                return None
+            return cast(dict[str, object], asdict(cast(Any, snapshot)))
+        except Exception as exc:
+            logger.warning("Failed to read daemon transport diagnostics", exc_info=exc)
             return None
-        if isinstance(snapshot, dict):
-            return snapshot
-        if not is_dataclass(snapshot):
-            return None
-        return cast(dict[str, object], asdict(cast(Any, snapshot)))

@@ -228,6 +228,26 @@ def test_management_service_health_tolerates_hook_client_count_failures(db_manag
     assert any("Failed to read active daemon client count" in message for message in caplog.messages)
 
 
+def test_management_service_health_tolerates_transport_diagnostics_failures(
+    db_manager, caplog: pytest.LogCaptureFixture
+) -> None:
+    class _BrokenTransport:
+        def get_diagnostics_snapshot(self) -> object:
+            raise RuntimeError("transport_unavailable")
+
+    service = ManagementService(
+        _ManagementContextStub(memory_path=db_manager.db_path.parent, db_manager=db_manager),
+        DaemonControllerView(transport_server=_BrokenTransport()),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        health = service.get_health()
+
+    assert health.status == "ok"
+    assert health.transport_diagnostics.current_in_flight_count == 0
+    assert any("Failed to read daemon transport diagnostics" in message for message in caplog.messages)
+
+
 def test_management_service_reporting_handles_empty_store(db_manager) -> None:
     repository = RelationalMemoryRepository(db_manager)
     task_queue = SQLiteTaskQueue(db_manager)
