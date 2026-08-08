@@ -20,6 +20,28 @@ from mcp_memory.utils.db_schema import create_current_schema, finalize_schema_se
 pytestmark = pytest.mark.small
 
 
+class _TrackingConnection:
+    def __init__(self, connection: sqlite3.Connection, *, fail: bool) -> None:
+        self._connection = connection
+        self._fail = fail
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query, parameters=()):
+        if self._fail:
+            raise RuntimeError("surface update failed")
+        return self._connection.execute(query, parameters)
+
+    def close(self) -> None:
+        self.closed = True
+        self._connection.close()
+
+
 def test_sqlite_repository_implements_memory_ports(db_manager):
     repository = RelationalMemoryRepository(db_manager)
 
@@ -27,6 +49,26 @@ def test_sqlite_repository_implements_memory_ports(db_manager):
     assert isinstance(repository, MemoryMutationPort)
     assert isinstance(repository, MemoryLinkPort)
     assert isinstance(repository, MemoryMaintenanceReadPort)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_best_effort_surface_update_closes_transient_connection(db_manager, fail: bool) -> None:
+    repository = RelationalMemoryRepository(db_manager)
+    record = repository.create_memory("Surface target", "Surface content", ["workspace-1"])
+    assert record is not None
+
+    connection = _TrackingConnection(sqlite3.connect(str(db_manager.db_path)), fail=fail)
+    db_manager.open_connection = lambda **kwargs: connection
+
+    if fail:
+        with pytest.raises(RuntimeError, match="surface update failed"):
+            repository.touch_last_surfaced([record.id], "2026-08-07T00:00:00+00:00", best_effort=True)
+    else:
+        assert repository.touch_last_surfaced(
+            [record.id], "2026-08-07T00:00:00+00:00", best_effort=True
+        ) == 1
+
+    assert connection.closed is True
 
 
 def test_database_manager_initializes_relational_memory_schema(db_manager):

@@ -249,6 +249,10 @@ class _BlockingSqliteTelemetryManager:
 
 
 class _LockedSqliteTelemetryConnection:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.closed = False
+        self._fail = fail
+
     def __enter__(self) -> _LockedSqliteTelemetryConnection:
         return self
 
@@ -256,15 +260,20 @@ class _LockedSqliteTelemetryConnection:
         return False
 
     def executemany(self, query: str, rows: list[tuple[object, ...]]) -> None:
+        if self._fail:
+            raise RuntimeError("telemetry write failed")
         raise sqlite3.OperationalError("database is locked")
 
     def close(self) -> None:
-        return None
+        self.closed = True
 
 
 class _LockedSqliteTelemetryManager:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.connection = _LockedSqliteTelemetryConnection(fail=fail)
+
     def open_connection(self, *, timeout_seconds: float | None = None) -> _LockedSqliteTelemetryConnection:
-        return _LockedSqliteTelemetryConnection()
+        return self.connection
 
     def get_connection(self) -> None:
         return None
@@ -364,6 +373,20 @@ def test_sqlite_retrieval_telemetry_is_buffered_until_flush() -> None:
     finally:
         db_manager.release_writes.set()
         repository.close()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_sqlite_retrieval_telemetry_closes_transient_connection_on_write_result(fail: bool) -> None:
+    db_manager = _LockedSqliteTelemetryManager(fail=fail)
+    repository = RetrievalTelemetryRepository(cast(object, db_manager), workspace_id="workspace-a")
+
+    if fail:
+        with pytest.raises(RuntimeError, match="telemetry write failed"):
+            repository._best_effort_sqlite_write([])
+    else:
+        repository._best_effort_sqlite_write([])
+
+    assert db_manager.connection.closed is True
 
 
 def test_sqlite_retrieval_telemetry_ignores_locked_writes_on_flush() -> None:
