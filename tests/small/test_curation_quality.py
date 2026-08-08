@@ -22,7 +22,6 @@ from mcp_memory.core.curation_quality import (
     _acceptance_met,
     _total_utility_delta,
 )
-from mcp_memory.core.curation_work_items import CurationWorkItemService, WorkItemAction
 from mcp_memory.curation_quality_store import (
     PostgresCurationQualityStore,
     SQLiteCurationQualityStore,
@@ -804,21 +803,6 @@ def test_quality_sampler_keeps_neutral_quality_evidence_non_escalating(db_manage
     assert curation_store.get_candidate_state(memory_id) == initial
 
 
-def test_explicit_acceptance_failure_completes_verified_work() -> None:
-    decision = CurationWorkItemService().decide(
-        CurationRunOutcome.APPLIED,
-        "applied",
-        None,
-        quality_evidence=[
-            SimpleNamespace(acceptance_met=False),
-        ],
-        campaign_hypothesis=CampaignHypothesis(query="important", minimum_improvement=0.5),
-    )
-
-    assert decision.action is WorkItemAction.COMPLETE
-    assert decision.reason_code == "applied"
-
-
 @pytest.mark.parametrize(
     ("mode", "before", "after", "minimum", "expected"),
     [
@@ -859,16 +843,6 @@ def test_campaign_acceptance_target_modes(
             minimum_improvement=minimum,
         ),
     ) is expected
-
-
-def test_legacy_campaign_accepts_verified_work_without_quality_evidence() -> None:
-    decision = CurationWorkItemService().decide(
-        CurationRunOutcome.APPLIED,
-        "applied",
-        None,
-    )
-
-    assert decision.action is WorkItemAction.COMPLETE
 
 
 def test_quality_sampler_ignores_maintenance_searches(db_manager) -> None:

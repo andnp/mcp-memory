@@ -1,8 +1,8 @@
 """Transaction-scoped SQLite execution for one curation action.
 
-This module is intentionally an execution primitive, not a planner or a
-production curation entry point.  ``execute_action`` owns one SQLite
-transaction and exposes only ``CurationTransaction`` to its callback.
+This module is intentionally an execution primitive, not a production
+curation entry point. ``execute_action`` owns one SQLite transaction and
+exposes only ``CurationTransaction`` to its callback.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class CurationActionFatalError(CurationActionError):
 
 
 class CurationActionContractError(CurationActionFatalError):
-    """The planner supplied an action that can be repaired before execution."""
+    """The curation agent supplied an action that can be repaired before execution."""
 
     def __init__(self, message: str, *, code: str = "action_contract") -> None:
         super().__init__(message)

@@ -20,7 +20,6 @@ if TYPE_CHECKING:
         MemoryRepositoryPort,
         RankedMemoryCandidate,
     )
-    from .planner import CurationPlanner, CurationReadTools, PlannerExecutionEnvelope, PlannerExecutionStatus
     from .providers import (
         NullProviderUsagePort,
         ProviderConversationLike,
@@ -46,10 +45,6 @@ _EXPORTS = {
     "MemoryRecord": ("memory", "MemoryRecord"),
     "MemoryRepositoryPort": ("memory", "MemoryRepositoryPort"),
     "RankedMemoryCandidate": ("memory", "RankedMemoryCandidate"),
-    "CurationPlanner": ("planner", "CurationPlanner"),
-    "CurationReadTools": ("planner", "CurationReadTools"),
-    "PlannerExecutionEnvelope": ("planner", "PlannerExecutionEnvelope"),
-    "PlannerExecutionStatus": ("planner", "PlannerExecutionStatus"),
     "ProviderUsagePort": ("providers", "ProviderUsagePort"),
     "NullProviderUsagePort": ("providers", "NullProviderUsagePort"),
     "ProviderConversationLike": ("providers", "ProviderConversationLike"),
@@ -79,10 +74,6 @@ __all__ = (
     "MemoryRecord",
     "MemoryRepositoryPort",
     "RankedMemoryCandidate",
-    "CurationPlanner",
-    "CurationReadTools",
-    "PlannerExecutionEnvelope",
-    "PlannerExecutionStatus",
     "ProviderUsagePort",
     "NullProviderUsagePort",
     "ProviderConversationLike",

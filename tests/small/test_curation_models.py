@@ -4,7 +4,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from mcp_memory.core.curation_models import (
-    ActionPreconditions,
     ArchiveMemoryAction,
     CampaignAcceptance,
     CampaignHypothesis,
@@ -15,10 +14,6 @@ from mcp_memory.core.curation_models import (
     CreateLinkAction,
     CurationAction,
     CurationBudgetUsage,
-    CurationContextPacket,
-    CurationPlan,
-    CurationRunOutcome,
-    CurationRunResult,
     EvidenceRef,
     LinkAssertion,
     MergeMemoriesAction,
@@ -26,8 +21,6 @@ from mcp_memory.core.curation_models import (
     NormalizeMemoryAction,
     ReceiptStatus,
     RemoveLinkAction,
-    RetentionDecision,
-    RetentionReason,
     RewriteMemoryAction,
     SplitMemoryAction,
     campaign_hypothesis_from_payload,
@@ -42,51 +35,6 @@ def test_action_union_rejects_unknown_and_delete_operations() -> None:
         adapter.validate_python({"operation": "unknown", "target_id": str(uuid4())})
 
 
-def test_plan_requires_complete_seed_dispositions() -> None:
-    seed = uuid4()
-    with pytest.raises(ValidationError, match="missing seed dispositions"):
-        CurationPlan(
-            plan_id=uuid4(), run_id=uuid4(), frontier_key="frontier", context_fingerprint="context",
-            rationale="no safe action", seed_memory_ids=[seed],
-        )
-
-    decision = RetentionDecision(memory_id=seed, reason=RetentionReason.ALREADY_FOCUSED, rationale="focused")
-    plan = CurationPlan(
-        plan_id=uuid4(), run_id=uuid4(), frontier_key="frontier", context_fingerprint="context",
-        rationale="no safe action", seed_memory_ids=[seed], retained=[decision],
-    )
-    assert plan.retained == [decision]
-
-
-def test_plan_rejects_overlapping_action_and_retention_dispositions() -> None:
-    seed = uuid4()
-    action = NormalizeMemoryAction(
-        action_id=uuid4(),
-        target_id=seed,
-        confidence=1,
-        rationale="normalize focused record",
-        summary="Focused record",
-        preconditions=ActionPreconditions(),
-    )
-    retained = RetentionDecision(
-        memory_id=seed,
-        reason=RetentionReason.ALREADY_FOCUSED,
-        rationale="focused",
-    )
-
-    with pytest.raises(ValidationError, match="exactly one disposition"):
-        CurationPlan(
-            plan_id=uuid4(),
-            run_id=uuid4(),
-            frontier_key="frontier",
-            context_fingerprint="context",
-            rationale="invalid overlap",
-            seed_memory_ids=[seed],
-            actions=[action],
-            retained=[retained],
-        )
-
-
 def test_defaults_are_isolated_and_contracts_are_pure() -> None:
     first = CurationBudgetUsage()
     second = CurationBudgetUsage()
@@ -96,22 +44,7 @@ def test_defaults_are_isolated_and_contracts_are_pure() -> None:
     receipt = MutationReceipt(
         run_id=uuid4(), action_id=uuid4(), operation="archive_memory", status=ReceiptStatus.VERIFIED,
     )
-    result = CurationRunResult(run_id=uuid4(), outcome=CurationRunOutcome.APPLIED, receipts=[receipt])
-    assert result.budget_usage.read_tool_calls == 0
-
-
-def test_context_packet_canonicalizes_visible_ids() -> None:
-    seed = uuid4()
-    support = uuid4()
-
-    context = CurationContextPacket.from_visible_ids(
-        seed_memory_ids=[str(seed).upper()],
-        support_memory_ids=[str(support).upper()],
-        context_fingerprint="context",
-    )
-
-    assert context.seed_memory_ids == [seed]
-    assert context.support_memory_ids == [support]
+    assert receipt.status == ReceiptStatus.VERIFIED
 
 
 def test_campaign_hypothesis_is_typed_and_legacy_payloads_are_deterministic() -> None:

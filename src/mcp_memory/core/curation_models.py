@@ -1,9 +1,9 @@
-"""Provider- and repository-neutral contracts for curation planning."""
+"""Provider- and repository-neutral contracts for curation."""
 
 from __future__ import annotations
 
 from enum import StrEnum
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -78,23 +78,6 @@ class ClaimManifest(CurationModel):
     unresolved_tensions: list[str] = Field(default_factory=list)
 
 
-class RetentionReason(StrEnum):
-    ALREADY_FOCUSED = "already_focused"
-    DISTINCT_CLAIMS = "distinct_claims"
-    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-    PROJECT_BOUNDARY_RISK = "project_boundary_risk"
-    RELATIONSHIP_IS_INTENTIONAL = "relationship_is_intentional"
-    DESTRUCTIVE_CHANGE_NOT_JUSTIFIED = "destructive_change_not_justified"
-    NEEDS_DIFFERENT_SPECIALIST = "needs_different_specialist"
-
-
-class RetentionDecision(CurationModel):
-    memory_id: UUID = Field(description="An existing memory ID from the planner context.")
-    reason: RetentionReason
-    rationale: str
-    evidence: list[EvidenceRef] = Field(default_factory=list)
-
-
 class ActionEnvelope(CurationModel):
     action_id: UUID
     confidence: float = Field(ge=0.0, le=1.0)
@@ -105,7 +88,7 @@ class ActionEnvelope(CurationModel):
 
 class NormalizeMemoryAction(ActionEnvelope):
     operation: Literal["normalize_memory"] = "normalize_memory"
-    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the curator context.")
     title: str | None = None
     summary: str | None = None
     tags: list[str] | None = None
@@ -119,7 +102,7 @@ class NormalizeMemoryAction(ActionEnvelope):
 
 class RewriteMemoryAction(ActionEnvelope):
     operation: Literal["rewrite_memory"] = "rewrite_memory"
-    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the curator context.")
     title: str | None = None
     content: str
     summary: str | None = None
@@ -128,8 +111,8 @@ class RewriteMemoryAction(ActionEnvelope):
 
 class CreateLinkAction(ActionEnvelope):
     operation: Literal["create_link"] = "create_link"
-    source_id: UUID = Field(description="An existing visible memory ID from the planner context.")
-    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    source_id: UUID = Field(description="An existing visible memory ID from the curator context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the curator context.")
     link_type: CanonicalLinkType
     context: str | None = None
 
@@ -143,8 +126,8 @@ class CreateLinkAction(ActionEnvelope):
 
 class RemoveLinkAction(ActionEnvelope):
     operation: Literal["remove_link"] = "remove_link"
-    source_id: UUID = Field(description="An existing visible memory ID from the planner context.")
-    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    source_id: UUID = Field(description="An existing visible memory ID from the curator context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the curator context.")
     link_type: CanonicalLinkType
     context: str | None = None
 
@@ -166,7 +149,7 @@ class MergeMemoriesAction(ActionEnvelope):
 
 class SplitMemoryAction(ActionEnvelope):
     operation: Literal["split_memory"] = "split_memory"
-    target_id: UUID = Field(description="An existing visible memory ID from the planner context.")
+    target_id: UUID = Field(description="An existing visible memory ID from the curator context.")
     children: list[ClaimMapping] = Field(
         min_length=1,
         description="Typed child content only; child record IDs are assigned by execution, not invented here.",
@@ -304,11 +287,6 @@ CurationAction = Annotated[
 ]
 
 
-class CurationPolicySummary(CurationModel):
-    allowed_operations: list[str] = Field(default_factory=list)
-    policy_version: str = "1"
-
-
 class CampaignRetrievalProblem(StrEnum):
     HEURISTIC = "heuristic"
     RETRIEVAL_QUALITY = "retrieval_quality"
@@ -378,83 +356,6 @@ def campaign_hypothesis_from_payload(payload: Mapping[str, Any] | None) -> Campa
     return CampaignHypothesis.model_validate(payload["campaign_hypothesis"])
 
 
-class CurationContextPacket(CurationModel):
-    seed_memory_ids: list[UUID] = Field(default_factory=list)
-    support_memory_ids: list[UUID] = Field(default_factory=list)
-    exploratory_memory_ids: list[UUID] = Field(default_factory=list)
-    context_fingerprint: str
-    campaign_hypothesis: CampaignHypothesis | None = None
-
-    @classmethod
-    def from_visible_ids(
-        cls,
-        *,
-        seed_memory_ids: Iterable[UUID | str],
-        support_memory_ids: Iterable[UUID | str],
-        exploratory_memory_ids: Iterable[UUID | str] = (),
-        context_fingerprint: str,
-        campaign_hypothesis: CampaignHypothesis | None = None,
-    ) -> CurationContextPacket:
-        return cls(
-            seed_memory_ids=[value if isinstance(value, UUID) else UUID(str(value)) for value in seed_memory_ids],
-            support_memory_ids=[
-                value if isinstance(value, UUID) else UUID(str(value)) for value in support_memory_ids
-            ],
-            exploratory_memory_ids=[
-                value if isinstance(value, UUID) else UUID(str(value))
-                for value in exploratory_memory_ids
-            ],
-            context_fingerprint=context_fingerprint,
-            campaign_hypothesis=campaign_hypothesis,
-        )
-
-
-class CurationPlanningRequest(CurationModel):
-    schema_version: Literal[1] = 1
-    run_id: UUID
-    plan_id: UUID
-    frontier_key: str
-    context_fingerprint: str
-    policy_summary: CurationPolicySummary = Field(default_factory=CurationPolicySummary)
-    context: CurationContextPacket | None = None
-    campaign_hypothesis: CampaignHypothesis | None = None
-
-
-class CurationPlan(CurationModel):
-    schema_version: Literal[1] = 1
-    plan_id: UUID
-    run_id: UUID
-    frontier_key: str
-    context_fingerprint: str
-    actions: list[CurationAction] = Field(default_factory=list)
-    retained: list[RetentionDecision] = Field(default_factory=list)
-    rationale: str
-    seed_memory_ids: list[UUID] = Field(
-        ...,
-        description="Every seed memory ID from the planner context, with exactly one disposition.",
-    )
-
-    @model_validator(mode="after")
-    def validates_seed_dispositions(self) -> CurationPlan:
-        action_ids = {
-            target
-            for action in self.actions
-            for target in _action_memory_ids(action)
-        }
-        retained_ids = {decision.memory_id for decision in self.retained}
-        missing = set(self.seed_memory_ids) - action_ids - retained_ids
-        if missing:
-            raise ValueError(f"missing seed dispositions: {sorted(missing, key=str)}")
-        if not self.actions and not self.retained:
-            raise ValueError("an empty plan requires a retention decision")
-        if action_ids & retained_ids:
-            raise ValueError(
-                "each seed memory must have exactly one disposition: "
-                "a memory cannot be both acted on and retained"
-            )
-        return self
-
-
 class CurationBudgetUsage(CurationModel):
     seed_records: int = 0
     support_records: int = 0
@@ -464,6 +365,7 @@ class CurationBudgetUsage(CurationModel):
     records_returned: int = 0
     proposed_actions: int = 0
     accepted_mutations: int = 0
+    # Retained so historical typed-curation payloads remain readable.
     planner_attempts: int = 0
     premium_requests: int = 0
     provider_calls: int = 0
@@ -498,6 +400,7 @@ class CurationRunOutcome(StrEnum):
     PARTIALLY_APPLIED = "partially_applied"
     QUALITY_REJECTED = "quality_rejected"
     NO_OP = "no_op"
+    # Historical outcomes retained for reading older typed-curation runs.
     INVALID_PLAN = "invalid_plan"
     STALE_PLAN = "stale_plan"
     VERIFICATION_FAILED = "verification_failed"
@@ -507,32 +410,3 @@ class CurationRunOutcome(StrEnum):
     CANCELLED = "cancelled"
     NO_CANDIDATES = "no_candidates"
     QUALITY_OVERRIDE = "quality_override"
-
-
-class CurationRunResult(CurationModel):
-    run_id: UUID
-    outcome: CurationRunOutcome
-    plan_id: UUID | None = None
-    receipts: list[MutationReceipt] = Field(default_factory=list)
-    rejection_codes: list[str] = Field(default_factory=list)
-    retry_reason: str | None = None
-    failure_details: dict[str, object] = Field(default_factory=dict)
-    budget_usage: CurationBudgetUsage = Field(default_factory=CurationBudgetUsage)
-    context_record_counts: dict[str, int] = Field(default_factory=dict)
-    verified_action_count: int = 0
-    productive_mutation_count: int = 0
-    affected_memory_count: int = 0
-    quality_evidence: list[dict[str, object]] = Field(default_factory=list)
-    restore_result: dict[str, object] | None = None
-    override_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    override_reason: str | None = None
-    override_judge_evidence: dict[str, object] = Field(default_factory=dict)
-    override_outcome: str | None = None
-
-
-def _action_memory_ids(action: CurationAction) -> set[UUID]:
-    if isinstance(action, MergeMemoriesAction):
-        return set(action.source_ids) | {action.canonical_id}
-    if isinstance(action, (CreateLinkAction, RemoveLinkAction)):
-        return {action.source_id, action.target_id}
-    return {action.target_id}
