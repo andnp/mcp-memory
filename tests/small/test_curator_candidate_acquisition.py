@@ -33,6 +33,7 @@ def _record(
     memory_id: str,
     *,
     updated_at: str,
+    title: str | None = None,
     tags: list[str] | None = None,
     summary: str | None = None,
     content: str | None = None,
@@ -41,7 +42,7 @@ def _record(
 ) -> RelationalMemoryRecord:
     return RelationalMemoryRecord(
         id=memory_id,
-        title=memory_id,
+        title=title or memory_id,
         content=content or f"Durable content for {memory_id}.",
         summary=summary or f"Summary for {memory_id}.",
         type=memory_type,
@@ -222,6 +223,42 @@ def test_retrieval_friction_flags_low_conversion_high_exposure() -> None:
     )
 
     assert "low_read_conversion" in retrieval_friction_flags(record)
+
+
+def test_retrieval_friction_flags_mark_dated_work_logs() -> None:
+    record = _record(
+        "dated-log",
+        updated_at="2026-01-01T00:00:00+00:00",
+        memory_type="journal",
+        title="2026-01-15 work log",
+        content="Worked on the migration and recorded the progress update.",
+    )
+
+    assert "dated_work_log" in retrieval_friction_flags(record)
+
+
+def test_retrieval_friction_flags_preserve_durable_date_context() -> None:
+    record = _record(
+        "durable-date",
+        updated_at="2026-01-01T00:00:00+00:00",
+        title="2026-01-15 release deadline",
+        content="The release deadline is 2026-01-15; this is a durable planning constraint.",
+    )
+
+    assert "dated_work_log" not in retrieval_friction_flags(record)
+
+
+def test_retrieval_friction_flags_mark_status_execution_and_mixed_content() -> None:
+    record = _record(
+        "mixed-status",
+        updated_at="2026-01-01T00:00:00+00:00",
+        content="Decision: keep the boundary. Completed the migration after debugging; ran tests with a temporary workaround.",
+    )
+
+    flags = retrieval_friction_flags(record)
+    assert "task_completion_residue" in flags
+    assert "transient_execution_detail" in flags
+    assert "mixed_durability_content" in flags
 
 
 def test_support_uses_global_queries_and_keeps_adjacent_metadata() -> None:
